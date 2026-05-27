@@ -250,6 +250,10 @@ fn discover_packages(
     if path.is_dir() && is_obvious_resource_only_dir(path) {
         return Ok(());
     }
+    if is_obvious_package_candidate(path)? {
+        out.push(path.to_path_buf());
+        return Ok(());
+    }
     if !registry.detect(path)?.is_empty() {
         out.push(path.to_path_buf());
         return Ok(());
@@ -277,6 +281,32 @@ fn is_package_file_candidate(path: &Path) -> bool {
     name == "main.data" || name.ends_with(".dbc") || name.ends_with(".idx")
 }
 
+fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
+    if path.is_file() {
+        return Ok(is_package_file_candidate(path));
+    }
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    if path.join("main.data").is_file() || directory_has_file_suffix(path, ".dbc")? {
+        return Ok(true);
+    }
+    if directory_has_file_suffix(path, ".idx")? {
+        return Ok(true);
+    }
+    if path.join("menuData.xml").is_file() && directory_has_multiview_payload(path)? {
+        return Ok(true);
+    }
+    let hourei_required = [
+        "_DataBase/hore_base.db",
+        "_DataBase/hore_search_a.db",
+        "_DataBase/horejo_base.db",
+    ];
+    Ok(hourei_required
+        .iter()
+        .all(|relative| path.join(relative).is_file()))
+}
+
 fn is_obvious_resource_only_dir(path: &Path) -> bool {
     let name = path
         .file_name()
@@ -293,4 +323,45 @@ fn is_obvious_resource_only_dir(path: &Path) -> bool {
         || name == "sound"
         || name == "sounds"
         || name == "mathjax"
+}
+
+fn directory_has_file_suffix(path: &Path, suffix: &str) -> Result<bool> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    let suffix = suffix.to_lowercase();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.path().is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .to_lowercase()
+                .ends_with(&suffix)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn directory_has_multiview_payload(path: &Path) -> Result<bool> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if name.len() == 6
+            && name.as_bytes()[1] == b'l'
+            && name.as_bytes()[2] == b'v'
+            && (name.ends_with("bat") || name.ends_with("dat"))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

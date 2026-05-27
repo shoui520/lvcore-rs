@@ -32,6 +32,7 @@ pub use hourei::{HoureiLawEntry, HoureiLawWindow, HoureiSearchHit, HoureiStore};
 pub use library::BookLibrary;
 pub use lved_sqlite::{
     LvedInfoPage, LvedKeyFile, LvedListItem, LvedListWindow, LvedSearchHit, LvedSqliteStore,
+    LvedSqliteSummary,
 };
 pub use navigation::{
     HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,

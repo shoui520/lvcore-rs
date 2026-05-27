@@ -10,7 +10,7 @@ use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution};
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
-use crate::lved_sqlite::LvedSqliteStore;
+use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary};
 use crate::multiview::{MultiviewMenuItem, MultiviewStore, parse_menu_data};
 use crate::navigation::{
     HomeSurface, NavigationItem, NavigationNode, NavigationProvider, NavigationStatus,
@@ -84,10 +84,10 @@ impl PackageDriver for SsedDriver {
             &package_root,
             detection,
             capabilities,
-            Some(catalog),
-            None,
-            None,
-            None,
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
         )))
     }
 }
@@ -126,19 +126,39 @@ impl PackageDriver for LvedSqliteDriver {
     }
 
     fn open(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
-        let detection = self
-            .detect(root)?
+        let package_root = package_root_for_detection(root).to_path_buf();
+        let store = LvedSqliteStore::discover(root)?
             .ok_or_else(|| Error::Driver("not an LVED_SQLITE3 package".to_owned()))?;
-        let package_root = detection.root.clone();
-        let store = LvedSqliteStore::discover(root)?;
+        let summary = store.summary()?;
+        let mut evidence = vec![
+            store
+                .payload_path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "lved_sqlite_payload".to_owned()),
+        ];
+        if let Some(key_file) = &store.key_file {
+            evidence.push(format!("key_file:{}", key_file.match_kind));
+        }
+        let detection = DetectedPackage {
+            root: package_root.clone(),
+            format_family: FormatFamily::LvedSqlite3,
+            confidence: 98,
+            title: summary
+                .title
+                .clone()
+                .or_else(|| inferred_folder_title(&package_root)),
+            evidence,
+        };
         Ok(Box::new(StubBookPackage::new(
             &package_root,
             detection,
             lved_capabilities(),
-            None,
-            store,
-            None,
-            None,
+            StubPackageStores {
+                lved_store: Some(store),
+                lved_summary: Some(summary),
+                ..Default::default()
+            },
         )))
     }
 }
@@ -185,10 +205,10 @@ impl PackageDriver for LvlMultiViewDriver {
             &package_root,
             detection,
             multiview_capabilities(),
-            None,
-            None,
-            store,
-            None,
+            StubPackageStores {
+                multiview_store: store,
+                ..Default::default()
+            },
         )))
     }
 }
@@ -230,10 +250,10 @@ impl PackageDriver for HoureiDriver {
             &package_root,
             detection,
             hourei_capabilities(),
-            None,
-            None,
-            None,
-            store,
+            StubPackageStores {
+                hourei_store: store,
+                ..Default::default()
+            },
         )))
     }
 }
@@ -244,8 +264,18 @@ pub struct StubBookPackage {
     metadata: BookMetadata,
     ssed_catalog: Option<SsedCatalog>,
     lved_store: Option<LvedSqliteStore>,
+    lved_summary: Option<LvedSqliteSummary>,
     multiview_store: Option<MultiviewStore>,
     hourei_store: Option<HoureiStore>,
+}
+
+#[derive(Debug, Default)]
+pub struct StubPackageStores {
+    pub ssed_catalog: Option<SsedCatalog>,
+    pub lved_store: Option<LvedSqliteStore>,
+    pub lved_summary: Option<LvedSqliteSummary>,
+    pub multiview_store: Option<MultiviewStore>,
+    pub hourei_store: Option<HoureiStore>,
 }
 
 struct NormalizedHtmlRefs {
@@ -260,10 +290,7 @@ impl StubBookPackage {
         root: &Path,
         detected: DetectedPackage,
         capabilities: Vec<Capability>,
-        ssed_catalog: Option<SsedCatalog>,
-        lved_store: Option<LvedSqliteStore>,
-        multiview_store: Option<MultiviewStore>,
-        hourei_store: Option<HoureiStore>,
+        stores: StubPackageStores,
     ) -> Self {
         let format_label = detected.format_family.ui_label().to_owned();
         let book_id = BookId(format!(
@@ -286,10 +313,11 @@ impl StubBookPackage {
             root: root.to_path_buf(),
             storage: DirectoryStorage::new(root),
             metadata,
-            ssed_catalog,
-            lved_store,
-            multiview_store,
-            hourei_store,
+            ssed_catalog: stores.ssed_catalog,
+            lved_store: stores.lved_store,
+            lved_summary: stores.lved_summary,
+            multiview_store: stores.multiview_store,
+            hourei_store: stores.hourei_store,
         }
     }
 }
@@ -406,13 +434,13 @@ impl NavigationProvider for StubBookPackage {
             }
             FormatFamily::LvedSqlite3 => {
                 let list_available = self
-                    .lved_store
+                    .lved_summary
                     .as_ref()
-                    .is_some_and(|store| store.list_items(1).is_ok_and(|items| !items.is_empty()));
+                    .is_some_and(|summary| summary.list_available);
                 let info_available = self
-                    .lved_store
+                    .lved_summary
                     .as_ref()
-                    .is_some_and(|store| store.info_pages(1).is_ok_and(|pages| !pages.is_empty()));
+                    .is_some_and(|summary| summary.info_available);
                 surfaces.push(HomeSurface {
                     surface_id: "lved-list".to_owned(),
                     kind: NavigationSurfaceKind::TitleIndexBrowse,
@@ -2760,6 +2788,17 @@ mod tests {
     #[test]
     fn dense_honmon_body_is_not_exposed_as_numeric_text() {
         let dir = tempdir().unwrap();
+        let catalog = SsedCatalog {
+            title: String::new(),
+            components: Vec::new(),
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 0,
+                trailing_bytes: 0,
+            },
+        };
         let package = StubBookPackage::new(
             dir.path(),
             DetectedPackage {
@@ -2769,21 +2808,8 @@ mod tests {
                 title: None,
                 evidence: Vec::new(),
             },
-            ssed_capabilities(&SsedCatalog {
-                title: String::new(),
-                components: Vec::new(),
-                layout: crate::ssed::SsedInfoLayout {
-                    component_count_offset: 0,
-                    record_start: 0,
-                    record_size: 0x30,
-                    component_count: 0,
-                    trailing_bytes: 0,
-                },
-            }),
-            None,
-            None,
-            None,
-            None,
+            ssed_capabilities(&catalog),
+            StubPackageStores::default(),
         );
         let token = TargetToken::new(&InternalTarget::SsedDenseAnchor {
             anchor: "00100050".to_owned(),

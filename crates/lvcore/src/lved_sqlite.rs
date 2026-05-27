@@ -23,6 +23,13 @@ pub struct LvedSqliteStore {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvedSqliteSummary {
+    pub title: Option<String>,
+    pub list_available: bool,
+    pub info_available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LvedSearchHit {
     pub list_id: i64,
     pub content_id: i64,
@@ -92,6 +99,15 @@ impl LvedSqliteStore {
     pub fn title(&self) -> Result<Option<String>> {
         let connection = self.open_readonly()?;
         Ok(lved_sqlite_title_from_connection(&connection))
+    }
+
+    pub fn summary(&self) -> Result<LvedSqliteSummary> {
+        let connection = self.open_readonly()?;
+        Ok(LvedSqliteSummary {
+            title: lved_sqlite_title_from_connection(&connection),
+            list_available: lved_list_available(&connection)?,
+            info_available: lved_info_available(&connection)?,
+        })
     }
 
     pub fn search(
@@ -261,6 +277,31 @@ impl LvedSqliteStore {
             after: after_rows,
         }))
     }
+}
+
+fn lved_list_available(connection: &Connection) -> Result<bool> {
+    let list_columns = sqlite_columns(connection, "list")?;
+    if !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
+        return Ok(false);
+    }
+    connection
+        .query_row("select 1 from list limit 1", [], |_| Ok(()))
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(Error::from)
+}
+
+fn lved_info_available(connection: &Connection) -> Result<bool> {
+    if !sqlite_table_exists(connection, "info")
+        || !sqlite_table_has_columns(connection, "info", &["id", "name", "body"])
+    {
+        return Ok(false);
+    }
+    connection
+        .query_row("select 1 from info limit 1", [], |_| Ok(()))
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(Error::from)
 }
 
 impl From<LvedSearchHit> for LvedListItem {
