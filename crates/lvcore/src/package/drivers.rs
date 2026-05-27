@@ -887,7 +887,7 @@ impl StubBookPackage {
         }
         if !matches!(
             query.mode,
-            SearchMode::Exact | SearchMode::Forward | SearchMode::Partial
+            SearchMode::Exact | SearchMode::Forward | SearchMode::Backward | SearchMode::Partial
         ) {
             return Ok(SearchPage::deferred(
                 "SSED search mode is not implemented for simple title/index scanning yet",
@@ -902,8 +902,9 @@ impl StubBookPackage {
             let matched = match query.mode {
                 SearchMode::Exact => key == needle,
                 SearchMode::Forward => key.starts_with(&needle),
+                SearchMode::Backward => key.ends_with(&needle),
                 SearchMode::Partial => key.contains(&needle),
-                SearchMode::Backward | SearchMode::FullText | SearchMode::Advanced(_) => false,
+                SearchMode::FullText | SearchMode::Advanced(_) => false,
             };
             if !matched {
                 return Ok(true);

@@ -713,6 +713,48 @@ fn ssed_simple_index_search_returns_title_backed_hits() {
 }
 
 #[test]
+fn ssed_simple_index_search_supports_backward_matching() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0agamma\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("beta", 1, 4, 13, 7),
+            ("gamma", 1, 6, 13, 12),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Backward,
+            query: "ta".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "beta");
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 4,
+        }
+    );
+}
+
+#[test]
 fn ssed_simple_index_search_does_not_limit_candidates_before_filtering() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
