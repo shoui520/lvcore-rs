@@ -3,8 +3,13 @@ use std::path::Path;
 
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
+use crate::navigation::{HomeSurface, NavigationSurface};
 use crate::package::{BookId, BookMetadata, BookPackage, DriverRegistry};
+use crate::render::{RenderOptions, ResolvedTargetView};
+use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::{SearchPage, SearchQuery, SearchScope};
+use crate::sequence::{SequenceHint, TargetWindow};
+use crate::target::TargetToken;
 
 #[derive(Default)]
 pub struct BookLibrary {
@@ -48,6 +53,53 @@ impl BookLibrary {
         self.books.get(book_id).map(Box::as_ref)
     }
 
+    pub fn home_surfaces(&self, book_id: &BookId) -> Result<Vec<HomeSurface>> {
+        self.required_book(book_id)?.home_surfaces()
+    }
+
+    pub fn open_surface(&self, book_id: &BookId, surface_id: &str) -> Result<NavigationSurface> {
+        self.required_book(book_id)?.open_surface(surface_id)
+    }
+
+    pub fn render_target(
+        &self,
+        book_id: &BookId,
+        target: &TargetToken,
+        options: &RenderOptions,
+    ) -> Result<ResolvedTargetView> {
+        self.required_book(book_id)?.render_target(target, options)
+    }
+
+    pub fn resolve_target_window(
+        &self,
+        book_id: &BookId,
+        target: &TargetToken,
+        sequence_hint: Option<&SequenceHint>,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<TargetWindow> {
+        self.required_book(book_id)?.resolve_target_window(
+            target,
+            sequence_hint,
+            before,
+            after,
+            options,
+        )
+    }
+
+    pub fn resolve_resource(
+        &self,
+        book_id: &BookId,
+        resource: &ResourceToken,
+    ) -> Result<ResourceRef> {
+        self.required_book(book_id)?.resolve_resource(resource)
+    }
+
+    pub fn read_resource(&self, book_id: &BookId, resource: &ResourceToken) -> Result<Vec<u8>> {
+        self.required_book(book_id)?.read_resource(resource)
+    }
+
     pub fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         match &query.scope {
             SearchScope::CurrentBook(book_id) => {
@@ -59,6 +111,11 @@ impl BookLibrary {
             SearchScope::SelectedBooks(book_ids) => self.search_many(book_ids.iter(), query),
             SearchScope::AllBooks => self.search_many(self.books.keys(), query),
         }
+    }
+
+    fn required_book(&self, book_id: &BookId) -> Result<&dyn BookPackage> {
+        self.book(book_id)
+            .ok_or_else(|| Error::BookNotFound(book_id.0.clone()))
     }
 
     fn search_many<'a>(

@@ -114,6 +114,64 @@ fn library_reports_missing_selected_books_as_diagnostics() {
 }
 
 #[test]
+fn library_delegates_reader_operations_by_book_id() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"abcdef"),
+    )
+    .unwrap();
+    fs::write(dir.path().join("MENU.DIC"), b"").unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    fs::write(dir.path().join("Templates/B123.SVG"), b"<svg/>").unwrap();
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let book_id = library.open_path(dir.path(), &registry).unwrap();
+
+    let surfaces = library.home_surfaces(&book_id).unwrap();
+    assert!(
+        surfaces
+            .iter()
+            .any(|surface| surface.kind == NavigationSurfaceKind::Menu)
+    );
+
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 2,
+    })
+    .unwrap();
+    let view = library
+        .render_target(&book_id, &target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::Deferred);
+
+    let window = library
+        .resolve_target_window(&book_id, &target, None, 1, 1, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(window.center.target, target);
+
+    let resource = ResourceToken::new(&InternalResource::PackageFile {
+        path: "templates/b123.svg".to_owned(),
+        resource_kind: ResourceKind::Template,
+    })
+    .unwrap();
+    assert!(
+        library
+            .resolve_resource(&book_id, &resource)
+            .unwrap()
+            .href
+            .is_some()
+    );
+    assert_eq!(
+        library.read_resource(&book_id, &resource).unwrap(),
+        b"<svg/>"
+    );
+}
+
+#[test]
 fn target_tokens_are_frontend_safe_and_round_trippable() {
     let target = InternalTarget::LvedRow {
         table: "content".to_owned(),
