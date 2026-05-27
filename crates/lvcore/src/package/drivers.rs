@@ -9,8 +9,8 @@ use crate::body::{BodyProvider, BodySourceKind, VisualBody};
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{
-    GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference, normalize_gaiji_identity,
-    parse_uni_gaiji_map,
+    GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference, RichLabel,
+    normalize_gaiji_identity, parse_uni_gaiji_map, resolve_rich_label,
 };
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
 use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary};
@@ -1033,13 +1033,14 @@ impl StubBookPackage {
             let title = self
                 .ssed_title_text(row.title)
                 .unwrap_or_else(|| row.key.clone());
+            let label = self.ssed_rich_label(&title);
             hits.push(SearchHit {
                 book_id: self.metadata.book_id.clone(),
                 target,
-                title_html: title.clone(),
-                title_text: title,
+                title_html: label.html,
+                title_text: label.text,
                 snippet_html: None,
-                diagnostics: Vec::new(),
+                diagnostics: label.diagnostics,
             });
             Ok(hits.len() < query.limit)
         })?;
@@ -1129,6 +1130,7 @@ impl StubBookPackage {
             let label = self
                 .ssed_title_text(row.title)
                 .unwrap_or_else(|| row.key.clone());
+            let label = self.ssed_rich_label(&label);
             let target = match self.ssed_target_for_index_pointer(row.body)? {
                 Ok(target) => target,
                 Err(diagnostic) => {
@@ -1138,9 +1140,10 @@ impl StubBookPackage {
             };
             items.push(NavigationItem {
                 item_id: format!("{}:{}", row.component, index),
-                label_html: label.clone(),
-                label_text: label,
+                label_html: label.html,
+                label_text: label.text,
                 target,
+                diagnostics: label.diagnostics,
             });
         }
         Ok(NavigationSurface::TitleIndexBrowse {
@@ -1280,7 +1283,7 @@ impl StubBookPackage {
         let mut diagnostics = Vec::new();
         let mut cells = Vec::new();
         for cell in inline_cells {
-            cells.push(ssed_panel_inline_cell_to_navigation_cell(&cell)?);
+            cells.push(ssed_panel_inline_cell_to_navigation_cell(self, &cell)?);
         }
         for data_ref in parsed.data_refs.into_iter().filter(|data_ref| {
             include_external_bins
@@ -1375,6 +1378,7 @@ impl StubBookPackage {
                         row_id: row.content_id,
                         anchor: row.anchor,
                     })?,
+                    diagnostics: Vec::new(),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1417,6 +1421,7 @@ impl StubBookPackage {
                         row_id: page.id,
                         anchor: None,
                     })?,
+                    diagnostics: Vec::new(),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1495,6 +1500,7 @@ impl StubBookPackage {
                                 hore_id: law.hore_id,
                                 anchor: None,
                             })?),
+                            diagnostics: Vec::new(),
                             children: Vec::new(),
                         })
                     })
@@ -1504,6 +1510,7 @@ impl StubBookPackage {
                     label_html: escape_hourei_label_html(&category.name),
                     label_text: category.name,
                     target: None,
+                    diagnostics: Vec::new(),
                     children,
                 })
             })
@@ -1638,6 +1645,10 @@ impl StubBookPackage {
             .ok()?;
         let title = decode_title_text(&data);
         (!title.is_empty()).then_some(title)
+    }
+
+    fn ssed_rich_label(&self, value: &str) -> RichLabel {
+        resolve_rich_label(self, value, &GaijiPolicy::default())
     }
 
     fn ssed_target_for_index_pointer(
@@ -3247,6 +3258,7 @@ fn lved_tree_level_to_nodes(
             label_html: escape_plain_label_html(&item.label),
             label_text: item.label.clone(),
             target,
+            diagnostics: Vec::new(),
             children,
         });
     }
@@ -3275,6 +3287,7 @@ fn multiview_menu_item_to_node(item: &MultiviewMenuItem, node_id: &str) -> Resul
         label_html: escape_plain_label_html(&item.label),
         label_text: item.label.clone(),
         target,
+        diagnostics: Vec::new(),
         children,
     })
 }
@@ -3293,11 +3306,13 @@ fn ssed_menu_records_to_nodes(
             continue;
         }
         let target = ssed_menu_record_target(package, record, diagnostics)?;
+        let rich_label = package.ssed_rich_label(label);
         let node = NavigationNode {
             node_id: format!("ssed-menu:{index}"),
-            label_html: escape_plain_label_html(label),
-            label_text: label.to_owned(),
+            label_html: rich_label.html,
+            label_text: rich_label.text,
             target,
+            diagnostics: rich_label.diagnostics,
             children: Vec::new(),
         };
         let depth = record.depth.max(1);
@@ -3399,7 +3414,10 @@ fn ssed_menu_record_target(
     })?))
 }
 
-fn ssed_panel_inline_cell_to_navigation_cell(cell: &SsedPanelInlineCell) -> Result<PanelCell> {
+fn ssed_panel_inline_cell_to_navigation_cell(
+    package: &StubBookPackage,
+    cell: &SsedPanelInlineCell,
+) -> Result<PanelCell> {
     let target = if !cell.ref_id.is_empty() {
         Some(TargetToken::new(&InternalTarget::PanelCell {
             panel_id: cell.ref_id.clone(),
@@ -3409,13 +3427,15 @@ fn ssed_panel_inline_cell_to_navigation_cell(cell: &SsedPanelInlineCell) -> Resu
     } else {
         None
     };
+    let rich_label = package.ssed_rich_label(&cell.label);
     Ok(PanelCell {
         panel_id: cell.panel_id.clone(),
         row: cell.row.unwrap_or(cell.cell_index),
         column: cell.column.unwrap_or(0),
-        label_html: escape_plain_label_html(&cell.label),
-        label_text: cell.label.clone(),
+        label_html: rich_label.html,
+        label_text: rich_label.text,
         target,
+        diagnostics: rich_label.diagnostics,
     })
 }
 
@@ -3425,13 +3445,15 @@ fn ssed_panel_bin_record_to_navigation_cell(
     record: &SsedPanelBinRecord,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<PanelCell> {
+    let rich_label = package.ssed_rich_label(&record.text);
     Ok(PanelCell {
         panel_id: data_ref.panel_id.clone(),
         row: record.index,
         column: 0,
-        label_html: escape_plain_label_html(&record.text),
-        label_text: record.text.clone(),
+        label_html: rich_label.html,
+        label_text: rich_label.text,
         target: ssed_panel_record_target(package, record, diagnostics)?,
+        diagnostics: rich_label.diagnostics,
     })
 }
 

@@ -29,7 +29,10 @@ pub mod target;
 pub use body::{BodyProvider, BodySourceKind, VisualBody};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity};
 pub use error::{Error, Result};
-pub use gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference};
+pub use gaiji::{
+    GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference, RichLabel,
+    resolve_rich_label,
+};
 pub use hourei::{HoureiLawEntry, HoureiLawWindow, HoureiSearchHit, HoureiStore};
 pub use library::BookLibrary;
 pub use lved_sqlite::{

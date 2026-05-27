@@ -873,6 +873,62 @@ fn ssed_simple_index_search_returns_title_backed_hits() {
 }
 
 #[test]
+fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
+    fs::write(dir.path().join("GA16HALF"), ga16_fixture(0xA121, 8)).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha <zB123> zA128 zB999\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Forward,
+            query: "alp".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    let hit = &page.hits[0];
+    assert_eq!(hit.title_text, "alpha 一 〓 〓");
+    assert!(hit.title_html.contains("alpha 一 "));
+    assert!(hit.title_html.contains("lvcore://resource/"));
+    assert!(hit.title_html.contains(r#"data-gaiji="B999""#));
+    assert!(!hit.title_html.contains("<zB123>"));
+    assert!(!hit.title_html.contains("zA128"));
+    assert!(
+        hit.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "gaiji_unresolved")
+    );
+
+    let surface = package.open_surface("title-index").unwrap();
+    let lvcore::NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("title-index should open as a title/index browse surface");
+    };
+    assert_eq!(items[0].label_text, "alpha 一 〓 〓");
+    assert!(items[0].label_html.contains("lvcore://resource/"));
+    assert!(items[0].label_html.contains(r#"data-gaiji="B999""#));
+    assert!(
+        items[0]
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "gaiji_unresolved")
+    );
+}
+
+#[test]
 fn ssed_simple_index_search_supports_backward_matching() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

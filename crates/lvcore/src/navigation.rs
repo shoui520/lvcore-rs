@@ -83,6 +83,8 @@ pub struct NavigationNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetToken>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<NavigationNode>,
 }
 
@@ -92,6 +94,8 @@ pub struct NavigationItem {
     pub label_html: String,
     pub label_text: String,
     pub target: TargetToken,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +107,8 @@ pub struct PanelCell {
     pub label_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetToken>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 pub trait NavigationProvider: Send + Sync {
