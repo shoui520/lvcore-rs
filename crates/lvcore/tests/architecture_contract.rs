@@ -924,6 +924,18 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
             .unwrap()
             .contains("<article><h1>Alpha</h1>")
     );
+    let window = package
+        .resolve_target_window(
+            alpha.target.as_ref().unwrap(),
+            Some(&lvcore::SequenceHint::LvedTreeOrder),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.center.title.as_deref(), Some("Alpha"));
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].title.as_deref(), Some("Beta"));
 }
 
 #[test]
@@ -1008,6 +1020,7 @@ fn write_minimal_lved_sqlite_fixture(root: &Path) {
                 insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
                 create table content (id integer primary key, type integer, body text, media text);
                 insert into content values (100, 1, '<article><h1>Alpha</h1><p>Tree body</p></article>', '');
+                insert into content values (105, 1, '<article><h1>Beta</h1><p>Tree body</p></article>', '');
                 create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
                 insert into list values (1, 100, 1, '', '<b>alpha</b>', '');
                 create virtual table search using fts4(forward, back, part, fts, advanced1, advanced2, filter);
@@ -1018,7 +1031,7 @@ fn write_minimal_lved_sqlite_fixture(root: &Path) {
     fs::create_dir(root.join("res")).unwrap();
     fs::write(
         root.join("res/tree.idx"),
-        "\u{feff}-127\t0\tExample Dictionary\r\n-127\t1\tBrowse\r\n100\t2\tAlpha\r\n",
+        "\u{feff}-127\t0\tExample Dictionary\r\n-127\t1\tBrowse\r\n100\t2\tAlpha\r\n105\t2\tBeta\r\n",
     )
     .unwrap();
     fs::write(root.join("main.key"), key).unwrap();

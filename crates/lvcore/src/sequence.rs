@@ -14,6 +14,7 @@ pub enum SequenceHint {
     MenuOrder(String),
     PanelOrder(String),
     LvedListOrder,
+    LvedTreeOrder,
     HoureiLawArticleOrder,
     MultiviewTreeOrder,
 }
