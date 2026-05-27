@@ -60,14 +60,35 @@ or gaiji codes directly.
 
 ## Current Status
 
-This repo currently contains the Rust-native architecture scaffold:
+This repo now contains the Rust-native reader-core skeleton plus working
+provider slices:
 
-- typed package-family detection;
+- typed package-family detection for SSED, LVED_SQLITE3, LVLMultiView, and
+  Hourei;
 - casefolded storage lookup with casing preservation;
+- readable SSED component materialization for plain payloads, LogoFontCipher
+  payloads, Mac OS X AES payloads, and observed Mac OS X ZipCrypto `HONMON`
+  wrappers;
 - round-trippable frontend-safe target tokens;
 - shared provider traits for search, navigation, body, render, resources,
   gaiji, and continuous view;
+- native indexed search/browse for implemented SSED title/index forms;
+- SQLCipher-backed LVED_SQLITE3 list/search/content/info/media access where the
+  package key is available;
+- LVLMultiView menu/search/body access for decoded payloads;
+- Hourei law tree/search/body/resource access for decoded law packages;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
-`logovista-tools` remains the research oracle while `lvcore-rs` fills in real
-providers incrementally.
+`logovista-tools` remains the research oracle while `lvcore-rs` ports stable
+reader-facing behavior incrementally. Real corpus validation is the main
+compatibility signal; synthetic fixtures are only regression guardrails for
+known structures.
+
+## Important Gaps
+
+- SSED HC renderer parity is not ported yet. SSED body targets currently resolve
+  to explicit HC renderer input rather than claiming rendered HTML.
+- SSED full-text search is not implemented yet.
+- Some SSED index variants are still reported as deferred when they are not the
+  simple leaf layout currently parsed.
+- CHM/HANREI wrapping is still reader-surface work, not finished rendering.
