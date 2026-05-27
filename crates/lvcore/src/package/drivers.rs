@@ -855,6 +855,9 @@ impl BodyProvider for StubBookPackage {
                 row_id,
                 anchor: _,
             } => self.visual_body_for_lved_row(&table, row_id),
+            InternalTarget::LvedInfoPage { name, anchor: _ } => {
+                self.visual_body_for_lved_info_name(&name)
+            }
             InternalTarget::MultiviewHref { href, anchor } => {
                 self.visual_body_for_multiview_href(&href, anchor.as_deref())
             }
@@ -1941,6 +1944,7 @@ impl StubBookPackage {
             InternalTarget::LvedRow { table, .. } if table.eq_ignore_ascii_case("info") => {
                 Ok(ResolvedTargetKind::InfoPage)
             }
+            InternalTarget::LvedInfoPage { .. } => Ok(ResolvedTargetKind::InfoPage),
             InternalTarget::HoureiLaw { .. } => Ok(ResolvedTargetKind::LawArticle),
             _ => Ok(ResolvedTargetKind::EntryBody),
         }
@@ -2074,6 +2078,31 @@ impl StubBookPackage {
         })
     }
 
+    fn visual_body_for_lved_info_name(&self, name: &str) -> Result<VisualBody> {
+        let Some(store) = &self.lved_store else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVED_SQLITE3 store is unavailable".to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "lved_store_missing",
+                    "LVED_SQLITE3 info targets require an opened SQLCipher store",
+                )],
+            });
+        };
+        let Some(html) = store.info_html_by_name(name)? else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVED_SQLITE3 info page was not found".to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "lved_info_missing",
+                    format!("LVED_SQLITE3 info page {name} was not found"),
+                )],
+            });
+        };
+        Ok(VisualBody::PreservedHtml {
+            html,
+            source: BodySourceKind::LvedSqlite,
+        })
+    }
+
     fn visual_body_for_multiview_href(
         &self,
         href: &str,
@@ -2177,6 +2206,22 @@ impl StubBookPackage {
                         diagnostics.push(Diagnostic::warning(
                             "lved_dataid_ref_unparsed",
                             format!("could not parse LVED dataid reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::Info => {
+                    if let Some(target) = lved_info_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            links.push(TargetLink::new(raw_ref, &target)?);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_info_ref_unparsed",
+                            format!("could not parse LVED info reference {raw_ref}"),
                         ));
                     }
                 }
@@ -2928,6 +2973,7 @@ fn html_basic_text(fragment: &str) -> String {
 enum LvedHtmlRefKind {
     Media,
     DataId,
+    Info,
 }
 
 fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
@@ -2937,11 +2983,13 @@ fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
     let dataid = value
         .find("lved.dataid:")
         .map(|index| (index, LvedHtmlRefKind::DataId));
-    match (media, dataid) {
-        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
-        (Some(found), None) | (None, Some(found)) => Some(found),
-        (None, None) => None,
-    }
+    let info = value
+        .find("lved.info:")
+        .map(|index| (index, LvedHtmlRefKind::Info));
+    [media, dataid, info]
+        .into_iter()
+        .flatten()
+        .min_by_key(|found| found.0)
 }
 
 fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {
@@ -2952,6 +3000,18 @@ fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {
         table: "content".to_owned(),
         row_id,
         anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
+    })
+}
+
+fn lved_info_target(raw_ref: &str) -> Option<InternalTarget> {
+    let value = raw_ref.strip_prefix("lved.info:")?;
+    let (name, anchor) = value.split_once('#').unwrap_or((value, ""));
+    if name.is_empty() {
+        return None;
+    }
+    Some(InternalTarget::LvedInfoPage {
+        name: html_unescape_minimal(name),
+        anchor: (!anchor.is_empty()).then(|| html_unescape_minimal(anchor)),
     })
 }
 
@@ -3272,15 +3332,33 @@ mod tests {
         assert!(html.contains("<article><h1>Alpha</h1><p>body</p>"));
         assert!(html.contains("lvcore://resource/"));
         assert!(html.contains("lvcore://target/"));
-        assert_eq!(view.links.len(), 1);
-        assert!(matches!(
-            view.links[0].token.decode().unwrap(),
+        assert!(!html.contains("lved.dataid:101"));
+        assert!(!html.contains("lved.info:help.html"));
+        assert_eq!(view.links.len(), 2);
+        assert!(view.links.iter().any(|link| matches!(
+            link.token.decode().unwrap(),
             InternalTarget::LvedRow {
                 table,
                 row_id: 101,
                 anchor: Some(anchor)
             } if table == "content" && anchor == "jump"
-        ));
+        )));
+        let help_token = view
+            .links
+            .iter()
+            .find_map(|link| match link.token.decode().unwrap() {
+                InternalTarget::LvedInfoPage {
+                    name,
+                    anchor: Some(anchor),
+                } if name == "help.html" && anchor == "top" => Some(link.token.clone()),
+                _ => None,
+            })
+            .expect("expected lved.info link to be routed through TargetToken");
+        let help_view = package
+            .render_target(&help_token, &RenderOptions::default())
+            .unwrap();
+        assert_eq!(help_view.kind, ResolvedTargetKind::InfoPage);
+        assert_eq!(help_view.display_html.as_deref(), Some("<h1>Help</h1>"));
         assert_eq!(view.resources.len(), 2);
         assert!(
             view.resources
@@ -3374,6 +3452,7 @@ mod tests {
                     "
                     create table info (id integer, type integer, name text primary key, body text, media text);
                     insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
+                    insert into info values (2, 1, 'help.html', '<h1>Help</h1>', '');
                     create table content (id integer primary key, type integer, body text, media text);
                     create table media (id integer primary key, name text, type integer, main blob);
                     create table mediasub (id integer primary key, name text, type integer, main blob);
@@ -3394,7 +3473,7 @@ mod tests {
                       advanced2,
                       filter
                     );
-                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><object class=\"icon\" data=\"AC6E.svg\"></object><a href=\"lved.media.sound:00010033.mp3\">sound</a><a href=\"lved.dataid:101#jump\">next</a></article>', '');
+                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><object class=\"icon\" data=\"AC6E.svg\"></object><a href=\"lved.media.sound:00010033.mp3\">sound</a><a href=\"lved.dataid:101#jump\">next</a><a href=\"lved.info:help.html#top\">help</a></article>', '');
                     insert into content values (101, 1, '<article><h1>Beta</h1></article>', '');
                     insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
                     insert into media values (1, 'AC6E', 4, X'3C7376672F3E');

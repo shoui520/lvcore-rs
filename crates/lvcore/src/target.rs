@@ -14,6 +14,7 @@ pub enum TargetKind {
     SsedAddress,
     SsedDenseAnchor,
     LvedRow,
+    LvedInfoPage,
     HoureiLaw,
     MultiviewHref,
     MenuItem,
@@ -40,6 +41,11 @@ pub enum InternalTarget {
     LvedRow {
         table: String,
         row_id: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
+    },
+    LvedInfoPage {
+        name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         anchor: Option<String>,
     },
@@ -84,6 +90,7 @@ impl InternalTarget {
             Self::SsedAddress { .. } => TargetKind::SsedAddress,
             Self::SsedDenseAnchor { .. } => TargetKind::SsedDenseAnchor,
             Self::LvedRow { .. } => TargetKind::LvedRow,
+            Self::LvedInfoPage { .. } => TargetKind::LvedInfoPage,
             Self::HoureiLaw { .. } => TargetKind::HoureiLaw,
             Self::MultiviewHref { .. } => TargetKind::MultiviewHref,
             Self::MenuItem { .. } => TargetKind::MenuItem,

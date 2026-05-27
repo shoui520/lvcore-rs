@@ -167,6 +167,21 @@ impl LvedSqliteStore {
         Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
     }
 
+    pub fn info_html_by_name(&self, name: &str) -> Result<Option<String>> {
+        let connection = self.open_readonly()?;
+        if !sqlite_table_exists(&connection, "info")
+            || !sqlite_table_has_columns(&connection, "info", &["name", "body"])
+        {
+            return Ok(None);
+        }
+        let mut statement = connection.prepare("select body from info where name = ? limit 1")?;
+        let mut rows = statement.query([name])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
+    }
+
     pub fn info_pages(&self, limit: usize) -> Result<Vec<LvedInfoPage>> {
         let connection = self.open_readonly()?;
         if limit == 0
