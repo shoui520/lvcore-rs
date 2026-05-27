@@ -136,6 +136,9 @@ impl DriverRegistry {
         rows.sort_by(|a, b| {
             b.confidence
                 .cmp(&a.confidence)
+                .then_with(|| {
+                    family_priority(b.format_family).cmp(&family_priority(a.format_family))
+                })
                 .then_with(|| a.root.cmp(&b.root))
         });
         Ok(rows)
@@ -155,6 +158,16 @@ impl DriverRegistry {
         Err(Error::UnsupportedFamily(
             detected.format_family.ui_label().to_owned(),
         ))
+    }
+}
+
+fn family_priority(family: FormatFamily) -> u8 {
+    match family {
+        FormatFamily::Hourei => 40,
+        FormatFamily::LvedSqlite3 => 30,
+        FormatFamily::LvlMultiView => 20,
+        FormatFamily::Ssed => 10,
+        FormatFamily::Unknown => 0,
     }
 }
 

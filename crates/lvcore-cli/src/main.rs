@@ -1,7 +1,9 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use lvcore::{DriverRegistry, Result};
+use serde_json::json;
 
 #[derive(Debug, Parser)]
 #[command(name = "lvcore")]
@@ -18,6 +20,14 @@ enum Command {
         /// Package root or payload path to inspect.
         path: PathBuf,
     },
+    /// Recursively open packages and exercise reader-facing metadata/surfaces.
+    Validate {
+        /// Package roots or corpus roots to inspect.
+        paths: Vec<PathBuf>,
+        /// Stop after this many discovered packages.
+        #[arg(long)]
+        max: Option<usize>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -27,6 +37,86 @@ fn main() -> Result<()> {
             let registry = DriverRegistry::default();
             let detected = registry.detect(&path)?;
             println!("{}", serde_json::to_string_pretty(&detected)?);
+        }
+        Command::Validate { paths, max } => {
+            let registry = DriverRegistry::default();
+            let mut package_paths = Vec::new();
+            for path in paths {
+                discover_packages(&registry, &path, max, &mut package_paths)?;
+                if max.is_some_and(|max| package_paths.len() >= max) {
+                    break;
+                }
+            }
+
+            let mut rows = Vec::new();
+            for path in package_paths {
+                eprintln!("lvcore: validating {}", path.display());
+                let row = match registry.open_best(&path) {
+                    Ok(package) => {
+                        let metadata = package.metadata();
+                        match package.home_surfaces() {
+                            Ok(surfaces) => json!({
+                                "path": path,
+                                "status": "ok",
+                                "book_id": metadata.book_id,
+                                "format_family": metadata.format_family,
+                                "format_label": metadata.format_label,
+                                "title": metadata.title,
+                                "capabilities": metadata.capabilities,
+                                "surface_count": surfaces.len(),
+                                "surfaces": surfaces,
+                            }),
+                            Err(error) => json!({
+                                "path": path,
+                                "status": "surface_error",
+                                "book_id": metadata.book_id,
+                                "format_family": metadata.format_family,
+                                "format_label": metadata.format_label,
+                                "title": metadata.title,
+                                "error": error.to_string(),
+                            }),
+                        }
+                    }
+                    Err(error) => json!({
+                        "path": path,
+                        "status": "open_error",
+                        "error": error.to_string(),
+                    }),
+                };
+                rows.push(row);
+            }
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+    }
+    Ok(())
+}
+
+fn discover_packages(
+    registry: &DriverRegistry,
+    path: &Path,
+    max: Option<usize>,
+    out: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if max.is_some_and(|max| out.len() >= max) {
+        return Ok(());
+    }
+    if !path.exists() {
+        return Ok(());
+    }
+    if !registry.detect(path)?.is_empty() {
+        out.push(path.to_path_buf());
+        return Ok(());
+    }
+    if !path.is_dir() {
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        discover_packages(registry, &entry.path(), max, out)?;
+        if max.is_some_and(|max| out.len() >= max) {
+            break;
         }
     }
     Ok(())

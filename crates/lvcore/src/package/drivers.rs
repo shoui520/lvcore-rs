@@ -120,7 +120,7 @@ impl PackageDriver for LvedSqliteDriver {
             return Ok(Some(DetectedPackage {
                 root: package_root.to_path_buf(),
                 format_family: FormatFamily::LvedSqlite3,
-                confidence: 90,
+                confidence: 98,
                 title: inferred_folder_title(package_root),
                 evidence,
             }));
@@ -168,7 +168,7 @@ impl PackageDriver for LvlMultiViewDriver {
         Ok(Some(DetectedPackage {
             root: root.to_path_buf(),
             format_family: FormatFamily::LvlMultiView,
-            confidence: 95,
+            confidence: 98,
             title: inferred_folder_title(root),
             evidence: vec!["menuData.xml".to_owned(), "*lvbat/*lvdat".to_owned()],
         }))
@@ -207,7 +207,7 @@ impl PackageDriver for HoureiDriver {
             return Ok(Some(DetectedPackage {
                 root: root.to_path_buf(),
                 format_family: FormatFamily::Hourei,
-                confidence: 95,
+                confidence: 98,
                 title: Some("LogoVista電子法令 Professional".to_owned()),
                 evidence: required.iter().map(|v| (*v).to_owned()).collect(),
             }));

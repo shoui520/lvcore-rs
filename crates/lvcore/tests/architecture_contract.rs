@@ -41,6 +41,28 @@ fn driver_registry_detects_first_class_families() {
 }
 
 #[test]
+fn multiview_container_wins_over_retained_ssed_facade() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("menuData.xml"), b"<menu/>").unwrap();
+    fs::write(dir.path().join("blvdat"), b"payload").unwrap();
+
+    let registry = DriverRegistry::default();
+    assert_eq!(
+        registry.detect(dir.path()).unwrap()[0].format_family,
+        FormatFamily::LvlMultiView
+    );
+    assert_eq!(
+        registry
+            .open_best(dir.path())
+            .unwrap()
+            .metadata()
+            .format_family,
+        FormatFamily::LvlMultiView
+    );
+}
+
+#[test]
 fn library_routes_all_book_search_without_unhandled_exceptions() {
     let ssed = tempdir().unwrap();
     fs::write(ssed.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
