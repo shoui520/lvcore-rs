@@ -117,6 +117,8 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
         r#"<list><item label="Book"><item label="まえがき" href="000001" /></item></list>"#,
     )
     .unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    fs::write(dir.path().join("Templates/pic.png"), b"png").unwrap();
     write_minimal_multiview_content_fixture(&dir.path().join("blvdat"));
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
@@ -129,10 +131,12 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
         .render_target(&target, &RenderOptions::default())
         .unwrap();
     assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
-    assert_eq!(
-        view.display_html.as_deref(),
-        Some(r#"<article><h1>まえがき</h1><p>body</p></article>"#)
-    );
+    let html = view.display_html.as_deref().unwrap();
+    assert!(html.contains("<article><h1>まえがき</h1><p>body</p>"));
+    assert!(html.contains(r#"<a href="lvcore://target/"#));
+    assert!(html.contains(r#"<img src="lvcore://resource/"#));
+    assert_eq!(view.links.len(), 1);
+    assert_eq!(view.resources.len(), 1);
 
     let page = package
         .search(&SearchQuery {
@@ -814,7 +818,7 @@ fn write_minimal_multiview_content_fixture(path: &Path) {
               f_All text
             );
             insert into t_contents values
-              (1, '<b>まえがき</b>', '<article><h1>まえがき</h1><p>body</p></article>');
+              (1, '<b>まえがき</b>', '<article><h1>まえがき</h1><p>body</p><a href="lved_ref:entry:000002">next</a><img src="pic.png"></article>');
             insert into t_search values
               (1, 1, 1, '§まえがき§', 1, 0, '<b>まえがき</b>', 'まえがき body');
             "#,

@@ -1327,15 +1327,17 @@ impl StubBookPackage {
         match body {
             VisualBody::PreservedHtml { html, source } => {
                 let view_kind = self.resolved_kind_for_body_target(&target)?;
-                let normalized = if source == BodySourceKind::LvedSqlite {
-                    self.normalize_lved_html_refs(&html)?
-                } else {
-                    NormalizedHtmlRefs {
+                let normalized = match source {
+                    BodySourceKind::LvedSqlite => self.normalize_lved_html_refs(&html)?,
+                    BodySourceKind::LvlMultiViewSqlite => {
+                        self.normalize_multiview_html_refs(&html)?
+                    }
+                    _ => NormalizedHtmlRefs {
                         html,
                         resources: Vec::new(),
                         links: Vec::new(),
                         diagnostics: Vec::new(),
-                    }
+                    },
                 };
                 Ok(ResolvedTargetView {
                     kind: view_kind,
@@ -1628,6 +1630,121 @@ impl StubBookPackage {
         })
     }
 
+    fn normalize_multiview_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
+        let mut output = String::with_capacity(html.len());
+        let mut resources = Vec::new();
+        let mut links = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut seen_resource_tokens = BTreeSet::new();
+        let mut seen_target_tokens = BTreeSet::new();
+        let mut cursor = 0usize;
+
+        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+            output.push_str(&html[cursor..attr.value_start]);
+            let raw_value = &html[attr.value_start..attr.value_end];
+            if attr.name == HtmlAttrName::Href {
+                if let Some(replacement) =
+                    self.rewrite_multiview_href(raw_value, &mut links, &mut seen_target_tokens)?
+                {
+                    output.push_str(&replacement);
+                } else {
+                    output.push_str(raw_value);
+                }
+            } else if let Some(resource) = self.multiview_package_resource(raw_value)? {
+                let token = ResourceToken::new(&resource)?;
+                let href = format!("lvcore://resource/{}", token.as_str());
+                if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                    let resource_ref = self.resolve_resource(&token)?;
+                    diagnostics.extend(resource_ref.diagnostics.clone());
+                    resources.push(resource_ref);
+                }
+                output.push_str(&href);
+            } else {
+                output.push_str(raw_value);
+            }
+            cursor = attr.value_end;
+        }
+
+        output.push_str(&html[cursor..]);
+        Ok(NormalizedHtmlRefs {
+            html: output,
+            resources,
+            links,
+            diagnostics,
+        })
+    }
+
+    fn rewrite_multiview_href(
+        &self,
+        raw_value: &str,
+        links: &mut Vec<TargetLink>,
+        seen_target_tokens: &mut BTreeSet<String>,
+    ) -> Result<Option<String>> {
+        let value = html_unescape_minimal(raw_value).trim().to_owned();
+        if value.is_empty()
+            || value.starts_with('#')
+            || value.starts_with("http://")
+            || value.starts_with("https://")
+            || value.starts_with("mailto:")
+            || value.starts_with("javascript:")
+        {
+            return Ok(None);
+        }
+        if let Some(anchor) = value
+            .strip_prefix("lved_mark:")
+            .and_then(|rest| rest.split_once(':').map(|(_, anchor)| anchor))
+        {
+            return Ok(Some(format!("#{anchor}")));
+        }
+        let target_href = value
+            .strip_prefix("lved_ref:")
+            .and_then(|rest| rest.split_once(':').map(|(_, target)| target))
+            .unwrap_or(&value);
+        let target = InternalTarget::MultiviewHref {
+            href: target_href.to_owned(),
+            anchor: None,
+        };
+        let token = TargetToken::new(&target)?;
+        if seen_target_tokens.insert(token.as_str().to_owned()) {
+            links.push(TargetLink::new(raw_value, &target)?);
+        }
+        Ok(Some(format!("lvcore://target/{}", token.as_str())))
+    }
+
+    fn multiview_package_resource(&self, raw_value: &str) -> Result<Option<InternalResource>> {
+        let value = html_unescape_minimal(raw_value).trim().replace('\\', "/");
+        if value.is_empty()
+            || value.starts_with('#')
+            || value.starts_with("http://")
+            || value.starts_with("https://")
+            || value.starts_with("data:")
+        {
+            return Ok(None);
+        }
+        let relative = value.split(['#', '?']).next().unwrap_or("").trim();
+        if relative.is_empty() {
+            return Ok(None);
+        }
+        let candidates = [
+            relative.to_owned(),
+            format!("Templates/{relative}"),
+            format!("Help/image/{relative}"),
+            format!("Help/{relative}"),
+        ];
+        for candidate in candidates {
+            if self.storage.exists(Path::new(&candidate))? {
+                return Ok(Some(InternalResource::PackageFile {
+                    resource_kind: resource_kind_from_path(&candidate),
+                    path: candidate,
+                }));
+            }
+        }
+        Ok(Some(InternalResource::PackageFile {
+            resource_kind: resource_kind_from_path(relative),
+            path: relative.to_owned(),
+        }))
+    }
+
     fn validate_plain_component(
         &self,
         component: &SsedComponent,
@@ -1771,6 +1888,78 @@ fn escape_plain_label_html(value: &str) -> String {
         }
     }
     escaped
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HtmlAttrName {
+    Href,
+    Src,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HtmlAttrRange {
+    name: HtmlAttrName,
+    value_start: usize,
+    value_end: usize,
+}
+
+fn next_html_href_or_src_attr(html: &str, cursor: usize) -> Option<HtmlAttrRange> {
+    let lower = html.to_ascii_lowercase();
+    let patterns = [
+        ("href=\"", HtmlAttrName::Href),
+        ("href='", HtmlAttrName::Href),
+        ("src=\"", HtmlAttrName::Src),
+        ("src='", HtmlAttrName::Src),
+    ];
+    let (attr_start, pattern, name) = patterns
+        .iter()
+        .filter_map(|(pattern, name)| {
+            lower[cursor..]
+                .find(pattern)
+                .map(|offset| (cursor + offset, *pattern, *name))
+        })
+        .min_by_key(|(start, _, _)| *start)?;
+    let quote = pattern.as_bytes()[pattern.len() - 1];
+    let value_start = attr_start + pattern.len();
+    let value_end = html.as_bytes()[value_start..]
+        .iter()
+        .position(|byte| *byte == quote)
+        .map(|offset| value_start + offset)?;
+    Some(HtmlAttrRange {
+        name,
+        value_start,
+        value_end,
+    })
+}
+
+fn html_unescape_minimal(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+fn resource_kind_from_path(path: &str) -> ResourceKind {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".mp3") || lower.ends_with(".wav") {
+        ResourceKind::Audio
+    } else if lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".gif")
+        || lower.ends_with(".svg")
+        || lower.ends_with(".bmp")
+    {
+        ResourceKind::Image
+    } else if lower.ends_with(".css") {
+        ResourceKind::Css
+    } else if lower.ends_with(".js") {
+        ResourceKind::Javascript
+    } else {
+        ResourceKind::Other
+    }
 }
 
 fn html_label_text(fragment: &str) -> String {
