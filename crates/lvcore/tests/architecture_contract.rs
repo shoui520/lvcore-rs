@@ -494,6 +494,62 @@ fn ssed_simple_index_targets_preserve_declared_honmon_component_name() {
 }
 
 #[test]
+fn ssed_title_index_sequence_returns_before_and_after_views() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"0123456789"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0agamma\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 0, 13, 0),
+            ("beta", 1, 2, 13, 7),
+            ("gamma", 1, 4, 13, 13),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 2,
+    })
+    .unwrap();
+
+    let window = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::TitleIndexOrder(
+                "title-index".to_owned(),
+            )),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(window.center.title.as_deref(), Some("beta"));
+    assert_eq!(window.before.len(), 1);
+    assert_eq!(window.before[0].title.as_deref(), Some("alpha"));
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].title.as_deref(), Some("gamma"));
+    assert!(
+        !window
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "sequence_deferred")
+    );
+}
+
+#[test]
 fn gaiji_policy_is_backend_owned_and_reorderable() {
     let policy = GaijiPolicy {
         priority: vec![

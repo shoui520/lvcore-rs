@@ -573,11 +573,18 @@ impl SequenceProvider for StubBookPackage {
     fn resolve_target_window(
         &self,
         target: &TargetToken,
-        _sequence_hint: Option<&SequenceHint>,
-        _before: usize,
-        _after: usize,
+        sequence_hint: Option<&SequenceHint>,
+        before: usize,
+        after: usize,
         options: &RenderOptions,
     ) -> Result<TargetWindow> {
+        if self.metadata.format_family == FormatFamily::Ssed
+            && sequence_hint.is_none_or(|hint| matches!(hint, SequenceHint::TitleIndexOrder(_)))
+            && let Some(window) =
+                self.resolve_ssed_title_index_window(target, before, after, options)?
+        {
+            return Ok(window);
+        }
         Ok(TargetWindow {
             center: self.render_target(target, options)?,
             before: Vec::new(),
@@ -879,6 +886,118 @@ impl StubBookPackage {
             block: pointer.block,
             offset: pointer.offset,
         })?))
+    }
+
+    fn resolve_ssed_title_index_window(
+        &self,
+        target: &TargetToken,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        let InternalTarget::SsedAddress {
+            component,
+            block,
+            offset,
+        } = target.decode()?
+        else {
+            return Ok(None);
+        };
+
+        let mut rows = Vec::new();
+        let mut diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
+            rows.push(row);
+            Ok(true)
+        })?;
+        if rows.is_empty() {
+            diagnostics.push(Diagnostic::info(
+                "sequence_deferred",
+                "SSED title/index order is unavailable for this target",
+            ));
+            return Ok(Some(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics,
+            }));
+        }
+
+        let center_index = rows.iter().position(|row| {
+            row.body.block == block
+                && row.body.offset == offset
+                && self
+                    .ssed_component_for_index_pointer(row.body)
+                    .is_some_and(|row_component| row_component.eq_ignore_ascii_case(&component))
+        });
+        let Some(center_index) = center_index else {
+            diagnostics.push(Diagnostic::info(
+                "sequence_target_not_in_title_index",
+                "target is not present in the simple SSED title/index order",
+            ));
+            return Ok(Some(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics,
+            }));
+        };
+
+        let mut center = self.render_target(target, options)?;
+        center.title = Some(self.ssed_index_row_label(&rows[center_index]));
+        let before_start = center_index.saturating_sub(before);
+        let after_end = rows
+            .len()
+            .min(center_index.saturating_add(after).saturating_add(1));
+
+        let mut before_views = Vec::new();
+        for row in &rows[before_start..center_index] {
+            if let Some(view) = self.render_ssed_index_row(row, options, &mut diagnostics)? {
+                before_views.push(view);
+            }
+        }
+        let mut after_views = Vec::new();
+        for row in &rows[center_index + 1..after_end] {
+            if let Some(view) = self.render_ssed_index_row(row, options, &mut diagnostics)? {
+                after_views.push(view);
+            }
+        }
+
+        Ok(Some(TargetWindow {
+            center,
+            before: before_views,
+            after: after_views,
+            diagnostics,
+        }))
+    }
+
+    fn render_ssed_index_row(
+        &self,
+        row: &SsedIndexRow,
+        options: &RenderOptions,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<Option<ResolvedTargetView>> {
+        let target = match self.ssed_target_for_index_pointer(row.body)? {
+            Ok(target) => target,
+            Err(diagnostic) => {
+                diagnostics.push(diagnostic);
+                return Ok(None);
+            }
+        };
+        let mut view = self.render_target(&target, options)?;
+        view.title = Some(self.ssed_index_row_label(row));
+        Ok(Some(view))
+    }
+
+    fn ssed_index_row_label(&self, row: &SsedIndexRow) -> String {
+        self.ssed_title_text(row.title)
+            .unwrap_or_else(|| row.key.clone())
+    }
+
+    fn ssed_component_for_index_pointer(&self, pointer: SsedIndexPointer) -> Option<&str> {
+        self.ssed_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.component_for_address(pointer.block))
+            .map(|component| component.filename.as_str())
     }
 
     fn view_for_visual_body(
