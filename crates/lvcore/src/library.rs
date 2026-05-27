@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use serde::{Deserialize, Serialize};
+
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::navigation::{HomeSurface, NavigationSurface};
@@ -14,6 +18,14 @@ use crate::target::TargetToken;
 #[derive(Default)]
 pub struct BookLibrary {
     books: BTreeMap<BookId, Box<dyn BookPackage>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LibrarySearchCursor {
+    version: u8,
+    book_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    book_cursor: Option<String>,
 }
 
 impl BookLibrary {
@@ -150,13 +162,30 @@ impl BookLibrary {
         book_ids: impl Iterator<Item = &'a BookId>,
         query: &SearchQuery,
     ) -> Result<SearchPage> {
+        if query.limit == 0 {
+            return Ok(SearchPage {
+                hits: Vec::new(),
+                next_cursor: None,
+                diagnostics: Vec::new(),
+            });
+        }
+        let ordered_book_ids = book_ids.collect::<Vec<_>>();
+        let (start_index, mut inner_cursor, cursor_diagnostic) =
+            decode_library_search_cursor(query.cursor.as_deref());
         let mut page = SearchPage {
             hits: Vec::new(),
             next_cursor: None,
             diagnostics: Vec::new(),
         };
+        if let Some(diagnostic) = cursor_diagnostic {
+            page.diagnostics.push(diagnostic);
+        }
 
-        for book_id in book_ids {
+        for (book_index, book_id) in ordered_book_ids.iter().enumerate().skip(start_index) {
+            if page.hits.len() >= query.limit {
+                page.next_cursor = Some(encode_library_search_cursor(book_index, None));
+                break;
+            }
             let Some(book) = self.book(book_id) else {
                 page.diagnostics.push(
                     Diagnostic::warning("book_missing", format!("{} is not open", book_id.0))
@@ -164,11 +193,13 @@ impl BookLibrary {
                 );
                 continue;
             };
-            if page.hits.len() >= query.limit {
-                break;
-            }
             let mut book_query = query.clone();
-            book_query.scope = SearchScope::CurrentBook(book_id.clone());
+            book_query.scope = SearchScope::CurrentBook((*book_id).clone());
+            book_query.cursor = if book_index == start_index {
+                inner_cursor.take()
+            } else {
+                None
+            };
             book_query.limit = query.limit.saturating_sub(page.hits.len());
             let mut book_page = book.search(&book_query)?;
             for diagnostic in &mut book_page.diagnostics {
@@ -177,16 +208,13 @@ impl BookLibrary {
                     .entry("book_id".to_owned())
                     .or_insert_with(|| book_id.0.clone());
             }
+            let next_book_cursor = book_page.next_cursor.take();
             page.hits.extend(book_page.hits);
             page.diagnostics.extend(book_page.diagnostics);
-            if book_page.next_cursor.is_some() {
-                page.diagnostics.push(
-                    Diagnostic::info(
-                        "search_cursor_deferred",
-                        "cross-book search cursor merging is not implemented yet",
-                    )
-                    .with_context("book_id", &book_id.0),
-                );
+            if let Some(book_cursor) = next_book_cursor {
+                page.next_cursor =
+                    Some(encode_library_search_cursor(book_index, Some(book_cursor)));
+                break;
             }
         }
 
@@ -194,5 +222,38 @@ impl BookLibrary {
             page.hits.truncate(query.limit);
         }
         Ok(page)
+    }
+}
+
+fn encode_library_search_cursor(book_index: usize, book_cursor: Option<String>) -> String {
+    let cursor = LibrarySearchCursor {
+        version: 1,
+        book_index,
+        book_cursor,
+    };
+    let bytes = serde_json::to_vec(&cursor).unwrap_or_default();
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn decode_library_search_cursor(
+    cursor: Option<&str>,
+) -> (usize, Option<String>, Option<Diagnostic>) {
+    let Some(cursor) = cursor else {
+        return (0, None, None);
+    };
+    let decoded = URL_SAFE_NO_PAD
+        .decode(cursor)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<LibrarySearchCursor>(&bytes).ok());
+    match decoded {
+        Some(cursor) if cursor.version == 1 => (cursor.book_index, cursor.book_cursor, None),
+        _ => (
+            0,
+            None,
+            Some(Diagnostic::warning(
+                "invalid_search_cursor",
+                "library search cursor could not be decoded; search restarted from the first book",
+            )),
+        ),
     }
 }
