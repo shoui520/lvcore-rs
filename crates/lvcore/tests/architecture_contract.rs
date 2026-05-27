@@ -862,6 +862,51 @@ fn payload_file_detection_opens_parent_package() {
 }
 
 #[test]
+fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.kind == NavigationSurfaceKind::LvedTree
+            && surface.status == NavigationStatus::Available
+            && surface.target.is_some()
+    }));
+
+    let surface = package.open_surface("lved-tree").unwrap();
+    let lvcore::NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+        panic!("LVED tree.idx should open as a hierarchical tree");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "Example Dictionary");
+    assert!(nodes[0].target.is_none());
+    assert_eq!(nodes[0].children[0].label_text, "Browse");
+    assert!(nodes[0].children[0].target.is_none());
+    let alpha = &nodes[0].children[0].children[0];
+    assert_eq!(alpha.label_text, "Alpha");
+    assert_eq!(
+        alpha.target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::LvedRow {
+            table: "content".to_owned(),
+            row_id: 100,
+            anchor: None,
+        }
+    );
+
+    let view = package
+        .render_target(alpha.target.as_ref().unwrap(), &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        view.display_html
+            .as_deref()
+            .unwrap()
+            .contains("<article><h1>Alpha</h1>")
+    );
+}
+
+#[test]
 fn casefolded_paths_find_real_casing() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("HONMON.DIN"), b"body").unwrap();
@@ -942,12 +987,20 @@ fn write_minimal_lved_sqlite_fixture(root: &Path) {
                 create table info (id integer, type integer, name text primary key, body text, media text);
                 insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
                 create table content (id integer primary key, type integer, body text, media text);
+                insert into content values (100, 1, '<article><h1>Alpha</h1><p>Tree body</p></article>', '');
                 create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                insert into list values (1, 100, 1, '', '<b>alpha</b>', '');
                 create virtual table search using fts4(forward, back, part, fts, advanced1, advanced2, filter);
                 ",
             )
             .unwrap();
     }
+    fs::create_dir(root.join("res")).unwrap();
+    fs::write(
+        root.join("res/tree.idx"),
+        "\u{feff}-127\t0\tExample Dictionary\r\n-127\t1\tBrowse\r\n100\t2\tAlpha\r\n",
+    )
+    .unwrap();
     fs::write(root.join("main.key"), key).unwrap();
 }
 

@@ -14,6 +14,7 @@ pub enum NavigationSurfaceKind {
     Hanrei,
     Info,
     SearchFallback,
+    LvedTree,
     LawTree,
     MultiviewTree,
 }

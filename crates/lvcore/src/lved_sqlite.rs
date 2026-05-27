@@ -27,6 +27,7 @@ pub struct LvedSqliteSummary {
     pub title: Option<String>,
     pub list_available: bool,
     pub info_available: bool,
+    pub tree_available: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +65,13 @@ pub struct LvedListItem {
     pub title_text: String,
     pub subtitle_html: String,
     pub list_type: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvedTreeIndexItem {
+    pub data_id: i64,
+    pub level: u32,
+    pub label: String,
 }
 
 impl LvedSqliteStore {
@@ -107,6 +115,7 @@ impl LvedSqliteStore {
             title: lved_sqlite_title_from_connection(&connection),
             list_available: lved_list_available(&connection)?,
             info_available: lved_info_available(&connection)?,
+            tree_available: self.tree_index_path().is_some(),
         })
     }
 
@@ -190,6 +199,19 @@ impl LvedSqliteStore {
         let rows =
             lved_list_hits_by_id_clause(&connection, &list_columns, "1 = ?", "l.id", 1, limit)?;
         Ok(rows.into_iter().map(LvedListItem::from).collect())
+    }
+
+    pub fn tree_index_items(&self) -> Result<Vec<LvedTreeIndexItem>> {
+        let Some(path) = self.tree_index_path() else {
+            return Ok(Vec::new());
+        };
+        parse_lved_tree_index(&fs::read(path)?)
+    }
+
+    pub fn tree_index_path(&self) -> Option<PathBuf> {
+        let root = self.payload_path.parent()?;
+        let candidates = [root.join("res/tree.idx"), root.join("tree.idx")];
+        candidates.into_iter().find(|path| path.is_file())
     }
 
     pub fn media_blob(&self, store: &str, key: &str) -> Result<Option<Vec<u8>>> {
@@ -302,6 +324,33 @@ fn lved_info_available(connection: &Connection) -> Result<bool> {
         .optional()
         .map(|value| value.is_some())
         .map_err(Error::from)
+}
+
+fn parse_lved_tree_index(bytes: &[u8]) -> Result<Vec<LvedTreeIndexItem>> {
+    let text = decode_sqlite_text(bytes);
+    let mut items = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r').trim_start_matches('\u{feff}');
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut columns = line.splitn(3, '\t');
+        let Some(data_id) = columns.next().and_then(|value| value.parse::<i64>().ok()) else {
+            continue;
+        };
+        let Some(level) = columns.next().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(label) = columns.next() else {
+            continue;
+        };
+        items.push(LvedTreeIndexItem {
+            data_id,
+            level,
+            label: label.to_owned(),
+        });
+    }
+    Ok(items)
 }
 
 impl From<LvedSearchHit> for LvedListItem {

@@ -444,6 +444,10 @@ impl NavigationProvider for StubBookPackage {
                     .lved_summary
                     .as_ref()
                     .is_some_and(|summary| summary.info_available);
+                let tree_available = self
+                    .lved_summary
+                    .as_ref()
+                    .is_some_and(|summary| summary.tree_available);
                 surfaces.push(HomeSurface {
                     surface_id: "lved-list".to_owned(),
                     kind: NavigationSurfaceKind::TitleIndexBrowse,
@@ -475,6 +479,26 @@ impl NavigationProvider for StubBookPackage {
                     title_html: "Info".to_owned(),
                     title_text: "Info".to_owned(),
                     target: None,
+                    diagnostics: Vec::new(),
+                });
+                surfaces.push(HomeSurface {
+                    surface_id: "lved-tree".to_owned(),
+                    kind: NavigationSurfaceKind::LvedTree,
+                    status: if tree_available {
+                        NavigationStatus::Available
+                    } else {
+                        NavigationStatus::Missing
+                    },
+                    title_html: "LVED tree".to_owned(),
+                    title_text: "LVED tree".to_owned(),
+                    target: tree_available
+                        .then(|| {
+                            TargetToken::new(&InternalTarget::MenuItem {
+                                surface_id: "lved-tree".to_owned(),
+                                item_id: "root".to_owned(),
+                            })
+                        })
+                        .transpose()?,
                     diagnostics: Vec::new(),
                 });
             }
@@ -546,6 +570,9 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "info" {
             return self.open_lved_info_surface(surface_id, 100);
+        }
+        if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "lved-tree" {
+            return self.open_lved_tree_surface(surface_id);
         }
         if self.metadata.format_family == FormatFamily::LvlMultiView && surface_id == "menuData" {
             return self.open_multiview_menu_surface(surface_id);
@@ -1070,6 +1097,32 @@ impl StubBookPackage {
         Ok(NavigationSurface::InfoPages {
             surface_id: surface_id.to_owned(),
             pages: items,
+        })
+    }
+
+    fn open_lved_tree_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        let Some(store) = &self.lved_store else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "lved_store_missing",
+                    "LVED_SQLITE3 tree surface requires an opened SQLCipher store",
+                )],
+            });
+        };
+        let rows = store.tree_index_items()?;
+        if rows.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "surface_missing",
+                    "LVED_SQLITE3 tree.idx did not expose navigation rows",
+                )],
+            });
+        }
+        Ok(NavigationSurface::HierarchicalTree {
+            surface_id: surface_id.to_owned(),
+            nodes: lved_tree_items_to_nodes(&rows)?,
         })
     }
 
@@ -2357,6 +2410,60 @@ fn lved_list_label_html(title_html: &str, subtitle_html: &str) -> String {
     } else {
         format!(r#"{title_html}<span class="lvcore-subtitle"> {subtitle_html}</span>"#)
     }
+}
+
+fn lved_tree_items_to_nodes(
+    rows: &[crate::lved_sqlite::LvedTreeIndexItem],
+) -> Result<Vec<NavigationNode>> {
+    let mut cursor = 0usize;
+    let Some(first) = rows.first() else {
+        return Ok(Vec::new());
+    };
+    lved_tree_level_to_nodes(rows, &mut cursor, first.level)
+}
+
+fn lved_tree_level_to_nodes(
+    rows: &[crate::lved_sqlite::LvedTreeIndexItem],
+    cursor: &mut usize,
+    level: u32,
+) -> Result<Vec<NavigationNode>> {
+    let mut nodes = Vec::new();
+    while let Some(item) = rows.get(*cursor) {
+        if item.level < level {
+            break;
+        }
+        if item.level > level {
+            nodes.extend(lved_tree_level_to_nodes(rows, cursor, item.level)?);
+            continue;
+        }
+        let item_index = *cursor;
+        *cursor += 1;
+        let children = if rows
+            .get(*cursor)
+            .is_some_and(|next_item| next_item.level > item.level)
+        {
+            lved_tree_level_to_nodes(rows, cursor, rows[*cursor].level)?
+        } else {
+            Vec::new()
+        };
+        let target = if item.data_id >= 0 {
+            Some(TargetToken::new(&InternalTarget::LvedRow {
+                table: "content".to_owned(),
+                row_id: item.data_id,
+                anchor: None,
+            })?)
+        } else {
+            None
+        };
+        nodes.push(NavigationNode {
+            node_id: format!("tree:{}:{}", item.data_id, item_index),
+            label_html: escape_plain_label_html(&item.label),
+            label_text: item.label.clone(),
+            target,
+            children,
+        });
+    }
+    Ok(nodes)
 }
 
 fn multiview_menu_item_to_node(item: &MultiviewMenuItem, node_id: &str) -> Result<NavigationNode> {
