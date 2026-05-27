@@ -26,7 +26,7 @@ use crate::ssed_index::{
     is_simple_leaf_index_type, parse_simple_leaf_page,
 };
 use crate::storage::{DirectoryStorage, StorageBackend};
-use crate::target::{InternalTarget, TargetToken};
+use crate::target::{InternalTarget, TargetLink, TargetToken};
 
 use super::{
     BookId, BookMetadata, BookPackage, Capability, DetectedPackage, FormatFamily, PackageDriver,
@@ -232,6 +232,13 @@ pub struct StubBookPackage {
     metadata: BookMetadata,
     ssed_catalog: Option<SsedCatalog>,
     lved_store: Option<LvedSqliteStore>,
+}
+
+struct NormalizedHtmlRefs {
+    html: String,
+    resources: Vec<ResourceRef>,
+    links: Vec<TargetLink>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl StubBookPackage {
@@ -1066,21 +1073,26 @@ impl StubBookPackage {
     ) -> Result<ResolvedTargetView> {
         match body {
             VisualBody::PreservedHtml { html, source } => {
-                let (html, resources, diagnostics) = if source == BodySourceKind::LvedSqlite {
-                    self.normalize_lved_html_resources(&html)?
+                let normalized = if source == BodySourceKind::LvedSqlite {
+                    self.normalize_lved_html_refs(&html)?
                 } else {
-                    (html, Vec::new(), Vec::new())
+                    NormalizedHtmlRefs {
+                        html,
+                        resources: Vec::new(),
+                        links: Vec::new(),
+                        diagnostics: Vec::new(),
+                    }
                 };
                 Ok(ResolvedTargetView {
                     kind: crate::render::ResolvedTargetKind::EntryBody,
                     target,
                     title: Some("Entry".to_owned()),
-                    display_html: Some(html),
+                    display_html: Some(normalized.html),
                     basic_text: None,
-                    resources,
-                    links: Vec::new(),
+                    resources: normalized.resources,
+                    links: normalized.links,
                     capabilities: vec![crate::render::RenderCapability::Html],
-                    diagnostics,
+                    diagnostics: normalized.diagnostics,
                     debug_trace: None,
                 })
             }
@@ -1232,16 +1244,15 @@ impl StubBookPackage {
         })
     }
 
-    fn normalize_lved_html_resources(
-        &self,
-        html: &str,
-    ) -> Result<(String, Vec<ResourceRef>, Vec<Diagnostic>)> {
+    fn normalize_lved_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
         let mut output = String::with_capacity(html.len());
         let mut resources = Vec::new();
+        let mut links = Vec::new();
         let mut diagnostics = Vec::new();
-        let mut seen_tokens = BTreeSet::new();
+        let mut seen_resource_tokens = BTreeSet::new();
+        let mut seen_target_tokens = BTreeSet::new();
         let mut cursor = 0usize;
-        while let Some(relative_start) = html[cursor..].find("lved.media.") {
+        while let Some((relative_start, ref_kind)) = next_lved_ref(&html[cursor..]) {
             let start = cursor + relative_start;
             output.push_str(&html[cursor..start]);
             let end = html[start..]
@@ -1249,26 +1260,51 @@ impl StubBookPackage {
                 .map(|index| start + index)
                 .unwrap_or(html.len());
             let raw_ref = &html[start..end];
-            if let Some(resource) = lved_media_resource(raw_ref) {
-                let token = ResourceToken::new(&resource)?;
-                let href = format!("lvcore://resource/{}", token.as_str());
-                if seen_tokens.insert(token.as_str().to_owned()) {
-                    let resource_ref = self.resolve_resource(&token)?;
-                    diagnostics.extend(resource_ref.diagnostics.clone());
-                    resources.push(resource_ref);
+            match ref_kind {
+                LvedHtmlRefKind::Media => {
+                    if let Some(resource) = lved_media_resource(raw_ref) {
+                        let token = ResourceToken::new(&resource)?;
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            let resource_ref = self.resolve_resource(&token)?;
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_media_ref_unparsed",
+                            format!("could not parse LVED media reference {raw_ref}"),
+                        ));
+                    }
                 }
-                output.push_str(&href);
-            } else {
-                output.push_str(raw_ref);
-                diagnostics.push(Diagnostic::warning(
-                    "lved_media_ref_unparsed",
-                    format!("could not parse LVED media reference {raw_ref}"),
-                ));
+                LvedHtmlRefKind::DataId => {
+                    if let Some(target) = lved_dataid_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            links.push(TargetLink::new(raw_ref, &target)?);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_dataid_ref_unparsed",
+                            format!("could not parse LVED dataid reference {raw_ref}"),
+                        ));
+                    }
+                }
             }
             cursor = end;
         }
         output.push_str(&html[cursor..]);
-        Ok((output, resources, diagnostics))
+        Ok(NormalizedHtmlRefs {
+            html: output,
+            resources,
+            links,
+            diagnostics,
+        })
     }
 
     fn validate_plain_component(
@@ -1364,6 +1400,37 @@ fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
         store: store.to_owned(),
         key: key.to_owned(),
         resource_kind,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LvedHtmlRefKind {
+    Media,
+    DataId,
+}
+
+fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
+    let media = value
+        .find("lved.media.")
+        .map(|index| (index, LvedHtmlRefKind::Media));
+    let dataid = value
+        .find("lved.dataid:")
+        .map(|index| (index, LvedHtmlRefKind::DataId));
+    match (media, dataid) {
+        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+        (Some(found), None) | (None, Some(found)) => Some(found),
+        (None, None) => None,
+    }
+}
+
+fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {
+    let value = raw_ref.strip_prefix("lved.dataid:")?;
+    let (row_id, anchor) = value.split_once('#').unwrap_or((value, ""));
+    let row_id = row_id.parse::<i64>().ok()?;
+    Some(InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id,
+        anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
     })
 }
 
@@ -1613,6 +1680,16 @@ mod tests {
         let html = view.display_html.as_deref().unwrap();
         assert!(html.contains("<article><h1>Alpha</h1><p>body</p>"));
         assert!(html.contains("lvcore://resource/"));
+        assert!(html.contains("lvcore://target/"));
+        assert_eq!(view.links.len(), 1);
+        assert!(matches!(
+            view.links[0].token.decode().unwrap(),
+            InternalTarget::LvedRow {
+                table,
+                row_id: 101,
+                anchor: Some(anchor)
+            } if table == "content" && anchor == "jump"
+        ));
         assert_eq!(view.resources.len(), 1);
         assert_eq!(view.resources[0].kind, ResourceKind::Audio);
         assert_eq!(
@@ -1688,7 +1765,7 @@ mod tests {
                       advanced2,
                       filter
                     );
-                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><a href=\"lved.media.sound:00010033.mp3\">sound</a></article>', '');
+                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><a href=\"lved.media.sound:00010033.mp3\">sound</a><a href=\"lved.dataid:101#jump\">next</a></article>', '');
                     insert into mediasub values (1, '00010033', 5, X'49443303');
                     insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
