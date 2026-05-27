@@ -1064,6 +1064,79 @@ fn gaiji_policy_is_backend_owned_and_reorderable() {
 }
 
 #[test]
+fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
+    fs::write(dir.path().join("GA16HALF"), b"ga16").unwrap();
+    fs::write(dir.path().join("GA16FULL"), b"ga16").unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    fs::write(dir.path().join("Templates/B123.SVG"), b"<svg/>").unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let default = package.resolve_gaiji("B123", &GaijiPolicy::default());
+    assert_eq!(default.identity, "B123");
+    assert_eq!(
+        default.preferred_source,
+        Some(GaijiSourcePreference::Unicode)
+    );
+    assert_eq!(default.unicode.as_deref(), Some("一"));
+    assert_eq!(
+        default.resource.as_ref().unwrap().kind,
+        ResourceKind::Template
+    );
+
+    let image_first = package.resolve_gaiji(
+        "<zB123>",
+        &GaijiPolicy {
+            priority: vec![
+                GaijiSourcePreference::ExternalResource,
+                GaijiSourcePreference::Unicode,
+                GaijiSourcePreference::Ga16Bitmap,
+            ],
+        },
+    );
+    assert_eq!(
+        image_first.preferred_source,
+        Some(GaijiSourcePreference::ExternalResource)
+    );
+    assert_eq!(image_first.unicode.as_deref(), Some("一"));
+    assert_eq!(
+        image_first.resource.as_ref().unwrap().label.as_deref(),
+        Some("B123.SVG")
+    );
+    let bitmap_first = package.resolve_gaiji(
+        "B123",
+        &GaijiPolicy {
+            priority: vec![
+                GaijiSourcePreference::Ga16Bitmap,
+                GaijiSourcePreference::ExternalResource,
+                GaijiSourcePreference::Unicode,
+            ],
+        },
+    );
+    assert_eq!(
+        bitmap_first.preferred_source,
+        Some(GaijiSourcePreference::Ga16Bitmap)
+    );
+    assert_eq!(
+        bitmap_first.resource.as_ref().unwrap().label.as_deref(),
+        Some("GA16FULL")
+    );
+
+    let bitmap = package.resolve_gaiji("A128", &GaijiPolicy::default());
+    assert_eq!(
+        bitmap.preferred_source,
+        Some(GaijiSourcePreference::Ga16Bitmap)
+    );
+    assert!(bitmap.unicode.is_none());
+    assert_eq!(
+        bitmap.resource.as_ref().unwrap().label.as_deref(),
+        Some("GA16HALF")
+    );
+}
+
+#[test]
 fn ssed_detection_uses_actual_idx_magic() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("fake.idx"), b"not-ssed").unwrap();
@@ -1442,6 +1515,17 @@ fn panel_bin_fixture_rows(rows: &[(u32, u32, [u8; 2])]) -> Vec<u8> {
         data.extend_from_slice(label);
         data.extend_from_slice(&[0x00, 0x00]);
     }
+    data
+}
+
+fn uni_fixture() -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(b"Ver2  ");
+    data.extend_from_slice(&0u32.to_be_bytes());
+    data.extend_from_slice(&1u32.to_be_bytes());
+    data.extend_from_slice(&[
+        0xB1, 0x23, 0x00, 0x00, 0x4E, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]);
     data
 }
 

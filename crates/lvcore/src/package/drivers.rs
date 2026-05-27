@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,7 +8,10 @@ use sha2::{Digest, Sha256};
 use crate::body::{BodyProvider, BodySourceKind, VisualBody};
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
-use crate::gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution};
+use crate::gaiji::{
+    GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference, normalize_gaiji_identity,
+    parse_uni_gaiji_map,
+};
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
 use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary};
 use crate::multiview::{MultiviewMenuItem, MultiviewStore, parse_menu_data};
@@ -94,6 +97,7 @@ impl PackageDriver for SsedDriver {
             capabilities,
             StubPackageStores {
                 ssed_catalog: Some(catalog),
+                gaiji_unicode_map: load_package_uni_gaiji_maps(&package_root),
                 ..Default::default()
             },
         )))
@@ -281,6 +285,7 @@ pub struct StubBookPackage {
     lved_summary: Option<LvedSqliteSummary>,
     multiview_store: Option<MultiviewStore>,
     hourei_store: Option<HoureiStore>,
+    gaiji_unicode_map: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Default)]
@@ -290,6 +295,7 @@ pub struct StubPackageStores {
     pub lved_summary: Option<LvedSqliteSummary>,
     pub multiview_store: Option<MultiviewStore>,
     pub hourei_store: Option<HoureiStore>,
+    pub gaiji_unicode_map: BTreeMap<String, String>,
 }
 
 struct NormalizedHtmlRefs {
@@ -337,6 +343,7 @@ impl StubBookPackage {
             lved_summary: stores.lved_summary,
             multiview_store: stores.multiview_store,
             hourei_store: stores.hourei_store,
+            gaiji_unicode_map: stores.gaiji_unicode_map,
         }
     }
 }
@@ -785,16 +792,50 @@ impl ResourceProvider for StubBookPackage {
 }
 
 impl GaijiProvider for StubBookPackage {
-    fn resolve_gaiji(&self, identity: &str, _policy: &GaijiPolicy) -> GaijiResolution {
+    fn resolve_gaiji(&self, identity: &str, policy: &GaijiPolicy) -> GaijiResolution {
+        let Some(code) = normalize_gaiji_identity(identity) else {
+            return GaijiResolution {
+                identity: identity.to_owned(),
+                preferred_source: None,
+                unicode: None,
+                resource: None,
+                nonliteral_marker: false,
+                diagnostics: vec![Diagnostic::warning(
+                    "gaiji_identity_invalid",
+                    format!("{identity} is not a four-hex-digit LogoVista gaiji identity"),
+                )],
+            };
+        };
+
+        let unicode = self.gaiji_unicode_map.get(&code).cloned();
+        let template_resource = self.template_gaiji_resource(&code);
+        let ga16_resource = self.ga16_gaiji_resource_ref(&code);
+        let preferred_source = policy.priority.iter().copied().find(|source| match source {
+            GaijiSourcePreference::Unicode => unicode.is_some(),
+            GaijiSourcePreference::ExternalResource => template_resource.is_some(),
+            GaijiSourcePreference::Ga16Bitmap => ga16_resource.is_some(),
+        });
+        let resource = match preferred_source {
+            Some(GaijiSourcePreference::ExternalResource) => template_resource,
+            Some(GaijiSourcePreference::Ga16Bitmap) => ga16_resource,
+            _ => template_resource.or(ga16_resource),
+        };
+        let diagnostics = if preferred_source.is_none() {
+            vec![Diagnostic::info(
+                "gaiji_unresolved",
+                format!("{code} was not resolved to Unicode, Template, or GA16 resource"),
+            )]
+        } else {
+            Vec::new()
+        };
+
         GaijiResolution {
-            identity: identity.to_owned(),
-            unicode: None,
-            resource: None,
+            identity: code,
+            preferred_source,
+            unicode,
+            resource,
             nonliteral_marker: false,
-            diagnostics: vec![Diagnostic::info(
-                "gaiji_deferred",
-                "gaiji provider is not implemented yet",
-            )],
+            diagnostics,
         }
     }
 }
@@ -1870,6 +1911,60 @@ impl StubBookPackage {
             view.title = Some(title.clone());
         }
         Ok(view)
+    }
+
+    fn template_gaiji_resource(&self, code: &str) -> Option<ResourceRef> {
+        for extension in ["svg", "png", "gif", "jpg", "jpeg"] {
+            let candidate = format!("Templates/{code}.{extension}");
+            if self
+                .storage
+                .resolve_casefolded(Path::new(&candidate))
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                continue;
+            }
+            let token = ResourceToken::new(&InternalResource::PackageFile {
+                path: candidate,
+                resource_kind: ResourceKind::Template,
+            })
+            .ok()?;
+            return self.resolve_resource(&token).ok();
+        }
+        None
+    }
+
+    fn ga16_gaiji_resource_ref(&self, code: &str) -> Option<ResourceRef> {
+        let first = code.as_bytes().first()?.to_ascii_uppercase();
+        let candidates: &[&str] = match first {
+            b'A' => &["GA16HALF", "GAI16H", "GAI16H00"],
+            b'B' => &["GA16FULL", "GAI16F", "GAI16F00"],
+            _ => &[],
+        };
+        for candidate in candidates {
+            if self
+                .storage
+                .resolve_casefolded(Path::new(candidate))
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                continue;
+            }
+            let token = ResourceToken::new(&InternalResource::PackageFile {
+                path: (*candidate).to_owned(),
+                resource_kind: ResourceKind::Other,
+            })
+            .ok()?;
+            let mut resource = self.resolve_resource(&token).ok()?;
+            resource.diagnostics.push(Diagnostic::info(
+                "ga16_glyph_extraction_deferred",
+                format!("{code} maps to a GA16 bitmap resource; glyph extraction is deferred"),
+            ));
+            return Some(resource);
+        }
+        None
     }
 
     fn resolve_lved_list_window(
@@ -3715,6 +3810,20 @@ fn files_with_suffix(root: &Path, suffix: &str) -> Result<Vec<PathBuf>> {
     }
     rows.sort();
     Ok(rows)
+}
+
+fn load_package_uni_gaiji_maps(root: &Path) -> BTreeMap<String, String> {
+    let mut merged = BTreeMap::new();
+    let Ok(paths) = files_with_suffix(root, ".uni") else {
+        return merged;
+    };
+    for path in paths {
+        let Ok(data) = fs::read(&path) else {
+            continue;
+        };
+        merged.extend(parse_uni_gaiji_map(&data));
+    }
+    merged
 }
 
 fn package_root_for_detection(path: &Path) -> &Path {
