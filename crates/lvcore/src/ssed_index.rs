@@ -109,26 +109,89 @@ pub fn decode_index_key(data: &[u8]) -> String {
 }
 
 pub fn decode_title_text(data: &[u8]) -> String {
-    let end = data
-        .windows(2)
-        .position(|pair| pair == [0x1f, 0x0a])
-        .or_else(|| {
-            data.iter()
-                .position(|byte| matches!(*byte, 0x00 | b'\n' | b'\r'))
-        })
-        .unwrap_or(data.len());
-    let mut filtered = Vec::with_capacity(end);
+    let filtered = title_payload_bytes(data);
+    if looks_like_plain_ascii_title(&filtered) {
+        return String::from_utf8_lossy(&filtered).trim().to_owned();
+    }
+    decode_title_payload_text(&filtered)
+}
+
+fn title_payload_bytes(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
     let mut index = 0usize;
-    while index < end {
+    while index < data.len() {
         if data[index] == 0x1f {
-            index = index.saturating_add(2);
+            if data.get(index + 1) == Some(&0x0a) {
+                break;
+            }
+            index = skip_control(data, index, data.len());
             continue;
         }
-        filtered.push(data[index]);
+        if matches!(data[index], 0x00 | b'\n' | b'\r') {
+            break;
+        }
+        out.push(data[index]);
         index += 1;
     }
-    let (decoded, _encoding, _had_errors) = SHIFT_JIS.decode(&filtered);
-    decoded.trim().to_owned()
+    out
+}
+
+fn decode_title_payload_text(data: &[u8]) -> String {
+    let mut out = String::new();
+    let mut index = 0usize;
+    while index < data.len() {
+        if data[index] == 0x1f {
+            index = skip_control(data, index, data.len());
+            continue;
+        }
+        if data[index] == 0 {
+            break;
+        }
+        if data[index] < 0x20 {
+            out.push(' ');
+            index += 1;
+            continue;
+        }
+        if index + 1 < data.len()
+            && (0x21..=0x7e).contains(&data[index])
+            && (0x21..=0x7e).contains(&data[index + 1])
+            && let Some(decoded) = decode_jis_pair(data[index], data[index + 1])
+        {
+            out.push(decoded);
+            index += 2;
+            continue;
+        }
+        if index + 1 < data.len()
+            && ((0x81..=0x9f).contains(&data[index]) || (0xe0..=0xfc).contains(&data[index]))
+        {
+            let (decoded, _encoding, had_errors) = SHIFT_JIS.decode(&data[index..index + 2]);
+            if !had_errors {
+                out.push_str(decoded.as_ref());
+                index += 2;
+                continue;
+            }
+        }
+        if data[index] <= 0x7e {
+            out.push(data[index] as char);
+        }
+        index += 1;
+    }
+    out.trim().to_owned()
+}
+
+fn looks_like_plain_ascii_title(data: &[u8]) -> bool {
+    if data.is_empty() || !data.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
+        return false;
+    }
+    let alnum_or_space = data
+        .iter()
+        .filter(|byte| byte.is_ascii_alphanumeric() || byte.is_ascii_whitespace())
+        .count();
+    let jis_like_punctuation = data
+        .iter()
+        .filter(|byte| matches!(**byte, b'!' | b'#' | b'$' | b'%'))
+        .count();
+    alnum_or_space * 2 >= data.len() && jis_like_punctuation * 3 <= data.len()
 }
 
 pub(crate) fn decode_jis_pair(first: u8, second: u8) -> Option<char> {
@@ -163,6 +226,17 @@ fn narrow_fullwidth_ascii(text: &str) -> String {
             _ => ch,
         })
         .collect()
+}
+
+fn skip_control(data: &[u8], index: usize, end: usize) -> usize {
+    let mut next = index.saturating_add(2).min(end);
+    if next < end && data[next] <= 0x10 {
+        next += 1;
+    }
+    if next < end && data[next] <= 0x10 {
+        next += 1;
+    }
+    next
 }
 
 fn be16(data: &[u8], offset: usize) -> u16 {
@@ -211,5 +285,20 @@ mod tests {
                 offset: 4
             }
         );
+    }
+
+    #[test]
+    fn decodes_jis_pair_title_text() {
+        assert_eq!(
+            decode_title_text(&[0x1f, 0x09, 0x00, 0x01, 0x24, 0x22, 0x1f, 0x0a]),
+            "あ"
+        );
+    }
+
+    #[test]
+    fn keeps_plain_ascii_title_text() {
+        assert_eq!(decode_title_text(b"alpha\x1f\x0a"), "alpha");
+        assert_eq!(decode_title_text(b"gamma\x1f\x0a"), "gamma");
+        assert_eq!(decode_title_text(b"\ngamma\x1f\x0a"), "");
     }
 }
