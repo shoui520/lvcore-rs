@@ -21,3 +21,4 @@ serde_json = "1.0"
 sha2 = "0.10"
 tempfile = "3.13"
 thiserror = "2.0"
+zip = { version = "5.1.1", default-features = false, features = ["deflate-flate2-zlib-rs", "legacy-zip"] }

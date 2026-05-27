@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use lvcore::{
@@ -10,6 +11,8 @@ use lvcore::{
 };
 use rusqlite::Connection;
 use tempfile::tempdir;
+use zip::unstable::write::FileOptionsExt;
+use zip::write::{SimpleFileOptions, ZipWriter};
 
 #[test]
 fn driver_registry_detects_first_class_families() {
@@ -900,6 +903,73 @@ fn render_target_uses_resolved_visual_body_contract() {
     assert!(debug_trace.contains("HONMON.DIC"));
     assert!(debug_trace.contains("\"offset\":2"));
     assert!(debug_trace.contains("HC0158"));
+}
+
+#[test]
+fn ssed_honmon_targets_accept_mac_extensionless_payload_alias() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_honmon("HONMON.DIN"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HONMON"),
+        sseddata_literal_fixture(b"0123456789"),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIN".to_owned(),
+        block: 1,
+        offset: 2,
+    })
+    .unwrap();
+
+    let input = package.renderer_input_for_target(&target).unwrap();
+    let RendererInput::HcSsedStream {
+        component, offset, ..
+    } = input
+    else {
+        panic!("extensionless Mac HONMON should still produce HC SSED renderer input");
+    };
+    assert_eq!(component, "HONMON.DIN");
+    assert_eq!(offset, 2);
+}
+
+#[test]
+fn ssed_honmon_targets_accept_mac_zipcrypto_payload_wrapper() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("0000012e.idx"),
+        ssedinfo_fixture_with_honmon("HONMON.DIN"),
+    )
+    .unwrap();
+    write_zipcrypto_honmon_wrapper(
+        &dir.path().join("HONMON"),
+        "HONMON.DIN",
+        b"casKet0000012e",
+        &sseddata_literal_fixture(b"0123456789"),
+    );
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIN".to_owned(),
+        block: 1,
+        offset: 2,
+    })
+    .unwrap();
+
+    let input = package.renderer_input_for_target(&target).unwrap();
+    let RendererInput::HcSsedStream {
+        component, offset, ..
+    } = input
+    else {
+        panic!("Mac HONMON ZipCrypto wrapper should produce HC SSED renderer input");
+    };
+    assert_eq!(component, "HONMON.DIN");
+    assert_eq!(offset, 2);
 }
 
 #[test]
@@ -1861,6 +1931,15 @@ fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
         data.extend_from_slice(&[0, 0, *literal]);
     }
     data
+}
+
+fn write_zipcrypto_honmon_wrapper(path: &Path, member_name: &str, password: &[u8], payload: &[u8]) {
+    let file = fs::File::create(path).unwrap();
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default().with_deprecated_encryption(password);
+    zip.start_file(member_name, options).unwrap();
+    zip.write_all(payload).unwrap();
+    zip.finish().unwrap();
 }
 
 fn menu_stream_fixture(block: u32, offset: u16) -> Vec<u8> {

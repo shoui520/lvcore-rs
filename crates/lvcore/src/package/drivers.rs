@@ -1,11 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use zip::ZipArchive;
+use zip::result::ZipError;
 
 use crate::body::{BodyProvider, BodySourceKind, VisualBody};
+use crate::crypto::{
+    decrypt_logofont_cipher_file_to_path, decrypt_logofont_cipher_prefix,
+    decrypt_macos_logofont_cipher_file_to_path, decrypt_macos_logofont_cipher_prefix,
+};
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{
@@ -28,7 +35,9 @@ use crate::resources::{
 };
 use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery};
 use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
-use crate::ssed::{SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile, SsedDataHeader};
+use crate::ssed::{
+    SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile, SsedDataHeader,
+};
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, decode_title_text, is_leaf_page,
     is_simple_leaf_index_type, parse_simple_leaf_page,
@@ -304,6 +313,9 @@ struct NormalizedHtmlRefs {
     links: Vec<TargetLink>,
     diagnostics: Vec<Diagnostic>,
 }
+
+type PrefixDecryptFn = fn(&[u8], usize) -> Result<Vec<u8>>;
+type FileDecryptFn = fn(&Path, &Path) -> Result<()>;
 
 impl StubBookPackage {
     pub fn new(
@@ -1248,20 +1260,35 @@ impl StubBookPackage {
                 )],
             });
         };
-        let Some(path) = self
-            .storage
-            .resolve_casefolded(Path::new(&component.filename))?
-        else {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![
-                    Diagnostic::warning(
-                        "ssed_navigation_component_file_missing",
-                        format!("{} is declared but not present on disk", component.filename),
-                    )
-                    .with_context("component", &component.filename),
-                ],
-            });
+        let path = match self.resolve_readable_ssed_component_path(component) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![
+                        Diagnostic::warning(
+                            "ssed_navigation_component_file_missing",
+                            format!("{} is declared but not present on disk", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                });
+            }
+            Err(error) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![
+                        Diagnostic::warning(
+                            "ssed_navigation_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                });
+            }
         };
         let mut reader = match SsedDataFile::open(&path) {
             Ok(reader) => reader,
@@ -1669,18 +1696,31 @@ impl StubBookPackage {
                 );
                 continue;
             }
-            let Some(path) = self
-                .storage
-                .resolve_casefolded(Path::new(&component.filename))?
-            else {
-                diagnostics.push(
-                    Diagnostic::warning(
-                        "ssed_index_component_missing",
-                        format!("{} is declared but not present on disk", component.filename),
-                    )
-                    .with_context("component", &component.filename),
-                );
-                continue;
+            let path = match self.resolve_readable_ssed_component_path(component) {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_component_missing",
+                            format!("{} is declared but not present on disk", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
             };
             let mut reader = SsedDataFile::open(&path)?;
             let page_count = component.block_count() as usize;
@@ -1744,8 +1784,7 @@ impl StubBookPackage {
         }
         let component_offset = component.relative_offset(pointer.block, pointer.offset)?;
         let path = self
-            .storage
-            .resolve_casefolded(Path::new(&component.filename))
+            .resolve_readable_ssed_component_path(component)
             .ok()
             .flatten()?;
         let mut reader = SsedDataFile::open(path).ok()?;
@@ -3201,16 +3240,23 @@ impl StubBookPackage {
                 format!("{} has no positive block range", component.filename),
             ));
         }
-        let relative = Path::new(&component.filename);
-        let Some(path) = self
-            .storage
-            .resolve_casefolded(relative)
-            .map_err(|err| Diagnostic::error("ssed_component_lookup_failed", err.to_string()))?
-        else {
-            return Err(Diagnostic::warning(
-                "ssed_component_file_missing",
-                format!("{} is declared but not present on disk", component.filename),
-            ));
+        let path = match self.resolve_readable_ssed_component_path(component) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                return Err(Diagnostic::warning(
+                    "ssed_component_file_missing",
+                    format!("{} is declared but not present on disk", component.filename),
+                ));
+            }
+            Err(err) => {
+                return Err(Diagnostic::warning(
+                    "ssed_component_decode_deferred",
+                    format!(
+                        "{} is not readable as SSEDDATA yet: {err}",
+                        component.filename
+                    ),
+                ));
+            }
         };
         SsedDataHeader::parse_file(&path).map_err(|err| {
             Diagnostic::warning(
@@ -3222,6 +3268,241 @@ impl StubBookPackage {
             )
         })?;
         Ok(())
+    }
+
+    fn resolve_readable_ssed_component_path(
+        &self,
+        component: &SsedComponent,
+    ) -> Result<Option<PathBuf>> {
+        let candidates = self.resolve_ssed_component_candidate_paths(component)?;
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        let mut unreadable = Vec::new();
+        for path in candidates {
+            match self.materialize_readable_ssed_component_path(component, &path)? {
+                Some(readable) => return Ok(Some(readable)),
+                None => unreadable.push(path),
+            }
+        }
+        Err(Error::Driver(format!(
+            "candidate file(s) were found but none decoded as plain, zipped, or encrypted SSEDDATA: {}",
+            unreadable
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )))
+    }
+
+    fn resolve_ssed_component_candidate_paths(
+        &self,
+        component: &SsedComponent,
+    ) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        let mut seen = BTreeSet::new();
+        if let Some(path) = self
+            .storage
+            .resolve_casefolded(Path::new(&component.filename))?
+        {
+            seen.insert(path.clone());
+            paths.push(path);
+        }
+        for alias in ssed_component_filename_aliases(component) {
+            if let Some(path) = self.storage.resolve_casefolded(Path::new(&alias))?
+                && seen.insert(path.clone())
+            {
+                paths.push(path);
+            }
+        }
+        Ok(paths)
+    }
+
+    fn materialize_readable_ssed_component_path(
+        &self,
+        component: &SsedComponent,
+        path: &Path,
+    ) -> Result<Option<PathBuf>> {
+        if SsedDataHeader::parse_file(path).is_ok() {
+            return Ok(Some(path.to_path_buf()));
+        }
+
+        if looks_like_zip_file(path)?
+            && let Some(extracted) = self.extract_zipped_ssed_component(component, path)?
+        {
+            return self.materialize_readable_ssed_component_path(component, &extracted);
+        }
+
+        if let Some(decrypted) = self.decrypt_ssed_component_if_needed(component, path)? {
+            return Ok(Some(decrypted));
+        }
+
+        Ok(None)
+    }
+
+    fn extract_zipped_ssed_component(
+        &self,
+        component: &SsedComponent,
+        zip_path: &Path,
+    ) -> Result<Option<PathBuf>> {
+        let member_name = match zip_member_name_for_component(component, zip_path)? {
+            Some(member_name) => member_name,
+            None => return Ok(None),
+        };
+        for password in self.mac_honmon_zip_passwords()? {
+            let file = File::open(zip_path)?;
+            let mut archive = ZipArchive::new(file).map_err(zip_error)?;
+            let mut member = match password.as_deref() {
+                Some(password) => match archive.by_name_decrypt(&member_name, password) {
+                    Ok(member) => member,
+                    Err(ZipError::InvalidPassword)
+                    | Err(ZipError::UnsupportedArchive(ZipError::PASSWORD_REQUIRED)) => continue,
+                    Err(err) => return Err(zip_error(err)),
+                },
+                None => match archive.by_name(&member_name) {
+                    Ok(member) if member.encrypted() => continue,
+                    Ok(member) => member,
+                    Err(ZipError::UnsupportedArchive(ZipError::PASSWORD_REQUIRED)) => continue,
+                    Err(err) => return Err(zip_error(err)),
+                },
+            };
+            let cache_path = self.ssed_component_cache_path(
+                component,
+                zip_path,
+                &format!(
+                    "zip:{}:{}",
+                    member_name,
+                    password
+                        .as_deref()
+                        .map(hex::encode)
+                        .unwrap_or_else(|| "none".to_owned())
+                ),
+                "bin",
+            )?;
+            if cache_path.exists() {
+                return Ok(Some(cache_path));
+            }
+            let tmp_path = cache_path.with_extension("tmp");
+            {
+                let mut outfile = File::create(&tmp_path)?;
+                if let Err(error) = std::io::copy(&mut member, &mut outfile) {
+                    if password.is_none()
+                        && matches!(
+                            error.kind(),
+                            std::io::ErrorKind::Unsupported
+                                | std::io::ErrorKind::PermissionDenied
+                                | std::io::ErrorKind::InvalidData
+                        )
+                    {
+                        let _ = fs::remove_file(&tmp_path);
+                        continue;
+                    }
+                    return Err(Error::Io(error));
+                }
+                outfile.flush()?;
+            }
+            fs::rename(&tmp_path, &cache_path)?;
+            return Ok(Some(cache_path));
+        }
+        Ok(None)
+    }
+
+    fn decrypt_ssed_component_if_needed(
+        &self,
+        component: &SsedComponent,
+        path: &Path,
+    ) -> Result<Option<PathBuf>> {
+        let mut file = File::open(path)?;
+        let mut prefix = vec![0_u8; 4096];
+        let read = file.read(&mut prefix)?;
+        prefix.truncate(read);
+        if prefix.len() < 16 {
+            return Ok(None);
+        }
+        let attempts: [(&str, PrefixDecryptFn, FileDecryptFn); 2] = [
+            (
+                "macos_logofont_cipher",
+                decrypt_macos_logofont_cipher_prefix,
+                decrypt_macos_logofont_cipher_file_to_path,
+            ),
+            (
+                "logofont_cipher",
+                decrypt_logofont_cipher_prefix,
+                decrypt_logofont_cipher_file_to_path,
+            ),
+        ];
+        for (name, prefix_decrypt, file_decrypt) in attempts {
+            let decrypted_prefix = prefix_decrypt(&prefix, prefix.len())?;
+            if !decrypted_prefix.starts_with(SSEDDATA_MAGIC) {
+                continue;
+            }
+            let cache_path = self.ssed_component_cache_path(component, path, name, "dic")?;
+            if SsedDataHeader::parse_file(&cache_path).is_ok() {
+                return Ok(Some(cache_path));
+            }
+            let tmp_path = cache_path.with_extension("tmp");
+            file_decrypt(path, &tmp_path)?;
+            SsedDataHeader::parse_file(&tmp_path)?;
+            fs::rename(&tmp_path, &cache_path)?;
+            return Ok(Some(cache_path));
+        }
+        Ok(None)
+    }
+
+    fn mac_honmon_zip_passwords(&self) -> Result<Vec<Option<Vec<u8>>>> {
+        let mut passwords = vec![None];
+        for path in self.storage.list_dir(Path::new(""))? {
+            if !path.is_file() {
+                continue;
+            }
+            let Some(stem) = path.file_stem().map(|value| value.to_string_lossy()) else {
+                continue;
+            };
+            let Some(extension) = path.extension().map(|value| value.to_string_lossy()) else {
+                continue;
+            };
+            if !extension.eq_ignore_ascii_case("idx") {
+                continue;
+            }
+            let lower = stem.to_ascii_lowercase();
+            if lower.len() == 8 && lower.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                passwords.push(Some(format!("casKet{lower}").into_bytes()));
+            }
+        }
+        Ok(passwords)
+    }
+
+    fn ssed_component_cache_path(
+        &self,
+        component: &SsedComponent,
+        source: &Path,
+        stage: &str,
+        extension: &str,
+    ) -> Result<PathBuf> {
+        let metadata = fs::metadata(source)?;
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let mut hasher = Sha256::new();
+        hasher.update(self.metadata.root_fingerprint.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(component.filename.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(stage.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(source.as_os_str().to_string_lossy().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(metadata.len().to_le_bytes());
+        hasher.update(modified.to_le_bytes());
+        let hash = hex::encode(hasher.finalize());
+        let dir = std::env::temp_dir()
+            .join("lvcore-rs")
+            .join("ssed-components");
+        fs::create_dir_all(&dir)?;
+        Ok(dir.join(format!("{hash}.{extension}")))
     }
 
     fn hc_profile_hint(&self) -> Result<Option<String>> {
@@ -4059,6 +4340,53 @@ fn ssed_catalog_for_root(root: &Path) -> Result<SsedCatalog> {
     Err(Error::Driver(
         "SSED catalog vanished after detection".to_owned(),
     ))
+}
+
+fn ssed_component_filename_aliases(component: &SsedComponent) -> Vec<String> {
+    if component.role != SsedComponentRole::Honmon {
+        return Vec::new();
+    }
+    let upper = component.filename.to_ascii_uppercase();
+    if !matches!(upper.as_str(), "HONMON" | "HONMON.DIC" | "HONMON.DIN") {
+        return Vec::new();
+    }
+    ["HONMON", "HONMON.DIC", "HONMON.DIN"]
+        .into_iter()
+        .filter(|alias| !alias.eq_ignore_ascii_case(&component.filename))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn looks_like_zip_file(path: &Path) -> Result<bool> {
+    let mut file = File::open(path)?;
+    let mut magic = [0_u8; 4];
+    let read = file.read(&mut magic)?;
+    Ok(read == magic.len() && magic == *b"PK\x03\x04")
+}
+
+fn zip_member_name_for_component(
+    component: &SsedComponent,
+    zip_path: &Path,
+) -> Result<Option<String>> {
+    let file = File::open(zip_path)?;
+    let mut archive = ZipArchive::new(file).map_err(zip_error)?;
+    let mut desired = BTreeSet::new();
+    desired.insert(component.filename.to_ascii_lowercase());
+    for alias in ssed_component_filename_aliases(component) {
+        desired.insert(alias.to_ascii_lowercase());
+    }
+    for index in 0..archive.len() {
+        let member = archive.by_index_raw(index).map_err(zip_error)?;
+        let name = member.name().replace('\\', "/");
+        if desired.contains(&name.to_ascii_lowercase()) {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
+}
+
+fn zip_error(error: ZipError) -> Error {
+    Error::Driver(format!("ZIP decode error: {error}"))
 }
 
 fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
