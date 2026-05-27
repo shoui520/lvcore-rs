@@ -42,6 +42,9 @@ enum Command {
         /// Maximum hits to return.
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        /// Opaque cursor from a previous search page.
+        #[arg(long)]
+        cursor: Option<String>,
         /// Resolve and render the first hit.
         #[arg(long)]
         render_first: bool,
@@ -58,6 +61,12 @@ enum Command {
         path: PathBuf,
         /// Surface identifier, for example `lved-list`, `info`, or `title-index`.
         surface_id: String,
+        /// Opaque cursor from a previous paged surface.
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Maximum surface items to return.
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
     },
     /// Resolve and render one opaque target token for one package.
     Render {
@@ -158,6 +167,7 @@ fn main() -> Result<()> {
             query,
             mode,
             limit,
+            cursor,
             render_first,
             window_before,
             window_after,
@@ -169,7 +179,7 @@ fn main() -> Result<()> {
                 scope: SearchScope::CurrentBook(metadata.book_id.clone()),
                 mode: mode.into(),
                 query,
-                cursor: None,
+                cursor,
                 limit,
             })?;
             let rendered_first = if render_first {
@@ -208,15 +218,22 @@ fn main() -> Result<()> {
                 }))?
             );
         }
-        Command::Surface { path, surface_id } => {
+        Command::Surface {
+            path,
+            surface_id,
+            cursor,
+            limit,
+        } => {
             let registry = DriverRegistry::default();
             let package = registry.open_best(&path)?;
             let metadata = package.metadata();
-            let surface = package.open_surface(&surface_id)?;
+            let surface = package.open_surface_page(&surface_id, cursor.as_deref(), limit)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
                     "metadata": metadata,
+                    "cursor": cursor,
+                    "limit": limit,
                     "surface": surface,
                 }))?
             );
