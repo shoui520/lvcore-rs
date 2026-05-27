@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use encoding_rs::SHIFT_JIS;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -31,6 +31,13 @@ pub struct LvedSearchHit {
     pub title_text: String,
     pub subtitle_html: String,
     pub list_type: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvedListWindow {
+    pub center: LvedSearchHit,
+    pub before: Vec<LvedSearchHit>,
+    pub after: Vec<LvedSearchHit>,
 }
 
 impl LvedSqliteStore {
@@ -122,6 +129,64 @@ impl LvedSqliteStore {
             return Ok(None);
         };
         Ok(Some(sqlite_value_to_bytes(row.get_ref(0)?)?))
+    }
+
+    pub fn list_window_for_content(
+        &self,
+        content_id: i64,
+        before: usize,
+        after: usize,
+    ) -> Result<Option<LvedListWindow>> {
+        let connection = self.open_readonly()?;
+        let list_columns = sqlite_columns(&connection, "list")?;
+        if !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
+            return Ok(None);
+        }
+        let Some(center_list_id) = connection
+            .query_row(
+                "select id from list where refid = ? order by id limit 1",
+                [content_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let center = lved_list_hits_by_id_clause(
+            &connection,
+            &list_columns,
+            "l.id = ?",
+            "l.id",
+            center_list_id,
+            1,
+        )?
+        .into_iter()
+        .next();
+        let Some(center) = center else {
+            return Ok(None);
+        };
+        let mut before_rows = lved_list_hits_by_id_clause(
+            &connection,
+            &list_columns,
+            "l.id < ?",
+            "l.id desc",
+            center_list_id,
+            before,
+        )?;
+        before_rows.reverse();
+        let after_rows = lved_list_hits_by_id_clause(
+            &connection,
+            &list_columns,
+            "l.id > ?",
+            "l.id",
+            center_list_id,
+            after,
+        )?;
+        Ok(Some(LvedListWindow {
+            center,
+            before: before_rows,
+            after: after_rows,
+        }))
     }
 }
 
@@ -280,20 +345,55 @@ fn search_lved_sqlite_connection(
          from search s join list l on l.id = s.rowid where {where_clause} order by l.id limit ?"
     );
     let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map((parameter, limit as i64), |row| {
-        let title_html = sqlite_value_to_string(row.get_ref(3)?)?;
-        Ok(LvedSearchHit {
-            list_id: row.get(0)?,
-            content_id: row.get(1)?,
-            anchor: nonempty_string(sqlite_value_to_string(row.get_ref(2)?)?),
-            title_text: html_to_text(&title_html),
-            title_html,
-            subtitle_html: sqlite_value_to_string(row.get_ref(4)?)?,
-            list_type: row.get(5)?,
-        })
-    })?;
+    let rows = statement.query_map((parameter, limit as i64), lved_search_hit_from_row)?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::from)
+}
+
+fn lved_list_hits_by_id_clause(
+    connection: &Connection,
+    list_columns: &[String],
+    where_clause: &str,
+    order_clause: &str,
+    id: i64,
+    limit: usize,
+) -> Result<Vec<LvedSearchHit>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let anchor_column = optional_column_expr(list_columns, "anchor", "''");
+    let title_column = optional_column_expr(list_columns, "title", "''");
+    let subtitle_column = if has_column(list_columns, "titlesub") {
+        "l.titlesub"
+    } else if has_column(list_columns, "subtext") {
+        "l.subtext"
+    } else if has_column(list_columns, "titleplain") {
+        "l.titleplain"
+    } else {
+        "''"
+    };
+    let type_column = optional_column_expr(list_columns, "type", "null");
+    let sql = format!(
+        "select l.id, l.refid, {anchor_column}, {title_column}, {subtitle_column}, {type_column} \
+         from list l where {where_clause} order by {order_clause} limit ?"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map((id, limit as i64), lved_search_hit_from_row)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
+fn lved_search_hit_from_row(row: &Row<'_>) -> rusqlite::Result<LvedSearchHit> {
+    let title_html = sqlite_value_to_string(row.get_ref(3)?)?;
+    Ok(LvedSearchHit {
+        list_id: row.get(0)?,
+        content_id: row.get(1)?,
+        anchor: nonempty_string(sqlite_value_to_string(row.get_ref(2)?)?),
+        title_text: html_to_text(&title_html),
+        title_html,
+        subtitle_html: sqlite_value_to_string(row.get_ref(4)?)?,
+        list_type: row.get(5)?,
+    })
 }
 
 fn lved_search_where(
@@ -826,8 +926,12 @@ mod tests {
                       filter
                     );
                     insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p></article>', '');
+                    insert into content values (101, 1, '<article><h1>Beta</h1></article>', '');
+                    insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
                     insert into mediasub values (1, '00010033', 5, X'49443303');
                     insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
+                    insert into list values (2, 101, 1, '', '<b>beta</b>', '');
+                    insert into list values (3, 102, 1, '', '<b>gamma</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
                     ",
@@ -851,6 +955,10 @@ mod tests {
             store.media_blob("lved.mediasub", "00010033.mp3").unwrap(),
             Some(b"ID3\x03".to_vec())
         );
+        let window = store.list_window_for_content(101, 1, 1).unwrap().unwrap();
+        assert_eq!(window.before[0].title_text, "alpha");
+        assert_eq!(window.center.title_text, "beta");
+        assert_eq!(window.after[0].title_text, "gamma");
     }
 
     #[test]

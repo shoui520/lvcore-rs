@@ -43,6 +43,12 @@ enum Command {
         /// Resolve and render the first hit.
         #[arg(long)]
         render_first: bool,
+        /// Resolve a continuous-view window before the first hit.
+        #[arg(long, default_value_t = 0)]
+        window_before: usize,
+        /// Resolve a continuous-view window after the first hit.
+        #[arg(long, default_value_t = 0)]
+        window_after: usize,
     },
 }
 
@@ -130,6 +136,8 @@ fn main() -> Result<()> {
             mode,
             limit,
             render_first,
+            window_before,
+            window_after,
         } => {
             let registry = DriverRegistry::default();
             let package = registry.open_best(&path)?;
@@ -149,6 +157,22 @@ fn main() -> Result<()> {
             } else {
                 None
             };
+            let target_window = if window_before > 0 || window_after > 0 {
+                page.hits
+                    .first()
+                    .map(|hit| {
+                        package.resolve_target_window(
+                            &hit.target,
+                            None,
+                            window_before,
+                            window_after,
+                            &RenderOptions::default(),
+                        )
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
@@ -157,6 +181,7 @@ fn main() -> Result<()> {
                     "next_cursor": page.next_cursor,
                     "diagnostics": page.diagnostics,
                     "rendered_first": rendered_first,
+                    "target_window": target_window,
                 }))?
             );
         }

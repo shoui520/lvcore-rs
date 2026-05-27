@@ -613,6 +613,12 @@ impl SequenceProvider for StubBookPackage {
         {
             return Ok(window);
         }
+        if self.metadata.format_family == FormatFamily::LvedSqlite3
+            && sequence_hint.is_none_or(|hint| matches!(hint, SequenceHint::LvedListOrder))
+            && let Some(window) = self.resolve_lved_list_window(target, before, after, options)?
+        {
+            return Ok(window);
+        }
         Ok(TargetWindow {
             center: self.render_target(target, options)?,
             before: Vec::new(),
@@ -1051,6 +1057,74 @@ impl StubBookPackage {
         let mut view = self.render_target(&target, options)?;
         view.title = Some(self.ssed_index_row_label(row));
         Ok(Some(view))
+    }
+
+    fn resolve_lved_list_window(
+        &self,
+        target: &TargetToken,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        let InternalTarget::LvedRow {
+            table,
+            row_id,
+            anchor: _,
+        } = target.decode()?
+        else {
+            return Ok(None);
+        };
+        if !table.eq_ignore_ascii_case("content") {
+            return Ok(None);
+        }
+        let Some(store) = &self.lved_store else {
+            return Ok(None);
+        };
+        let Some(window) = store.list_window_for_content(row_id, before, after)? else {
+            return Ok(Some(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![Diagnostic::info(
+                    "sequence_target_not_in_lved_list",
+                    "target is not present in the LVED list order",
+                )],
+            }));
+        };
+
+        let mut center = self.render_lved_list_hit(&window.center, options)?;
+        center.title = Some(window.center.title_text);
+        let before = window
+            .before
+            .iter()
+            .map(|hit| self.render_lved_list_hit(hit, options))
+            .collect::<Result<Vec<_>>>()?;
+        let after = window
+            .after
+            .iter()
+            .map(|hit| self.render_lved_list_hit(hit, options))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(TargetWindow {
+            center,
+            before,
+            after,
+            diagnostics: Vec::new(),
+        }))
+    }
+
+    fn render_lved_list_hit(
+        &self,
+        hit: &crate::lved_sqlite::LvedSearchHit,
+        options: &RenderOptions,
+    ) -> Result<ResolvedTargetView> {
+        let target = TargetToken::new(&InternalTarget::LvedRow {
+            table: "content".to_owned(),
+            row_id: hit.content_id,
+            anchor: hit.anchor.clone(),
+        })?;
+        let mut view = self.render_target(&target, options)?;
+        view.title = Some(hit.title_text.clone());
+        Ok(view)
     }
 
     fn ssed_index_row_label(&self, row: &SsedIndexRow) -> String {
@@ -1696,6 +1770,20 @@ mod tests {
             package.read_resource(&view.resources[0].token).unwrap(),
             b"ID3\x03".to_vec()
         );
+
+        let window = package
+            .resolve_target_window(
+                &page.hits[0].target,
+                Some(&SequenceHint::LvedListOrder),
+                0,
+                2,
+                &RenderOptions::default(),
+            )
+            .unwrap();
+        assert!(window.before.is_empty());
+        assert_eq!(window.after.len(), 2);
+        assert_eq!(window.after[0].title.as_deref(), Some("beta"));
+        assert_eq!(window.after[1].title.as_deref(), Some("gamma"));
     }
 
     #[test]
@@ -1766,8 +1854,12 @@ mod tests {
                       filter
                     );
                     insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><a href=\"lved.media.sound:00010033.mp3\">sound</a><a href=\"lved.dataid:101#jump\">next</a></article>', '');
+                    insert into content values (101, 1, '<article><h1>Beta</h1></article>', '');
+                    insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
                     insert into mediasub values (1, '00010033', 5, X'49443303');
                     insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
+                    insert into list values (2, 101, 1, '', '<b>beta</b>', '');
+                    insert into list values (3, 102, 1, '', '<b>gamma</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
                     ",
