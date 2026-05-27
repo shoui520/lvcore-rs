@@ -854,12 +854,18 @@ impl StubBookPackage {
                     row_id: hit.content_id,
                     anchor: hit.anchor,
                 })?;
+                let title_html = self.normalize_lved_label_html(&hit.title_html)?;
+                let snippet_html = if hit.subtitle_html.is_empty() {
+                    None
+                } else {
+                    Some(self.normalize_lved_label_html(&hit.subtitle_html)?)
+                };
                 Ok(SearchHit {
                     book_id: self.metadata.book_id.clone(),
                     target,
-                    title_html: hit.title_html,
+                    title_html,
                     title_text: hit.title_text,
-                    snippet_html: (!hit.subtitle_html.is_empty()).then_some(hit.subtitle_html),
+                    snippet_html,
                     diagnostics: Vec::new(),
                 })
             })
@@ -1052,6 +1058,10 @@ impl StubBookPackage {
         let items = rows
             .into_iter()
             .map(|row| {
+                let label_html = self.normalize_lved_label_html(&lved_list_label_html(
+                    &row.title_html,
+                    &row.subtitle_html,
+                ))?;
                 let label_text = if row.subtitle_html.is_empty() {
                     row.title_text.clone()
                 } else {
@@ -1059,7 +1069,7 @@ impl StubBookPackage {
                 };
                 Ok(NavigationItem {
                     item_id: row.list_id.to_string(),
-                    label_html: lved_list_label_html(&row.title_html, &row.subtitle_html),
+                    label_html,
                     label_text,
                     target: TargetToken::new(&InternalTarget::LvedRow {
                         table: "content".to_owned(),
@@ -2153,6 +2163,10 @@ impl StubBookPackage {
         })
     }
 
+    fn normalize_lved_label_html(&self, html: &str) -> Result<String> {
+        Ok(self.normalize_lved_html_refs(html)?.html)
+    }
+
     fn normalize_lved_direct_resource_attrs(
         &self,
         html: &str,
@@ -3151,6 +3165,8 @@ mod tests {
         };
         assert_eq!(list_items.len(), 3);
         assert_eq!(list_items[0].label_text, "alpha subtitle");
+        assert!(list_items[0].label_html.contains("lvcore://resource/"));
+        assert!(!list_items[0].label_html.contains("src=\"AC6E.svg\""));
         assert!(matches!(
             list_items[0].target.decode().unwrap(),
             InternalTarget::LvedRow {
@@ -3184,6 +3200,8 @@ mod tests {
 
         assert_eq!(page.hits.len(), 1);
         assert_eq!(page.hits[0].title_text, "alpha");
+        assert!(page.hits[0].title_html.contains("lvcore://resource/"));
+        assert!(!page.hits[0].title_html.contains("src=\"AC6E.svg\""));
         assert!(matches!(
             page.hits[0].target.decode().unwrap(),
             InternalTarget::LvedRow {
@@ -3329,7 +3347,7 @@ mod tests {
                     insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
                     insert into media values (1, 'AC6E', 4, X'3C7376672F3E');
                     insert into mediasub values (1, '00010033', 5, X'49443303');
-                    insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
+                    insert into list values (1, 100, 1, 'body-anchor', '<img class=\"icon\" src=\"AC6E.svg\"><b>alpha</b>', '<span>subtitle</span>');
                     insert into list values (2, 101, 1, '', '<b>beta</b>', '');
                     insert into list values (3, 102, 1, '', '<b>gamma</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
