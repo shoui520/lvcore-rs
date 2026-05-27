@@ -4,9 +4,9 @@ use std::path::Path;
 use lvcore::{
     BodySourceKind, BookLibrary, Capability, DriverRegistry, FormatFamily, GaijiPolicy,
     GaijiSourcePreference, InternalResource, InternalTarget, NavigationStatus,
-    NavigationSurfaceKind, RenderOptions, RendererInput, ResolvedTargetKind, ResourceKind,
-    ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode, SearchQuery, SearchScope,
-    StorageBackend, TargetToken, VisualBody,
+    NavigationSurfaceKind, RenderMode, RenderOptions, RendererInput, ResolvedTargetKind,
+    ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode, SearchQuery,
+    SearchScope, StorageBackend, TargetToken, VisualBody,
 };
 use rusqlite::Connection;
 use tempfile::tempdir;
@@ -138,6 +138,22 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     assert!(html.contains(r#"<img src="lvcore://resource/"#));
     assert_eq!(view.links.len(), 1);
     assert_eq!(view.resources.len(), 1);
+    let basic_view = package
+        .render_target(
+            &target,
+            &RenderOptions {
+                mode: RenderMode::BasicText,
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+    assert!(basic_view.display_html.is_none());
+    assert_eq!(
+        basic_view.basic_text.as_deref(),
+        Some("まえがき\nbody\nnext")
+    );
+    assert!(basic_view.resources.is_empty());
+    assert!(basic_view.links.is_empty());
 
     let page = package
         .search(&SearchQuery {

@@ -17,8 +17,8 @@ use crate::navigation::{
     NavigationSurface, NavigationSurfaceKind,
 };
 use crate::render::{
-    RenderOptions, RendererInput, RendererInputProvider, RendererProvider, ResolvedTargetKind,
-    ResolvedTargetView,
+    RenderMode, RenderOptions, RendererInput, RendererInputProvider, RendererProvider,
+    ResolvedTargetKind, ResolvedTargetView,
 };
 use crate::resources::{
     InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
@@ -1689,6 +1689,20 @@ impl StubBookPackage {
             } => {
                 let view_kind = self.resolved_kind_for_body_target(&target)?;
                 let title = self.title_for_body_target(&target)?;
+                if options.mode == RenderMode::BasicText {
+                    return Ok(ResolvedTargetView {
+                        kind: view_kind,
+                        target,
+                        title: Some(title.unwrap_or_else(|| "Entry".to_owned())),
+                        display_html: None,
+                        basic_text: Some(html_basic_text(&html)),
+                        resources: Vec::new(),
+                        links: Vec::new(),
+                        capabilities: Vec::new(),
+                        diagnostics: Vec::new(),
+                        debug_trace: None,
+                    });
+                }
                 let normalized = match source {
                     BodySourceKind::LvedSqlite => self.normalize_lved_html_refs(&html)?,
                     BodySourceKind::LvlMultiViewSqlite => {
@@ -2622,6 +2636,59 @@ fn html_label_text(fragment: &str) -> String {
         .replace("&amp;", "&")
         .trim()
         .to_owned()
+}
+
+fn html_basic_text(fragment: &str) -> String {
+    let mut text = String::with_capacity(fragment.len());
+    let mut in_tag = false;
+    let mut tag = String::new();
+    for ch in fragment.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                tag.clear();
+            }
+            '>' if in_tag => {
+                in_tag = false;
+                let tag_name = tag
+                    .trim_start_matches('/')
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches('/')
+                    .to_ascii_lowercase();
+                if matches!(
+                    tag_name.as_str(),
+                    "br" | "p"
+                        | "div"
+                        | "li"
+                        | "tr"
+                        | "table"
+                        | "article"
+                        | "section"
+                        | "h1"
+                        | "h2"
+                        | "h3"
+                        | "h4"
+                        | "h5"
+                        | "h6"
+                ) {
+                    text.push('\n');
+                }
+            }
+            _ if in_tag => tag.push(ch),
+            _ => text.push(ch),
+        }
+    }
+    text.replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
