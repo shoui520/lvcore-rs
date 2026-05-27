@@ -189,11 +189,17 @@ impl PackageDriver for LvlMultiViewDriver {
         if payloads == 0 {
             return Ok(None);
         }
+        let retained_ssed_title = ssed_catalog_for_root(root)
+            .ok()
+            .and_then(|catalog| usable_multiview_title(&catalog.title));
+        let menu_title = multiview_menu_title(root)?;
         Ok(Some(DetectedPackage {
             root: root.to_path_buf(),
             format_family: FormatFamily::LvlMultiView,
             confidence: 98,
-            title: inferred_folder_title(root),
+            title: retained_ssed_title
+                .or(menu_title)
+                .or_else(|| inferred_folder_title(root)),
             evidence: vec!["menuData.xml".to_owned(), "*lvbat/*lvdat".to_owned()],
         }))
     }
@@ -2799,6 +2805,28 @@ fn inferred_folder_title(root: &Path) -> Option<String> {
     })
 }
 
+fn multiview_menu_title(root: &Path) -> Result<Option<String>> {
+    let path = root.join("menuData.xml");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let xml = fs::read_to_string(path)?;
+    let items = parse_menu_data(&xml)?;
+    Ok(items
+        .into_iter()
+        .map(|item| item.label.trim().to_owned())
+        .find(|label| !label.is_empty()))
+}
+
+fn usable_multiview_title(title: &str) -> Option<String> {
+    let title = title.trim();
+    if title.is_empty() || title.contains('○') {
+        None
+    } else {
+        Some(title.to_owned())
+    }
+}
+
 fn display_name(path: &Path) -> String {
     path.file_name()
         .map(|v| v.to_string_lossy().to_string())
@@ -2915,11 +2943,16 @@ mod tests {
     #[test]
     fn detects_multiview_by_menu_and_payload() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("menuData.xml"), b"<menu/>").unwrap();
+        fs::write(
+            dir.path().join("menuData.xml"),
+            br#"<list><item label="Visible Title" /></list>"#,
+        )
+        .unwrap();
         fs::write(dir.path().join("blvdat"), b"payload").unwrap();
 
         let detected = LvlMultiViewDriver.detect(dir.path()).unwrap().unwrap();
         assert_eq!(detected.format_family, FormatFamily::LvlMultiView);
+        assert_eq!(detected.title.as_deref(), Some("Visible Title"));
     }
 
     #[test]
