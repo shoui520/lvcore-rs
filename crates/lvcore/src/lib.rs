@@ -9,6 +9,7 @@ pub mod crypto;
 pub mod diagnostics;
 pub mod error;
 pub mod gaiji;
+pub mod hourei;
 pub mod library;
 pub mod lved_sqlite;
 pub mod multiview;
@@ -27,6 +28,7 @@ pub use body::{BodyProvider, BodySourceKind, VisualBody};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity};
 pub use error::{Error, Result};
 pub use gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference};
+pub use hourei::{HoureiLawEntry, HoureiLawWindow, HoureiSearchHit, HoureiStore};
 pub use library::BookLibrary;
 pub use lved_sqlite::{
     LvedInfoPage, LvedKeyFile, LvedListItem, LvedListWindow, LvedSearchHit, LvedSqliteStore,

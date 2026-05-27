@@ -180,6 +180,96 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
 }
 
 #[test]
+fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
+    let dir = tempdir().unwrap();
+    write_minimal_hourei_fixture(dir.path());
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert_eq!(package.metadata().format_family, FormatFamily::Hourei);
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.kind == NavigationSurfaceKind::LawTree
+            && surface.status == NavigationStatus::Available
+            && surface.target.is_some()
+    }));
+
+    let surface = package.open_surface("law-tree").unwrap();
+    let lvcore::NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+        panic!("Hourei law tree should open as a hierarchical tree");
+    };
+    assert_eq!(nodes[0].label_text, "民事");
+    assert_eq!(nodes[0].children.len(), 2);
+    assert_eq!(nodes[0].children[0].label_text, "民法");
+    assert_eq!(
+        nodes[0].children[0]
+            .target
+            .as_ref()
+            .unwrap()
+            .decode()
+            .unwrap(),
+        InternalTarget::HoureiLaw {
+            hore_id: "401000000000000001".to_owned(),
+            anchor: None,
+        }
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Forward,
+            query: "民".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "民法");
+
+    let view = package
+        .render_target(&page.hits[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::LawArticle);
+    assert_eq!(view.title.as_deref(), Some("民法"));
+    let html = view.display_html.as_deref().unwrap();
+    assert!(html.contains("<div class=\"header\">民法</div>"));
+    assert!(html.contains("lvcore://target/"));
+    assert!(html.contains("lvcore://resource/"));
+    assert!(!html.contains("lved_ref&1:"));
+    assert_eq!(view.links.len(), 1);
+    assert_eq!(
+        view.links[0].token.decode().unwrap(),
+        InternalTarget::HoureiLaw {
+            hore_id: "401000000000000002".to_owned(),
+            anchor: Some("A2".to_owned()),
+        }
+    );
+    assert_eq!(view.resources.len(), 1);
+    assert_eq!(view.resources[0].kind, ResourceKind::Image);
+    assert_eq!(
+        package.read_resource(&view.resources[0].token).unwrap(),
+        b"png".to_vec()
+    );
+
+    let window = package
+        .resolve_target_window(
+            &page.hits[0].target,
+            Some(&lvcore::SequenceHint::HoureiLawArticleOrder),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.after.len(), 1);
+    assert!(
+        window.after[0]
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("商法本文")
+    );
+}
+
+#[test]
 fn library_routes_all_book_search_without_unhandled_exceptions() {
     let ssed = tempdir().unwrap();
     fs::write(ssed.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -846,6 +936,59 @@ fn write_minimal_multiview_content_fixture(path: &Path) {
               (3, '<b>あとがき</b>', '<article><h1>あとがき</h1><p>body</p></article>');
             insert into t_search values
               (1, 1, 1, '§まえがき§', 1, 0, '<b>まえがき</b>', 'まえがき body');
+            "#,
+        )
+        .unwrap();
+}
+
+fn write_minimal_hourei_fixture(root: &Path) {
+    let database = root.join("_DataBase");
+    fs::create_dir_all(database.join("HTMLs/H")).unwrap();
+    fs::create_dir_all(database.join("image")).unwrap();
+    fs::create_dir_all(database.join("H01")).unwrap();
+    fs::write(database.join("image/law.png"), b"png").unwrap();
+
+    for name in ["hore_base.db", "hore_search_a.db"] {
+        let connection = Connection::open(database.join(name)).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                create table t_category (f_category_id integer, f_category_name string);
+                create table t_hore (
+                  f_hore_id integer,
+                  f_name string,
+                  f_name_sub string,
+                  f_abbr1 string,
+                  f_abbr2 string,
+                  f_abbr3 string,
+                  f_abbr4 string,
+                  f_abbr5 string,
+                  f_abbr6 string,
+                  f_abbr7 string,
+                  f_category_id integer,
+                  f_kana_order integer,
+                  f_text_plane text
+                );
+                insert into t_category values (10, '民事');
+                insert into t_hore values
+                  (401000000000000001, '民法', '', '', '', '', '', '', '', '', 10, 1, '民法本文'),
+                  (401000000000000002, '商法', '', '', '', '', '', '', '', '', 10, 2, '商法本文');
+                "#,
+            )
+            .unwrap();
+    }
+    Connection::open(database.join("horejo_base.db")).unwrap();
+    fs::write(
+        database.join("HTMLs/H/401000000000000001_H.html"),
+        r#"<div class="header">民法</div><a href="lved_mark&&A1">mark</a><a href="lved_ref&1:401000000000000002&A2">商法</a><img src="law.png">"#,
+    )
+    .unwrap();
+    let shard = Connection::open(database.join("H01/401000000000000002.db")).unwrap();
+    shard
+        .execute_batch(
+            r#"
+            create table t_page (f_rec_id integer, f_text text);
+            insert into t_page values (1, '<div>商法本文</div>');
             "#,
         )
         .unwrap();

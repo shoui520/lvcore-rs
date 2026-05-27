@@ -9,6 +9,7 @@ use crate::body::{BodyProvider, BodySourceKind, VisualBody};
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution};
+use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
 use crate::lved_sqlite::LvedSqliteStore;
 use crate::multiview::{MultiviewMenuItem, MultiviewStore, parse_menu_data};
 use crate::navigation::{
@@ -86,6 +87,7 @@ impl PackageDriver for SsedDriver {
             Some(catalog),
             None,
             None,
+            None,
         )))
     }
 }
@@ -136,6 +138,7 @@ impl PackageDriver for LvedSqliteDriver {
             None,
             store,
             None,
+            None,
         )))
     }
 }
@@ -185,6 +188,7 @@ impl PackageDriver for LvlMultiViewDriver {
             None,
             None,
             store,
+            None,
         )))
     }
 }
@@ -221,6 +225,7 @@ impl PackageDriver for HoureiDriver {
             .detect(root)?
             .ok_or_else(|| Error::Driver("not a Hourei package".to_owned()))?;
         let package_root = detection.root.clone();
+        let store = HoureiStore::discover(&package_root)?;
         Ok(Box::new(StubBookPackage::new(
             &package_root,
             detection,
@@ -228,6 +233,7 @@ impl PackageDriver for HoureiDriver {
             None,
             None,
             None,
+            store,
         )))
     }
 }
@@ -239,6 +245,7 @@ pub struct StubBookPackage {
     ssed_catalog: Option<SsedCatalog>,
     lved_store: Option<LvedSqliteStore>,
     multiview_store: Option<MultiviewStore>,
+    hourei_store: Option<HoureiStore>,
 }
 
 struct NormalizedHtmlRefs {
@@ -256,6 +263,7 @@ impl StubBookPackage {
         ssed_catalog: Option<SsedCatalog>,
         lved_store: Option<LvedSqliteStore>,
         multiview_store: Option<MultiviewStore>,
+        hourei_store: Option<HoureiStore>,
     ) -> Self {
         let format_label = detected.format_family.ui_label().to_owned();
         let book_id = BookId(format!(
@@ -281,6 +289,7 @@ impl StubBookPackage {
             ssed_catalog,
             lved_store,
             multiview_store,
+            hourei_store,
         }
     }
 }
@@ -305,6 +314,9 @@ impl SearchProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::LvlMultiView {
             return self.search_multiview(query);
+        }
+        if self.metadata.format_family == FormatFamily::Hourei {
+            return self.search_hourei(query);
         }
         Ok(SearchPage::deferred(format!(
             "{} search provider is not implemented yet",
@@ -453,14 +465,31 @@ impl NavigationProvider for StubBookPackage {
                 surfaces.push(HomeSurface {
                     surface_id: "law-tree".to_owned(),
                     kind: NavigationSurfaceKind::LawTree,
-                    status: NavigationStatus::Deferred,
+                    status: if self.hourei_store.is_some() {
+                        NavigationStatus::Available
+                    } else {
+                        NavigationStatus::Deferred
+                    },
                     title_html: "法令".to_owned(),
                     title_text: "法令".to_owned(),
-                    target: None,
-                    diagnostics: vec![Diagnostic::info(
-                        "surface_deferred",
-                        "Hourei law tree opening is not wired in this milestone",
-                    )],
+                    target: self
+                        .hourei_store
+                        .is_some()
+                        .then(|| {
+                            TargetToken::new(&InternalTarget::MenuItem {
+                                surface_id: "law-tree".to_owned(),
+                                item_id: "root".to_owned(),
+                            })
+                        })
+                        .transpose()?,
+                    diagnostics: if self.hourei_store.is_some() {
+                        Vec::new()
+                    } else {
+                        vec![Diagnostic::info(
+                            "surface_deferred",
+                            "Hourei law tree requires an opened Hourei store",
+                        )]
+                    },
                 });
             }
             FormatFamily::Unknown => {}
@@ -489,6 +518,9 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::LvlMultiView && surface_id == "menuData" {
             return self.open_multiview_menu_surface(surface_id);
+        }
+        if self.metadata.format_family == FormatFamily::Hourei && surface_id == "law-tree" {
+            return self.open_hourei_law_tree_surface(surface_id);
         }
         Ok(NavigationSurface::Deferred {
             surface_id: surface_id.to_owned(),
@@ -668,6 +700,12 @@ impl SequenceProvider for StubBookPackage {
         {
             return Ok(window);
         }
+        if self.metadata.format_family == FormatFamily::Hourei
+            && sequence_hint.is_none_or(|hint| matches!(hint, SequenceHint::HoureiLawArticleOrder))
+            && let Some(window) = self.resolve_hourei_law_window(target, before, after, options)?
+        {
+            return Ok(window);
+        }
         Ok(TargetWindow {
             center: self.render_target(target, options)?,
             before: Vec::new(),
@@ -703,6 +741,9 @@ impl BodyProvider for StubBookPackage {
             } => self.visual_body_for_lved_row(&table, row_id),
             InternalTarget::MultiviewHref { href, anchor } => {
                 self.visual_body_for_multiview_href(&href, anchor.as_deref())
+            }
+            InternalTarget::HoureiLaw { hore_id, anchor: _ } => {
+                self.visual_body_for_hourei_law(&hore_id)
             }
             _ => Ok(VisualBody::Unsupported {
                 reason: "body provider deferred".to_owned(),
@@ -822,6 +863,36 @@ impl StubBookPackage {
                     book_id: self.metadata.book_id.clone(),
                     target: TargetToken::new(&InternalTarget::MultiviewHref {
                         href: hit.href,
+                        anchor: None,
+                    })?,
+                    title_html: hit.title_html,
+                    title_text: hit.title_text,
+                    snippet_html: hit.snippet_html,
+                    diagnostics: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(SearchPage {
+            hits,
+            next_cursor: None,
+            diagnostics: Vec::new(),
+        })
+    }
+
+    fn search_hourei(&self, query: &SearchQuery) -> Result<SearchPage> {
+        let Some(store) = &self.hourei_store else {
+            return Ok(SearchPage::deferred(
+                "Hourei search requires an opened Hourei store",
+            ));
+        };
+        let hits = store.search(&query.query, &query.mode, query.limit)?;
+        let hits = hits
+            .into_iter()
+            .map(|hit| {
+                Ok(SearchHit {
+                    book_id: self.metadata.book_id.clone(),
+                    target: TargetToken::new(&InternalTarget::HoureiLaw {
+                        hore_id: hit.hore_id,
                         anchor: None,
                     })?,
                     title_html: hit.title_html,
@@ -973,6 +1044,52 @@ impl StubBookPackage {
             .iter()
             .enumerate()
             .map(|(index, item)| multiview_menu_item_to_node(item, &index.to_string()))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(NavigationSurface::HierarchicalTree {
+            surface_id: surface_id.to_owned(),
+            nodes,
+        })
+    }
+
+    fn open_hourei_law_tree_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        let Some(store) = &self.hourei_store else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "hourei_store_missing",
+                    "Hourei law tree requires an opened Hourei store",
+                )],
+            });
+        };
+        let categories = store.categories_with_laws()?;
+        let nodes = categories
+            .into_iter()
+            .map(|category| {
+                let children = category
+                    .laws
+                    .into_iter()
+                    .map(|law| {
+                        let label = hourei_law_node_label(&law);
+                        Ok(NavigationNode {
+                            node_id: format!("law:{}", law.hore_id),
+                            label_html: escape_hourei_label_html(&label),
+                            label_text: label,
+                            target: Some(TargetToken::new(&InternalTarget::HoureiLaw {
+                                hore_id: law.hore_id,
+                                anchor: None,
+                            })?),
+                            children: Vec::new(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(NavigationNode {
+                    node_id: format!("category:{}", category.id),
+                    label_html: escape_hourei_label_html(&category.name),
+                    label_text: category.name,
+                    target: None,
+                    children,
+                })
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
@@ -1358,6 +1475,64 @@ impl StubBookPackage {
         }))
     }
 
+    fn resolve_hourei_law_window(
+        &self,
+        target: &TargetToken,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        let InternalTarget::HoureiLaw { hore_id, .. } = target.decode()? else {
+            return Ok(None);
+        };
+        let Some(store) = &self.hourei_store else {
+            return Ok(None);
+        };
+        let Some(window) = store.law_window(&hore_id, before, after)? else {
+            return Ok(Some(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![Diagnostic::info(
+                    "sequence_target_not_in_hourei_law_order",
+                    "target is not present in the Hourei kana-order law list",
+                )],
+            }));
+        };
+        let mut center = self.render_target(target, options)?;
+        center.title = Some(hourei_law_node_label(&window.center));
+        let before = window
+            .before
+            .into_iter()
+            .map(|entry| self.render_hourei_law_entry(&entry, options))
+            .collect::<Result<Vec<_>>>()?;
+        let after = window
+            .after
+            .into_iter()
+            .map(|entry| self.render_hourei_law_entry(&entry, options))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(TargetWindow {
+            center,
+            before,
+            after,
+            diagnostics: Vec::new(),
+        }))
+    }
+
+    fn render_hourei_law_entry(
+        &self,
+        entry: &crate::hourei::HoureiLawEntry,
+        options: &RenderOptions,
+    ) -> Result<ResolvedTargetView> {
+        let target = TargetToken::new(&InternalTarget::HoureiLaw {
+            hore_id: entry.hore_id.clone(),
+            anchor: None,
+        })?;
+        let mut view = self.render_target(&target, options)?;
+        view.title = Some(hourei_law_node_label(entry));
+        Ok(view)
+    }
+
     fn ssed_index_row_label(&self, row: &SsedIndexRow) -> String {
         self.ssed_title_text(row.title)
             .unwrap_or_else(|| row.key.clone())
@@ -1379,11 +1554,13 @@ impl StubBookPackage {
         match body {
             VisualBody::PreservedHtml { html, source } => {
                 let view_kind = self.resolved_kind_for_body_target(&target)?;
+                let title = self.title_for_body_target(&target)?;
                 let normalized = match source {
                     BodySourceKind::LvedSqlite => self.normalize_lved_html_refs(&html)?,
                     BodySourceKind::LvlMultiViewSqlite => {
                         self.normalize_multiview_html_refs(&html)?
                     }
+                    BodySourceKind::HoureiSqlite => self.normalize_hourei_html_refs(&html)?,
                     _ => NormalizedHtmlRefs {
                         html,
                         resources: Vec::new(),
@@ -1394,7 +1571,7 @@ impl StubBookPackage {
                 Ok(ResolvedTargetView {
                     kind: view_kind,
                     target,
-                    title: Some("Entry".to_owned()),
+                    title: Some(title.unwrap_or_else(|| "Entry".to_owned())),
                     display_html: Some(normalized.html),
                     basic_text: None,
                     resources: normalized.resources,
@@ -1471,7 +1648,22 @@ impl StubBookPackage {
             InternalTarget::LvedRow { table, .. } if table.eq_ignore_ascii_case("info") => {
                 Ok(ResolvedTargetKind::InfoPage)
             }
+            InternalTarget::HoureiLaw { .. } => Ok(ResolvedTargetKind::LawArticle),
             _ => Ok(ResolvedTargetKind::EntryBody),
+        }
+    }
+
+    fn title_for_body_target(&self, target: &TargetToken) -> Result<Option<String>> {
+        match target.decode()? {
+            InternalTarget::HoureiLaw { hore_id, .. } => {
+                let Some(store) = &self.hourei_store else {
+                    return Ok(None);
+                };
+                Ok(store
+                    .law_entry(&hore_id)?
+                    .map(|entry| hourei_law_node_label(&entry)))
+            }
+            _ => Ok(None),
         }
     }
 
@@ -1619,6 +1811,31 @@ impl StubBookPackage {
         })
     }
 
+    fn visual_body_for_hourei_law(&self, hore_id: &str) -> Result<VisualBody> {
+        let Some(store) = &self.hourei_store else {
+            return Ok(VisualBody::Unsupported {
+                reason: "Hourei store is unavailable".to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "hourei_store_missing",
+                    "Hourei law targets require an opened Hourei store",
+                )],
+            });
+        };
+        let Some(html) = store.law_html(hore_id)? else {
+            return Ok(VisualBody::Unsupported {
+                reason: "Hourei law body was not found".to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "hourei_law_missing",
+                    format!("Hourei law {hore_id} was not found in cached HTML or law shard DB"),
+                )],
+            });
+        };
+        Ok(VisualBody::PreservedHtml {
+            html,
+            source: BodySourceKind::HoureiSqlite,
+        })
+    }
+
     fn normalize_lved_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
         let mut output = String::with_capacity(html.len());
         let mut resources = Vec::new();
@@ -1724,6 +1941,139 @@ impl StubBookPackage {
             links,
             diagnostics,
         })
+    }
+
+    fn normalize_hourei_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
+        let mut output = String::with_capacity(html.len());
+        let mut resources = Vec::new();
+        let mut links = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut seen_resource_tokens = BTreeSet::new();
+        let mut seen_target_tokens = BTreeSet::new();
+        let mut cursor = 0usize;
+
+        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+            output.push_str(&html[cursor..attr.value_start]);
+            let raw_value = &html[attr.value_start..attr.value_end];
+            if attr.name == HtmlAttrName::Href {
+                if let Some(replacement) =
+                    self.rewrite_hourei_href(raw_value, &mut links, &mut seen_target_tokens)?
+                {
+                    output.push_str(&replacement);
+                } else {
+                    output.push_str(raw_value);
+                }
+            } else if let Some(resource) = self.hourei_package_resource(raw_value)? {
+                let token = ResourceToken::new(&resource)?;
+                let href = format!("lvcore://resource/{}", token.as_str());
+                if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                    let resource_ref = self.resolve_resource(&token)?;
+                    diagnostics.extend(resource_ref.diagnostics.clone());
+                    resources.push(resource_ref);
+                }
+                output.push_str(&href);
+            } else {
+                output.push_str(raw_value);
+            }
+            cursor = attr.value_end;
+        }
+
+        output.push_str(&html[cursor..]);
+        Ok(NormalizedHtmlRefs {
+            html: output,
+            resources,
+            links,
+            diagnostics,
+        })
+    }
+
+    fn rewrite_hourei_href(
+        &self,
+        raw_value: &str,
+        links: &mut Vec<TargetLink>,
+        seen_target_tokens: &mut BTreeSet<String>,
+    ) -> Result<Option<String>> {
+        let value = html_unescape_minimal(raw_value).trim().to_owned();
+        if value.is_empty()
+            || value.starts_with('#')
+            || value.starts_with("http://")
+            || value.starts_with("https://")
+            || value.starts_with("mailto:")
+            || value.starts_with("javascript:")
+        {
+            return Ok(None);
+        }
+        if let Some(anchor) = value.strip_prefix("lved_mark&&") {
+            return Ok(Some(format!("#{anchor}")));
+        }
+        if let Some(anchor) = value.strip_prefix("lved_ref&&") {
+            return Ok(Some(format!("#{anchor}")));
+        }
+        if let Some(query) = value.strip_prefix("lved_ref:") {
+            let target = InternalTarget::Unsupported {
+                reason: format!("Hourei kana-search link is not modeled yet: {query}"),
+            };
+            let token = TargetToken::new(&target)?;
+            if seen_target_tokens.insert(token.as_str().to_owned()) {
+                links.push(TargetLink::new(raw_value, &target)?);
+            }
+            return Ok(Some(format!("lvcore://target/{}", token.as_str())));
+        }
+        if value.eq_ignore_ascii_case("lved_unsafe") {
+            return Ok(Some("#".to_owned()));
+        }
+        if let Some(rest) = value.strip_prefix("lved_ref&")
+            && let Some((mode, body)) = rest.split_once(':')
+        {
+            if mode == "1" {
+                let (hore_id, anchor) = body.split_once('&').unwrap_or((body, ""));
+                if hore_id.chars().all(|ch| ch.is_ascii_digit()) {
+                    let target = InternalTarget::HoureiLaw {
+                        hore_id: hore_id.to_owned(),
+                        anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
+                    };
+                    let token = TargetToken::new(&target)?;
+                    if seen_target_tokens.insert(token.as_str().to_owned()) {
+                        links.push(TargetLink::new(raw_value, &target)?);
+                    }
+                    return Ok(Some(format!("lvcore://target/{}", token.as_str())));
+                }
+            }
+            if mode == "4" {
+                let (primary, _) = body.split_once(':').unwrap_or((body, ""));
+                if primary.chars().all(|ch| ch.is_ascii_digit()) {
+                    let target = InternalTarget::HoureiLaw {
+                        hore_id: primary.to_owned(),
+                        anchor: None,
+                    };
+                    let token = TargetToken::new(&target)?;
+                    if seen_target_tokens.insert(token.as_str().to_owned()) {
+                        let mut link = TargetLink::new(raw_value, &target)?;
+                        link.diagnostics.push(Diagnostic::info(
+                                "hourei_revision_ref_partial",
+                                "Hourei future/revision reference was routed to the primary law; related revision semantics are deferred",
+                            ));
+                        links.push(link);
+                    }
+                    return Ok(Some(format!("lvcore://target/{}", token.as_str())));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn hourei_package_resource(&self, raw_value: &str) -> Result<Option<InternalResource>> {
+        let Some(store) = &self.hourei_store else {
+            return Ok(None);
+        };
+        let Some(path) = store.resource_path_by_reference(raw_value)? else {
+            return Ok(None);
+        };
+        let path = path.to_string_lossy().replace('\\', "/");
+        Ok(Some(InternalResource::PackageFile {
+            resource_kind: resource_kind_from_path(&path),
+            path,
+        }))
     }
 
     fn rewrite_multiview_href(
@@ -1925,6 +2275,23 @@ fn multiview_menu_item_to_node(item: &MultiviewMenuItem, node_id: &str) -> Resul
         target,
         children,
     })
+}
+
+fn hourei_law_node_label(entry: &crate::hourei::HoureiLawEntry) -> String {
+    if let Some(name_sub) = &entry.name_sub
+        && !name_sub.trim().is_empty()
+    {
+        return format!("{} {}", entry.name, name_sub);
+    }
+    if !entry.name.trim().is_empty() {
+        return entry.name.clone();
+    }
+    if let Some(abbr1) = &entry.abbr1
+        && !abbr1.trim().is_empty()
+    {
+        return abbr1.clone();
+    }
+    entry.hore_id.clone()
 }
 
 fn collect_navigation_node_targets(nodes: &[NavigationNode], out: &mut Vec<TargetToken>) {
@@ -2413,6 +2780,7 @@ mod tests {
                     trailing_bytes: 0,
                 },
             }),
+            None,
             None,
             None,
             None,
