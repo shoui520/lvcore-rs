@@ -5,7 +5,7 @@ use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::navigation::{HomeSurface, NavigationSurface};
 use crate::package::{BookId, BookMetadata, BookPackage, DriverRegistry};
-use crate::render::{RenderOptions, ResolvedTargetView};
+use crate::render::{RenderOptions, RendererInput, ResolvedTargetView};
 use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::{SearchPage, SearchQuery, SearchScope};
 use crate::sequence::{SequenceHint, TargetWindow};
@@ -68,6 +68,15 @@ impl BookLibrary {
         options: &RenderOptions,
     ) -> Result<ResolvedTargetView> {
         self.required_book(book_id)?.render_target(target, options)
+    }
+
+    pub fn renderer_input_for_target(
+        &self,
+        book_id: &BookId,
+        target: &TargetToken,
+    ) -> Result<RendererInput> {
+        self.required_book(book_id)?
+            .renderer_input_for_target(target)
     }
 
     pub fn resolve_target_window(

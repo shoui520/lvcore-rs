@@ -407,6 +407,12 @@ fn library_delegates_reader_operations_by_book_id() {
         .render_target(&book_id, &target, &RenderOptions::default())
         .unwrap();
     assert_eq!(view.kind, ResolvedTargetKind::Deferred);
+    assert!(matches!(
+        library
+            .renderer_input_for_target(&book_id, &target)
+            .unwrap(),
+        RendererInput::HcSsedStream { .. }
+    ));
 
     let window = library
         .resolve_target_window(&book_id, &target, None, 1, 1, &RenderOptions::default())
