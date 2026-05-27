@@ -21,6 +21,7 @@ pub mod search;
 pub mod sequence;
 pub mod ssed;
 pub mod ssed_index;
+pub mod ssed_menu;
 pub mod storage;
 pub mod target;
 
@@ -53,5 +54,8 @@ pub use ssed::{
     SsedDataHeader, SsedDataReader, SsedInfoLayout,
 };
 pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
+pub use ssed_menu::{
+    SsedMenuDestination, SsedMenuDestinationEncoding, SsedMenuLink, SsedMenuParse, SsedMenuRecord,
+};
 pub use storage::{CaseFoldedDirectory, DirectoryStorage, StorageBackend};
 pub use target::{InternalTarget, TargetKind, TargetLink, TargetToken};

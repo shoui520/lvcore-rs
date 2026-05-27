@@ -30,6 +30,7 @@ use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, decode_title_text, is_leaf_page,
     is_simple_leaf_index_type, parse_simple_leaf_page,
 };
+use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
 use crate::storage::{DirectoryStorage, StorageBackend};
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
@@ -381,17 +382,14 @@ impl NavigationProvider for StubBookPackage {
                     surfaces.push(HomeSurface {
                         surface_id: "menu".to_owned(),
                         kind: NavigationSurfaceKind::Menu,
-                        status: NavigationStatus::Deferred,
+                        status: NavigationStatus::Available,
                         title_html: "MENU".to_owned(),
                         title_text: "MENU".to_owned(),
                         target: Some(TargetToken::new(&InternalTarget::MenuItem {
                             surface_id: "menu".to_owned(),
                             item_id: "root".to_owned(),
                         })?),
-                        diagnostics: vec![Diagnostic::info(
-                            "ssed_menu_deferred",
-                            "SSED MENU.DIC exists, but MENU parsing is not implemented yet",
-                        )],
+                        diagnostics: Vec::new(),
                     });
                 }
                 if self
@@ -402,17 +400,14 @@ impl NavigationProvider for StubBookPackage {
                     surfaces.push(HomeSurface {
                         surface_id: "toc".to_owned(),
                         kind: NavigationSurfaceKind::Toc,
-                        status: NavigationStatus::Deferred,
+                        status: NavigationStatus::Available,
                         title_html: "TOC".to_owned(),
                         title_text: "TOC".to_owned(),
                         target: Some(TargetToken::new(&InternalTarget::TocItem {
                             surface_id: "toc".to_owned(),
                             item_id: "root".to_owned(),
                         })?),
-                        diagnostics: vec![Diagnostic::info(
-                            "ssed_toc_deferred",
-                            "SSED TOC.DIC exists, but TOC parsing is not implemented yet",
-                        )],
+                        diagnostics: Vec::new(),
                     });
                 }
                 push_surface_if_exists(
@@ -582,6 +577,12 @@ impl NavigationProvider for StubBookPackage {
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "title-index" {
             return self.open_ssed_title_index_surface(surface_id, 100);
         }
+        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "menu" {
+            return self.open_ssed_menu_surface(surface_id, SsedComponentRole::Menu, "MENU.DIC");
+        }
+        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "toc" {
+            return self.open_ssed_menu_surface(surface_id, SsedComponentRole::Toc, "TOC.DIC");
+        }
         if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "lved-list" {
             return self.open_lved_list_surface(surface_id, 100);
         }
@@ -599,14 +600,6 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::Ssed {
             let (code, message) = match surface_id {
-                "menu" => (
-                    "ssed_menu_deferred",
-                    "SSED MENU.DIC parsing is not implemented yet",
-                ),
-                "toc" => (
-                    "ssed_toc_deferred",
-                    "SSED TOC.DIC parsing is not implemented yet",
-                ),
                 "hanrei" => (
                     "ssed_hanrei_deferred",
                     "SSED HANREI content wrapping/parsing is not implemented yet",
@@ -1070,6 +1063,95 @@ impl StubBookPackage {
             surface_id: surface_id.to_owned(),
             items,
             next_cursor: None,
+        })
+    }
+
+    fn open_ssed_menu_surface(
+        &self,
+        surface_id: &str,
+        role: SsedComponentRole,
+        fallback_name: &str,
+    ) -> Result<NavigationSurface> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "ssed_catalog_missing",
+                    "SSED MENU/TOC surfaces require a parsed SSEDINFO catalog",
+                )],
+            });
+        };
+        let Some(component) = catalog
+            .components_by_role(role)
+            .find(|component| component.has_positive_range())
+            .or_else(|| catalog.component_named(fallback_name))
+        else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_navigation_component_missing",
+                    format!("{fallback_name} is not declared in this SSED catalog"),
+                )],
+            });
+        };
+        let Some(path) = self
+            .storage
+            .resolve_casefolded(Path::new(&component.filename))?
+        else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![
+                    Diagnostic::warning(
+                        "ssed_navigation_component_file_missing",
+                        format!("{} is declared but not present on disk", component.filename),
+                    )
+                    .with_context("component", &component.filename),
+                ],
+            });
+        };
+        let mut reader = match SsedDataFile::open(&path) {
+            Ok(reader) => reader,
+            Err(error) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![
+                        Diagnostic::warning(
+                            "ssed_navigation_component_decode_failed",
+                            format!(
+                                "{} is not readable as plain SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                });
+            }
+        };
+        let data = reader.read_range(0, reader.header().expanded_size())?;
+        let parsed = parse_menu_stream(&data);
+        if parsed.records.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![
+                    Diagnostic::info(
+                        "ssed_navigation_empty",
+                        format!("{} did not decode any navigation rows", component.filename),
+                    )
+                    .with_context("component", &component.filename),
+                ],
+            });
+        }
+        let mut diagnostics = Vec::new();
+        let nodes = ssed_menu_records_to_nodes(self, &parsed.records, &mut diagnostics)?;
+        if nodes.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics,
+            });
+        }
+        Ok(NavigationSurface::SimpleMenu {
+            surface_id: surface_id.to_owned(),
+            nodes,
         })
     }
 
@@ -2779,6 +2861,126 @@ fn multiview_menu_item_to_node(item: &MultiviewMenuItem, node_id: &str) -> Resul
         target,
         children,
     })
+}
+
+fn ssed_menu_records_to_nodes(
+    package: &StubBookPackage,
+    records: &[SsedMenuRecord],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Vec<NavigationNode>> {
+    let mut roots = Vec::new();
+    let mut path = Vec::<usize>::new();
+
+    for (index, record) in records.iter().enumerate() {
+        let label = record.label();
+        if label.is_empty() {
+            continue;
+        }
+        let target = ssed_menu_record_target(package, record, diagnostics)?;
+        let node = NavigationNode {
+            node_id: format!("ssed-menu:{index}"),
+            label_html: escape_plain_label_html(label),
+            label_text: label.to_owned(),
+            target,
+            children: Vec::new(),
+        };
+        let depth = record.depth.max(1);
+        while path.len() >= depth {
+            path.pop();
+        }
+        if path.is_empty() {
+            roots.push(node);
+            path.push(roots.len() - 1);
+        } else if let Some(parent) = navigation_node_mut_at_path(&mut roots, &path) {
+            parent.children.push(node);
+            path.push(parent.children.len() - 1);
+        } else {
+            diagnostics.push(Diagnostic::warning(
+                "ssed_navigation_tree_depth_invalid",
+                format!("could not attach MENU/TOC row {index} at depth {depth}"),
+            ));
+            roots.push(node);
+            path.clear();
+            path.push(roots.len() - 1);
+        }
+    }
+
+    Ok(roots)
+}
+
+fn navigation_node_mut_at_path<'a>(
+    nodes: &'a mut [NavigationNode],
+    path: &[usize],
+) -> Option<&'a mut NavigationNode> {
+    let (&first, rest) = path.split_first()?;
+    let mut node = nodes.get_mut(first)?;
+    for index in rest {
+        node = node.children.get_mut(*index)?;
+    }
+    Some(node)
+}
+
+fn ssed_menu_record_target(
+    package: &StubBookPackage,
+    record: &SsedMenuRecord,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<TargetToken>> {
+    let Some(destination) = record
+        .links
+        .iter()
+        .filter_map(|link| link.destination.as_ref())
+        .find(|destination| !destination.is_null())
+    else {
+        return Ok(None);
+    };
+    let Some(catalog) = &package.ssed_catalog else {
+        diagnostics.push(Diagnostic::error(
+            "ssed_catalog_missing",
+            "SSED menu destination cannot be resolved without a catalog",
+        ));
+        return Ok(None);
+    };
+    let Some(component) = catalog.component_for_address(destination.block) else {
+        diagnostics.push(Diagnostic::warning(
+            "ssed_navigation_target_unresolved",
+            format!(
+                "MENU/TOC target block {} offset {} is outside declared components",
+                destination.block, destination.offset
+            ),
+        ));
+        return Ok(None);
+    };
+    if component
+        .relative_offset(destination.block, destination.offset)
+        .is_none()
+    {
+        diagnostics.push(Diagnostic::warning(
+            "ssed_navigation_target_invalid",
+            format!(
+                "{} does not contain MENU/TOC target block {} offset {}",
+                component.filename, destination.block, destination.offset
+            ),
+        ));
+        return Ok(None);
+    }
+    if component.role != SsedComponentRole::Honmon {
+        diagnostics.push(
+            Diagnostic::info(
+                "ssed_navigation_non_body_target_deferred",
+                format!(
+                    "MENU/TOC target points to {} ({:?}); non-body navigation routing is deferred",
+                    component.filename, component.role
+                ),
+            )
+            .with_context("component", &component.filename),
+        );
+        return Ok(None);
+    }
+    Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
+        component: component.filename.clone(),
+        block: destination.block,
+        offset: destination.offset,
+    })?))
 }
 
 fn hourei_law_node_label(entry: &crate::hourei::HoureiLawEntry) -> String {

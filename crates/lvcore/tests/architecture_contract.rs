@@ -456,7 +456,11 @@ fn target_tokens_are_frontend_safe_and_round_trippable() {
 fn ssed_home_surfaces_are_capability_based() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
-    fs::write(dir.path().join("MENU.DIC"), b"").unwrap();
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        sseddata_literal_fixture(&menu_stream_fixture(10, 2)),
+    )
+    .unwrap();
     fs::write(dir.path().join("Panels.xml"), b"").unwrap();
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
@@ -466,12 +470,7 @@ fn ssed_home_surfaces_are_capability_based() {
 
     let surfaces = package.home_surfaces().unwrap();
     assert!(surfaces.iter().any(|surface| {
-        surface.kind == NavigationSurfaceKind::Menu
-            && surface.status == NavigationStatus::Deferred
-            && surface
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "ssed_menu_deferred")
+        surface.kind == NavigationSurfaceKind::Menu && surface.status == NavigationStatus::Available
     }));
     assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::Panel
@@ -482,14 +481,19 @@ fn ssed_home_surfaces_are_capability_based() {
                 .any(|diagnostic| diagnostic.code == "ssed_panels_deferred")
     }));
     let menu_surface = package.open_surface("menu").unwrap();
-    let lvcore::NavigationSurface::Deferred { diagnostics, .. } = menu_surface else {
-        panic!("SSED MENU should be explicitly deferred until parsing is implemented");
+    let lvcore::NavigationSurface::SimpleMenu { nodes, .. } = menu_surface else {
+        panic!("SSED MENU should decode to a simple menu surface");
     };
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "ssed_menu_deferred")
-    );
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "あ");
+    assert!(matches!(
+        nodes[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
 }
 
 #[test]
@@ -1270,6 +1274,38 @@ fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
         data.extend_from_slice(&[0, 0, *literal]);
     }
     data
+}
+
+fn menu_stream_fixture(block: u32, offset: u16) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01]);
+    data.extend_from_slice(&[0x1f, 0x42]);
+    data.extend_from_slice(&[0x24, 0x22]);
+    data.extend_from_slice(&[0x1f, 0x62]);
+    data.extend_from_slice(&bcd_u32(block));
+    data.extend_from_slice(&bcd_u16(offset));
+    data.extend_from_slice(&[0x1f, 0x0a]);
+    data
+}
+
+fn bcd_u32(value: u32) -> [u8; 4] {
+    let digits = format!("{value:08}");
+    let bytes = digits.as_bytes();
+    [
+        (bytes[0] - b'0') << 4 | (bytes[1] - b'0'),
+        (bytes[2] - b'0') << 4 | (bytes[3] - b'0'),
+        (bytes[4] - b'0') << 4 | (bytes[5] - b'0'),
+        (bytes[6] - b'0') << 4 | (bytes[7] - b'0'),
+    ]
+}
+
+fn bcd_u16(value: u16) -> [u8; 2] {
+    let digits = format!("{value:04}");
+    let bytes = digits.as_bytes();
+    [
+        (bytes[0] - b'0') << 4 | (bytes[1] - b'0'),
+        (bytes[2] - b'0') << 4 | (bytes[3] - b'0'),
+    ]
 }
 
 fn simple_index_fixture(
