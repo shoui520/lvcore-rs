@@ -41,8 +41,8 @@ use crate::ssed::{
     SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile, SsedDataHeader,
 };
 use crate::ssed_index::{
-    INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, decode_jis_pair, decode_title_text,
-    is_leaf_page, is_simple_leaf_index_type, parse_simple_leaf_page,
+    INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_jis_pair,
+    decode_title_text, is_leaf_page, is_supported_index_type, parse_supported_leaf_page,
 };
 use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
 use crate::ssed_panel::{
@@ -485,7 +485,7 @@ impl NavigationProvider for StubBookPackage {
                         })?),
                         diagnostics: vec![Diagnostic::info(
                             "surface_partial",
-                            "SSED simple leaf title/index browsing is available; grouped/internal variants remain deferred",
+                            "SSED title/index browsing is available for supported leaf row grammars; internal tree pages are scanned linearly",
                         )],
                     });
                 }
@@ -1904,14 +1904,11 @@ impl StubBookPackage {
             if row_limit.is_some_and(|limit| row_count >= limit) {
                 break;
             }
-            if !is_simple_leaf_index_type(component.component_type) {
+            if !is_supported_index_type(component.component_type) {
                 diagnostics.push(
                     Diagnostic::info(
                         "ssed_index_variant_deferred",
-                        format!(
-                            "{} is not a simple leaf index component",
-                            component.filename
-                        ),
+                        format!("{} is not a supported index component", component.filename),
                     )
                     .with_context("component", &component.filename),
                 );
@@ -1945,6 +1942,7 @@ impl StubBookPackage {
             };
             let mut reader = SsedDataFile::open(&path)?;
             let page_count = component.block_count() as usize;
+            let mut scan_state = SsedIndexScanState::default();
             for page_index in 0..page_count {
                 if row_limit.is_some_and(|limit| row_count >= limit) {
                     break;
@@ -1955,21 +1953,16 @@ impl StubBookPackage {
                 }
                 let word = u16::from_be_bytes([page[0], page[1]]);
                 if !is_leaf_page(word) {
-                    diagnostics.push(
-                        Diagnostic::info(
-                            "ssed_index_internal_page_deferred",
-                            format!("{} contains internal index pages", component.filename),
-                        )
-                        .with_context("component", &component.filename),
-                    );
                     continue;
                 }
                 let logical_block = component.start_block + page_index as u32;
-                let (page_rows, unknown) = parse_simple_leaf_page(
+                let (page_rows, unknown) = parse_supported_leaf_page(
                     &component.filename,
+                    component.component_type,
                     &page,
                     page_index as u32,
                     logical_block,
+                    &mut scan_state,
                 );
                 if unknown > 0 {
                     diagnostics.push(

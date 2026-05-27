@@ -72,7 +72,9 @@ provider slices:
 - round-trippable frontend-safe target tokens;
 - shared provider traits for search, navigation, body, render, resources,
   gaiji, and continuous view;
-- native indexed search/browse for implemented SSED title/index forms;
+- native indexed search/browse for the observed SSED leaf row families:
+  simple, keyless pointer-table, body-only, tagged/grouped, keyword,
+  cross-reference, and multi-selector rows;
 - initial SSED full-text search over HONMON body windows behind native index
   targets, with diagnostics and explicit HC rendering separation;
 - dense HONMON anchor dereference for supported SQLite sidecars, including
@@ -98,6 +100,7 @@ known structures.
 - SSED full-text search is implemented as a bounded, index-anchored HONMON scan;
   it is not a substitute for HC-rendered semantic text and may need more product
   tuning for dense/sidecar-heavy dictionaries.
-- Some SSED index variants are still reported as deferred when they are not the
-  simple leaf layout currently parsed.
+- SSED index internal tree pages are currently bypassed with linear leaf-page
+  scans. This is correct enough for target resolution, but not the final
+  performance model for very large books.
 - CHM/HANREI wrapping is still reader-surface work, not finished rendering.

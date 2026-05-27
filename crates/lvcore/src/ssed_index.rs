@@ -21,8 +21,46 @@ pub struct SsedIndexRow {
     pub title: SsedIndexPointer,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SsedIndexScanState {
+    current_key: Option<String>,
+    current_title: Option<SsedIndexPointer>,
+    current_count_hint: Option<u32>,
+}
+
+pub fn is_supported_index_type(component_type: u8) -> bool {
+    matches!(
+        component_type,
+        0x30 | 0x60 | 0x70 | 0x71 | 0x72 | 0x80 | 0x81 | 0x90 | 0x91 | 0x92 | 0xa1
+    )
+}
+
 pub fn is_simple_leaf_index_type(component_type: u8) -> bool {
     matches!(component_type, 0x71 | 0x72 | 0x91 | 0x92)
+}
+
+pub fn is_body_only_simple_leaf_index_type(component_type: u8) -> bool {
+    component_type == 0x60
+}
+
+pub fn is_body_only_tagged_leaf_index_type(component_type: u8) -> bool {
+    component_type == 0x30
+}
+
+pub fn is_tagged_leaf_index_type(component_type: u8) -> bool {
+    matches!(component_type, 0x70 | 0x90)
+}
+
+pub fn is_kw_leaf_index_type(component_type: u8) -> bool {
+    component_type == 0x80
+}
+
+pub fn is_cr_leaf_index_type(component_type: u8) -> bool {
+    component_type == 0x81
+}
+
+pub fn is_multi_leaf_index_type(component_type: u8) -> bool {
+    component_type == 0xa1
 }
 
 pub fn is_leaf_page(page_word: u16) -> bool {
@@ -49,6 +87,33 @@ pub fn parse_simple_leaf_page(
         }
         let key_len = page[pos] as usize;
         if key_len == 0 {
+            if page[pos..page.len().min(pos + 13)]
+                .iter()
+                .any(|value| *value != 0)
+            {
+                while pos + 13 <= page.len() && page[pos..pos + 13].iter().any(|value| *value != 0)
+                {
+                    let body = SsedIndexPointer {
+                        block: be32(page, pos),
+                        offset: u32::from(be16(page, pos + 4)),
+                    };
+                    let title = SsedIndexPointer {
+                        block: be32(page, pos + 7),
+                        offset: u32::from(be16(page, pos + 11)),
+                    };
+                    rows.push(SsedIndexRow {
+                        component: component.to_owned(),
+                        page_index,
+                        logical_block,
+                        row_index: rows.len() as u32 + 1,
+                        key: String::new(),
+                        target_key: String::new(),
+                        body,
+                        title,
+                    });
+                    pos += 13;
+                }
+            }
             break;
         }
         pos += 1;
@@ -79,6 +144,498 @@ pub fn parse_simple_leaf_page(
         });
     }
 
+    (rows, unknown)
+}
+
+pub fn parse_supported_leaf_page(
+    component: &str,
+    component_type: u8,
+    page: &[u8],
+    page_index: u32,
+    logical_block: u32,
+    state: &mut SsedIndexScanState,
+) -> (Vec<SsedIndexRow>, usize) {
+    if is_simple_leaf_index_type(component_type) {
+        return parse_simple_leaf_page(component, page, page_index, logical_block);
+    }
+    if is_body_only_simple_leaf_index_type(component_type) {
+        return parse_body_only_simple_leaf_page(component, page, page_index, logical_block);
+    }
+    if is_body_only_tagged_leaf_index_type(component_type) {
+        return parse_tagged_leaf_page(
+            component,
+            page,
+            page_index,
+            logical_block,
+            state,
+            TaggedLeafLayout::BodyOnly,
+        );
+    }
+    if is_tagged_leaf_index_type(component_type) {
+        return parse_tagged_leaf_page(
+            component,
+            page,
+            page_index,
+            logical_block,
+            state,
+            TaggedLeafLayout::BodyAndTitle,
+        );
+    }
+    if is_kw_leaf_index_type(component_type) {
+        return parse_kw_leaf_page(component, page, page_index, logical_block, state);
+    }
+    if is_cr_leaf_index_type(component_type) {
+        return parse_cr_leaf_page(component, page, page_index, logical_block, state);
+    }
+    if is_multi_leaf_index_type(component_type) {
+        return parse_multi_leaf_page(component, page, page_index, logical_block, state);
+    }
+    (Vec::new(), 0)
+}
+
+fn parse_body_only_simple_leaf_page(
+    component: &str,
+    page: &[u8],
+    page_index: u32,
+    logical_block: u32,
+) -> (Vec<SsedIndexRow>, usize) {
+    if page.len() < 4 {
+        return (Vec::new(), 1);
+    }
+    let count = be16(page, 2);
+    let mut pos = 4usize;
+    let mut rows = Vec::new();
+    let mut unknown = 0usize;
+    for row_index in 1..=u32::from(count) {
+        if pos >= page.len() || page[pos] == 0 {
+            break;
+        }
+        let key_len = page[pos] as usize;
+        pos += 1;
+        if pos + key_len + 6 > page.len() {
+            unknown += 1;
+            break;
+        }
+        let key = decode_index_key(&page[pos..pos + key_len]);
+        pos += key_len;
+        let body = SsedIndexPointer {
+            block: be32(page, pos),
+            offset: u32::from(be16(page, pos + 4)),
+        };
+        pos += 6;
+        rows.push(SsedIndexRow {
+            component: component.to_owned(),
+            page_index,
+            logical_block,
+            row_index,
+            key: key.clone(),
+            target_key: key,
+            body,
+            title: body,
+        });
+    }
+    (rows, unknown)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaggedLeafLayout {
+    BodyOnly,
+    BodyAndTitle,
+}
+
+fn parse_tagged_leaf_page(
+    component: &str,
+    page: &[u8],
+    page_index: u32,
+    logical_block: u32,
+    state: &mut SsedIndexScanState,
+    layout: TaggedLeafLayout,
+) -> (Vec<SsedIndexRow>, usize) {
+    if page.len() < 4 {
+        return (Vec::new(), 1);
+    }
+    let count = be16(page, 2);
+    let mut pos = 4usize;
+    let mut rows = Vec::new();
+    let mut unknown = 0usize;
+    let mut subrecord = 0u16;
+
+    while subrecord < count && pos + 2 <= page.len() {
+        let tag = page[pos];
+        let key_len = page[pos + 1] as usize;
+        if tag == 0 && key_len == 0 {
+            break;
+        }
+        pos += 2;
+
+        match tag {
+            0x00 => {
+                let pointer_len = match layout {
+                    TaggedLeafLayout::BodyOnly => 6,
+                    TaggedLeafLayout::BodyAndTitle => 12,
+                };
+                if pos + key_len + pointer_len > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let key = decode_index_key(&page[pos..pos + key_len]);
+                pos += key_len;
+                let body = read_body_pointer(page, pos);
+                let title = match layout {
+                    TaggedLeafLayout::BodyOnly => body,
+                    TaggedLeafLayout::BodyAndTitle => read_title_pointer(page, pos),
+                };
+                pos += pointer_len;
+                rows.push(SsedIndexRow {
+                    component: component.to_owned(),
+                    page_index,
+                    logical_block,
+                    row_index: rows.len() as u32 + 1,
+                    key: key.clone(),
+                    target_key: key,
+                    body,
+                    title,
+                });
+            }
+            0x80 => {
+                if pos + 2 + key_len > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                state.current_count_hint = Some(u32::from(be16(page, pos)));
+                pos += 2;
+                state.current_key = Some(decode_index_key(&page[pos..pos + key_len]));
+                state.current_title = None;
+                pos += key_len;
+            }
+            0xc0 => {
+                let pointer_len = match layout {
+                    TaggedLeafLayout::BodyOnly => 6,
+                    TaggedLeafLayout::BodyAndTitle => 12,
+                };
+                if pos + key_len + pointer_len > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let target_key = decode_index_key(&page[pos..pos + key_len]);
+                pos += key_len;
+                let body = read_body_pointer(page, pos);
+                let title = match layout {
+                    TaggedLeafLayout::BodyOnly => body,
+                    TaggedLeafLayout::BodyAndTitle => read_title_pointer(page, pos),
+                };
+                pos += pointer_len;
+                let key = state
+                    .current_key
+                    .clone()
+                    .unwrap_or_else(|| target_key.clone());
+                rows.push(SsedIndexRow {
+                    component: component.to_owned(),
+                    page_index,
+                    logical_block,
+                    row_index: rows.len() as u32 + 1,
+                    key,
+                    target_key,
+                    body,
+                    title,
+                });
+            }
+            _ => {
+                unknown += 1;
+                break;
+            }
+        }
+        subrecord += 1;
+    }
+    (rows, unknown)
+}
+
+fn parse_kw_leaf_page(
+    component: &str,
+    page: &[u8],
+    page_index: u32,
+    logical_block: u32,
+    state: &mut SsedIndexScanState,
+) -> (Vec<SsedIndexRow>, usize) {
+    if page.len() < 4 {
+        return (Vec::new(), 1);
+    }
+    let count = be16(page, 2);
+    let mut pos = 4usize;
+    let mut rows = Vec::new();
+    let mut unknown = 0usize;
+    let mut subrecord = 0u16;
+
+    while subrecord < count && pos < page.len() {
+        let tag = page[pos];
+        if tag == 0 && (pos + 1 >= page.len() || page[pos + 1] == 0) {
+            break;
+        }
+        match tag {
+            0x00 => {
+                if pos + 2 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let key_len = page[pos + 1] as usize;
+                if key_len == 0 {
+                    break;
+                }
+                pos += 2;
+                if pos + key_len + 12 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let key = decode_index_key(&page[pos..pos + key_len]);
+                pos += key_len;
+                let (body, title) = read_pointer_pair(page, pos);
+                pos += 12;
+                rows.push(SsedIndexRow {
+                    component: component.to_owned(),
+                    page_index,
+                    logical_block,
+                    row_index: rows.len() as u32 + 1,
+                    key: key.clone(),
+                    target_key: key,
+                    body,
+                    title,
+                });
+            }
+            0x80 => {
+                if pos + 6 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let key_len = page[pos + 1] as usize;
+                if pos + 6 + key_len + 6 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                state.current_count_hint = Some(be32(page, pos + 2));
+                state.current_key = Some(decode_index_key(&page[pos + 6..pos + 6 + key_len]));
+                pos += 6 + key_len;
+                state.current_title = Some(SsedIndexPointer {
+                    block: be32(page, pos),
+                    offset: u32::from(be16(page, pos + 4)),
+                });
+                pos += 6;
+            }
+            0xb0 | 0xc0 => {
+                if pos + 7 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let body = SsedIndexPointer {
+                    block: be32(page, pos + 1),
+                    offset: u32::from(be16(page, pos + 5)),
+                };
+                let key = state.current_key.clone().unwrap_or_default();
+                let title = state.current_title.unwrap_or(body);
+                rows.push(SsedIndexRow {
+                    component: component.to_owned(),
+                    page_index,
+                    logical_block,
+                    row_index: rows.len() as u32 + 1,
+                    key: key.clone(),
+                    target_key: key,
+                    body,
+                    title,
+                });
+                pos += 7;
+            }
+            _ => {
+                unknown += 1;
+                break;
+            }
+        }
+        subrecord += 1;
+    }
+    (rows, unknown)
+}
+
+fn parse_cr_leaf_page(
+    component: &str,
+    page: &[u8],
+    page_index: u32,
+    logical_block: u32,
+    state: &mut SsedIndexScanState,
+) -> (Vec<SsedIndexRow>, usize) {
+    if page.len() < 4 {
+        return (Vec::new(), 1);
+    }
+    let count = be16(page, 2);
+    let mut pos = 4usize;
+    let mut rows = Vec::new();
+    let mut unknown = 0usize;
+    let mut subrecord = 0u16;
+
+    while subrecord < count && pos + 2 <= page.len() {
+        let first = page[pos];
+        let second = page[pos + 1];
+        if first == 0 && second == 0 {
+            break;
+        }
+        match first {
+            0x00 => {
+                let key_len = second as usize;
+                pos += 2;
+                if pos + key_len + 12 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let key = decode_index_key(&page[pos..pos + key_len]);
+                pos += key_len;
+                let (body, title) = read_pointer_pair(page, pos);
+                pos += 12;
+                rows.push(SsedIndexRow {
+                    component: component.to_owned(),
+                    page_index,
+                    logical_block,
+                    row_index: rows.len() as u32 + 1,
+                    key: key.clone(),
+                    target_key: key,
+                    body,
+                    title,
+                });
+            }
+            0x80 => {
+                let key_len = second as usize;
+                pos += 2;
+                if pos + 4 + key_len + 6 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                state.current_count_hint = Some(be32(page, pos));
+                pos += 4;
+                state.current_key = Some(decode_index_key(&page[pos..pos + key_len]));
+                pos += key_len;
+                state.current_title = Some(SsedIndexPointer {
+                    block: be32(page, pos),
+                    offset: u32::from(be16(page, pos + 4)),
+                });
+                pos += 6;
+            }
+            0xc0 => {
+                if pos + 7 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let body = SsedIndexPointer {
+                    block: be32(page, pos + 1),
+                    offset: u32::from(be16(page, pos + 5)),
+                };
+                let key = state.current_key.clone().unwrap_or_default();
+                let title = state.current_title.unwrap_or(body);
+                rows.push(SsedIndexRow {
+                    component: component.to_owned(),
+                    page_index,
+                    logical_block,
+                    row_index: rows.len() as u32 + 1,
+                    key: key.clone(),
+                    target_key: key,
+                    body,
+                    title,
+                });
+                pos += 7;
+            }
+            _ => {
+                unknown += 1;
+                break;
+            }
+        }
+        subrecord += 1;
+    }
+    (rows, unknown)
+}
+
+fn parse_multi_leaf_page(
+    component: &str,
+    page: &[u8],
+    page_index: u32,
+    logical_block: u32,
+    state: &mut SsedIndexScanState,
+) -> (Vec<SsedIndexRow>, usize) {
+    if page.len() < 4 {
+        return (Vec::new(), 1);
+    }
+    let count = be16(page, 2);
+    let mut pos = 4usize;
+    let mut rows = Vec::new();
+    let mut unknown = 0usize;
+    let mut subrecord = 0u16;
+
+    while subrecord < count && pos < page.len() {
+        let tag = page[pos];
+        if tag == 0 && (pos + 1 >= page.len() || page[pos + 1] == 0) {
+            break;
+        }
+        match tag {
+            0x00 => {
+                if pos + 2 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let key_len = page[pos + 1] as usize;
+                if pos + 2 + key_len + 12 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let key = decode_index_key(&page[pos + 2..pos + 2 + key_len]);
+                pos += 2 + key_len;
+                let (body, title) = read_pointer_pair(page, pos);
+                pos += 12;
+                rows.push(SsedIndexRow {
+                    component: component.to_owned(),
+                    page_index,
+                    logical_block,
+                    row_index: rows.len() as u32 + 1,
+                    key: key.clone(),
+                    target_key: key,
+                    body,
+                    title,
+                });
+            }
+            0x80 => {
+                if pos + 6 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let key_len = page[pos + 1] as usize;
+                if pos + 6 + key_len > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                state.current_count_hint = Some(be32(page, pos + 2));
+                state.current_key = Some(decode_index_key(&page[pos + 6..pos + 6 + key_len]));
+                state.current_title = None;
+                pos += 6 + key_len;
+            }
+            0xc0 => {
+                if pos + 13 > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                let (body, title) = read_pointer_pair(page, pos + 1);
+                let key = state.current_key.clone().unwrap_or_default();
+                rows.push(SsedIndexRow {
+                    component: component.to_owned(),
+                    page_index,
+                    logical_block,
+                    row_index: rows.len() as u32 + 1,
+                    key: key.clone(),
+                    target_key: key,
+                    body,
+                    title,
+                });
+                pos += 13;
+            }
+            _ => {
+                unknown += 1;
+                break;
+            }
+        }
+        subrecord += 1;
+    }
     (rows, unknown)
 }
 
@@ -250,6 +807,24 @@ fn be32(data: &[u8], offset: usize) -> u32 {
         data[offset + 2],
         data[offset + 3],
     ])
+}
+
+fn read_body_pointer(data: &[u8], pos: usize) -> SsedIndexPointer {
+    SsedIndexPointer {
+        block: be32(data, pos),
+        offset: u32::from(be16(data, pos + 4)),
+    }
+}
+
+fn read_title_pointer(data: &[u8], pos: usize) -> SsedIndexPointer {
+    SsedIndexPointer {
+        block: be32(data, pos + 6),
+        offset: u32::from(be16(data, pos + 10)),
+    }
+}
+
+fn read_pointer_pair(data: &[u8], pos: usize) -> (SsedIndexPointer, SsedIndexPointer) {
+    (read_body_pointer(data, pos), read_title_pointer(data, pos))
 }
 
 pub const INDEX_PAGE_SIZE: usize = BLOCK_SIZE as usize;

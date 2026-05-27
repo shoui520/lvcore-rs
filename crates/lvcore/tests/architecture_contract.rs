@@ -1232,6 +1232,220 @@ fn ssed_simple_index_search_supports_backward_matching() {
 }
 
 #[test]
+fn ssed_tagged_index_search_supports_grouped_rows_across_pages() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_index_type(0x90),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"child title\x1f\x0a"),
+    )
+    .unwrap();
+    let index = [
+        leaf_page_fixture(&[tagged_group_record("parent", 2)]),
+        leaf_page_fixture(&[tagged_target_record("child", 1, 2, 13, 0)]),
+    ]
+    .concat();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&index),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Exact,
+            query: "parent".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "child title");
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+        }
+    );
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_index_variant_deferred")
+    );
+}
+
+#[test]
+fn ssed_keyword_and_cross_reference_indexes_resolve_grouped_body_targets() {
+    for (component_type, target_tag) in [(0x80, 0xb0), (0x81, 0xc0)] {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("DICT.IDX"),
+            ssedinfo_fixture_with_index_type(component_type),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("FHTITLE.DIC"),
+            sseddata_literal_fixture(b"group title\x1f\x0a"),
+        )
+        .unwrap();
+        let index = leaf_page_fixture(&[
+            title_group_record("group", 13, 0, 1),
+            compact_body_target_record(target_tag, 1, 6),
+        ]);
+        fs::write(
+            dir.path().join("FHINDEX.DIC"),
+            sseddata_literal_fixture(&index),
+        )
+        .unwrap();
+        let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+        let page = package
+            .search(&SearchQuery {
+                scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                mode: SearchMode::Exact,
+                query: "group".to_owned(),
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(page.hits.len(), 1, "component type {component_type:02x}");
+        assert_eq!(page.hits[0].title_text, "group title");
+        assert_eq!(
+            page.hits[0].target.decode().unwrap(),
+            InternalTarget::SsedAddress {
+                component: "HONMON.DIC".to_owned(),
+                block: 1,
+                offset: 6,
+            }
+        );
+    }
+}
+
+#[test]
+fn ssed_body_only_and_multi_selector_indexes_resolve_targets() {
+    for (component_type, index) in [
+        (
+            0x60,
+            leaf_page_fixture(&[body_only_simple_record("body", 1, 8)]),
+        ),
+        (
+            0x30,
+            leaf_page_fixture(&[
+                tagged_group_record("bodytag", 1),
+                tagged_target_body_only_record("child", 1, 10),
+            ]),
+        ),
+        (
+            0xa1,
+            leaf_page_fixture(&[
+                multi_group_record("multi", 1),
+                multi_target_record(1, 12, 13, 0),
+            ]),
+        ),
+    ] {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("DICT.IDX"),
+            ssedinfo_fixture_with_index_type(component_type),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("FHTITLE.DIC"),
+            sseddata_literal_fixture(b"multi title\x1f\x0a"),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("FHINDEX.DIC"),
+            sseddata_literal_fixture(&index),
+        )
+        .unwrap();
+        let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+        let query = if component_type == 0x30 {
+            "bodytag"
+        } else if component_type == 0xa1 {
+            "multi"
+        } else {
+            "body"
+        };
+
+        let page = package
+            .search(&SearchQuery {
+                scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                mode: SearchMode::Exact,
+                query: query.to_owned(),
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(page.hits.len(), 1, "component type {component_type:02x}");
+        let (_, expected_offset) = match component_type {
+            0x60 => ("body", 8),
+            0x30 => ("bodytag", 10),
+            0xa1 => ("multi", 12),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            page.hits[0].target.decode().unwrap(),
+            InternalTarget::SsedAddress {
+                component: "HONMON.DIC".to_owned(),
+                block: 1,
+                offset: expected_offset,
+            }
+        );
+    }
+}
+
+#[test]
+fn ssed_keyless_pointer_table_simple_leaf_is_supported() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"keyless\x1f\x0a"),
+    )
+    .unwrap();
+    let mut page = vec![0u8; 2048];
+    page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    page[4..8].copy_from_slice(&1u32.to_be_bytes());
+    page[8..10].copy_from_slice(&14u16.to_be_bytes());
+    page[11..15].copy_from_slice(&13u32.to_be_bytes());
+    page[15..17].copy_from_slice(&0u16.to_be_bytes());
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&page),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("title-index should open as a title/index browse surface");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "keyless");
+    assert_eq!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 14,
+        }
+    );
+}
+
+#[test]
 fn ssed_simple_index_search_uses_cursor_pagination() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -1735,6 +1949,10 @@ fn ssedinfo_fixture() -> Vec<u8> {
     ssedinfo_fixture_with_honmon("HONMON.DIC")
 }
 
+fn ssedinfo_fixture_with_index_type(index_type: u8) -> Vec<u8> {
+    ssedinfo_fixture_with_honmon_and_index_type("HONMON.DIC", index_type)
+}
+
 fn write_minimal_lved_sqlite_fixture(root: &Path) {
     let payload = root.join("main.data");
     let key = "test-key";
@@ -1862,6 +2080,10 @@ fn write_minimal_hourei_fixture(root: &Path) {
 }
 
 fn ssedinfo_fixture_with_honmon(honmon_filename: &str) -> Vec<u8> {
+    ssedinfo_fixture_with_honmon_and_index_type(honmon_filename, 0x91)
+}
+
+fn ssedinfo_fixture_with_honmon_and_index_type(honmon_filename: &str, index_type: u8) -> Vec<u8> {
     let record_start = 0x80;
     let mut data = vec![0u8; record_start + 5 * 0x30];
     data[..8].copy_from_slice(SSEDINFO_MAGIC);
@@ -1892,7 +2114,7 @@ fn ssedinfo_fixture_with_honmon(honmon_filename: &str) -> Vec<u8> {
     );
     write_record(
         &mut data[record_start + 0x90..record_start + 0xc0],
-        0x91,
+        index_type,
         15,
         16,
         "FHINDEX.DIC",
@@ -1917,12 +2139,13 @@ fn write_record(rec: &mut [u8], component_type: u8, start: u32, end: u32, filena
 
 fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
     let chunk_offset = 0x44usize;
+    let block_count = literals.len().div_ceil(2048).max(1);
     let mut data = vec![0u8; chunk_offset];
     data[..8].copy_from_slice(SSEDDATA_MAGIC);
     data[0x0f] = 1;
     data[0x16..0x18].copy_from_slice(&1u16.to_be_bytes());
     data[0x18..0x1c].copy_from_slice(&1u32.to_be_bytes());
-    data[0x1c..0x20].copy_from_slice(&1u32.to_be_bytes());
+    data[0x1c..0x20].copy_from_slice(&(block_count as u32).to_be_bytes());
     data[0x40..0x44].copy_from_slice(&(chunk_offset as u32).to_be_bytes());
     data.extend_from_slice(&[0, 0]);
     data.extend_from_slice(&(literals.len() as u16).to_be_bytes());
@@ -2052,6 +2275,101 @@ fn simple_index_fixture_rows(rows: &[(&str, u32, u16, u32, u16)]) -> Vec<u8> {
         pos += 12;
     }
     page
+}
+
+fn leaf_page_fixture(records: &[Vec<u8>]) -> Vec<u8> {
+    let mut page = vec![0u8; 2048];
+    page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    page[2..4].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    let mut pos = 4usize;
+    for record in records {
+        page[pos..pos + record.len()].copy_from_slice(record);
+        pos += record.len();
+    }
+    page
+}
+
+fn body_only_simple_record(key: &str, body_block: u32, body_offset: u16) -> Vec<u8> {
+    let key = jis_fullwidth_ascii_key(key);
+    let mut out = Vec::new();
+    out.push(key.len() as u8);
+    out.extend_from_slice(&key);
+    out.extend_from_slice(&body_block.to_be_bytes());
+    out.extend_from_slice(&body_offset.to_be_bytes());
+    out
+}
+
+fn tagged_group_record(key: &str, count: u16) -> Vec<u8> {
+    let key = jis_fullwidth_ascii_key(key);
+    let mut out = vec![0x80, key.len() as u8];
+    out.extend_from_slice(&count.to_be_bytes());
+    out.extend_from_slice(&key);
+    out
+}
+
+fn tagged_target_record(
+    key: &str,
+    body_block: u32,
+    body_offset: u16,
+    title_block: u32,
+    title_offset: u16,
+) -> Vec<u8> {
+    let key = jis_fullwidth_ascii_key(key);
+    let mut out = vec![0xc0, key.len() as u8];
+    out.extend_from_slice(&key);
+    out.extend_from_slice(&body_block.to_be_bytes());
+    out.extend_from_slice(&body_offset.to_be_bytes());
+    out.extend_from_slice(&title_block.to_be_bytes());
+    out.extend_from_slice(&title_offset.to_be_bytes());
+    out
+}
+
+fn tagged_target_body_only_record(key: &str, body_block: u32, body_offset: u16) -> Vec<u8> {
+    let key = jis_fullwidth_ascii_key(key);
+    let mut out = vec![0xc0, key.len() as u8];
+    out.extend_from_slice(&key);
+    out.extend_from_slice(&body_block.to_be_bytes());
+    out.extend_from_slice(&body_offset.to_be_bytes());
+    out
+}
+
+fn title_group_record(key: &str, title_block: u32, title_offset: u16, count: u32) -> Vec<u8> {
+    let key = jis_fullwidth_ascii_key(key);
+    let mut out = vec![0x80, key.len() as u8];
+    out.extend_from_slice(&count.to_be_bytes());
+    out.extend_from_slice(&key);
+    out.extend_from_slice(&title_block.to_be_bytes());
+    out.extend_from_slice(&title_offset.to_be_bytes());
+    out
+}
+
+fn compact_body_target_record(tag: u8, body_block: u32, body_offset: u16) -> Vec<u8> {
+    let mut out = vec![tag];
+    out.extend_from_slice(&body_block.to_be_bytes());
+    out.extend_from_slice(&body_offset.to_be_bytes());
+    out
+}
+
+fn multi_group_record(key: &str, count: u32) -> Vec<u8> {
+    let key = jis_fullwidth_ascii_key(key);
+    let mut out = vec![0x80, key.len() as u8];
+    out.extend_from_slice(&count.to_be_bytes());
+    out.extend_from_slice(&key);
+    out
+}
+
+fn multi_target_record(
+    body_block: u32,
+    body_offset: u16,
+    title_block: u32,
+    title_offset: u16,
+) -> Vec<u8> {
+    let mut out = vec![0xc0];
+    out.extend_from_slice(&body_block.to_be_bytes());
+    out.extend_from_slice(&body_offset.to_be_bytes());
+    out.extend_from_slice(&title_block.to_be_bytes());
+    out.extend_from_slice(&title_offset.to_be_bytes());
+    out
 }
 
 fn jis_fullwidth_ascii_key(text: &str) -> Vec<u8> {
