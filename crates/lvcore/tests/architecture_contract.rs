@@ -2,10 +2,11 @@ use std::fs;
 use std::path::Path;
 
 use lvcore::{
-    BookLibrary, Capability, DriverRegistry, FormatFamily, GaijiPolicy, GaijiSourcePreference,
-    InternalResource, InternalTarget, NavigationStatus, NavigationSurfaceKind, RenderOptions,
-    ResolvedTargetKind, ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode,
-    SearchQuery, SearchScope, StorageBackend, TargetToken, VisualBody,
+    BodySourceKind, BookLibrary, Capability, DriverRegistry, FormatFamily, GaijiPolicy,
+    GaijiSourcePreference, InternalResource, InternalTarget, NavigationStatus,
+    NavigationSurfaceKind, RenderOptions, RendererInput, ResolvedTargetKind, ResourceKind,
+    ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode, SearchQuery, SearchScope,
+    StorageBackend, TargetToken, VisualBody,
 };
 use rusqlite::Connection;
 use tempfile::tempdir;
@@ -156,6 +157,14 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
             anchor: None,
         }
     );
+    let input = package
+        .renderer_input_for_target(&page.hits[0].target)
+        .unwrap();
+    let RendererInput::PreservedHtml { source, html, .. } = input else {
+        panic!("MultiView body must stay preserved HTML before rendering normalization");
+    };
+    assert_eq!(source, BodySourceKind::LvlMultiViewSqlite);
+    assert!(html.contains("<article><h1>まえがき</h1><p>body</p>"));
 
     let middle = nodes[0].children[1].target.clone().unwrap();
     let window = package
@@ -447,6 +456,10 @@ fn dense_honmon_targets_do_not_render_as_raw_numeric_anchors() {
     assert!(matches!(body, VisualBody::Unsupported { .. }));
     assert!(!serde_json::to_string(&body).unwrap().contains("00100050"));
 
+    let input = package.renderer_input_for_target(&token).unwrap();
+    assert!(matches!(input, RendererInput::Unsupported { .. }));
+    assert!(!serde_json::to_string(&input).unwrap().contains("00100050"));
+
     let view = package
         .render_target(&token, &RenderOptions::default())
         .unwrap();
@@ -521,6 +534,7 @@ fn render_target_uses_resolved_visual_body_contract() {
         sseddata_literal_fixture(b"abcdef"),
     )
     .unwrap();
+    fs::write(dir.path().join("HC0158.dll"), b"").unwrap();
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
     let token = TargetToken::new(&InternalTarget::SsedAddress {
         component: "HONMON.DIC".to_owned(),
@@ -533,9 +547,37 @@ fn render_target_uses_resolved_visual_body_contract() {
         ..RenderOptions::default()
     };
 
+    let input = package.renderer_input_for_target(&token).unwrap();
+    assert_eq!(input.target(), &token);
+    assert_eq!(input.kind(), lvcore::RendererInputKind::HcSsedStream);
+    let RendererInput::HcSsedStream {
+        component,
+        offset,
+        length,
+        profile_hint,
+        diagnostics,
+        ..
+    } = input
+    else {
+        panic!("SSED stream must become explicit HC renderer input");
+    };
+    assert_eq!(component, "HONMON.DIC");
+    assert_eq!(offset, 2);
+    assert_eq!(length, None);
+    assert_eq!(profile_hint.as_deref(), Some("HC0158"));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "hc_renderer_input_ready")
+    );
+
     let view = package.render_target(&token, &options).unwrap();
     assert_eq!(view.kind, ResolvedTargetKind::Deferred);
     assert!(view.display_html.is_none());
+    assert!(
+        view.capabilities
+            .contains(&lvcore::RenderCapability::HcRenderInput)
+    );
     assert!(
         view.diagnostics
             .iter()
@@ -544,6 +586,7 @@ fn render_target_uses_resolved_visual_body_contract() {
     let debug_trace = view.debug_trace.as_deref().unwrap_or_default();
     assert!(debug_trace.contains("HONMON.DIC"));
     assert!(debug_trace.contains("\"offset\":2"));
+    assert!(debug_trace.contains("HC0158"));
 }
 
 #[test]

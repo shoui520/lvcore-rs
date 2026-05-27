@@ -16,7 +16,10 @@ use crate::navigation::{
     HomeSurface, NavigationItem, NavigationNode, NavigationProvider, NavigationStatus,
     NavigationSurface, NavigationSurfaceKind,
 };
-use crate::render::{RenderOptions, RendererProvider, ResolvedTargetKind, ResolvedTargetView};
+use crate::render::{
+    RenderOptions, RendererInput, RendererInputProvider, RendererProvider, ResolvedTargetKind,
+    ResolvedTargetView,
+};
 use crate::resources::{
     InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
 };
@@ -590,10 +593,17 @@ impl RendererProvider for StubBookPackage {
                 })
             }
             _ => {
-                let body = self.visual_body_for_target(token)?;
-                self.view_for_visual_body(token.clone(), body, options)
+                let input = self.renderer_input_for_target(token)?;
+                self.view_for_renderer_input(input, options)
             }
         }
+    }
+}
+
+impl RendererInputProvider for StubBookPackage {
+    fn renderer_input_for_target(&self, token: &TargetToken) -> Result<RendererInput> {
+        let body = self.visual_body_for_target(token)?;
+        self.renderer_input_from_visual_body(token.clone(), body)
     }
 }
 
@@ -1573,14 +1583,57 @@ impl StubBookPackage {
             .map(|component| component.filename.as_str())
     }
 
-    fn view_for_visual_body(
+    fn renderer_input_from_visual_body(
         &self,
         target: TargetToken,
         body: VisualBody,
+    ) -> Result<RendererInput> {
+        match body {
+            VisualBody::PreservedHtml { html, source } => Ok(RendererInput::PreservedHtml {
+                target,
+                html,
+                source,
+            }),
+            VisualBody::SsedStream {
+                component,
+                offset,
+                length,
+            } => Ok(RendererInput::HcSsedStream {
+                target,
+                component,
+                offset,
+                length,
+                profile_hint: self.hc_profile_hint()?,
+                diagnostics: vec![Diagnostic::info(
+                    "hc_renderer_input_ready",
+                    "SSED stream was resolved as input for an HC/profile renderer",
+                )],
+            }),
+            VisualBody::SemanticFallback { text } => {
+                Ok(RendererInput::SemanticFallback { target, text })
+            }
+            VisualBody::Unsupported {
+                reason,
+                diagnostics,
+            } => Ok(RendererInput::Unsupported {
+                target,
+                reason,
+                diagnostics,
+            }),
+        }
+    }
+
+    fn view_for_renderer_input(
+        &self,
+        input: RendererInput,
         options: &RenderOptions,
     ) -> Result<ResolvedTargetView> {
-        match body {
-            VisualBody::PreservedHtml { html, source } => {
+        match input {
+            RendererInput::PreservedHtml {
+                target,
+                html,
+                source,
+            } => {
                 let view_kind = self.resolved_kind_for_body_target(&target)?;
                 let title = self.title_for_body_target(&target)?;
                 let normalized = match source {
@@ -1609,10 +1662,13 @@ impl StubBookPackage {
                     debug_trace: None,
                 })
             }
-            VisualBody::SsedStream {
+            RendererInput::HcSsedStream {
+                target,
                 component,
                 offset,
                 length,
+                profile_hint,
+                mut diagnostics,
             } => Ok(ResolvedTargetView {
                 kind: crate::render::ResolvedTargetKind::Deferred,
                 target,
@@ -1621,11 +1677,14 @@ impl StubBookPackage {
                 basic_text: None,
                 resources: Vec::new(),
                 links: Vec::new(),
-                capabilities: Vec::new(),
-                diagnostics: vec![Diagnostic::info(
-                    "hc_render_deferred",
-                    "SSED stream resolved successfully; HC/profile rendering is not implemented yet",
-                )],
+                capabilities: vec![crate::render::RenderCapability::HcRenderInput],
+                diagnostics: {
+                    diagnostics.push(Diagnostic::info(
+                        "hc_render_deferred",
+                        "SSED stream resolved successfully; HC/profile rendering is not implemented yet",
+                    ));
+                    diagnostics
+                },
                 debug_trace: options.include_debug_trace.then(|| {
                     json!({
                         "body": {
@@ -1633,12 +1692,13 @@ impl StubBookPackage {
                             "component": component,
                             "offset": offset,
                             "length": length,
+                            "profile_hint": profile_hint,
                         }
                     })
                     .to_string()
                 }),
             }),
-            VisualBody::SemanticFallback { text } => Ok(ResolvedTargetView {
+            RendererInput::SemanticFallback { target, text } => Ok(ResolvedTargetView {
                 kind: crate::render::ResolvedTargetKind::EntryBody,
                 target,
                 title: Some("Semantic fallback".to_owned()),
@@ -1653,7 +1713,8 @@ impl StubBookPackage {
                 )],
                 debug_trace: None,
             }),
-            VisualBody::Unsupported {
+            RendererInput::Unsupported {
+                target,
                 reason,
                 diagnostics,
             } => Ok(ResolvedTargetView {
@@ -2206,6 +2267,25 @@ impl StubBookPackage {
             )
         })?;
         Ok(())
+    }
+
+    fn hc_profile_hint(&self) -> Result<Option<String>> {
+        let mut hints = Vec::new();
+        for path in self.storage.list_dir(Path::new(""))? {
+            let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
+                continue;
+            };
+            let upper = name.to_ascii_uppercase();
+            if upper.len() == "HC0000.DLL".len()
+                && upper.starts_with("HC")
+                && upper.ends_with(".DLL")
+                && upper[2..6].chars().all(|ch| ch.is_ascii_hexdigit())
+            {
+                hints.push(upper.trim_end_matches(".DLL").to_owned());
+            }
+        }
+        hints.sort();
+        Ok(hints.into_iter().next())
     }
 }
 

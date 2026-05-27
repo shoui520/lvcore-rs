@@ -8,7 +8,7 @@ use crate::body::BodyProvider;
 use crate::error::{Error, Result};
 use crate::gaiji::GaijiProvider;
 use crate::navigation::NavigationProvider;
-use crate::render::RendererProvider;
+use crate::render::{RendererInputProvider, RendererProvider};
 use crate::resources::ResourceProvider;
 use crate::search::SearchProvider;
 use crate::sequence::SequenceProvider;
@@ -90,6 +90,7 @@ pub trait BookPackage:
     + SearchProvider
     + NavigationProvider
     + RendererProvider
+    + RendererInputProvider
     + ResourceProvider
     + GaijiProvider
     + SequenceProvider

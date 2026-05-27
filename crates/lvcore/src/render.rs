@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::body::BodySourceKind;
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
 use crate::gaiji::GaijiPolicy;
@@ -43,7 +44,68 @@ pub enum RenderCapability {
     Audio,
     Images,
     Panels,
+    HcRenderInput,
     DeferredHook,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RendererInputKind {
+    HcSsedStream,
+    PreservedHtml,
+    SemanticFallback,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RendererInput {
+    HcSsedStream {
+        target: TargetToken,
+        component: String,
+        offset: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        length: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile_hint: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diagnostics: Vec<Diagnostic>,
+    },
+    PreservedHtml {
+        target: TargetToken,
+        html: String,
+        source: BodySourceKind,
+    },
+    SemanticFallback {
+        target: TargetToken,
+        text: String,
+    },
+    Unsupported {
+        target: TargetToken,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diagnostics: Vec<Diagnostic>,
+    },
+}
+
+impl RendererInput {
+    pub fn kind(&self) -> RendererInputKind {
+        match self {
+            Self::HcSsedStream { .. } => RendererInputKind::HcSsedStream,
+            Self::PreservedHtml { .. } => RendererInputKind::PreservedHtml,
+            Self::SemanticFallback { .. } => RendererInputKind::SemanticFallback,
+            Self::Unsupported { .. } => RendererInputKind::Unsupported,
+        }
+    }
+
+    pub fn target(&self) -> &TargetToken {
+        match self {
+            Self::HcSsedStream { target, .. }
+            | Self::PreservedHtml { target, .. }
+            | Self::SemanticFallback { target, .. }
+            | Self::Unsupported { target, .. } => target,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,4 +187,8 @@ pub trait RendererProvider: Send + Sync {
         token: &TargetToken,
         options: &RenderOptions,
     ) -> Result<ResolvedTargetView>;
+}
+
+pub trait RendererInputProvider: Send + Sync {
+    fn renderer_input_for_target(&self, token: &TargetToken) -> Result<RendererInput>;
 }

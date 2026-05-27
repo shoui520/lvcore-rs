@@ -42,8 +42,8 @@ pub use package::{
     FormatFamily, PackageDriver,
 };
 pub use render::{
-    RenderCapability, RenderMode, RenderOptions, RendererProvider, ResolvedTargetKind,
-    ResolvedTargetView,
+    RenderCapability, RenderMode, RenderOptions, RendererInput, RendererInputKind,
+    RendererInputProvider, RendererProvider, ResolvedTargetKind, ResolvedTargetView,
 };
 pub use resources::{InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken};
 pub use search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery, SearchScope};
