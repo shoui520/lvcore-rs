@@ -2,10 +2,10 @@ use std::fs;
 use std::path::Path;
 
 use lvcore::{
-    Capability, DriverRegistry, FormatFamily, GaijiPolicy, GaijiSourcePreference, InternalResource,
-    InternalTarget, NavigationStatus, NavigationSurfaceKind, RenderOptions, ResolvedTargetKind,
-    ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, StorageBackend, TargetToken,
-    VisualBody,
+    BookLibrary, Capability, DriverRegistry, FormatFamily, GaijiPolicy, GaijiSourcePreference,
+    InternalResource, InternalTarget, NavigationStatus, NavigationSurfaceKind, RenderOptions,
+    ResolvedTargetKind, ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode,
+    SearchQuery, SearchScope, StorageBackend, TargetToken, VisualBody,
 };
 use tempfile::tempdir;
 
@@ -37,6 +37,79 @@ fn driver_registry_detects_first_class_families() {
     assert_eq!(
         registry.detect(hourei.path()).unwrap()[0].format_family,
         FormatFamily::Hourei
+    );
+}
+
+#[test]
+fn library_routes_all_book_search_without_unhandled_exceptions() {
+    let ssed = tempdir().unwrap();
+    fs::write(ssed.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+
+    let lved = tempdir().unwrap();
+    fs::write(lved.path().join("main.data"), b"encrypted").unwrap();
+    fs::write(lved.path().join("dict.key"), b"key").unwrap();
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let ssed_id = library.open_path(ssed.path(), &registry).unwrap();
+    let lved_id = library.open_path(lved.path(), &registry).unwrap();
+    assert_eq!(library.len(), 2);
+    assert!(
+        library
+            .metadata()
+            .iter()
+            .any(|metadata| metadata.book_id == ssed_id)
+    );
+    assert!(
+        library
+            .metadata()
+            .iter()
+            .any(|metadata| metadata.book_id == lved_id)
+    );
+
+    let page = library
+        .search(&SearchQuery {
+            scope: SearchScope::AllBooks,
+            mode: SearchMode::Forward,
+            query: "test".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert!(page.hits.is_empty());
+    assert_eq!(page.diagnostics.len(), 2);
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.context.contains_key("book_id"))
+    );
+}
+
+#[test]
+fn library_reports_missing_selected_books_as_diagnostics() {
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let ssed = tempdir().unwrap();
+    fs::write(ssed.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    let ssed_id = library.open_path(ssed.path(), &registry).unwrap();
+
+    let page = library
+        .search(&SearchQuery {
+            scope: SearchScope::SelectedBooks(vec![
+                ssed_id,
+                lvcore::BookId("missing-book".to_owned()),
+            ]),
+            mode: SearchMode::Exact,
+            query: "test".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "book_missing")
     );
 }
 

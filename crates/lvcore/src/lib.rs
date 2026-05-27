@@ -8,6 +8,7 @@ pub mod body;
 pub mod diagnostics;
 pub mod error;
 pub mod gaiji;
+pub mod library;
 pub mod navigation;
 pub mod package;
 pub mod render;
@@ -22,6 +23,7 @@ pub use body::{BodyProvider, BodySourceKind, VisualBody};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity};
 pub use error::{Error, Result};
 pub use gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference};
+pub use library::BookLibrary;
 pub use navigation::{
     HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
 };

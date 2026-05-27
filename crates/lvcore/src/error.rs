@@ -22,6 +22,9 @@ pub enum Error {
     #[error("package was not recognized")]
     UnrecognizedPackage,
 
+    #[error("book was not found: {0}")]
+    BookNotFound(String),
+
     #[error("package driver error: {0}")]
     Driver(String),
 }
