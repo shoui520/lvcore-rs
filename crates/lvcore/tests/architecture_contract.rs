@@ -551,6 +551,86 @@ fn ssed_home_surfaces_are_capability_based() {
 }
 
 #[test]
+fn ssed_menu_and_panel_targets_support_continuous_view_windows() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        sseddata_literal_fixture(&menu_stream_fixture_rows(&[
+            ([0x24, 0x22], 10, 0),
+            ([0x24, 0x24], 10, 2),
+            ([0x24, 0x26], 10, 4),
+        ])),
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("Panel")).unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<panels>
+  <panel index="01010000" paneltype="contents">
+    <title>あ</title>
+    <data type="bin" filename="Panel\All-A.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("Panel/All-A.bin"),
+        panel_bin_fixture_rows(&[
+            (10, 0, [0x24, 0x22]),
+            (10, 2, [0x24, 0x24]),
+            (10, 4, [0x24, 0x26]),
+        ]),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 10,
+        offset: 2,
+    })
+    .unwrap();
+
+    let menu_window = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::MenuOrder("menu".to_owned())),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(menu_window.center.title.as_deref(), Some("い"));
+    assert_eq!(menu_window.before.len(), 1);
+    assert_eq!(menu_window.after.len(), 1);
+    assert_eq!(ssed_view_offset(&menu_window.before[0]), Some((10, 0)));
+    assert_eq!(ssed_view_offset(&menu_window.after[0]), Some((10, 4)));
+    assert!(menu_window.diagnostics.is_empty());
+
+    let panel_window = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::PanelOrder("01010000".to_owned())),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(panel_window.center.title.as_deref(), Some("い"));
+    assert_eq!(panel_window.before.len(), 1);
+    assert_eq!(panel_window.after.len(), 1);
+    assert_eq!(ssed_view_offset(&panel_window.before[0]), Some((10, 0)));
+    assert_eq!(ssed_view_offset(&panel_window.after[0]), Some((10, 4)));
+    assert!(panel_window.diagnostics.is_empty());
+}
+
+#[test]
 fn dense_honmon_targets_do_not_render_as_raw_numeric_anchors() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -1331,25 +1411,45 @@ fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
 }
 
 fn menu_stream_fixture(block: u32, offset: u16) -> Vec<u8> {
+    menu_stream_fixture_rows(&[([0x24, 0x22], block, offset)])
+}
+
+fn menu_stream_fixture_rows(rows: &[([u8; 2], u32, u16)]) -> Vec<u8> {
     let mut data = Vec::new();
-    data.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01]);
-    data.extend_from_slice(&[0x1f, 0x42]);
-    data.extend_from_slice(&[0x24, 0x22]);
-    data.extend_from_slice(&[0x1f, 0x62]);
-    data.extend_from_slice(&bcd_u32(block));
-    data.extend_from_slice(&bcd_u16(offset));
-    data.extend_from_slice(&[0x1f, 0x0a]);
+    for (label, block, offset) in rows {
+        data.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01]);
+        data.extend_from_slice(&[0x1f, 0x42]);
+        data.extend_from_slice(label);
+        data.extend_from_slice(&[0x1f, 0x62]);
+        data.extend_from_slice(&bcd_u32(*block));
+        data.extend_from_slice(&bcd_u16(*offset));
+        data.extend_from_slice(&[0x1f, 0x0a]);
+    }
     data
 }
 
 fn panel_bin_fixture(block: u32, offset: u32) -> Vec<u8> {
+    panel_bin_fixture_rows(&[(block, offset, [0x24, 0x22])])
+}
+
+fn panel_bin_fixture_rows(rows: &[(u32, u32, [u8; 2])]) -> Vec<u8> {
     let mut data = Vec::new();
-    data.extend_from_slice(&1u32.to_le_bytes());
+    data.extend_from_slice(&(rows.len() as u32).to_le_bytes());
     data.extend_from_slice(&4u32.to_le_bytes());
-    data.extend_from_slice(&block.to_le_bytes());
-    data.extend_from_slice(&offset.to_le_bytes());
-    data.extend_from_slice(&[0x24, 0x22, 0x00, 0x00]);
+    for (block, offset, label) in rows {
+        data.extend_from_slice(&block.to_le_bytes());
+        data.extend_from_slice(&offset.to_le_bytes());
+        data.extend_from_slice(label);
+        data.extend_from_slice(&[0x00, 0x00]);
+    }
     data
+}
+
+fn ssed_view_offset(view: &lvcore::ResolvedTargetView) -> Option<(u32, u32)> {
+    match view.target.decode().ok()? {
+        InternalTarget::SsedAddress { block, offset, .. } => Some((block, offset)),
+        _ => None,
+    }
 }
 
 fn bcd_u32(value: u32) -> [u8; 4] {

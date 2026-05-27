@@ -815,6 +815,20 @@ impl SequenceProvider for StubBookPackage {
         {
             return Ok(window);
         }
+        if self.metadata.format_family == FormatFamily::Ssed
+            && matches!(sequence_hint, Some(SequenceHint::MenuOrder(_)))
+            && let Some(window) =
+                self.resolve_ssed_menu_window(target, sequence_hint, before, after, options)?
+        {
+            return Ok(window);
+        }
+        if self.metadata.format_family == FormatFamily::Ssed
+            && matches!(sequence_hint, Some(SequenceHint::PanelOrder(_)))
+            && let Some(window) =
+                self.resolve_ssed_panel_window(target, sequence_hint, before, after, options)?
+        {
+            return Ok(window);
+        }
         if self.metadata.format_family == FormatFamily::LvedSqlite3
             && matches!(sequence_hint, Some(SequenceHint::LvedTreeOrder))
             && let Some(window) = self.resolve_lved_tree_window(target, before, after, options)?
@@ -1718,6 +1732,144 @@ impl StubBookPackage {
         let mut view = self.render_target(&target, options)?;
         view.title = Some(self.ssed_index_row_label(row));
         Ok(Some(view))
+    }
+
+    fn resolve_ssed_menu_window(
+        &self,
+        target: &TargetToken,
+        sequence_hint: Option<&SequenceHint>,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        let Some(SequenceHint::MenuOrder(surface_id)) = sequence_hint else {
+            return Ok(None);
+        };
+        let surface = self.open_surface(surface_id)?;
+        let NavigationSurface::SimpleMenu { nodes, .. } = surface else {
+            return Ok(Some(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![Diagnostic::info(
+                    "sequence_surface_not_ordered",
+                    format!("{surface_id} is not a simple SSED MENU/TOC surface"),
+                )],
+            }));
+        };
+        let mut ordered = Vec::new();
+        collect_navigation_node_ordered_targets(&nodes, &mut ordered);
+        Ok(Some(self.resolve_ordered_target_window(
+            target,
+            &ordered,
+            before,
+            after,
+            options,
+            Diagnostic::info(
+                "sequence_target_not_in_ssed_menu",
+                "target is not present in the requested SSED MENU/TOC order",
+            ),
+        )?))
+    }
+
+    fn resolve_ssed_panel_window(
+        &self,
+        target: &TargetToken,
+        sequence_hint: Option<&SequenceHint>,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        let Some(SequenceHint::PanelOrder(panel_id)) = sequence_hint else {
+            return Ok(None);
+        };
+        let surface_id = if panel_id == "panels" || panel_id.starts_with("panels:") {
+            panel_id.clone()
+        } else {
+            format!("panels:{panel_id}")
+        };
+        let surface = self.open_surface(&surface_id)?;
+        let NavigationSurface::Panel { cells, .. } = surface else {
+            return Ok(Some(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![Diagnostic::info(
+                    "sequence_surface_not_ordered",
+                    format!("{surface_id} is not an SSED panel surface"),
+                )],
+            }));
+        };
+        let mut ordered = Vec::new();
+        collect_panel_cell_ordered_targets(&cells, &mut ordered);
+        Ok(Some(self.resolve_ordered_target_window(
+            target,
+            &ordered,
+            before,
+            after,
+            options,
+            Diagnostic::info(
+                "sequence_target_not_in_ssed_panel",
+                "target is not present in the requested SSED panel order",
+            ),
+        )?))
+    }
+
+    fn resolve_ordered_target_window(
+        &self,
+        target: &TargetToken,
+        ordered: &[OrderedSequenceTarget],
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+        not_found_diagnostic: Diagnostic,
+    ) -> Result<TargetWindow> {
+        let Some(center_index) = ordered
+            .iter()
+            .position(|candidate| &candidate.target == target)
+        else {
+            return Ok(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![not_found_diagnostic],
+            });
+        };
+
+        let mut center = self.render_target(target, options)?;
+        if let Some(title) = &ordered[center_index].title {
+            center.title = Some(title.clone());
+        }
+
+        let before_start = center_index.saturating_sub(before);
+        let before_views = ordered[before_start..center_index]
+            .iter()
+            .map(|item| self.render_ordered_sequence_target(item, options))
+            .collect::<Result<Vec<_>>>()?;
+        let after_end = (center_index + 1 + after).min(ordered.len());
+        let after_views = ordered[center_index + 1..after_end]
+            .iter()
+            .map(|item| self.render_ordered_sequence_target(item, options))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(TargetWindow {
+            center,
+            before: before_views,
+            after: after_views,
+            diagnostics: Vec::new(),
+        })
+    }
+
+    fn render_ordered_sequence_target(
+        &self,
+        item: &OrderedSequenceTarget,
+        options: &RenderOptions,
+    ) -> Result<ResolvedTargetView> {
+        let mut view = self.render_target(&item.target, options)?;
+        if let Some(title) = &item.title {
+            view.title = Some(title.clone());
+        }
+        Ok(view)
     }
 
     fn resolve_lved_list_window(
@@ -3237,6 +3389,12 @@ fn ssed_panel_record_target(
     })?))
 }
 
+#[derive(Debug, Clone)]
+struct OrderedSequenceTarget {
+    target: TargetToken,
+    title: Option<String>,
+}
+
 fn hourei_law_node_label(entry: &crate::hourei::HoureiLawEntry) -> String {
     if let Some(name_sub) = &entry.name_sub
         && !name_sub.trim().is_empty()
@@ -3260,6 +3418,32 @@ fn collect_navigation_node_targets(nodes: &[NavigationNode], out: &mut Vec<Targe
             out.push(target.clone());
         }
         collect_navigation_node_targets(&node.children, out);
+    }
+}
+
+fn collect_navigation_node_ordered_targets(
+    nodes: &[NavigationNode],
+    out: &mut Vec<OrderedSequenceTarget>,
+) {
+    for node in nodes {
+        if let Some(target) = &node.target {
+            out.push(OrderedSequenceTarget {
+                target: target.clone(),
+                title: Some(node.label_text.clone()),
+            });
+        }
+        collect_navigation_node_ordered_targets(&node.children, out);
+    }
+}
+
+fn collect_panel_cell_ordered_targets(cells: &[PanelCell], out: &mut Vec<OrderedSequenceTarget>) {
+    for cell in cells {
+        if let Some(target) = &cell.target {
+            out.push(OrderedSequenceTarget {
+                target: target.clone(),
+                title: Some(cell.label_text.clone()),
+            });
+        }
     }
 }
 
