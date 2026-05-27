@@ -461,7 +461,22 @@ fn ssed_home_surfaces_are_capability_based() {
         sseddata_literal_fixture(&menu_stream_fixture(10, 2)),
     )
     .unwrap();
-    fs::write(dir.path().join("Panels.xml"), b"").unwrap();
+    fs::create_dir(dir.path().join("Panel")).unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<panels>
+  <panel index="01000000" paneltype="menu" count_x="2">
+    <title>五十音</title>
+    <data><cell action_verb="lved.panel:01010000" ref="01010000">あ</cell></data>
+  </panel>
+  <panel index="01010000" paneltype="contents">
+    <title>あ</title>
+    <data type="bin" filename="Panel\All-A.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("Panel/All-A.bin"), panel_bin_fixture(10, 2)).unwrap();
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
     let metadata = package.metadata();
@@ -474,11 +489,7 @@ fn ssed_home_surfaces_are_capability_based() {
     }));
     assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::Panel
-            && surface.status == NavigationStatus::Deferred
-            && surface
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "ssed_panels_deferred")
+            && surface.status == NavigationStatus::Available
     }));
     let menu_surface = package.open_surface("menu").unwrap();
     let lvcore::NavigationSurface::SimpleMenu { nodes, .. } = menu_surface else {
@@ -488,6 +499,28 @@ fn ssed_home_surfaces_are_capability_based() {
     assert_eq!(nodes[0].label_text, "あ");
     assert!(matches!(
         nodes[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+    let panel_surface = package.open_surface("panels").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = panel_surface else {
+        panic!("SSED Panels should decode to a panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::PanelCell { panel_id, .. } if panel_id == "01010000"
+    ));
+    let child_panel = package.open_surface("panels:01010000").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
+        panic!("SSED child Panel should decode to a panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
         InternalTarget::SsedAddress {
             component,
             block: 10,
@@ -1285,6 +1318,16 @@ fn menu_stream_fixture(block: u32, offset: u16) -> Vec<u8> {
     data.extend_from_slice(&bcd_u32(block));
     data.extend_from_slice(&bcd_u16(offset));
     data.extend_from_slice(&[0x1f, 0x0a]);
+    data
+}
+
+fn panel_bin_fixture(block: u32, offset: u32) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&1u32.to_le_bytes());
+    data.extend_from_slice(&4u32.to_le_bytes());
+    data.extend_from_slice(&block.to_le_bytes());
+    data.extend_from_slice(&offset.to_le_bytes());
+    data.extend_from_slice(&[0x24, 0x22, 0x00, 0x00]);
     data
 }
 

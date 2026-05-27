@@ -14,7 +14,7 @@ use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary};
 use crate::multiview::{MultiviewMenuItem, MultiviewStore, parse_menu_data};
 use crate::navigation::{
     HomeSurface, NavigationItem, NavigationNode, NavigationProvider, NavigationStatus,
-    NavigationSurface, NavigationSurfaceKind,
+    NavigationSurface, NavigationSurfaceKind, PanelCell,
 };
 use crate::render::{
     RenderMode, RenderOptions, RendererInput, RendererInputProvider, RendererProvider,
@@ -31,6 +31,10 @@ use crate::ssed_index::{
     is_simple_leaf_index_type, parse_simple_leaf_page,
 };
 use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
+use crate::ssed_panel::{
+    SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, parse_panel_bin,
+    parse_panel_xml_bytes,
+};
 use crate::storage::{DirectoryStorage, StorageBackend};
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
@@ -582,6 +586,11 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "toc" {
             return self.open_ssed_menu_surface(surface_id, SsedComponentRole::Toc, "TOC.DIC");
+        }
+        if self.metadata.format_family == FormatFamily::Ssed
+            && (surface_id == "panels" || surface_id.starts_with("panels:"))
+        {
+            return self.open_ssed_panel_surface(surface_id);
         }
         if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "lved-list" {
             return self.open_lved_list_surface(surface_id, 100);
@@ -1152,6 +1161,101 @@ impl StubBookPackage {
         Ok(NavigationSurface::SimpleMenu {
             surface_id: surface_id.to_owned(),
             nodes,
+        })
+    }
+
+    fn open_ssed_panel_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        let Some(path) = self.storage.resolve_casefolded(Path::new("Panels.xml"))? else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_panels_missing",
+                    "Panels.xml was not found",
+                )],
+            });
+        };
+        let parsed = match parse_panel_xml_bytes(&fs::read(path)?) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![Diagnostic::warning(
+                        "ssed_panels_xml_parse_failed",
+                        format!("Panels.xml could not be parsed: {error}"),
+                    )],
+                });
+            }
+        };
+        let requested_panel_id = surface_id
+            .strip_prefix("panels:")
+            .filter(|id| !id.is_empty());
+        let root_panel_id = requested_panel_id.or_else(|| {
+            parsed
+                .inline_cells
+                .first()
+                .map(|cell| cell.panel_id.as_str())
+        });
+        let inline_cells = parsed
+            .inline_cells
+            .iter()
+            .filter(|cell| root_panel_id.is_none_or(|panel_id| cell.panel_id == panel_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let include_external_bins = requested_panel_id.is_some() || inline_cells.is_empty();
+        let mut diagnostics = Vec::new();
+        let mut cells = Vec::new();
+        for cell in inline_cells {
+            cells.push(ssed_panel_inline_cell_to_navigation_cell(&cell)?);
+        }
+        for data_ref in parsed.data_refs.into_iter().filter(|data_ref| {
+            include_external_bins
+                && requested_panel_id.is_none_or(|panel_id| data_ref.panel_id == panel_id)
+        }) {
+            let relative = data_ref.filename.replace('\\', "/");
+            let Some(path) = self.storage.resolve_casefolded(Path::new(&relative))? else {
+                diagnostics.push(Diagnostic::warning(
+                    "ssed_panel_bin_missing",
+                    format!("Panel BIN {} was not found", data_ref.filename),
+                ));
+                continue;
+            };
+            let panel = match parse_panel_bin(&fs::read(path)?) {
+                Ok(panel) => panel,
+                Err(error) => {
+                    diagnostics.push(Diagnostic::warning(
+                        "ssed_panel_bin_parse_failed",
+                        format!(
+                            "Panel BIN {} could not be parsed: {error}",
+                            data_ref.filename
+                        ),
+                    ));
+                    continue;
+                }
+            };
+            for record in panel.records {
+                cells.push(ssed_panel_bin_record_to_navigation_cell(
+                    self,
+                    &data_ref,
+                    &record,
+                    &mut diagnostics,
+                )?);
+            }
+        }
+        if cells.is_empty() {
+            if diagnostics.is_empty() {
+                diagnostics.push(Diagnostic::info(
+                    "ssed_panels_empty",
+                    "Panels.xml did not expose inline cells or decoded BIN rows",
+                ));
+            }
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics,
+            });
+        }
+        Ok(NavigationSurface::Panel {
+            surface_id: surface_id.to_owned(),
+            cells,
         })
     }
 
@@ -2716,13 +2820,7 @@ fn push_surface_if_exists(
                     "SSED HANREI content exists, but HANREI wrapping/parsing is not implemented yet",
                 )],
             ),
-            NavigationSurfaceKind::Panel => (
-                NavigationStatus::Deferred,
-                vec![Diagnostic::info(
-                    "ssed_panels_deferred",
-                    "SSED panel files exist, but panel parsing is not implemented yet",
-                )],
-            ),
+            NavigationSurfaceKind::Panel => (NavigationStatus::Available, Vec::new()),
             _ => (NavigationStatus::Available, Vec::new()),
         };
         surfaces.push(HomeSurface {
@@ -2980,6 +3078,100 @@ fn ssed_menu_record_target(
         component: component.filename.clone(),
         block: destination.block,
         offset: destination.offset,
+    })?))
+}
+
+fn ssed_panel_inline_cell_to_navigation_cell(cell: &SsedPanelInlineCell) -> Result<PanelCell> {
+    let target = if !cell.ref_id.is_empty() {
+        Some(TargetToken::new(&InternalTarget::PanelCell {
+            panel_id: cell.ref_id.clone(),
+            row: 0,
+            column: 0,
+        })?)
+    } else {
+        None
+    };
+    Ok(PanelCell {
+        panel_id: cell.panel_id.clone(),
+        row: cell.row.unwrap_or(cell.cell_index),
+        column: cell.column.unwrap_or(0),
+        label_html: escape_plain_label_html(&cell.label),
+        label_text: cell.label.clone(),
+        target,
+    })
+}
+
+fn ssed_panel_bin_record_to_navigation_cell(
+    package: &StubBookPackage,
+    data_ref: &SsedPanelDataRef,
+    record: &SsedPanelBinRecord,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<PanelCell> {
+    Ok(PanelCell {
+        panel_id: data_ref.panel_id.clone(),
+        row: record.index,
+        column: 0,
+        label_html: escape_plain_label_html(&record.text),
+        label_text: record.text.clone(),
+        target: ssed_panel_record_target(package, record, diagnostics)?,
+    })
+}
+
+fn ssed_panel_record_target(
+    package: &StubBookPackage,
+    record: &SsedPanelBinRecord,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<TargetToken>> {
+    if record.block == 0 && record.offset == 0 {
+        return Ok(None);
+    }
+    let Some(catalog) = &package.ssed_catalog else {
+        diagnostics.push(Diagnostic::error(
+            "ssed_catalog_missing",
+            "Panel BIN target cannot be resolved without a catalog",
+        ));
+        return Ok(None);
+    };
+    let Some(component) = catalog.component_for_address(record.block) else {
+        diagnostics.push(Diagnostic::warning(
+            "ssed_panel_target_unresolved",
+            format!(
+                "Panel target block {} offset {} is outside declared components",
+                record.block, record.offset
+            ),
+        ));
+        return Ok(None);
+    };
+    if component
+        .relative_offset(record.block, record.offset)
+        .is_none()
+    {
+        diagnostics.push(Diagnostic::warning(
+            "ssed_panel_target_invalid",
+            format!(
+                "{} does not contain Panel target block {} offset {}",
+                component.filename, record.block, record.offset
+            ),
+        ));
+        return Ok(None);
+    }
+    if component.role != SsedComponentRole::Honmon {
+        diagnostics.push(
+            Diagnostic::info(
+                "ssed_panel_non_body_target_deferred",
+                format!(
+                    "Panel target points to {} ({:?}); non-body panel routing is deferred",
+                    component.filename, component.role
+                ),
+            )
+            .with_context("component", &component.filename),
+        );
+        return Ok(None);
+    }
+    Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
+        component: component.filename.clone(),
+        block: record.block,
+        offset: record.offset,
     })?))
 }
 
