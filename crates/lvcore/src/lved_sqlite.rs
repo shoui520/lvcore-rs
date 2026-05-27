@@ -792,14 +792,18 @@ fn lved_sqlite_title_from_connection(connection: &Connection) -> Option<String> 
             where body is not null and body != ''
             order by
               case
+                when body like '%book_title%' then 0
+                when body like '%凡例書籍名%' then 0
+                when body like '%著作権表示%' then 0
+                when lower(name) like '%copyright%' then 0
                 when lower(name) like '%about%' then 0
                 when lower(name) like '%hanrei%' then 1
-                when lower(name) like '%copyright%' then 2
                 when lower(name) like '%license%' then 3
+                when lower(name) = 'index.html' then 4
                 else 6
               end,
               rowid
-            limit 128
+            limit 1024
             ",
         )
         .ok()?;
@@ -876,6 +880,7 @@ fn html_text_lines(fragment: &str) -> Vec<String> {
     let mut text = String::with_capacity(fragment.len());
     let mut in_tag = false;
     let mut tag = String::new();
+    let mut skipping_element: Option<String> = None;
     for ch in fragment.chars() {
         match ch {
             '<' => {
@@ -884,12 +889,26 @@ fn html_text_lines(fragment: &str) -> Vec<String> {
             }
             '>' if in_tag => {
                 in_tag = false;
-                let tag_name = tag.trim_start_matches('/').trim().to_lowercase();
-                if matches!(tag_name.as_str(), "br" | "br/" | "p" | "div" | "li" | "tr") {
+                let normalized_tag = tag.trim().to_lowercase();
+                let tag_name = normalized_tag
+                    .trim_start_matches('/')
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
+                if matches!(tag_name, "style" | "script") {
+                    if normalized_tag.starts_with('/') {
+                        skipping_element = None;
+                    } else {
+                        skipping_element = Some(tag_name.to_owned());
+                    }
+                    continue;
+                }
+                if matches!(tag_name, "br" | "br/" | "p" | "div" | "li" | "tr") {
                     text.push('\n');
                 }
             }
             _ if in_tag => tag.push(ch),
+            _ if skipping_element.is_some() => {}
             _ => text.push(ch),
         }
     }
@@ -955,7 +974,12 @@ fn normalize_title_candidate(value: &str) -> Option<String> {
     {
         return None;
     }
-    if value.contains('。') || value.contains('．') || value.contains("この辞書") {
+    if value.contains('。')
+        || value.contains('．')
+        || value.contains("この辞書")
+        || value.contains("この辞典")
+        || value.contains("教授")
+    {
         return None;
     }
     Some(value)
@@ -993,16 +1017,21 @@ fn title_score(value: &str, source_name: &str) -> i32 {
         score += 20;
     }
     let source_name = source_name.to_lowercase();
-    if source_name.contains("about") || source_name.contains("index") {
+    let source_basename = source_name.rsplit('/').next().unwrap_or(&source_name);
+    if source_name.contains("about") || matches!(source_basename, "index.html" | "index.htm") {
         score += 40;
     }
-    if source_name.contains("copyright") || source_name.contains("license") {
-        score -= 20;
+    if source_name.contains("copyright") {
+        score += 70;
+    }
+    if source_name.contains("license") {
+        score += 20;
     }
     for weak in [
         "凡例",
         "索引",
         "一覧",
+        "インデックス",
         "目次",
         "使い方",
         "著作権",
@@ -1188,6 +1217,58 @@ mod tests {
 
         assert!(
             title_score(&index_title, "index.html") > title_score(&bibliography, "shuyou.html")
+        );
+    }
+
+    #[test]
+    fn title_probe_finds_late_book_title_and_ignores_index_labels() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text);
+                insert into info values (
+                  1, 1, 'index.html',
+                  '<div class=\"title\">索引</div><div>和英インデックス</div>'
+                );
+                ",
+            )
+            .unwrap();
+        for index in 0..300 {
+            connection
+                .execute(
+                    "insert into info values (?, 1, ?, ?)",
+                    (
+                        index + 2,
+                        format!("i{index:03}.html"),
+                        format!("<div class=\"title\">CEFR-J ランク {index}</div>"),
+                    ),
+                )
+                .unwrap();
+        }
+        connection
+            .execute(
+                "insert into info values (1000, 1, 'h04.html', ?)",
+                ["<div class=\"Copyright\"><div class=\"凡例書籍名\">エースクラウン英和辞典 第4版</div></div>"],
+            )
+            .unwrap();
+
+        assert_eq!(
+            lved_sqlite_title_from_connection(&connection).as_deref(),
+            Some("エースクラウン英和辞典 第4版")
+        );
+    }
+
+    #[test]
+    fn title_probe_ignores_style_blocks_and_staff_affiliations() {
+        assert_eq!(
+            html_text_lines(
+                r#"<html><head><style>.title { color: red; }</style></head><body><div class="title">新明解国語辞典　第八版</div></body></html>"#
+            ),
+            vec!["新明解国語辞典　第八版".to_owned()]
+        );
+        assert!(
+            normalize_title_candidate("浅井　昌弘　慶應義塾大学医学部　精神神経科　教授").is_none()
         );
     }
 }
