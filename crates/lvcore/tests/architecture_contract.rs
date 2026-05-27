@@ -291,6 +291,29 @@ fn package_file_resources_resolve_and_read_with_preserved_casing() {
     assert_eq!(package.read_resource(&token).unwrap(), b"<svg/>");
 }
 
+#[test]
+fn resource_targets_render_as_media_resource_views() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    fs::write(dir.path().join("Templates/B123.SVG"), b"<svg/>").unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let resource = ResourceToken::new(&InternalResource::PackageFile {
+        path: "Templates/B123.SVG".to_owned(),
+        resource_kind: ResourceKind::Template,
+    })
+    .unwrap();
+    let target = TargetToken::new(&InternalTarget::Resource { resource }).unwrap();
+
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::MediaResource);
+    assert_eq!(view.resources.len(), 1);
+    assert_eq!(view.resources[0].kind, ResourceKind::Template);
+    assert!(view.resources[0].href.is_some());
+}
+
 fn ssedinfo_fixture() -> Vec<u8> {
     let record_start = 0x80;
     let mut data = vec![0u8; record_start + 5 * 0x30];

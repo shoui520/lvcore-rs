@@ -12,7 +12,7 @@ use crate::gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution};
 use crate::navigation::{
     HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
 };
-use crate::render::{RenderOptions, RendererProvider, ResolvedTargetView};
+use crate::render::{RenderOptions, RendererProvider, ResolvedTargetKind, ResolvedTargetView};
 use crate::resources::{
     InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
 };
@@ -447,6 +447,22 @@ impl RendererProvider for StubBookPackage {
                 "Unsupported target",
                 Diagnostic::warning("target_unsupported", reason),
             )),
+            InternalTarget::Resource { resource } => {
+                let resource_ref = self.resolve_resource(&resource)?;
+                let diagnostics = resource_ref.diagnostics.clone();
+                Ok(ResolvedTargetView {
+                    kind: ResolvedTargetKind::MediaResource,
+                    target: token.clone(),
+                    title: resource_ref.label.clone(),
+                    display_html: None,
+                    basic_text: None,
+                    resources: vec![resource_ref],
+                    links: Vec::new(),
+                    capabilities: Vec::new(),
+                    diagnostics,
+                    debug_trace: None,
+                })
+            }
             _ => {
                 let body = self.visual_body_for_target(token)?;
                 Ok(self.view_for_visual_body(token.clone(), body, options))

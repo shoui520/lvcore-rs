@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
+use crate::resources::ResourceToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,7 +69,7 @@ pub enum InternalTarget {
         column: u32,
     },
     Resource {
-        resource_id: String,
+        resource: ResourceToken,
     },
     Unsupported {
         reason: String,
