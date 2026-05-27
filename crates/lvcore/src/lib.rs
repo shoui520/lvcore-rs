@@ -37,7 +37,8 @@ pub use resources::{ResourceKind, ResourceProvider, ResourceRef, ResourceToken};
 pub use search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery, SearchScope};
 pub use sequence::{SequenceHint, SequenceProvider, TargetWindow};
 pub use ssed::{
-    SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedInfoLayout,
+    SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataHeader,
+    SsedDataReader, SsedInfoLayout,
 };
 pub use storage::{CaseFoldedDirectory, DirectoryStorage, StorageBackend};
 pub use target::{InternalTarget, TargetKind, TargetLink, TargetToken};
