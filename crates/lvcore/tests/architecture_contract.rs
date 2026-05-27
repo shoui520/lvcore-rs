@@ -382,6 +382,13 @@ fn library_delegates_reader_operations_by_book_id() {
     let registry = DriverRegistry::default();
     let mut library = BookLibrary::new();
     let book_id = library.open_path(dir.path(), &registry).unwrap();
+    let metadata = library
+        .metadata()
+        .into_iter()
+        .find(|metadata| metadata.book_id == book_id)
+        .unwrap();
+    assert!(book_id.0.starts_with("SSED:"));
+    assert!(book_id.0.ends_with(&metadata.root_fingerprint[..12]));
 
     let surfaces = library.home_surfaces(&book_id).unwrap();
     assert!(

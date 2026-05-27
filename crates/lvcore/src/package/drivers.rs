@@ -302,12 +302,17 @@ impl StubBookPackage {
         stores: StubPackageStores,
     ) -> Self {
         let format_label = detected.format_family.ui_label().to_owned();
+        let root_fingerprint = root_fingerprint(root);
+        let fingerprint_short = root_fingerprint
+            .get(..12)
+            .unwrap_or(root_fingerprint.as_str());
         let book_id = BookId(format!(
-            "{}:{}",
+            "{}:{}:{}",
             format_label,
             root.file_name()
                 .map(|v| v.to_string_lossy())
-                .unwrap_or_else(|| root.as_os_str().to_string_lossy())
+                .unwrap_or_else(|| root.as_os_str().to_string_lossy()),
+            fingerprint_short,
         ));
         let metadata = BookMetadata {
             book_id,
@@ -315,7 +320,7 @@ impl StubBookPackage {
             format_label,
             title: detected.title,
             icon_hint: None,
-            root_fingerprint: root_fingerprint(root),
+            root_fingerprint,
             capabilities,
         };
         Self {
