@@ -95,6 +95,34 @@ impl LvedSqliteStore {
         };
         Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
     }
+
+    pub fn media_blob(&self, store: &str, key: &str) -> Result<Option<Vec<u8>>> {
+        let connection = self.open_readonly()?;
+        let table = match store {
+            "lved.media" | "media" => "media",
+            "lved.mediasub" | "mediasub" => "mediasub",
+            _ => return Ok(None),
+        };
+        if !sqlite_table_exists(&connection, table)
+            || !sqlite_table_has_columns(&connection, table, &["name", "main"])
+        {
+            return Ok(None);
+        }
+        let stem = Path::new(key)
+            .file_stem()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| key.to_owned());
+        let sql = format!(
+            "select main from {} where name = ? or name = ? limit 1",
+            quote_identifier(table)
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let mut rows = statement.query((key, stem))?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(sqlite_value_to_bytes(row.get_ref(0)?)?))
+    }
 }
 
 pub fn lved_payload_path(root: &Path) -> Result<Option<PathBuf>> {
@@ -419,6 +447,15 @@ fn sqlite_value_to_string(value: ValueRef<'_>) -> rusqlite::Result<String> {
         ValueRef::Integer(value) => Ok(value.to_string()),
         ValueRef::Real(value) => Ok(value.to_string()),
         ValueRef::Text(bytes) | ValueRef::Blob(bytes) => Ok(decode_sqlite_text(bytes)),
+    }
+}
+
+fn sqlite_value_to_bytes(value: ValueRef<'_>) -> rusqlite::Result<Vec<u8>> {
+    match value {
+        ValueRef::Null => Ok(Vec::new()),
+        ValueRef::Integer(value) => Ok(value.to_string().into_bytes()),
+        ValueRef::Real(value) => Ok(value.to_string().into_bytes()),
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => Ok(bytes.to_vec()),
     }
 }
 
@@ -770,6 +807,7 @@ mod tests {
                     "
                     create table info (id integer, type integer, name text primary key, body text, media text);
                     create table content (id integer primary key, type integer, body text, media text);
+                    create table mediasub (id integer primary key, name text, type integer, main blob);
                     create table list (
                       id integer primary key,
                       refid integer,
@@ -788,6 +826,7 @@ mod tests {
                       filter
                     );
                     insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p></article>', '');
+                    insert into mediasub values (1, '00010033', 5, X'49443303');
                     insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
@@ -807,6 +846,10 @@ mod tests {
         assert_eq!(
             store.content_html(100).unwrap().as_deref(),
             Some("<article><h1>Alpha</h1><p>body</p></article>")
+        );
+        assert_eq!(
+            store.media_blob("lved.mediasub", "00010033.mp3").unwrap(),
+            Some(b"ID3\x03".to_vec())
         );
     }
 

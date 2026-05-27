@@ -482,7 +482,7 @@ impl RendererProvider for StubBookPackage {
             }
             _ => {
                 let body = self.visual_body_for_target(token)?;
-                Ok(self.view_for_visual_body(token.clone(), body, options))
+                self.view_for_visual_body(token.clone(), body, options)
             }
         }
     }
@@ -523,12 +523,19 @@ impl ResourceProvider for StubBookPackage {
             InternalResource::MediaBlob { resource_kind, .. } => Ok(ResourceRef {
                 token: token.clone(),
                 kind: resource_kind,
-                label: None,
-                href: None,
-                diagnostics: vec![Diagnostic::info(
-                    "resource_deferred",
-                    "media blob resource resolution is not implemented yet",
-                )],
+                label: media_blob_label(token)?,
+                href: self
+                    .lved_store
+                    .is_some()
+                    .then(|| format!("lvcore://resource/{}", token.as_str())),
+                diagnostics: if self.lved_store.is_some() {
+                    Vec::new()
+                } else {
+                    vec![Diagnostic::info(
+                        "resource_deferred",
+                        "media blob resource resolution is not implemented yet for this package",
+                    )]
+                },
             }),
             InternalResource::Unsupported { reason } => Ok(ResourceRef {
                 token: token.clone(),
@@ -549,9 +556,20 @@ impl ResourceProvider for StubBookPackage {
                 };
                 Ok(fs::read(resolved)?)
             }
-            InternalResource::MediaBlob { .. } => Err(Error::Driver(
-                "media blob resource reading is not implemented yet".to_owned(),
-            )),
+            InternalResource::MediaBlob { store, key, .. } => {
+                let Some(lved_store) = &self.lved_store else {
+                    return Err(Error::Driver(
+                        "media blob resource reading is not implemented yet for this package"
+                            .to_owned(),
+                    ));
+                };
+                let Some(bytes) = lved_store.media_blob(&store, &key)? else {
+                    return Err(Error::Driver(format!(
+                        "media blob not found: {store}:{key}"
+                    )));
+                };
+                Ok(bytes)
+            }
             InternalResource::Unsupported { reason } => Err(Error::Driver(reason)),
         }
     }
@@ -1045,25 +1063,32 @@ impl StubBookPackage {
         target: TargetToken,
         body: VisualBody,
         options: &RenderOptions,
-    ) -> ResolvedTargetView {
+    ) -> Result<ResolvedTargetView> {
         match body {
-            VisualBody::PreservedHtml { html, source: _ } => ResolvedTargetView {
-                kind: crate::render::ResolvedTargetKind::EntryBody,
-                target,
-                title: Some("Entry".to_owned()),
-                display_html: Some(html),
-                basic_text: None,
-                resources: Vec::new(),
-                links: Vec::new(),
-                capabilities: vec![crate::render::RenderCapability::Html],
-                diagnostics: Vec::new(),
-                debug_trace: None,
-            },
+            VisualBody::PreservedHtml { html, source } => {
+                let (html, resources, diagnostics) = if source == BodySourceKind::LvedSqlite {
+                    self.normalize_lved_html_resources(&html)?
+                } else {
+                    (html, Vec::new(), Vec::new())
+                };
+                Ok(ResolvedTargetView {
+                    kind: crate::render::ResolvedTargetKind::EntryBody,
+                    target,
+                    title: Some("Entry".to_owned()),
+                    display_html: Some(html),
+                    basic_text: None,
+                    resources,
+                    links: Vec::new(),
+                    capabilities: vec![crate::render::RenderCapability::Html],
+                    diagnostics,
+                    debug_trace: None,
+                })
+            }
             VisualBody::SsedStream {
                 component,
                 offset,
                 length,
-            } => ResolvedTargetView {
+            } => Ok(ResolvedTargetView {
                 kind: crate::render::ResolvedTargetKind::Deferred,
                 target,
                 title: Some("SSED entry stream".to_owned()),
@@ -1087,8 +1112,8 @@ impl StubBookPackage {
                     })
                     .to_string()
                 }),
-            },
-            VisualBody::SemanticFallback { text } => ResolvedTargetView {
+            }),
+            VisualBody::SemanticFallback { text } => Ok(ResolvedTargetView {
                 kind: crate::render::ResolvedTargetKind::EntryBody,
                 target,
                 title: Some("Semantic fallback".to_owned()),
@@ -1102,11 +1127,11 @@ impl StubBookPackage {
                     "visual renderer is unavailable; semantic fallback was returned",
                 )],
                 debug_trace: None,
-            },
+            }),
             VisualBody::Unsupported {
                 reason,
                 diagnostics,
-            } => ResolvedTargetView {
+            } => Ok(ResolvedTargetView {
                 kind: crate::render::ResolvedTargetKind::Unsupported,
                 target,
                 title: Some(reason),
@@ -1117,7 +1142,7 @@ impl StubBookPackage {
                 capabilities: Vec::new(),
                 diagnostics,
                 debug_trace: None,
-            },
+            }),
         }
     }
 
@@ -1207,6 +1232,45 @@ impl StubBookPackage {
         })
     }
 
+    fn normalize_lved_html_resources(
+        &self,
+        html: &str,
+    ) -> Result<(String, Vec<ResourceRef>, Vec<Diagnostic>)> {
+        let mut output = String::with_capacity(html.len());
+        let mut resources = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut seen_tokens = BTreeSet::new();
+        let mut cursor = 0usize;
+        while let Some(relative_start) = html[cursor..].find("lved.media.") {
+            let start = cursor + relative_start;
+            output.push_str(&html[cursor..start]);
+            let end = html[start..]
+                .find(is_lved_ref_terminator)
+                .map(|index| start + index)
+                .unwrap_or(html.len());
+            let raw_ref = &html[start..end];
+            if let Some(resource) = lved_media_resource(raw_ref) {
+                let token = ResourceToken::new(&resource)?;
+                let href = format!("lvcore://resource/{}", token.as_str());
+                if seen_tokens.insert(token.as_str().to_owned()) {
+                    let resource_ref = self.resolve_resource(&token)?;
+                    diagnostics.extend(resource_ref.diagnostics.clone());
+                    resources.push(resource_ref);
+                }
+                output.push_str(&href);
+            } else {
+                output.push_str(raw_ref);
+                diagnostics.push(Diagnostic::warning(
+                    "lved_media_ref_unparsed",
+                    format!("could not parse LVED media reference {raw_ref}"),
+                ));
+            }
+            cursor = end;
+        }
+        output.push_str(&html[cursor..]);
+        Ok((output, resources, diagnostics))
+    }
+
     fn validate_plain_component(
         &self,
         component: &SsedComponent,
@@ -1267,6 +1331,51 @@ fn push_surface_if_exists(
         });
     }
     Ok(())
+}
+
+fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
+    let (namespace, key) = raw_ref.strip_prefix("lved.media.")?.split_once(':')?;
+    if key.is_empty() {
+        return None;
+    }
+    let lower_namespace = namespace.to_lowercase();
+    let lower_key = key.to_lowercase();
+    let audio = lower_namespace.contains("sound")
+        || lower_namespace.contains("audio")
+        || lower_key.ends_with(".mp3")
+        || lower_key.ends_with(".wav");
+    let image = lower_namespace.contains("image")
+        || lower_namespace.contains("picture")
+        || lower_key.ends_with(".png")
+        || lower_key.ends_with(".jpg")
+        || lower_key.ends_with(".jpeg")
+        || lower_key.ends_with(".gif")
+        || lower_key.ends_with(".svg")
+        || lower_key.ends_with(".bmp");
+    let resource_kind = if audio {
+        ResourceKind::Audio
+    } else if image {
+        ResourceKind::Image
+    } else {
+        ResourceKind::MediaBlob
+    };
+    let store = if audio { "lved.mediasub" } else { "lved.media" };
+    Some(InternalResource::MediaBlob {
+        store: store.to_owned(),
+        key: key.to_owned(),
+        resource_kind,
+    })
+}
+
+fn is_lved_ref_terminator(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>' | ')' | ']')
+}
+
+fn media_blob_label(token: &ResourceToken) -> Result<Option<String>> {
+    match token.decode()? {
+        InternalResource::MediaBlob { key, .. } => Ok(Some(key)),
+        _ => Ok(None),
+    }
 }
 
 fn root_fingerprint(root: &Path) -> String {
@@ -1501,9 +1610,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+        let html = view.display_html.as_deref().unwrap();
+        assert!(html.contains("<article><h1>Alpha</h1><p>body</p>"));
+        assert!(html.contains("lvcore://resource/"));
+        assert_eq!(view.resources.len(), 1);
+        assert_eq!(view.resources[0].kind, ResourceKind::Audio);
         assert_eq!(
-            view.display_html.as_deref(),
-            Some("<article><h1>Alpha</h1><p>body</p></article>")
+            package.read_resource(&view.resources[0].token).unwrap(),
+            b"ID3\x03".to_vec()
         );
     }
 
@@ -1556,6 +1670,7 @@ mod tests {
                     create table info (id integer, type integer, name text primary key, body text, media text);
                     insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
                     create table content (id integer primary key, type integer, body text, media text);
+                    create table mediasub (id integer primary key, name text, type integer, main blob);
                     create table list (
                       id integer primary key,
                       refid integer,
@@ -1573,7 +1688,8 @@ mod tests {
                       advanced2,
                       filter
                     );
-                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p></article>', '');
+                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><a href=\"lved.media.sound:00010033.mp3\">sound</a></article>', '');
+                    insert into mediasub values (1, '00010033', 5, X'49443303');
                     insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
