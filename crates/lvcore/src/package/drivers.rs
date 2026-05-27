@@ -436,7 +436,7 @@ impl RendererProvider for StubBookPackage {
     fn render_target(
         &self,
         token: &TargetToken,
-        _options: &crate::render::RenderOptions,
+        options: &crate::render::RenderOptions,
     ) -> Result<ResolvedTargetView> {
         let target = token.decode()?;
         match target {
@@ -445,22 +445,10 @@ impl RendererProvider for StubBookPackage {
                 "Unsupported target",
                 Diagnostic::warning("target_unsupported", reason),
             )),
-            InternalTarget::SsedDenseAnchor { .. } => Ok(ResolvedTargetView::deferred(
-                token.clone(),
-                "Dense HONMON target",
-                Diagnostic::warning(
-                    "dense_honmon_deferred",
-                    "dense HONMON targets must be dereferenced through a body provider before display",
-                ),
-            )),
-            _ => Ok(ResolvedTargetView::deferred(
-                token.clone(),
-                "Target",
-                Diagnostic::info(
-                    "render_deferred",
-                    "target resolution is typed but renderer implementation is deferred",
-                ),
-            )),
+            _ => {
+                let body = self.visual_body_for_target(token)?;
+                Ok(self.view_for_visual_body(token.clone(), body, options))
+            }
         }
     }
 }
@@ -550,6 +538,87 @@ impl BodyProvider for StubBookPackage {
 }
 
 impl StubBookPackage {
+    fn view_for_visual_body(
+        &self,
+        target: TargetToken,
+        body: VisualBody,
+        options: &RenderOptions,
+    ) -> ResolvedTargetView {
+        match body {
+            VisualBody::PreservedHtml { html, source: _ } => ResolvedTargetView {
+                kind: crate::render::ResolvedTargetKind::EntryBody,
+                target,
+                title: Some("Entry".to_owned()),
+                display_html: Some(html),
+                basic_text: None,
+                resources: Vec::new(),
+                links: Vec::new(),
+                capabilities: vec![crate::render::RenderCapability::Html],
+                diagnostics: Vec::new(),
+                debug_trace: None,
+            },
+            VisualBody::SsedStream {
+                component,
+                offset,
+                length,
+            } => ResolvedTargetView {
+                kind: crate::render::ResolvedTargetKind::Deferred,
+                target,
+                title: Some("SSED entry stream".to_owned()),
+                display_html: None,
+                basic_text: None,
+                resources: Vec::new(),
+                links: Vec::new(),
+                capabilities: Vec::new(),
+                diagnostics: vec![Diagnostic::info(
+                    "hc_render_deferred",
+                    "SSED stream resolved successfully; HC/profile rendering is not implemented yet",
+                )],
+                debug_trace: options.include_debug_trace.then(|| {
+                    json!({
+                        "body": {
+                            "kind": "ssed_stream",
+                            "component": component,
+                            "offset": offset,
+                            "length": length,
+                        }
+                    })
+                    .to_string()
+                }),
+            },
+            VisualBody::SemanticFallback { text } => ResolvedTargetView {
+                kind: crate::render::ResolvedTargetKind::EntryBody,
+                target,
+                title: Some("Semantic fallback".to_owned()),
+                display_html: None,
+                basic_text: Some(text),
+                resources: Vec::new(),
+                links: Vec::new(),
+                capabilities: Vec::new(),
+                diagnostics: vec![Diagnostic::info(
+                    "semantic_fallback",
+                    "visual renderer is unavailable; semantic fallback was returned",
+                )],
+                debug_trace: None,
+            },
+            VisualBody::Unsupported {
+                reason,
+                diagnostics,
+            } => ResolvedTargetView {
+                kind: crate::render::ResolvedTargetKind::Unsupported,
+                target,
+                title: Some(reason),
+                display_html: None,
+                basic_text: None,
+                resources: Vec::new(),
+                links: Vec::new(),
+                capabilities: Vec::new(),
+                diagnostics,
+                debug_trace: None,
+            },
+        }
+    }
+
     fn visual_body_for_ssed_address(
         &self,
         requested_component: &str,

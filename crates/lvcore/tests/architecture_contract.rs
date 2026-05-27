@@ -3,8 +3,8 @@ use std::path::Path;
 
 use lvcore::{
     Capability, DriverRegistry, FormatFamily, GaijiPolicy, GaijiSourcePreference, InternalTarget,
-    NavigationStatus, NavigationSurfaceKind, RenderOptions, SSEDDATA_MAGIC, SSEDINFO_MAGIC,
-    StorageBackend, TargetToken, VisualBody,
+    NavigationStatus, NavigationSurfaceKind, RenderOptions, ResolvedTargetKind, SSEDDATA_MAGIC,
+    SSEDINFO_MAGIC, StorageBackend, TargetToken, VisualBody,
 };
 use tempfile::tempdir;
 
@@ -91,10 +91,11 @@ fn dense_honmon_targets_do_not_render_as_raw_numeric_anchors() {
         .render_target(&token, &RenderOptions::default())
         .unwrap();
     assert!(view.display_html.is_none());
+    assert_eq!(view.kind, ResolvedTargetKind::Unsupported);
     assert!(
         view.diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "dense_honmon_deferred")
+            .any(|diagnostic| diagnostic.code == "dense_honmon_dereference_required")
     );
 }
 
@@ -149,6 +150,40 @@ fn ssed_address_targets_resolve_through_catalog_components() {
             length: None,
         }
     );
+}
+
+#[test]
+fn render_target_uses_resolved_visual_body_contract() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"abcdef"),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 2,
+    })
+    .unwrap();
+    let options = RenderOptions {
+        include_debug_trace: true,
+        ..RenderOptions::default()
+    };
+
+    let view = package.render_target(&token, &options).unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::Deferred);
+    assert!(view.display_html.is_none());
+    assert!(
+        view.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "hc_render_deferred")
+    );
+    let debug_trace = view.debug_trace.as_deref().unwrap_or_default();
+    assert!(debug_trace.contains("HONMON.DIC"));
+    assert!(debug_trace.contains("\"offset\":2"));
 }
 
 #[test]
