@@ -134,6 +134,8 @@ pub struct SsedDataFile {
     file: File,
     file_len: u64,
     header: SsedDataHeader,
+    cached_chunk_index: Option<usize>,
+    cached_chunk: Vec<u8>,
 }
 
 impl SsedDataReader {
@@ -176,6 +178,8 @@ impl SsedDataFile {
             file,
             file_len,
             header,
+            cached_chunk_index: None,
+            cached_chunk: Vec::new(),
         })
     }
 
@@ -211,6 +215,9 @@ impl SsedDataFile {
     }
 
     fn read_expanded_chunk(&mut self, chunk_index: usize) -> Result<Vec<u8>> {
+        if self.cached_chunk_index == Some(chunk_index) {
+            return Ok(self.cached_chunk.clone());
+        }
         let start = *self
             .header
             .chunk_offsets
@@ -233,7 +240,10 @@ impl SsedDataFile {
         let mut bytes = vec![0u8; size];
         self.file.seek(SeekFrom::Start(start))?;
         self.file.read_exact(&mut bytes)?;
-        expand_sseddata_chunk(&bytes, 0)
+        let expanded = expand_sseddata_chunk(&bytes, 0)?;
+        self.cached_chunk_index = Some(chunk_index);
+        self.cached_chunk = expanded.clone();
+        Ok(expanded)
     }
 }
 

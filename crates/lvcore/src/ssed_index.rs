@@ -131,7 +131,7 @@ pub fn decode_title_text(data: &[u8]) -> String {
     decoded.trim().to_owned()
 }
 
-fn decode_jis_pair(first: u8, second: u8) -> Option<char> {
+pub(crate) fn decode_jis_pair(first: u8, second: u8) -> Option<char> {
     let row = first.checked_sub(0x21)?;
     let cell = second.checked_sub(0x21)?;
     let mut lead = (row >> 1).saturating_add(0x81);
