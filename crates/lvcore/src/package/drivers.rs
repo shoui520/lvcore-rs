@@ -2134,12 +2134,84 @@ impl StubBookPackage {
             cursor = end;
         }
         output.push_str(&html[cursor..]);
+        let html = self.normalize_lved_direct_resource_attrs(
+            &output,
+            &mut resources,
+            &mut diagnostics,
+            &mut seen_resource_tokens,
+        )?;
         Ok(NormalizedHtmlRefs {
-            html: output,
+            html,
             resources,
             links,
             diagnostics,
         })
+    }
+
+    fn normalize_lved_direct_resource_attrs(
+        &self,
+        html: &str,
+        resources: &mut Vec<ResourceRef>,
+        diagnostics: &mut Vec<Diagnostic>,
+        seen_resource_tokens: &mut BTreeSet<String>,
+    ) -> Result<String> {
+        let mut output = String::with_capacity(html.len());
+        let mut cursor = 0usize;
+        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+            output.push_str(&html[cursor..attr.value_start]);
+            let raw_value = &html[attr.value_start..attr.value_end];
+            if matches!(attr.name, HtmlAttrName::Src | HtmlAttrName::Data)
+                && !raw_value.starts_with("lvcore://")
+                && let Some(resource) = self.lved_direct_resource(raw_value)?
+            {
+                let token = ResourceToken::new(&resource)?;
+                let href = format!("lvcore://resource/{}", token.as_str());
+                if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                    let resource_ref = self.resolve_resource(&token)?;
+                    diagnostics.extend(resource_ref.diagnostics.clone());
+                    resources.push(resource_ref);
+                }
+                output.push_str(&href);
+            } else {
+                output.push_str(raw_value);
+            }
+            cursor = attr.value_end;
+        }
+        output.push_str(&html[cursor..]);
+        Ok(output)
+    }
+
+    fn lved_direct_resource(&self, raw_value: &str) -> Result<Option<InternalResource>> {
+        let value = html_unescape_minimal(raw_value).trim().replace('\\', "/");
+        if value.is_empty()
+            || value.starts_with('#')
+            || value.starts_with("http://")
+            || value.starts_with("https://")
+            || value.starts_with("data:")
+            || value.starts_with("javascript:")
+            || value.starts_with("lvcore://")
+            || value.starts_with("lved.")
+        {
+            return Ok(None);
+        }
+        let relative = value.split(['#', '?']).next().unwrap_or("").trim();
+        if relative.is_empty() {
+            return Ok(None);
+        }
+        let candidates = [relative.to_owned(), format!("res/{relative}")];
+        for candidate in candidates {
+            if self.storage.exists(Path::new(&candidate))? {
+                return Ok(Some(InternalResource::PackageFile {
+                    resource_kind: resource_kind_from_path(&candidate),
+                    path: candidate,
+                }));
+            }
+        }
+        Ok(Some(InternalResource::MediaBlob {
+            store: "lved.media".to_owned(),
+            key: relative.to_owned(),
+            resource_kind: resource_kind_from_path(relative),
+        }))
     }
 
     fn normalize_multiview_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
@@ -2638,6 +2710,7 @@ fn escape_plain_label_html(value: &str) -> String {
 enum HtmlAttrName {
     Href,
     Src,
+    Data,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2654,6 +2727,8 @@ fn next_html_href_or_src_attr(html: &str, cursor: usize) -> Option<HtmlAttrRange
         ("href='", HtmlAttrName::Href),
         ("src=\"", HtmlAttrName::Src),
         ("src='", HtmlAttrName::Src),
+        ("data=\"", HtmlAttrName::Data),
+        ("data='", HtmlAttrName::Data),
     ];
     let (attr_start, pattern, name) = patterns
         .iter()
@@ -3131,11 +3206,34 @@ mod tests {
                 anchor: Some(anchor)
             } if table == "content" && anchor == "jump"
         ));
-        assert_eq!(view.resources.len(), 1);
-        assert_eq!(view.resources[0].kind, ResourceKind::Audio);
+        assert_eq!(view.resources.len(), 2);
+        assert!(
+            view.resources
+                .iter()
+                .any(|resource| resource.kind == ResourceKind::Image)
+        );
+        assert!(
+            view.resources
+                .iter()
+                .any(|resource| resource.kind == ResourceKind::Audio)
+        );
+        let audio = view
+            .resources
+            .iter()
+            .find(|resource| resource.kind == ResourceKind::Audio)
+            .unwrap();
         assert_eq!(
-            package.read_resource(&view.resources[0].token).unwrap(),
+            package.read_resource(&audio.token).unwrap(),
             b"ID3\x03".to_vec()
+        );
+        let image = view
+            .resources
+            .iter()
+            .find(|resource| resource.kind == ResourceKind::Image)
+            .unwrap();
+        assert_eq!(
+            package.read_resource(&image.token).unwrap(),
+            b"<svg/>".to_vec()
         );
 
         let window = package
@@ -3202,6 +3300,7 @@ mod tests {
                     create table info (id integer, type integer, name text primary key, body text, media text);
                     insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
                     create table content (id integer primary key, type integer, body text, media text);
+                    create table media (id integer primary key, name text, type integer, main blob);
                     create table mediasub (id integer primary key, name text, type integer, main blob);
                     create table list (
                       id integer primary key,
@@ -3220,9 +3319,10 @@ mod tests {
                       advanced2,
                       filter
                     );
-                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><a href=\"lved.media.sound:00010033.mp3\">sound</a><a href=\"lved.dataid:101#jump\">next</a></article>', '');
+                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><object class=\"icon\" data=\"AC6E.svg\"></object><a href=\"lved.media.sound:00010033.mp3\">sound</a><a href=\"lved.dataid:101#jump\">next</a></article>', '');
                     insert into content values (101, 1, '<article><h1>Beta</h1></article>', '');
                     insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
+                    insert into media values (1, 'AC6E', 4, X'3C7376672F3E');
                     insert into mediasub values (1, '00010033', 5, X'49443303');
                     insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
                     insert into list values (2, 101, 1, '', '<b>beta</b>', '');
