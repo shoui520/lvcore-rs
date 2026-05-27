@@ -9,6 +9,7 @@ use crate::body::{BodyProvider, VisualBody};
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution};
+use crate::lved_sqlite::LvedSqliteStore;
 use crate::navigation::{
     HomeSurface, NavigationItem, NavigationProvider, NavigationStatus, NavigationSurface,
     NavigationSurfaceKind,
@@ -93,35 +94,27 @@ impl PackageDriver for LvedSqliteDriver {
 
     fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>> {
         let package_root = package_root_for_detection(root);
-        let storage = DirectoryStorage::new(package_root);
-        let file_name = root
-            .file_name()
-            .map(|v| v.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-        let is_payload_file =
-            root.is_file() && (file_name == "main.data" || file_name.ends_with(".dbc"));
-        let has_main_data = is_payload_file && file_name == "main.data"
-            || storage.exists(Path::new("main.data"))?;
-        let has_dbc = is_payload_file && file_name.ends_with(".dbc")
-            || !files_with_suffix(package_root, ".dbc")?.is_empty();
-        if has_main_data || has_dbc {
-            let mut evidence = Vec::new();
-            if has_main_data {
-                evidence.push("main.data".to_owned());
+        if let Some(store) = LvedSqliteStore::discover(root)? {
+            let mut evidence = vec![
+                store
+                    .payload_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "lved_sqlite_payload".to_owned()),
+            ];
+            if let Some(key_file) = &store.key_file {
+                evidence.push(format!("key_file:{}", key_file.match_kind));
             }
-            if has_dbc {
-                evidence.push("*.dbc".to_owned());
-            }
-            if storage.exists(Path::new(".key"))?
-                || !files_with_suffix(package_root, ".key")?.is_empty()
-            {
-                evidence.push("local_key_file".to_owned());
-            }
+            let title = store
+                .title()
+                .ok()
+                .flatten()
+                .or_else(|| inferred_folder_title(package_root));
             return Ok(Some(DetectedPackage {
                 root: package_root.to_path_buf(),
                 format_family: FormatFamily::LvedSqlite3,
                 confidence: 98,
-                title: inferred_folder_title(package_root),
+                title,
                 evidence,
             }));
         }
@@ -1364,7 +1357,12 @@ mod tests {
 
         let detected = LvedSqliteDriver.detect(dir.path()).unwrap().unwrap();
         assert_eq!(detected.format_family, FormatFamily::LvedSqlite3);
-        assert!(detected.evidence.contains(&"local_key_file".to_owned()));
+        assert!(
+            detected
+                .evidence
+                .iter()
+                .any(|item| item.starts_with("key_file:"))
+        );
     }
 
     #[test]

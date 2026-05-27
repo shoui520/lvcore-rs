@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod gaiji;
 pub mod library;
+pub mod lved_sqlite;
 pub mod navigation;
 pub mod package;
 pub mod render;
@@ -25,6 +26,7 @@ pub use diagnostics::{Diagnostic, DiagnosticSeverity};
 pub use error::{Error, Result};
 pub use gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference};
 pub use library::BookLibrary;
+pub use lved_sqlite::{LvedKeyFile, LvedSqliteStore};
 pub use navigation::{
     HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
 };
