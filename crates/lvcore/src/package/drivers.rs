@@ -814,13 +814,17 @@ impl GaijiProvider for StubBookPackage {
             GaijiSourcePreference::Unicode => unicode.is_some(),
             GaijiSourcePreference::ExternalResource => template_resource.is_some(),
             GaijiSourcePreference::Ga16Bitmap => ga16_resource.is_some(),
+            GaijiSourcePreference::Unresolved => true,
         });
         let resource = match preferred_source {
             Some(GaijiSourcePreference::ExternalResource) => template_resource,
             Some(GaijiSourcePreference::Ga16Bitmap) => ga16_resource,
             _ => template_resource.or(ga16_resource),
         };
-        let diagnostics = if preferred_source.is_none() {
+        let diagnostics = if matches!(
+            preferred_source,
+            None | Some(GaijiSourcePreference::Unresolved)
+        ) {
             vec![Diagnostic::info(
                 "gaiji_unresolved",
                 format!("{code} was not resolved to Unicode, Template, or GA16 resource"),
@@ -1943,13 +1947,18 @@ impl StubBookPackage {
             _ => &[],
         };
         for candidate in candidates {
-            if self
+            let Some(path) = self
                 .storage
                 .resolve_casefolded(Path::new(candidate))
                 .ok()
                 .flatten()
-                .is_none()
-            {
+            else {
+                continue;
+            };
+            let Ok(data) = fs::read(&path) else {
+                continue;
+            };
+            if !ga16_resource_covers_code(&data, code) {
                 continue;
             }
             let token = ResourceToken::new(&InternalResource::PackageFile {
@@ -3824,6 +3833,35 @@ fn load_package_uni_gaiji_maps(root: &Path) -> BTreeMap<String, String> {
         merged.extend(parse_uni_gaiji_map(&data));
     }
     merged
+}
+
+fn ga16_resource_covers_code(data: &[u8], code: &str) -> bool {
+    if data.len() < 14 {
+        return false;
+    }
+    if data[8] == 0 || data[9] == 0 {
+        return false;
+    }
+    let Ok(code) = u16::from_str_radix(code, 16) else {
+        return false;
+    };
+    let start = u16::from_be_bytes([data[10], data[11]]);
+    let count = u16::from_be_bytes([data[12], data[13]]) as i32;
+    ga16_grid_index(start, code).is_some_and(|index| index >= 0 && index < count)
+}
+
+fn ga16_grid_index(start: u16, code: u16) -> Option<i32> {
+    let start_row = ((start >> 8) & 0xff) as i32;
+    let start_cell = (start & 0xff) as i32;
+    let row = ((code >> 8) & 0xff) as i32;
+    let cell = (code & 0xff) as i32;
+    if !(0x21..=0x7e).contains(&start_cell) || !(0x21..=0x7e).contains(&cell) {
+        return Some(code as i32 - start as i32);
+    }
+    if row < start_row {
+        return None;
+    }
+    Some((row - start_row) * 0x5e + (cell - start_cell))
 }
 
 fn package_root_for_detection(path: &Path) -> &Path {

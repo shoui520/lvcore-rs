@@ -16,6 +16,7 @@ pub enum GaijiSourcePreference {
     Unicode,
     ExternalResource,
     Ga16Bitmap,
+    Unresolved,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +31,7 @@ impl Default for GaijiPolicy {
                 GaijiSourcePreference::Unicode,
                 GaijiSourcePreference::ExternalResource,
                 GaijiSourcePreference::Ga16Bitmap,
+                GaijiSourcePreference::Unresolved,
             ],
         }
     }
@@ -171,6 +173,7 @@ mod tests {
         let policy = GaijiPolicy {
             priority: vec![
                 GaijiSourcePreference::Ga16Bitmap,
+                GaijiSourcePreference::Unresolved,
                 GaijiSourcePreference::ExternalResource,
                 GaijiSourcePreference::Unicode,
             ],

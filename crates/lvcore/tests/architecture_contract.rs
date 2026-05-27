@@ -1068,8 +1068,8 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
     fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
-    fs::write(dir.path().join("GA16HALF"), b"ga16").unwrap();
-    fs::write(dir.path().join("GA16FULL"), b"ga16").unwrap();
+    fs::write(dir.path().join("GA16HALF"), ga16_fixture(0xA121, 8)).unwrap();
+    fs::write(dir.path().join("GA16FULL"), ga16_fixture(0xB121, 3)).unwrap();
     fs::create_dir(dir.path().join("Templates")).unwrap();
     fs::write(dir.path().join("Templates/B123.SVG"), b"<svg/>").unwrap();
 
@@ -1133,6 +1133,20 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
     assert_eq!(
         bitmap.resource.as_ref().unwrap().label.as_deref(),
         Some("GA16HALF")
+    );
+
+    let unresolved = package.resolve_gaiji("B999", &GaijiPolicy::default());
+    assert_eq!(
+        unresolved.preferred_source,
+        Some(GaijiSourcePreference::Unresolved)
+    );
+    assert!(unresolved.resource.is_none());
+    assert!(unresolved.unicode.is_none());
+    assert!(
+        unresolved
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "gaiji_unresolved")
     );
 }
 
@@ -1526,6 +1540,15 @@ fn uni_fixture() -> Vec<u8> {
     data.extend_from_slice(&[
         0xB1, 0x23, 0x00, 0x00, 0x4E, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0,
     ]);
+    data
+}
+
+fn ga16_fixture(start_code: u16, count: u16) -> Vec<u8> {
+    let mut data = vec![0u8; 14];
+    data[8] = 16;
+    data[9] = 16;
+    data[10..12].copy_from_slice(&start_code.to_be_bytes());
+    data[12..14].copy_from_slice(&count.to_be_bytes());
     data
 }
 
