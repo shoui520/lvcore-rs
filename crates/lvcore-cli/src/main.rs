@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use lvcore::{DriverRegistry, RenderOptions, Result, SearchMode, SearchQuery, SearchScope};
+use lvcore::{
+    DriverRegistry, RenderOptions, Result, SearchMode, SearchQuery, SearchScope, TargetToken,
+};
 use serde_json::json;
 
 #[derive(Debug, Parser)]
@@ -56,6 +58,13 @@ enum Command {
         path: PathBuf,
         /// Surface identifier, for example `lved-list`, `info`, or `title-index`.
         surface_id: String,
+    },
+    /// Resolve and render one opaque target token for one package.
+    Render {
+        /// Package root or payload path to inspect.
+        path: PathBuf,
+        /// Target token previously returned by search, navigation, or links.
+        token: String,
     },
 }
 
@@ -202,6 +211,20 @@ fn main() -> Result<()> {
                 serde_json::to_string_pretty(&json!({
                     "metadata": metadata,
                     "surface": surface,
+                }))?
+            );
+        }
+        Command::Render { path, token } => {
+            let registry = DriverRegistry::default();
+            let package = registry.open_best(&path)?;
+            let metadata = package.metadata();
+            let target = TargetToken::from_opaque(token);
+            let view = package.render_target(&target, &RenderOptions::default())?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "metadata": metadata,
+                    "view": view,
                 }))?
             );
         }

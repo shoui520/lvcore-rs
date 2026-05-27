@@ -10,7 +10,7 @@ use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution};
 use crate::lved_sqlite::LvedSqliteStore;
-use crate::multiview::{MultiviewMenuItem, parse_menu_data};
+use crate::multiview::{MultiviewMenuItem, MultiviewStore, parse_menu_data};
 use crate::navigation::{
     HomeSurface, NavigationItem, NavigationNode, NavigationProvider, NavigationStatus,
     NavigationSurface, NavigationSurfaceKind,
@@ -85,6 +85,7 @@ impl PackageDriver for SsedDriver {
             capabilities,
             Some(catalog),
             None,
+            None,
         )))
     }
 }
@@ -134,6 +135,7 @@ impl PackageDriver for LvedSqliteDriver {
             lved_capabilities(),
             None,
             store,
+            None,
         )))
     }
 }
@@ -175,12 +177,14 @@ impl PackageDriver for LvlMultiViewDriver {
             .detect(root)?
             .ok_or_else(|| Error::Driver("not an LVLMultiView package".to_owned()))?;
         let package_root = detection.root.clone();
+        let store = MultiviewStore::discover(&package_root)?;
         Ok(Box::new(StubBookPackage::new(
             &package_root,
             detection,
             multiview_capabilities(),
             None,
             None,
+            store,
         )))
     }
 }
@@ -223,6 +227,7 @@ impl PackageDriver for HoureiDriver {
             hourei_capabilities(),
             None,
             None,
+            None,
         )))
     }
 }
@@ -233,6 +238,7 @@ pub struct StubBookPackage {
     metadata: BookMetadata,
     ssed_catalog: Option<SsedCatalog>,
     lved_store: Option<LvedSqliteStore>,
+    multiview_store: Option<MultiviewStore>,
 }
 
 struct NormalizedHtmlRefs {
@@ -249,6 +255,7 @@ impl StubBookPackage {
         capabilities: Vec<Capability>,
         ssed_catalog: Option<SsedCatalog>,
         lved_store: Option<LvedSqliteStore>,
+        multiview_store: Option<MultiviewStore>,
     ) -> Self {
         let format_label = detected.format_family.ui_label().to_owned();
         let book_id = BookId(format!(
@@ -273,6 +280,7 @@ impl StubBookPackage {
             metadata,
             ssed_catalog,
             lved_store,
+            multiview_store,
         }
     }
 }
@@ -294,6 +302,9 @@ impl SearchProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::LvedSqlite3 {
             return self.search_lved_sqlite(query);
+        }
+        if self.metadata.format_family == FormatFamily::LvlMultiView {
+            return self.search_multiview(query);
         }
         Ok(SearchPage::deferred(format!(
             "{} search provider is not implemented yet",
@@ -683,6 +694,9 @@ impl BodyProvider for StubBookPackage {
                 row_id,
                 anchor: _,
             } => self.visual_body_for_lved_row(&table, row_id),
+            InternalTarget::MultiviewHref { href, anchor } => {
+                self.visual_body_for_multiview_href(&href, anchor.as_deref())
+            }
             _ => Ok(VisualBody::Unsupported {
                 reason: "body provider deferred".to_owned(),
                 diagnostics: vec![Diagnostic::info(
@@ -784,6 +798,36 @@ impl StubBookPackage {
             hits,
             next_cursor: None,
             diagnostics,
+        })
+    }
+
+    fn search_multiview(&self, query: &SearchQuery) -> Result<SearchPage> {
+        let Some(store) = &self.multiview_store else {
+            return Ok(SearchPage::deferred(
+                "LVLMultiView search requires opened LogoFontCipher SQLite payloads",
+            ));
+        };
+        let hits = store.search(&query.query, &query.mode, query.limit)?;
+        let hits = hits
+            .into_iter()
+            .map(|hit| {
+                Ok(SearchHit {
+                    book_id: self.metadata.book_id.clone(),
+                    target: TargetToken::new(&InternalTarget::MultiviewHref {
+                        href: hit.href,
+                        anchor: None,
+                    })?,
+                    title_html: hit.title_html,
+                    title_text: hit.title_text,
+                    snippet_html: hit.snippet_html,
+                    diagnostics: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(SearchPage {
+            hits,
+            next_cursor: None,
+            diagnostics: Vec::new(),
         })
     }
 
@@ -1491,6 +1535,36 @@ impl StubBookPackage {
         })
     }
 
+    fn visual_body_for_multiview_href(
+        &self,
+        href: &str,
+        anchor: Option<&str>,
+    ) -> Result<VisualBody> {
+        let Some(store) = &self.multiview_store else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVLMultiView store is unavailable".to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "multiview_store_missing",
+                    "LVLMultiView targets require opened LogoFontCipher SQLite payloads",
+                )],
+            });
+        };
+        let lookup = anchor.unwrap_or(href);
+        let Some(body) = store.body_for_href(lookup)? else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVLMultiView target was not found".to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "multiview_target_missing",
+                    format!("LVLMultiView target {lookup} was not found in decoded payloads"),
+                )],
+            });
+        };
+        Ok(VisualBody::PreservedHtml {
+            html: body.html,
+            source: BodySourceKind::LvlMultiViewSqlite,
+        })
+    }
+
     fn normalize_lved_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
         let mut output = String::with_capacity(html.len());
         let mut resources = Vec::new();
@@ -2089,6 +2163,7 @@ mod tests {
                     trailing_bytes: 0,
                 },
             }),
+            None,
             None,
             None,
         );

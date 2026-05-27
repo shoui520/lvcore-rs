@@ -100,6 +100,10 @@ impl InternalTarget {
 pub struct TargetToken(String);
 
 impl TargetToken {
+    pub fn from_opaque(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     pub fn new(target: &InternalTarget) -> Result<Self> {
         let envelope = TargetEnvelope {
             version: 1,

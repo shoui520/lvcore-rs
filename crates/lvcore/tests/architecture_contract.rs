@@ -110,6 +110,51 @@ fn multiview_menu_data_opens_as_hierarchical_tree() {
 }
 
 #[test]
+fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        r#"<list><item label="Book"><item label="まえがき" href="000001" /></item></list>"#,
+    )
+    .unwrap();
+    write_minimal_multiview_content_fixture(&dir.path().join("blvdat"));
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surface = package.open_surface("menuData").unwrap();
+    let lvcore::NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+        panic!("menuData should open as a MultiView tree");
+    };
+    let target = nodes[0].children[0].target.clone().unwrap();
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(
+        view.display_html.as_deref(),
+        Some(r#"<article><h1>まえがき</h1><p>body</p></article>"#)
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Forward,
+            query: "まえ".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "まえがき");
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::MultiviewHref {
+            href: "000001".to_owned(),
+            anchor: None,
+        }
+    );
+}
+
+#[test]
 fn library_routes_all_book_search_without_unhandled_exceptions() {
     let ssed = tempdir().unwrap();
     fs::write(ssed.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -746,6 +791,35 @@ fn write_minimal_lved_sqlite_fixture(root: &Path) {
             .unwrap();
     }
     fs::write(root.join("main.key"), key).unwrap();
+}
+
+fn write_minimal_multiview_content_fixture(path: &Path) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            create table t_contents (
+              f_ID integer primary key,
+              f_Title text,
+              f_Body text
+            );
+            create table t_search (
+              f_No integer primary key,
+              f_ID integer,
+              f_Anchor integer,
+              f_KeyWord text,
+              f_MainFlag integer,
+              f_Level integer,
+              f_TitleMain text,
+              f_All text
+            );
+            insert into t_contents values
+              (1, '<b>まえがき</b>', '<article><h1>まえがき</h1><p>body</p></article>');
+            insert into t_search values
+              (1, 1, 1, '§まえがき§', 1, 0, '<b>まえがき</b>', 'まえがき body');
+            "#,
+        )
+        .unwrap();
 }
 
 fn ssedinfo_fixture_with_honmon(honmon_filename: &str) -> Vec<u8> {
