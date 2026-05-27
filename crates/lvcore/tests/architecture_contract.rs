@@ -482,6 +482,11 @@ fn ssed_home_surfaces_are_capability_based() {
     let metadata = package.metadata();
     assert_eq!(metadata.format_family, FormatFamily::Ssed);
     assert!(metadata.capabilities.contains(&Capability::HcRenderInput));
+    assert!(metadata.capabilities.contains(&Capability::NativeSearch));
+    assert!(
+        !metadata.capabilities.contains(&Capability::FullTextSearch),
+        "SSED fulltext must not be advertised until a real provider exists"
+    );
 
     let surfaces = package.home_surfaces().unwrap();
     assert!(surfaces.iter().any(|surface| {

@@ -3955,7 +3955,6 @@ fn ssed_capabilities(catalog: &SsedCatalog) -> Vec<Capability> {
     ];
     if catalog.has_role(SsedComponentRole::Index) {
         capabilities.push(Capability::NativeSearch);
-        capabilities.push(Capability::FullTextSearch);
     }
     if catalog.has_role(SsedComponentRole::Title) || catalog.has_role(SsedComponentRole::Index) {
         capabilities.push(Capability::TitleIndexBrowse);
