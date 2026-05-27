@@ -659,10 +659,28 @@ impl RendererProvider for StubBookPackage {
                     title: resource_ref.label.clone(),
                     display_html: None,
                     basic_text: None,
+                    surface: None,
                     resources: vec![resource_ref],
                     links: Vec::new(),
                     capabilities: Vec::new(),
                     diagnostics,
+                    debug_trace: None,
+                })
+            }
+            InternalTarget::PanelCell { panel_id, .. } => {
+                let surface_id = format!("panels:{panel_id}");
+                let surface = self.open_surface(&surface_id)?;
+                Ok(ResolvedTargetView {
+                    kind: ResolvedTargetKind::PanelSurface,
+                    target: token.clone(),
+                    title: Some(panel_id),
+                    display_html: None,
+                    basic_text: None,
+                    surface: Some(surface),
+                    resources: Vec::new(),
+                    links: Vec::new(),
+                    capabilities: vec![crate::render::RenderCapability::Panels],
+                    diagnostics: Vec::new(),
                     debug_trace: None,
                 })
             }
@@ -2022,6 +2040,7 @@ impl StubBookPackage {
                         title: Some(title.unwrap_or_else(|| "Entry".to_owned())),
                         display_html: None,
                         basic_text: Some(html_basic_text(&html)),
+                        surface: None,
                         resources: Vec::new(),
                         links: Vec::new(),
                         capabilities: Vec::new(),
@@ -2048,6 +2067,7 @@ impl StubBookPackage {
                     title: Some(title.unwrap_or_else(|| "Entry".to_owned())),
                     display_html: Some(normalized.html),
                     basic_text: None,
+                    surface: None,
                     resources: normalized.resources,
                     links: normalized.links,
                     capabilities: vec![crate::render::RenderCapability::Html],
@@ -2068,6 +2088,7 @@ impl StubBookPackage {
                 title: Some("SSED entry stream".to_owned()),
                 display_html: None,
                 basic_text: None,
+                surface: None,
                 resources: Vec::new(),
                 links: Vec::new(),
                 capabilities: vec![crate::render::RenderCapability::HcRenderInput],
@@ -2097,6 +2118,7 @@ impl StubBookPackage {
                 title: Some("Semantic fallback".to_owned()),
                 display_html: None,
                 basic_text: Some(text),
+                surface: None,
                 resources: Vec::new(),
                 links: Vec::new(),
                 capabilities: Vec::new(),
@@ -2116,6 +2138,7 @@ impl StubBookPackage {
                 title: Some(reason),
                 display_html: None,
                 basic_text: None,
+                surface: None,
                 resources: Vec::new(),
                 links: Vec::new(),
                 capabilities: Vec::new(),

@@ -4,6 +4,7 @@ use crate::body::BodySourceKind;
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
 use crate::gaiji::GaijiPolicy;
+use crate::navigation::NavigationSurface;
 use crate::resources::ResourceRef;
 use crate::target::{TargetLink, TargetToken};
 
@@ -133,6 +134,8 @@ pub struct ResolvedTargetView {
     pub display_html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub basic_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<NavigationSurface>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<ResourceRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -153,6 +156,7 @@ impl ResolvedTargetView {
             title: Some(title.into()),
             display_html: None,
             basic_text: None,
+            surface: None,
             resources: Vec::new(),
             links: Vec::new(),
             capabilities: Vec::new(),
@@ -172,6 +176,7 @@ impl ResolvedTargetView {
             title: Some(title.into()),
             display_html: None,
             basic_text: None,
+            surface: None,
             resources: Vec::new(),
             links: Vec::new(),
             capabilities: Vec::new(),

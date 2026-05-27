@@ -514,6 +514,14 @@ fn ssed_home_surfaces_are_capability_based() {
         cells[0].target.as_ref().unwrap().decode().unwrap(),
         InternalTarget::PanelCell { panel_id, .. } if panel_id == "01010000"
     ));
+    let panel_view = package
+        .render_target(cells[0].target.as_ref().unwrap(), &RenderOptions::default())
+        .unwrap();
+    assert_eq!(panel_view.kind, ResolvedTargetKind::PanelSurface);
+    assert!(matches!(
+        panel_view.surface.as_ref().unwrap(),
+        lvcore::NavigationSurface::Panel { cells, .. } if cells.len() == 1
+    ));
     let child_panel = package.open_surface("panels:01010000").unwrap();
     let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
         panic!("SSED child Panel should decode to a panel surface");
