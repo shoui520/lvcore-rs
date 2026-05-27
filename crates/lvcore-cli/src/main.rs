@@ -66,6 +66,13 @@ enum Command {
         /// Target token previously returned by search, navigation, or links.
         token: String,
     },
+    /// Resolve one opaque target token into backend-owned renderer input.
+    RendererInput {
+        /// Package root or payload path to inspect.
+        path: PathBuf,
+        /// Target token previously returned by search, navigation, or links.
+        token: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -225,6 +232,20 @@ fn main() -> Result<()> {
                 serde_json::to_string_pretty(&json!({
                     "metadata": metadata,
                     "view": view,
+                }))?
+            );
+        }
+        Command::RendererInput { path, token } => {
+            let registry = DriverRegistry::default();
+            let package = registry.open_best(&path)?;
+            let metadata = package.metadata();
+            let target = TargetToken::from_opaque(token);
+            let input = package.renderer_input_for_target(&target)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "metadata": metadata,
+                    "renderer_input": input,
                 }))?
             );
         }
