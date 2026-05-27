@@ -244,6 +244,12 @@ fn discover_packages(
     if !path.exists() {
         return Ok(());
     }
+    if path.is_file() && !is_package_file_candidate(path) {
+        return Ok(());
+    }
+    if path.is_dir() && is_obvious_resource_only_dir(path) {
+        return Ok(());
+    }
     if !registry.detect(path)?.is_empty() {
         out.push(path.to_path_buf());
         return Ok(());
@@ -261,4 +267,30 @@ fn discover_packages(
         }
     }
     Ok(())
+}
+
+fn is_package_file_candidate(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    name == "main.data" || name.ends_with(".dbc") || name.ends_with(".idx")
+}
+
+fn is_obvious_resource_only_dir(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    name.ends_with("_media")
+        || name.ends_with("_sound_files")
+        || name.ends_with("_mathjax")
+        || name.ends_with("_templates")
+        || name == "templates"
+        || name == "template"
+        || name == "img"
+        || name == "images"
+        || name == "sound"
+        || name == "sounds"
+        || name == "mathjax"
 }
