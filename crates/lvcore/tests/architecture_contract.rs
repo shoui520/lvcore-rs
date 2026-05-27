@@ -589,12 +589,15 @@ fn ssed_home_surfaces_are_capability_based() {
     )
     .unwrap();
     fs::write(dir.path().join("Panel/All-A.bin"), panel_bin_fixture(10, 2)).unwrap();
+    fs::write(dir.path().join("HANREI.chm"), b"chm").unwrap();
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
     let metadata = package.metadata();
     assert_eq!(metadata.format_family, FormatFamily::Ssed);
     assert!(metadata.capabilities.contains(&Capability::HcRenderInput));
     assert!(metadata.capabilities.contains(&Capability::NativeSearch));
+    assert!(metadata.capabilities.contains(&Capability::Hanrei));
+    assert!(metadata.capabilities.contains(&Capability::Panels));
     assert!(
         !metadata.capabilities.contains(&Capability::FullTextSearch),
         "SSED fulltext must not be advertised until a real provider exists"
@@ -620,6 +623,10 @@ fn ssed_home_surfaces_are_capability_based() {
     assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::Panel
             && surface.status == NavigationStatus::Available
+    }));
+    assert!(surfaces.iter().any(|surface| {
+        surface.kind == NavigationSurfaceKind::Hanrei
+            && surface.status == NavigationStatus::Deferred
     }));
     let menu_surface = package.open_surface("menu").unwrap();
     let lvcore::NavigationSurface::SimpleMenu { nodes, .. } = menu_surface else {

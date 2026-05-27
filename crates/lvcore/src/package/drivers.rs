@@ -89,8 +89,8 @@ impl PackageDriver for SsedDriver {
             .detect(root)?
             .ok_or_else(|| Error::Driver("not an SSED package".to_owned()))?;
         let catalog = ssed_catalog_for_root(&detection.root)?;
-        let capabilities = ssed_capabilities(&catalog);
         let package_root = detection.root.clone();
+        let capabilities = ssed_capabilities(&catalog, &package_root);
         Ok(Box::new(StubBookPackage::new(
             &package_root,
             detection,
@@ -4061,13 +4061,14 @@ fn ssed_catalog_for_root(root: &Path) -> Result<SsedCatalog> {
     ))
 }
 
-fn ssed_capabilities(catalog: &SsedCatalog) -> Vec<Capability> {
+fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
     let mut capabilities = vec![
         Capability::Resources,
         Capability::HcRenderInput,
         Capability::ContinuousView,
         Capability::DeferredRendering,
     ];
+    let storage = DirectoryStorage::new(root.to_path_buf());
     if catalog.has_role(SsedComponentRole::Index) {
         capabilities.push(Capability::NativeSearch);
     }
@@ -4080,12 +4081,24 @@ fn ssed_capabilities(catalog: &SsedCatalog) -> Vec<Capability> {
     if catalog.has_role(SsedComponentRole::Toc) {
         capabilities.push(Capability::Toc);
     }
+    if has_any_casefolded(&storage, &["HANREI.chm", "HANREI", "hanrei.html"]) {
+        capabilities.push(Capability::Hanrei);
+    }
+    if has_any_casefolded(&storage, &["Panels.xml", "Panel"]) {
+        capabilities.push(Capability::Panels);
+    }
     if catalog.has_role(SsedComponentRole::GaijiFull)
         || catalog.has_role(SsedComponentRole::GaijiHalf)
     {
         capabilities.push(Capability::Gaiji);
     }
     capabilities
+}
+
+fn has_any_casefolded(storage: &DirectoryStorage, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| storage.exists(Path::new(candidate)).unwrap_or(false))
 }
 
 fn lved_capabilities() -> Vec<Capability> {
@@ -4356,7 +4369,7 @@ mod tests {
                 title: None,
                 evidence: Vec::new(),
             },
-            ssed_capabilities(&catalog),
+            ssed_capabilities(&catalog, dir.path()),
             StubPackageStores::default(),
         );
         let token = TargetToken::new(&InternalTarget::SsedDenseAnchor {
