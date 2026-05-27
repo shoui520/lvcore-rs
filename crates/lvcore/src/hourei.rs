@@ -124,6 +124,16 @@ impl HoureiStore {
         mode: &SearchMode,
         limit: usize,
     ) -> Result<Vec<HoureiSearchHit>> {
+        self.search_page(query, mode, 0, limit)
+    }
+
+    pub fn search_page(
+        &self,
+        query: &str,
+        mode: &SearchMode,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<HoureiSearchHit>> {
         if limit == 0 || query.is_empty() {
             return Ok(Vec::new());
         }
@@ -178,10 +188,11 @@ impl HoureiStore {
             sql_params.push(format!("{}%", escape_sql_like(query)));
         }
         sql_params.push(limit.to_string());
+        sql_params.push(offset.to_string());
 
         let sql = format!(
             "select f_hore_id, f_name, f_name_sub, f_abbr1, f_text_plane \
-             from t_hore where {where_clause} order by {order_prefix}f_kana_order, f_hore_id limit ?"
+             from t_hore where {where_clause} order by {order_prefix}f_kana_order, f_hore_id limit ? offset ?"
         );
         let mut statement = connection.prepare(&sql)?;
         let rows = statement.query_map(params_from_iter(sql_params.iter()), |row| {

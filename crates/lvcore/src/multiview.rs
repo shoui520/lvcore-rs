@@ -166,6 +166,16 @@ impl MultiviewStore {
         mode: &SearchMode,
         limit: usize,
     ) -> Result<Vec<MultiviewSearchHit>> {
+        self.search_page(query, mode, 0, limit)
+    }
+
+    pub fn search_page(
+        &self,
+        query: &str,
+        mode: &SearchMode,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<MultiviewSearchHit>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -193,10 +203,10 @@ impl MultiviewStore {
         let operator = "like";
         let sql = format!(
             "select f_ID, f_KeyWord, f_TitleMain, f_All from t_search \
-             where {column} {operator} ? order by f_No limit ?"
+             where {column} {operator} ? order by f_No limit ? offset ?"
         );
         let mut statement = connection.prepare(&sql)?;
-        let rows = statement.query_map((pattern, limit as i64), |row| {
+        let rows = statement.query_map((pattern, limit as i64, offset as i64), |row| {
             let id = sqlite_value_to_string(row.get_ref(0)?)?;
             let keyword = sqlite_value_to_string(row.get_ref(1)?)?;
             let title = sqlite_value_to_string(row.get_ref(2)?)?;

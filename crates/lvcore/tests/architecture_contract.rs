@@ -182,6 +182,29 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     assert_eq!(source, BodySourceKind::LvlMultiViewSqlite);
     assert!(html.contains("<article><h1>まえがき</h1><p>body</p>"));
 
+    let first = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Partial,
+            query: "body".to_owned(),
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(first.hits[0].title_text, "まえがき");
+    assert_eq!(first.next_cursor.as_deref(), Some("1"));
+    let second = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Partial,
+            query: "body".to_owned(),
+            cursor: first.next_cursor,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(second.hits[0].title_text, "本文");
+    assert!(second.next_cursor.is_none());
+
     let middle = nodes[0].children[1].target.clone().unwrap();
     let window = package
         .resolve_target_window(&middle, None, 1, 1, &RenderOptions::default())
@@ -249,6 +272,29 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
         .unwrap();
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "民法");
+
+    let first = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Partial,
+            query: "本文".to_owned(),
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(first.hits[0].title_text, "民法");
+    assert_eq!(first.next_cursor.as_deref(), Some("1"));
+    let second = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Partial,
+            query: "本文".to_owned(),
+            cursor: first.next_cursor,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(second.hits[0].title_text, "商法");
+    assert!(second.next_cursor.is_none());
 
     let view = package
         .render_target(&page.hits[0].target, &RenderOptions::default())
@@ -1612,6 +1658,8 @@ fn write_minimal_multiview_content_fixture(path: &Path) {
               (3, '<b>あとがき</b>', '<article><h1>あとがき</h1><p>body</p></article>');
             insert into t_search values
               (1, 1, 1, '§まえがき§', 1, 0, '<b>まえがき</b>', 'まえがき body');
+            insert into t_search values
+              (2, 2, 1, '§本文§', 1, 0, '<b>本文</b>', '本文 body');
             "#,
         )
         .unwrap();
