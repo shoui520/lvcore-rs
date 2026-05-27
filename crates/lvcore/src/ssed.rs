@@ -1,6 +1,7 @@
 use std::cmp::{Reverse, min};
-use std::io::Read;
-use std::path::Path;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
 use encoding_rs::SHIFT_JIS;
 use serde::{Deserialize, Serialize};
@@ -127,6 +128,14 @@ pub struct SsedDataReader {
     expanded: Vec<u8>,
 }
 
+#[derive(Debug)]
+pub struct SsedDataFile {
+    path: PathBuf,
+    file: File,
+    file_len: u64,
+    header: SsedDataHeader,
+}
+
 impl SsedDataReader {
     pub fn parse_file(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)?;
@@ -153,6 +162,78 @@ impl SsedDataReader {
         }
         let end = min(offset.saturating_add(size), self.expanded.len());
         &self.expanded[offset..end]
+    }
+}
+
+impl SsedDataFile {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let header = SsedDataHeader::parse_file(&path)?;
+        let file = File::open(&path)?;
+        let file_len = file.metadata()?.len();
+        Ok(Self {
+            path,
+            file,
+            file_len,
+            header,
+        })
+    }
+
+    pub fn header(&self) -> &SsedDataHeader {
+        &self.header
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn read_range(&mut self, offset: usize, size: usize) -> Result<Vec<u8>> {
+        if size == 0 || offset >= self.header.expanded_size() {
+            return Ok(Vec::new());
+        }
+
+        let end = min(offset.saturating_add(size), self.header.expanded_size());
+        let first_chunk = offset / CHUNK_SIZE;
+        let last_chunk = (end - 1) / CHUNK_SIZE;
+        let mut out = Vec::with_capacity(end - offset);
+
+        for chunk_index in first_chunk..=last_chunk {
+            let expanded = self.read_expanded_chunk(chunk_index)?;
+            let chunk_start = chunk_index * CHUNK_SIZE;
+            let start_in_chunk = offset.saturating_sub(chunk_start);
+            let end_in_chunk = min(end.saturating_sub(chunk_start), expanded.len());
+            if start_in_chunk < end_in_chunk {
+                out.extend_from_slice(&expanded[start_in_chunk..end_in_chunk]);
+            }
+        }
+
+        Ok(out)
+    }
+
+    fn read_expanded_chunk(&mut self, chunk_index: usize) -> Result<Vec<u8>> {
+        let start = *self
+            .header
+            .chunk_offsets
+            .get(chunk_index)
+            .ok_or_else(|| Error::Driver("SSEDDATA chunk index outside header".to_owned()))?
+            as u64;
+        let end = self
+            .header
+            .chunk_offsets
+            .get(chunk_index + 1)
+            .map(|offset| u64::from(*offset))
+            .unwrap_or(self.file_len);
+        if start >= self.file_len || end < start || end > self.file_len {
+            return Err(Error::Driver(
+                "SSEDDATA chunk byte range outside file".to_owned(),
+            ));
+        }
+        let size = usize::try_from(end - start)
+            .map_err(|_| Error::Driver("SSEDDATA chunk is too large".to_owned()))?;
+        let mut bytes = vec![0u8; size];
+        self.file.seek(SeekFrom::Start(start))?;
+        self.file.read_exact(&mut bytes)?;
+        expand_sseddata_chunk(&bytes, 0)
     }
 }
 
@@ -467,6 +548,9 @@ pub fn expand_sseddata_chunk(data: &[u8], chunk_offset: usize) -> Result<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use tempfile::tempdir;
 
     #[test]
     fn parses_standard_ssedinfo_catalog() {
@@ -509,6 +593,28 @@ mod tests {
         assert_eq!(reader.read(1, 2), b"bc");
     }
 
+    #[test]
+    fn file_backed_reader_reads_only_requested_expanded_range() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("HONMON.DIC");
+        let first_chunk = vec![b'a'; CHUNK_SIZE];
+        fs::write(
+            &path,
+            fixture_sseddata_literal_chunks(&[&first_chunk, b"tail"], 1, 17),
+        )
+        .unwrap();
+
+        let mut file = SsedDataFile::open(&path).unwrap();
+        assert_eq!(file.header().chunk_count, 2);
+        assert_eq!(file.read_range(CHUNK_SIZE - 2, 6).unwrap(), b"aatail");
+        assert_eq!(file.read_range(CHUNK_SIZE + 1, 2).unwrap(), b"ai");
+        assert!(
+            file.read_range(file.header().expanded_size(), 2)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     fn fixture_ssedinfo(component_count_offset: usize, record_start: usize) -> Vec<u8> {
         let mut data = vec![0u8; record_start + 3 * 0x30];
         data[..8].copy_from_slice(SSEDINFO_MAGIC);
@@ -549,20 +655,46 @@ mod tests {
     }
 
     fn fixture_sseddata_literal(literals: &[u8]) -> Vec<u8> {
-        let chunk_offset = 0x44usize;
-        let mut data = vec![0u8; chunk_offset];
+        fixture_sseddata_literal_chunks(&[literals], 1, 1)
+    }
+
+    fn fixture_sseddata_literal_chunks(
+        chunks: &[&[u8]],
+        start_block: u32,
+        end_block: u32,
+    ) -> Vec<u8> {
+        let chunk_count = chunks.len();
+        let first_chunk_offset = 0x40 + chunk_count * 4;
+        let mut data = vec![0u8; first_chunk_offset];
         data[..8].copy_from_slice(SSEDDATA_MAGIC);
         data[0x0f] = 1;
-        data[0x16..0x18].copy_from_slice(&1u16.to_be_bytes());
-        data[0x18..0x1c].copy_from_slice(&1u32.to_be_bytes());
-        data[0x1c..0x20].copy_from_slice(&1u32.to_be_bytes());
-        data[0x40..0x44].copy_from_slice(&(chunk_offset as u32).to_be_bytes());
-        data.extend_from_slice(&[0, 0]);
-        data.extend_from_slice(&(literals.len() as u16).to_be_bytes());
-        data.push(0);
-        for literal in literals {
-            data.extend_from_slice(&[0, 0, *literal]);
+        data[0x16..0x18].copy_from_slice(&(chunk_count as u16).to_be_bytes());
+        data[0x18..0x1c].copy_from_slice(&start_block.to_be_bytes());
+        data[0x1c..0x20].copy_from_slice(&end_block.to_be_bytes());
+
+        let mut compressed_chunks = Vec::with_capacity(chunk_count);
+        let mut next_offset = first_chunk_offset;
+        for (index, chunk) in chunks.iter().enumerate() {
+            data[0x40 + index * 4..0x44 + index * 4]
+                .copy_from_slice(&(next_offset as u32).to_be_bytes());
+            let compressed = fixture_sseddata_literal_chunk(chunk);
+            next_offset += compressed.len();
+            compressed_chunks.push(compressed);
+        }
+        for compressed in compressed_chunks {
+            data.extend_from_slice(&compressed);
         }
         data
+    }
+
+    fn fixture_sseddata_literal_chunk(literals: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&[0, 0]);
+        chunk.extend_from_slice(&(literals.len() as u16).to_be_bytes());
+        chunk.push(0);
+        for literal in literals {
+            chunk.extend_from_slice(&[0, 0, *literal]);
+        }
+        chunk
     }
 }
