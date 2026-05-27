@@ -114,7 +114,7 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("menuData.xml"),
-        r#"<list><item label="Book"><item label="まえがき" href="000001" /></item></list>"#,
+        r#"<list><item label="Book"><item label="前" href="000001" /><item label="中" href="000002" /><item label="後" href="000003" /></item></list>"#,
     )
     .unwrap();
     fs::create_dir(dir.path().join("Templates")).unwrap();
@@ -155,6 +155,27 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
             href: "000001".to_owned(),
             anchor: None,
         }
+    );
+
+    let middle = nodes[0].children[1].target.clone().unwrap();
+    let window = package
+        .resolve_target_window(&middle, None, 1, 1, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(window.before.len(), 1);
+    assert_eq!(window.after.len(), 1);
+    assert!(
+        window.before[0]
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("<h1>まえがき</h1>")
+    );
+    assert!(
+        window.after[0]
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("<h1>あとがき</h1>")
     );
 }
 
@@ -819,6 +840,10 @@ fn write_minimal_multiview_content_fixture(path: &Path) {
             );
             insert into t_contents values
               (1, '<b>まえがき</b>', '<article><h1>まえがき</h1><p>body</p><a href="lved_ref:entry:000002">next</a><img src="pic.png"></article>');
+            insert into t_contents values
+              (2, '<b>本文</b>', '<article><h1>本文</h1><p>body</p></article>');
+            insert into t_contents values
+              (3, '<b>あとがき</b>', '<article><h1>あとがき</h1><p>body</p></article>');
             insert into t_search values
               (1, 1, 1, '§まえがき§', 1, 0, '<b>まえがき</b>', 'まえがき body');
             "#,
