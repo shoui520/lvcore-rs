@@ -319,6 +319,10 @@ fn library_routes_all_book_search_without_unhandled_exceptions() {
             .iter()
             .any(|metadata| metadata.book_id == lved_id)
     );
+    let snapshot = library.metadata_snapshot();
+    assert_eq!(snapshot.len(), 2);
+    assert!(snapshot.iter().any(|metadata| metadata.book_id == ssed_id));
+    assert!(snapshot.iter().any(|metadata| metadata.book_id == lved_id));
 
     let page = library
         .search(&SearchQuery {

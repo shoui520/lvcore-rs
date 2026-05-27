@@ -49,6 +49,13 @@ impl BookLibrary {
         self.books.values().map(|book| book.metadata()).collect()
     }
 
+    pub fn metadata_snapshot(&self) -> Vec<BookMetadata> {
+        self.books
+            .values()
+            .map(|book| book.metadata().clone())
+            .collect()
+    }
+
     pub fn book(&self, book_id: &BookId) -> Option<&dyn BookPackage> {
         self.books.get(book_id).map(Box::as_ref)
     }
