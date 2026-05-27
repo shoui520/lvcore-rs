@@ -487,6 +487,19 @@ fn ssed_home_surfaces_are_capability_based() {
     assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::Menu && surface.status == NavigationStatus::Available
     }));
+    let menu_home_target = surfaces
+        .iter()
+        .find(|surface| surface.kind == NavigationSurfaceKind::Menu)
+        .and_then(|surface| surface.target.clone())
+        .unwrap();
+    let menu_home_view = package
+        .render_target(&menu_home_target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(menu_home_view.kind, ResolvedTargetKind::NavigationSurface);
+    assert!(matches!(
+        menu_home_view.surface.as_ref().unwrap(),
+        lvcore::NavigationSurface::SimpleMenu { nodes, .. } if nodes.len() == 1
+    ));
     assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::Panel
             && surface.status == NavigationStatus::Available

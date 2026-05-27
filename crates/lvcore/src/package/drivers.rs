@@ -669,21 +669,19 @@ impl RendererProvider for StubBookPackage {
             }
             InternalTarget::PanelCell { panel_id, .. } => {
                 let surface_id = format!("panels:{panel_id}");
-                let surface = self.open_surface(&surface_id)?;
-                Ok(ResolvedTargetView {
-                    kind: ResolvedTargetKind::PanelSurface,
-                    target: token.clone(),
-                    title: Some(panel_id),
-                    display_html: None,
-                    basic_text: None,
-                    surface: Some(surface),
-                    resources: Vec::new(),
-                    links: Vec::new(),
-                    capabilities: vec![crate::render::RenderCapability::Panels],
-                    diagnostics: Vec::new(),
-                    debug_trace: None,
-                })
+                self.view_for_navigation_surface_target(token.clone(), &surface_id, Some(panel_id))
             }
+            InternalTarget::MenuItem { surface_id, .. }
+            | InternalTarget::TocItem { surface_id, .. }
+            | InternalTarget::TitleIndexItem { surface_id, .. } => {
+                self.view_for_navigation_surface_target(token.clone(), &surface_id, None)
+            }
+            InternalTarget::MultiviewHref { href, anchor: _ } if href == "menuData.xml" => self
+                .view_for_navigation_surface_target(
+                    token.clone(),
+                    "menuData",
+                    Some("MultiView menu".to_owned()),
+                ),
             _ => {
                 let input = self.renderer_input_for_target(token)?;
                 self.view_for_renderer_input(input, options)
@@ -2018,6 +2016,47 @@ impl StubBookPackage {
                 diagnostics,
             }),
         }
+    }
+
+    fn view_for_navigation_surface_target(
+        &self,
+        target: TargetToken,
+        surface_id: &str,
+        title: Option<String>,
+    ) -> Result<ResolvedTargetView> {
+        let surface = self.open_surface(surface_id)?;
+        let kind = match &surface {
+            NavigationSurface::Panel { .. } => ResolvedTargetKind::PanelSurface,
+            NavigationSurface::InfoPages { .. } => ResolvedTargetKind::InfoPage,
+            NavigationSurface::Deferred { .. } => ResolvedTargetKind::Deferred,
+            _ => ResolvedTargetKind::NavigationSurface,
+        };
+        let capabilities = if matches!(kind, ResolvedTargetKind::PanelSurface) {
+            vec![crate::render::RenderCapability::Panels]
+        } else {
+            Vec::new()
+        };
+        let mut diagnostics = Vec::new();
+        if let NavigationSurface::Deferred {
+            diagnostics: surface_diagnostics,
+            ..
+        } = &surface
+        {
+            diagnostics.extend(surface_diagnostics.clone());
+        }
+        Ok(ResolvedTargetView {
+            kind,
+            target,
+            title: title.or_else(|| Some(surface_id.to_owned())),
+            display_html: None,
+            basic_text: None,
+            surface: Some(surface),
+            resources: Vec::new(),
+            links: Vec::new(),
+            capabilities,
+            diagnostics,
+            debug_trace: None,
+        })
     }
 
     fn view_for_renderer_input(
