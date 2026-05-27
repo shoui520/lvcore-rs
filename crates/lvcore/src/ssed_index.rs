@@ -670,7 +670,7 @@ pub fn decode_title_text(data: &[u8]) -> String {
     if looks_like_plain_ascii_title(&filtered) {
         return String::from_utf8_lossy(&filtered).trim().to_owned();
     }
-    decode_title_payload_text(&filtered)
+    decode_title_payload_text(data)
 }
 
 fn title_payload_bytes(data: &[u8]) -> Vec<u8> {
@@ -696,13 +696,26 @@ fn title_payload_bytes(data: &[u8]) -> Vec<u8> {
 fn decode_title_payload_text(data: &[u8]) -> String {
     let mut out = String::new();
     let mut index = 0usize;
+    let mut halfwidth_depth = 0usize;
     while index < data.len() {
         if data[index] == 0x1f {
+            if let Some(op) = data.get(index + 1).copied() {
+                match op {
+                    0x04 => halfwidth_depth = halfwidth_depth.saturating_add(1),
+                    0x05 => halfwidth_depth = halfwidth_depth.saturating_sub(1),
+                    0x0a => break,
+                    _ => {}
+                }
+            }
             index = skip_control(data, index, data.len());
             continue;
         }
-        if data[index] == 0 {
+        if matches!(data[index], 0 | b'\n' | b'\r') {
             break;
+        }
+        if index + 1 < data.len() && data[index..index + 2] == [0x11, 0x03] {
+            index += 2;
+            continue;
         }
         if data[index] < 0x20 {
             out.push(' ');
@@ -714,7 +727,11 @@ fn decode_title_payload_text(data: &[u8]) -> String {
             && (0x21..=0x7e).contains(&data[index + 1])
             && let Some(decoded) = decode_jis_pair(data[index], data[index + 1])
         {
-            out.push(decoded);
+            if halfwidth_depth > 0 {
+                out.push_str(&narrow_fullwidth_ascii(&decoded.to_string()));
+            } else {
+                out.push(decoded);
+            }
             index += 2;
             continue;
         }
@@ -727,6 +744,13 @@ fn decode_title_payload_text(data: &[u8]) -> String {
                 index += 2;
                 continue;
             }
+        }
+        if index + 1 < data.len() && (0xa1..=0xfe).contains(&data[index]) {
+            // Raw gaiji/control marker pairs in title streams are not CP932 text.
+            // Dropping them matches the toolkit title extractor's safe default and
+            // avoids leaking marker bytes as mojibake in reader-facing labels.
+            index += 2;
+            continue;
         }
         if data[index] <= 0x7e {
             out.push(data[index] as char);
@@ -875,5 +899,22 @@ mod tests {
         assert_eq!(decode_title_text(b"alpha\x1f\x0a"), "alpha");
         assert_eq!(decode_title_text(b"gamma\x1f\x0a"), "gamma");
         assert_eq!(decode_title_text(b"\ngamma\x1f\x0a"), "");
+    }
+
+    #[test]
+    fn decodes_title_halfwidth_span_and_drops_binary_gaiji_markers() {
+        assert_eq!(
+            decode_title_text(&[
+                0xb4, 0x4f, 0x1f, 0x04, 0x23, 0x65, 0x23, 0x74, 0x1f, 0x05, 0x1f, 0x0a,
+            ]),
+            "et"
+        );
+        assert_eq!(
+            decode_title_text(&[
+                0xb4, 0x4f, 0x1f, 0x04, 0x23, 0x74, 0x23, 0x61, 0x23, 0x62, 0x23, 0x6c, 0x23, 0x69,
+                0x1f, 0x0e, 0x23, 0x31, 0x1f, 0x0f, 0x1f, 0x05, 0x1f, 0x0a,
+            ]),
+            "tabli1"
+        );
     }
 }
