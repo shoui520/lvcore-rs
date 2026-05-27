@@ -64,10 +64,15 @@ pub struct RichLabel {
 }
 
 pub fn normalize_gaiji_identity(identity: &str) -> Option<String> {
-    let trimmed = identity
-        .trim()
-        .trim_start_matches("<z")
-        .trim_start_matches('z')
+    let trimmed = identity.trim();
+    let trimmed = trimmed
+        .strip_prefix("<z")
+        .or_else(|| trimmed.strip_prefix("<Z"))
+        .unwrap_or(trimmed);
+    let trimmed = trimmed
+        .strip_prefix('z')
+        .or_else(|| trimmed.strip_prefix('Z'))
+        .unwrap_or(trimmed)
         .trim_end_matches('>');
     if trimmed.len() != 4 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return None;
@@ -370,5 +375,11 @@ mod tests {
         let map = parse_uni_gaiji_map(&data);
         assert_eq!(map.get("A128").map(String::as_str), Some("★"));
         assert_eq!(map.get("B123").map(String::as_str), Some("一"));
+    }
+
+    #[test]
+    fn normalizes_uppercase_z_gaiji_markers() {
+        assert_eq!(normalize_gaiji_identity("Z8f42").as_deref(), Some("8F42"));
+        assert_eq!(normalize_gaiji_identity("<Z8f42>").as_deref(), Some("8F42"));
     }
 }
