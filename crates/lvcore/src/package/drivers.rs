@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use encoding_rs::SHIFT_JIS;
 use serde_json::json;
@@ -47,6 +48,10 @@ use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
 use crate::ssed_panel::{
     SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, parse_panel_bin,
     parse_panel_xml_bytes,
+};
+use crate::ssed_sidecar::{
+    SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
+    discover_ssed_sidecar_body_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
 };
 use crate::storage::{DirectoryStorage, StorageBackend};
 use crate::target::{InternalTarget, TargetLink, TargetToken};
@@ -296,6 +301,8 @@ pub struct StubBookPackage {
     multiview_store: Option<MultiviewStore>,
     hourei_store: Option<HoureiStore>,
     gaiji_unicode_map: BTreeMap<String, String>,
+    ssed_sidecar_body_resolvers:
+        OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -368,6 +375,7 @@ impl StubBookPackage {
             multiview_store: stores.multiview_store,
             hourei_store: stores.hourei_store,
             gaiji_unicode_map: stores.gaiji_unicode_map,
+            ssed_sidecar_body_resolvers: OnceLock::new(),
         }
     }
 }
@@ -947,14 +955,10 @@ impl SequenceProvider for StubBookPackage {
 impl BodyProvider for StubBookPackage {
     fn visual_body_for_target(&self, token: &TargetToken) -> Result<VisualBody> {
         match token.decode()? {
-            InternalTarget::SsedDenseAnchor { .. } => Ok(VisualBody::Unsupported {
-                reason: "dense HONMON target requires sidecar/renderer database dereference"
-                    .to_owned(),
-                diagnostics: vec![Diagnostic::warning(
-                    "dense_honmon_dereference_required",
-                    "raw dense HONMON anchors must not be displayed directly",
-                )],
-            }),
+            InternalTarget::SsedDenseAnchor {
+                anchor,
+                resolver_hint,
+            } => self.visual_body_for_ssed_dense_anchor(&anchor, resolver_hint.as_deref()),
             InternalTarget::SsedAddress {
                 component,
                 block,
@@ -2901,11 +2905,95 @@ impl StubBookPackage {
                 diagnostics: vec![diagnostic],
             });
         }
+        if component.role == SsedComponentRole::Honmon
+            && let Some(anchor_id) = self.ssed_dense_anchor_at_component_offset(
+                component,
+                usize::try_from(component_offset).unwrap_or(usize::MAX),
+            )?
+        {
+            return self.visual_body_for_ssed_dense_anchor(&anchor_id, None);
+        }
         Ok(VisualBody::SsedStream {
             component: component.filename.clone(),
             offset: component_offset,
             length: None,
         })
+    }
+
+    fn visual_body_for_ssed_dense_anchor(
+        &self,
+        anchor_id: &str,
+        resolver_hint: Option<&str>,
+    ) -> Result<VisualBody> {
+        match lookup_ssed_dense_sidecar_body_with_resolvers(
+            self.ssed_sidecar_body_resolvers()?,
+            anchor_id,
+            resolver_hint,
+        )? {
+            SsedSidecarLookup::Resolved(body) => {
+                if let Some(html) = body.html {
+                    Ok(VisualBody::PreservedHtml {
+                        html,
+                        source: match body.resolver.kind {
+                            SsedSidecarKind::TContents => BodySourceKind::RendererDatabase,
+                            _ => BodySourceKind::SidecarHtml,
+                        },
+                    })
+                } else {
+                    Ok(VisualBody::SemanticFallback { text: body.text })
+                }
+            }
+            SsedSidecarLookup::MissingRow { diagnostics, .. } => Ok(VisualBody::Unsupported {
+                reason: "dense HONMON sidecar row is missing".to_owned(),
+                diagnostics,
+            }),
+            SsedSidecarLookup::NoResolver { diagnostics } => Ok(VisualBody::Unsupported {
+                reason: "dense HONMON sidecar resolver is unavailable".to_owned(),
+                diagnostics,
+            }),
+        }
+    }
+
+    fn ssed_sidecar_body_resolvers(&self) -> Result<&[SsedSidecarBodyResolver]> {
+        let resolvers = self.ssed_sidecar_body_resolvers.get_or_init(|| {
+            discover_ssed_sidecar_body_resolvers(
+                &self.root,
+                inferred_folder_title(&self.root).as_deref(),
+            )
+            .map_err(|error| error.to_string())
+        });
+        match resolvers {
+            Ok(resolvers) => Ok(resolvers.as_slice()),
+            Err(error) => Err(Error::Driver(error.clone())),
+        }
+    }
+
+    fn ssed_dense_anchor_at_component_offset(
+        &self,
+        component: &SsedComponent,
+        offset: usize,
+    ) -> Result<Option<String>> {
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Ok(None);
+        };
+        let mut reader = SsedDataFile::open(&path)?;
+        let mut data = reader.read_range(offset, 256)?;
+        if let Some(end) = find_ssed_dense_anchor_record_end(&data) {
+            data.truncate(end);
+        }
+        let decoded = decode_ssed_body_search_text(&data);
+        let compact = decoded
+            .chars()
+            .filter(|ch| !ch.is_whitespace() && *ch != '\0')
+            .collect::<String>();
+        if compact.len() >= 4
+            && compact.len() <= 16
+            && compact.chars().all(|ch| ch.is_ascii_digit())
+        {
+            Ok(Some(compact))
+        } else {
+            Ok(None)
+        }
     }
 
     fn visual_body_for_lved_row(&self, table: &str, row_id: i64) -> Result<VisualBody> {
@@ -4297,6 +4385,19 @@ fn looks_like_raw_anchor_label(value: &str) -> bool {
     value.len() >= 4 && value.chars().all(|ch| ch.is_ascii_digit())
 }
 
+fn find_ssed_dense_anchor_record_end(data: &[u8]) -> Option<usize> {
+    data.windows(2)
+        .enumerate()
+        .skip(1)
+        .find_map(|(index, window)| (window == [0x1f, 0x0a]).then_some(index))
+        .or_else(|| {
+            data.windows(4)
+                .enumerate()
+                .skip(1)
+                .find_map(|(index, window)| (window == [0x1f, 0x09, 0x00, 0x01]).then_some(index))
+        })
+}
+
 fn ssed_fulltext_body_window_len(rows: &[SsedFulltextRow], index: usize) -> usize {
     let Some(row) = rows.get(index) else {
         return SSED_FULLTEXT_BODY_WINDOW_BYTES;
@@ -5085,6 +5186,211 @@ mod tests {
     }
 
     #[test]
+    fn dense_honmon_address_target_resolves_sidecar_html() {
+        let dir = tempdir().unwrap();
+        let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("Dense".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let target = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 32,
+        })
+        .unwrap();
+
+        let body = package.visual_body_for_target(&target).unwrap();
+
+        assert_eq!(
+            body,
+            VisualBody::PreservedHtml {
+                html: "<div>beta sidecar html</div>".to_owned(),
+                source: BodySourceKind::RendererDatabase,
+            }
+        );
+        let view = package
+            .render_target(&target, &RenderOptions::default())
+            .unwrap();
+        assert_eq!(
+            view.display_html.as_deref(),
+            Some("<div>beta sidecar html</div>")
+        );
+    }
+
+    #[test]
+    fn dense_honmon_search_hit_target_resolves_sidecar_html() {
+        let dir = tempdir().unwrap();
+        let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("Dense".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let page = package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                mode: SearchMode::Exact,
+                query: "い".to_owned(),
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(page.hits.len(), 1);
+        assert_eq!(page.hits[0].title_text, "beta");
+        assert!(matches!(
+            page.hits[0].target.decode().unwrap(),
+            InternalTarget::SsedAddress { .. }
+        ));
+        let body = package
+            .visual_body_for_target(&page.hits[0].target)
+            .unwrap();
+        assert!(matches!(
+            body,
+            VisualBody::PreservedHtml {
+                source: BodySourceKind::RendererDatabase,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn title_only_sidecar_does_not_block_dense_body_sidecar() {
+        let dir = tempdir().unwrap();
+        let catalog = write_ssed_dense_sidecar_fixture(
+            dir.path(),
+            DenseSidecarFixture::TitleOnlyThenBodyRows,
+        );
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("Dense".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let target = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 0,
+        })
+        .unwrap();
+
+        let body = package.visual_body_for_target(&target).unwrap();
+
+        assert_eq!(
+            body,
+            VisualBody::PreservedHtml {
+                html: "<div>alpha sidecar html</div>".to_owned(),
+                source: BodySourceKind::RendererDatabase,
+            }
+        );
+    }
+
+    #[test]
+    fn dense_sidecar_decodes_utf8_and_cp932_blob_text() {
+        let dir = tempdir().unwrap();
+        let catalog =
+            write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BlobBodyRows);
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("Dense".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let beta = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 32,
+        })
+        .unwrap();
+
+        let body = package.visual_body_for_target(&beta).unwrap();
+
+        assert_eq!(
+            body,
+            VisualBody::PreservedHtml {
+                html: "<div>ベータ html</div>".to_owned(),
+                source: BodySourceKind::RendererDatabase,
+            }
+        );
+        assert!(!serde_json::to_string(&body).unwrap().contains("b'"));
+    }
+
+    #[test]
+    fn dense_sidecar_missing_row_is_unsupported_without_anchor_leak() {
+        let dir = tempdir().unwrap();
+        let catalog =
+            write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::MissingBetaRow);
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("Dense".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let target = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 32,
+        })
+        .unwrap();
+
+        let body = package.visual_body_for_target(&target).unwrap();
+        let json = serde_json::to_string(&body).unwrap();
+
+        assert!(matches!(body, VisualBody::Unsupported { .. }));
+        assert!(!json.contains("00000002"));
+        assert!(json.contains("ssed_dense_sidecar_row_missing"));
+    }
+
+    #[test]
     fn ssed_fulltext_searches_honmon_body_windows() {
         let dir = tempdir().unwrap();
         let catalog = write_ssed_fulltext_fixture(dir.path());
@@ -5174,6 +5480,208 @@ mod tests {
             .unwrap();
 
         assert_eq!(page.hits.len(), 1);
+    }
+
+    enum DenseSidecarFixture {
+        BodyRows,
+        TitleOnlyThenBodyRows,
+        BlobBodyRows,
+        MissingBetaRow,
+    }
+
+    fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -> SsedCatalog {
+        let mut body = Vec::new();
+        body.extend_from_slice(&dense_anchor_record("00000001"));
+        body.extend_from_slice(&dense_anchor_record("00000002"));
+        fs::write(
+            root.join("HONMON.DIC"),
+            fixture_sseddata_literal_chunks(&[&body], 100, 100),
+        )
+        .unwrap();
+
+        let mut titles = Vec::new();
+        let alpha_title_offset = 0u16;
+        titles.extend_from_slice(b"alpha\x1f\x0a");
+        let beta_title_offset = u16::try_from(titles.len()).unwrap();
+        titles.extend_from_slice(b"beta\x1f\x0a");
+        fs::write(
+            root.join("FHTITLE.DIC"),
+            fixture_sseddata_literal_chunks(&[&titles], 300, 300),
+        )
+        .unwrap();
+
+        let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+        index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        index_page[2..4].copy_from_slice(&2u16.to_be_bytes());
+        let mut pos = 4usize;
+        write_simple_index_row(
+            &mut index_page,
+            &mut pos,
+            &body_jis("あ"),
+            100,
+            0,
+            300,
+            alpha_title_offset,
+        );
+        write_simple_index_row(
+            &mut index_page,
+            &mut pos,
+            &body_jis("い"),
+            100,
+            32,
+            300,
+            beta_title_offset,
+        );
+        fs::write(
+            root.join("FHINDEX.DIC"),
+            fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+        )
+        .unwrap();
+
+        match fixture {
+            DenseSidecarFixture::BodyRows => {
+                write_dense_body_db(root.join("body.db"), true, true, false);
+            }
+            DenseSidecarFixture::TitleOnlyThenBodyRows => {
+                let connection = Connection::open(root.join("a-title-only.db")).unwrap();
+                connection
+                    .execute_batch(
+                        "
+                        create table t_contents (f_DataId integer primary key, f_Title text);
+                        insert into t_contents values (1, 'alpha title only');
+                        ",
+                    )
+                    .unwrap();
+                write_dense_body_db(root.join("body.db"), true, true, false);
+            }
+            DenseSidecarFixture::BlobBodyRows => {
+                write_dense_body_db(root.join("body.db"), true, true, true);
+            }
+            DenseSidecarFixture::MissingBetaRow => {
+                write_dense_body_db(root.join("body.db"), true, false, false);
+            }
+        }
+
+        SsedCatalog {
+            title: "Dense".to_owned(),
+            components: vec![
+                SsedComponent {
+                    index: 0,
+                    multi: 0,
+                    component_type: 0x00,
+                    start_block: 100,
+                    end_block: 100,
+                    data: [0; 4],
+                    filename: "HONMON.DIC".to_owned(),
+                    role: SsedComponentRole::Honmon,
+                },
+                SsedComponent {
+                    index: 1,
+                    multi: 0,
+                    component_type: 0x03,
+                    start_block: 300,
+                    end_block: 300,
+                    data: [0; 4],
+                    filename: "FHTITLE.DIC".to_owned(),
+                    role: SsedComponentRole::Title,
+                },
+                SsedComponent {
+                    index: 2,
+                    multi: 0,
+                    component_type: 0x91,
+                    start_block: 200,
+                    end_block: 200,
+                    data: [0; 4],
+                    filename: "FHINDEX.DIC".to_owned(),
+                    role: SsedComponentRole::Index,
+                },
+            ],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 3,
+                trailing_bytes: 0,
+            },
+        }
+    }
+
+    fn dense_anchor_record(anchor: &str) -> Vec<u8> {
+        let mut record = Vec::new();
+        record.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01, 0x1f, 0x41]);
+        record.extend_from_slice(&body_jis(anchor));
+        record.extend_from_slice(&[0x1f, 0x61, 0x1f, 0x0a]);
+        record.resize(32, 0);
+        record
+    }
+
+    fn write_simple_index_row(
+        page: &mut [u8],
+        pos: &mut usize,
+        key: &[u8],
+        body_block: u32,
+        body_offset: u16,
+        title_block: u32,
+        title_offset: u16,
+    ) {
+        page[*pos] = u8::try_from(key.len()).unwrap();
+        *pos += 1;
+        page[*pos..*pos + key.len()].copy_from_slice(key);
+        *pos += key.len();
+        page[*pos..*pos + 4].copy_from_slice(&body_block.to_be_bytes());
+        page[*pos + 4..*pos + 6].copy_from_slice(&body_offset.to_be_bytes());
+        page[*pos + 6..*pos + 10].copy_from_slice(&title_block.to_be_bytes());
+        page[*pos + 10..*pos + 12].copy_from_slice(&title_offset.to_be_bytes());
+        *pos += 12;
+    }
+
+    fn write_dense_body_db(path: PathBuf, alpha: bool, beta: bool, blob: bool) {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .execute_batch(
+                "create table t_contents (f_DataId integer primary key, f_Title blob, f_Html blob, f_Plane blob);",
+            )
+            .unwrap();
+        if alpha {
+            connection
+                .execute(
+                    "insert into t_contents values (?, ?, ?, ?)",
+                    (
+                        1,
+                        "alpha".as_bytes(),
+                        "<div>alpha sidecar html</div>".as_bytes(),
+                        "alpha sidecar body".as_bytes(),
+                    ),
+                )
+                .unwrap();
+        }
+        if beta {
+            if blob {
+                connection
+                    .execute(
+                        "insert into t_contents values (?, ?, ?, ?)",
+                        (
+                            2,
+                            cp932("ベータ"),
+                            cp932("<div>ベータ html</div>"),
+                            cp932("ベータ body"),
+                        ),
+                    )
+                    .unwrap();
+            } else {
+                connection
+                    .execute(
+                        "insert into t_contents values (?, ?, ?, ?)",
+                        (
+                            2,
+                            "beta".as_bytes(),
+                            "<div>beta sidecar html</div>".as_bytes(),
+                            "beta sidecar body".as_bytes(),
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
     }
 
     fn write_ssed_fulltext_fixture(root: &Path) -> SsedCatalog {

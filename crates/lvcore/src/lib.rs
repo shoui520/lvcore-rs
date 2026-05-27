@@ -23,6 +23,7 @@ pub mod ssed;
 pub mod ssed_index;
 pub mod ssed_menu;
 pub mod ssed_panel;
+pub mod ssed_sidecar;
 pub mod storage;
 pub mod target;
 
@@ -64,5 +65,6 @@ pub use ssed_menu::{
 pub use ssed_panel::{
     SsedPanelBin, SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, SsedPanelXml,
 };
+pub use ssed_sidecar::{SsedSidecarBody, SsedSidecarBodyResolver, SsedSidecarLookup};
 pub use storage::{CaseFoldedDirectory, DirectoryStorage, StorageBackend};
 pub use target::{InternalTarget, TargetKind, TargetLink, TargetToken};

@@ -784,7 +784,7 @@ fn dense_honmon_targets_do_not_render_as_raw_numeric_anchors() {
     assert!(
         view.diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "dense_honmon_dereference_required")
+            .any(|diagnostic| diagnostic.code == "ssed_dense_sidecar_not_found")
     );
 }
 

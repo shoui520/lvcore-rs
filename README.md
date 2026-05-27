@@ -75,6 +75,9 @@ provider slices:
 - native indexed search/browse for implemented SSED title/index forms;
 - initial SSED full-text search over HONMON body windows behind native index
   targets, with diagnostics and explicit HC rendering separation;
+- dense HONMON anchor dereference for supported SQLite sidecars, including
+  `t_contents`, `HONBUN`, extensionless main wordlist tables, and conservative
+  generic id/body schemas;
 - SQLCipher-backed LVED_SQLITE3 list/search/content/info/media access where the
   package key is available;
 - LVLMultiView menu/search/body access for decoded payloads;
@@ -88,8 +91,10 @@ known structures.
 
 ## Important Gaps
 
-- SSED HC renderer parity is not ported yet. SSED body targets currently resolve
-  to explicit HC renderer input rather than claiming rendered HTML.
+- SSED HC renderer parity is not ported yet. Plain SSED body targets currently
+  resolve to explicit HC renderer input rather than claiming rendered HTML;
+  supported dense sidecar targets resolve to preserved HTML or exact sidecar
+  text where available.
 - SSED full-text search is implemented as a bounded, index-anchored HONMON scan;
   it is not a substitute for HC-rendered semantic text and may need more product
   tuning for dense/sidecar-heavy dictionaries.
