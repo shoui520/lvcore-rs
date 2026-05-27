@@ -1389,6 +1389,37 @@ fn lved_list_surface_is_cursor_paged_by_backend() {
 }
 
 #[test]
+fn lved_search_is_cursor_paged_by_backend() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let first = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Exact,
+            query: "shared".to_owned(),
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(first.hits[0].title_text, "alpha");
+    assert_eq!(first.next_cursor.as_deref(), Some("1"));
+
+    let second = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Exact,
+            query: "shared".to_owned(),
+            cursor: first.next_cursor,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(second.hits[0].title_text, "beta");
+    assert!(second.next_cursor.is_none());
+}
+
+#[test]
 fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());
@@ -1536,6 +1567,10 @@ fn write_minimal_lved_sqlite_fixture(root: &Path) {
                 insert into list values (1, 100, 1, '', '<b>alpha</b>', '');
                 insert into list values (2, 105, 1, '', '<b>beta</b>', '');
                 create virtual table search using fts4(forward, back, part, fts, advanced1, advanced2, filter);
+                insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                  values (1, 'alpha', 'ahpla', 'shared alpha', 'alpha body', '', '', '∥shared∥');
+                insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                  values (2, 'beta', 'ateb', 'shared beta', 'beta body', '', '', '∥shared∥');
                 ",
             )
             .unwrap();

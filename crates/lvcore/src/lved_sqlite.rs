@@ -130,11 +130,21 @@ impl LvedSqliteStore {
         mode: &SearchMode,
         limit: usize,
     ) -> Result<Vec<LvedSearchHit>> {
+        self.search_page(query, mode, 0, limit)
+    }
+
+    pub fn search_page(
+        &self,
+        query: &str,
+        mode: &SearchMode,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<LvedSearchHit>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
         let connection = self.open_readonly()?;
-        search_lved_sqlite_connection(&connection, query, mode, limit)
+        search_lved_sqlite_connection(&connection, query, mode, offset, limit)
     }
 
     pub fn content_html(&self, content_id: i64) -> Result<Option<String>> {
@@ -538,6 +548,7 @@ fn search_lved_sqlite_connection(
     connection: &Connection,
     query: &str,
     mode: &SearchMode,
+    offset: usize,
     limit: usize,
 ) -> Result<Vec<LvedSearchHit>> {
     if !sqlite_table_exists(connection, "search") || !sqlite_table_exists(connection, "list") {
@@ -571,10 +582,13 @@ fn search_lved_sqlite_connection(
     let type_column = optional_column_expr(&list_columns, "type", "null");
     let sql = format!(
         "select l.id, l.refid, {anchor_column}, {title_column}, {subtitle_column}, {type_column} \
-         from search s join list l on l.id = s.rowid where {where_clause} order by l.id limit ?"
+         from search s join list l on l.id = s.rowid where {where_clause} order by l.id limit ? offset ?"
     );
     let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map((parameter, limit as i64), lved_search_hit_from_row)?;
+    let rows = statement.query_map(
+        (parameter, limit as i64, offset as i64),
+        lved_search_hit_from_row,
+    )?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::from)
 }

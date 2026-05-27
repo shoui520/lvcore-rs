@@ -968,8 +968,20 @@ impl StubBookPackage {
                 "LVED_SQLITE3 search requires an opened SQLCipher store",
             ));
         };
-        let hits = store.search(&query.query, &query.mode, query.limit)?;
-        let hits = hits
+        if query.limit == 0 {
+            return Ok(SearchPage {
+                hits: Vec::new(),
+                next_cursor: None,
+                diagnostics: Vec::new(),
+            });
+        }
+        let offset = decode_offset_cursor(query.cursor.as_deref());
+        let page_limit = query.limit.saturating_add(1);
+        let mut raw_hits = store.search_page(&query.query, &query.mode, offset, page_limit)?;
+        let next_cursor =
+            (raw_hits.len() > query.limit).then(|| (offset + query.limit).to_string());
+        raw_hits.truncate(query.limit);
+        let hits = raw_hits
             .into_iter()
             .map(|hit| {
                 let target = TargetToken::new(&InternalTarget::LvedRow {
@@ -995,7 +1007,7 @@ impl StubBookPackage {
             .collect::<Result<Vec<_>>>()?;
         Ok(SearchPage {
             hits,
-            next_cursor: None,
+            next_cursor,
             diagnostics: Vec::new(),
         })
     }
