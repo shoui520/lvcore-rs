@@ -10,15 +10,20 @@ use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution};
 use crate::navigation::{
-    HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
+    HomeSurface, NavigationItem, NavigationProvider, NavigationStatus, NavigationSurface,
+    NavigationSurfaceKind,
 };
 use crate::render::{RenderOptions, RendererProvider, ResolvedTargetKind, ResolvedTargetView};
 use crate::resources::{
     InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
 };
-use crate::search::{SearchPage, SearchProvider, SearchQuery};
+use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery};
 use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
-use crate::ssed::{SsedCatalog, SsedComponent, SsedComponentRole, SsedDataHeader};
+use crate::ssed::{SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile, SsedDataHeader};
+use crate::ssed_index::{
+    INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, decode_title_text, is_leaf_page,
+    is_simple_leaf_index_type, parse_simple_leaf_page,
+};
 use crate::storage::{DirectoryStorage, StorageBackend};
 use crate::target::{InternalTarget, TargetToken};
 
@@ -275,7 +280,10 @@ impl BookPackage for StubBookPackage {
 }
 
 impl SearchProvider for StubBookPackage {
-    fn search(&self, _query: &SearchQuery) -> Result<SearchPage> {
+    fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
+        if self.metadata.format_family == FormatFamily::Ssed {
+            return self.search_ssed_simple_indexes(query);
+        }
         Ok(SearchPage::deferred(format!(
             "{} search provider is not implemented yet",
             self.metadata.format_label
@@ -348,13 +356,16 @@ impl NavigationProvider for StubBookPackage {
                     surfaces.push(HomeSurface {
                         surface_id: "title-index".to_owned(),
                         kind: NavigationSurfaceKind::TitleIndexBrowse,
-                        status: NavigationStatus::Deferred,
+                        status: NavigationStatus::Available,
                         title_html: "Title/Index Browse".to_owned(),
                         title_text: "Title/Index Browse".to_owned(),
-                        target: None,
+                        target: Some(TargetToken::new(&InternalTarget::TitleIndexItem {
+                            surface_id: "title-index".to_owned(),
+                            item_id: "root".to_owned(),
+                        })?),
                         diagnostics: vec![Diagnostic::info(
-                            "surface_deferred",
-                            "SSED title/index parsing is not wired in this milestone",
+                            "surface_partial",
+                            "SSED simple leaf title/index browsing is available; grouped/internal variants remain deferred",
                         )],
                     });
                 }
@@ -424,6 +435,9 @@ impl NavigationProvider for StubBookPackage {
     }
 
     fn open_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "title-index" {
+            return self.open_ssed_title_index_surface(surface_id, 100);
+        }
         Ok(NavigationSurface::Deferred {
             surface_id: surface_id.to_owned(),
             diagnostics: vec![Diagnostic::info(
@@ -604,6 +618,269 @@ impl BodyProvider for StubBookPackage {
 }
 
 impl StubBookPackage {
+    fn search_ssed_simple_indexes(&self, query: &SearchQuery) -> Result<SearchPage> {
+        if query.limit == 0 {
+            return Ok(SearchPage {
+                hits: Vec::new(),
+                next_cursor: None,
+                diagnostics: Vec::new(),
+            });
+        }
+        if !matches!(
+            query.mode,
+            SearchMode::Exact | SearchMode::Forward | SearchMode::Partial
+        ) {
+            return Ok(SearchPage::deferred(
+                "SSED search mode is not implemented for simple title/index scanning yet",
+            ));
+        }
+
+        let mut diagnostics = Vec::new();
+        let needle = query.query.to_lowercase();
+        let mut hits = Vec::new();
+        let scan_diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
+            let key = row.key.to_lowercase();
+            let matched = match query.mode {
+                SearchMode::Exact => key == needle,
+                SearchMode::Forward => key.starts_with(&needle),
+                SearchMode::Partial => key.contains(&needle),
+                SearchMode::Backward | SearchMode::FullText | SearchMode::Advanced(_) => false,
+            };
+            if !matched {
+                return Ok(true);
+            }
+            let target = match self.ssed_target_for_index_pointer(row.body)? {
+                Ok(target) => target,
+                Err(diagnostic) => {
+                    diagnostics.push(diagnostic);
+                    return Ok(true);
+                }
+            };
+            let title = self
+                .ssed_title_text(row.title)
+                .unwrap_or_else(|| row.key.clone());
+            hits.push(SearchHit {
+                book_id: self.metadata.book_id.clone(),
+                target,
+                title_html: title.clone(),
+                title_text: title,
+                snippet_html: None,
+                diagnostics: Vec::new(),
+            });
+            Ok(hits.len() < query.limit)
+        })?;
+        diagnostics.extend(scan_diagnostics);
+
+        Ok(SearchPage {
+            hits,
+            next_cursor: None,
+            diagnostics,
+        })
+    }
+
+    fn open_ssed_title_index_surface(
+        &self,
+        surface_id: &str,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
+        let (rows, mut diagnostics) = self.ssed_simple_index_rows(limit)?;
+        if rows.is_empty() && !diagnostics.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics,
+            });
+        }
+        let mut items = Vec::new();
+        for (index, row) in rows.into_iter().enumerate().take(limit) {
+            let label = self
+                .ssed_title_text(row.title)
+                .unwrap_or_else(|| row.key.clone());
+            let target = match self.ssed_target_for_index_pointer(row.body)? {
+                Ok(target) => target,
+                Err(diagnostic) => {
+                    diagnostics.push(diagnostic);
+                    continue;
+                }
+            };
+            items.push(NavigationItem {
+                item_id: format!("{}:{}", row.component, index),
+                label_html: label.clone(),
+                label_text: label,
+                target,
+            });
+        }
+        Ok(NavigationSurface::TitleIndexBrowse {
+            surface_id: surface_id.to_owned(),
+            items,
+            next_cursor: None,
+        })
+    }
+
+    fn ssed_simple_index_rows(&self, limit: usize) -> Result<(Vec<SsedIndexRow>, Vec<Diagnostic>)> {
+        let mut rows = Vec::new();
+        let diagnostics = self.scan_ssed_simple_index_rows(Some(limit), |row| {
+            rows.push(row);
+            Ok(rows.len() < limit)
+        })?;
+        Ok((rows, diagnostics))
+    }
+
+    fn scan_ssed_simple_index_rows(
+        &self,
+        row_limit: Option<usize>,
+        mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<Vec<Diagnostic>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(vec![Diagnostic::error(
+                "ssed_catalog_missing",
+                "SSED index scanning requires a parsed SSEDINFO catalog",
+            )]);
+        };
+        let mut diagnostics = Vec::new();
+        let mut row_count = 0usize;
+        'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
+            if row_limit.is_some_and(|limit| row_count >= limit) {
+                break;
+            }
+            if !is_simple_leaf_index_type(component.component_type) {
+                diagnostics.push(
+                    Diagnostic::info(
+                        "ssed_index_variant_deferred",
+                        format!(
+                            "{} is not a simple leaf index component",
+                            component.filename
+                        ),
+                    )
+                    .with_context("component", &component.filename),
+                );
+                continue;
+            }
+            let Some(path) = self
+                .storage
+                .resolve_casefolded(Path::new(&component.filename))?
+            else {
+                diagnostics.push(
+                    Diagnostic::warning(
+                        "ssed_index_component_missing",
+                        format!("{} is declared but not present on disk", component.filename),
+                    )
+                    .with_context("component", &component.filename),
+                );
+                continue;
+            };
+            let mut reader = SsedDataFile::open(&path)?;
+            let page_count = component.block_count() as usize;
+            for page_index in 0..page_count {
+                if row_limit.is_some_and(|limit| row_count >= limit) {
+                    break;
+                }
+                let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
+                if page.len() < 4 {
+                    break;
+                }
+                let word = u16::from_be_bytes([page[0], page[1]]);
+                if !is_leaf_page(word) {
+                    diagnostics.push(
+                        Diagnostic::info(
+                            "ssed_index_internal_page_deferred",
+                            format!("{} contains internal index pages", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+                let logical_block = component.start_block + page_index as u32;
+                let (page_rows, unknown) = parse_simple_leaf_page(
+                    &component.filename,
+                    &page,
+                    page_index as u32,
+                    logical_block,
+                );
+                if unknown > 0 {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_unknown_leaf_bytes",
+                            format!(
+                                "{} had {unknown} unknown simple leaf row(s)",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                }
+                for row in page_rows {
+                    if row_limit.is_some_and(|limit| row_count >= limit) {
+                        break 'components;
+                    }
+                    row_count = row_count.saturating_add(1);
+                    if !on_row(row)? {
+                        break 'components;
+                    }
+                }
+            }
+        }
+        Ok(diagnostics)
+    }
+
+    fn ssed_title_text(&self, pointer: SsedIndexPointer) -> Option<String> {
+        let catalog = self.ssed_catalog.as_ref()?;
+        let component = catalog.component_for_address(pointer.block)?;
+        if component.role != SsedComponentRole::Title {
+            return None;
+        }
+        let component_offset = component.relative_offset(pointer.block, pointer.offset)?;
+        let path = self
+            .storage
+            .resolve_casefolded(Path::new(&component.filename))
+            .ok()
+            .flatten()?;
+        let mut reader = SsedDataFile::open(path).ok()?;
+        let data = reader
+            .read_range(usize::try_from(component_offset).ok()?, 512)
+            .ok()?;
+        let title = decode_title_text(&data);
+        (!title.is_empty()).then_some(title)
+    }
+
+    fn ssed_target_for_index_pointer(
+        &self,
+        pointer: SsedIndexPointer,
+    ) -> Result<std::result::Result<TargetToken, Diagnostic>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(Err(Diagnostic::error(
+                "ssed_catalog_missing",
+                "SSED index body pointers require a parsed SSEDINFO catalog",
+            )));
+        };
+        let Some(component) = catalog.component_for_address(pointer.block) else {
+            return Ok(Err(Diagnostic::warning(
+                "ssed_index_body_component_missing",
+                format!(
+                    "no component contains index body pointer block {} offset {}",
+                    pointer.block, pointer.offset
+                ),
+            )));
+        };
+        if component
+            .relative_offset(pointer.block, pointer.offset)
+            .is_none()
+        {
+            return Ok(Err(Diagnostic::warning(
+                "ssed_index_body_pointer_invalid",
+                format!(
+                    "{} does not contain index body pointer block {} offset {}",
+                    component.filename, pointer.block, pointer.offset
+                ),
+            )
+            .with_context("component", &component.filename)));
+        }
+        Ok(Ok(TargetToken::new(&InternalTarget::SsedAddress {
+            component: component.filename.clone(),
+            block: pointer.block,
+            offset: pointer.offset,
+        })?))
+    }
+
     fn view_for_visual_body(
         &self,
         target: TargetToken,

@@ -342,6 +342,158 @@ fn ssed_address_targets_report_missing_declared_components() {
 }
 
 #[test]
+fn ssed_simple_title_index_surface_resolves_entry_targets() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surface = package.open_surface("title-index").unwrap();
+    let lvcore::NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("title-index should open as a title/index browse surface");
+    };
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "alpha");
+    assert_eq!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+        }
+    );
+}
+
+#[test]
+fn ssed_simple_index_search_returns_title_backed_hits() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Forward,
+            query: "alp".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+        }
+    );
+}
+
+#[test]
+fn ssed_simple_index_search_does_not_limit_candidates_before_filtering() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"beta\x1f\x0aalpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("beta", 1, 2, 13, 0),
+            ("alpha", 1, 4, 13, 6),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Exact,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 4,
+        }
+    );
+}
+
+#[test]
+fn ssed_simple_index_targets_preserve_declared_honmon_component_name() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_honmon("HONMON.DIN"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Exact,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIN".to_owned(),
+            block: 1,
+            offset: 2,
+        }
+    );
+}
+
+#[test]
 fn gaiji_policy_is_backend_owned_and_reorderable() {
     let policy = GaijiPolicy {
         priority: vec![
@@ -446,6 +598,10 @@ fn resource_targets_render_as_media_resource_views() {
 }
 
 fn ssedinfo_fixture() -> Vec<u8> {
+    ssedinfo_fixture_with_honmon("HONMON.DIC")
+}
+
+fn ssedinfo_fixture_with_honmon(honmon_filename: &str) -> Vec<u8> {
     let record_start = 0x80;
     let mut data = vec![0u8; record_start + 5 * 0x30];
     data[..8].copy_from_slice(SSEDINFO_MAGIC);
@@ -458,7 +614,7 @@ fn ssedinfo_fixture() -> Vec<u8> {
         0x00,
         1,
         10,
-        "HONMON.DIC",
+        honmon_filename,
     );
     write_record(
         &mut data[record_start + 0x30..record_start + 0x60],
@@ -515,4 +671,48 @@ fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
         data.extend_from_slice(&[0, 0, *literal]);
     }
     data
+}
+
+fn simple_index_fixture(
+    key: &str,
+    body_block: u32,
+    body_offset: u16,
+    title_block: u32,
+    title_offset: u16,
+) -> Vec<u8> {
+    simple_index_fixture_rows(&[(key, body_block, body_offset, title_block, title_offset)])
+}
+
+fn simple_index_fixture_rows(rows: &[(&str, u32, u16, u32, u16)]) -> Vec<u8> {
+    let mut page = vec![0u8; 2048];
+    page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    page[2..4].copy_from_slice(&(rows.len() as u16).to_be_bytes());
+    let mut pos = 4usize;
+    for (key, body_block, body_offset, title_block, title_offset) in rows {
+        let key = jis_fullwidth_ascii_key(key);
+        page[pos] = key.len() as u8;
+        pos += 1;
+        page[pos..pos + key.len()].copy_from_slice(&key);
+        pos += key.len();
+        page[pos..pos + 4].copy_from_slice(&body_block.to_be_bytes());
+        page[pos + 4..pos + 6].copy_from_slice(&body_offset.to_be_bytes());
+        page[pos + 6..pos + 10].copy_from_slice(&title_block.to_be_bytes());
+        page[pos + 10..pos + 12].copy_from_slice(&title_offset.to_be_bytes());
+        pos += 12;
+    }
+    page
+}
+
+fn jis_fullwidth_ascii_key(text: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for byte in text.bytes() {
+        if (0x21..=0x7e).contains(&byte) {
+            out.extend_from_slice(&[0x23, byte]);
+        } else if byte == b' ' {
+            out.extend_from_slice(&[0x21, 0x21]);
+        } else {
+            out.push(byte);
+        }
+    }
+    out
 }

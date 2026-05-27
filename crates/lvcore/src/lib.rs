@@ -16,6 +16,7 @@ pub mod resources;
 pub mod search;
 pub mod sequence;
 pub mod ssed;
+pub mod ssed_index;
 pub mod storage;
 pub mod target;
 
@@ -42,5 +43,6 @@ pub use ssed::{
     SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
     SsedDataHeader, SsedDataReader, SsedInfoLayout,
 };
+pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
 pub use storage::{CaseFoldedDirectory, DirectoryStorage, StorageBackend};
 pub use target::{InternalTarget, TargetKind, TargetLink, TargetToken};
