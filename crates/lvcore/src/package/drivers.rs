@@ -16,7 +16,7 @@ use crate::render::{RenderOptions, RendererProvider, ResolvedTargetView};
 use crate::resources::{ResourceKind, ResourceProvider, ResourceRef, ResourceToken};
 use crate::search::{SearchPage, SearchProvider, SearchQuery};
 use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
-use crate::ssed::{SsedCatalog, SsedComponentRole};
+use crate::ssed::{SsedCatalog, SsedComponent, SsedComponentRole, SsedDataHeader};
 use crate::storage::{DirectoryStorage, StorageBackend};
 use crate::target::{InternalTarget, TargetToken};
 
@@ -533,11 +533,11 @@ impl BodyProvider for StubBookPackage {
                     "raw dense HONMON anchors must not be displayed directly",
                 )],
             }),
-            InternalTarget::SsedAddress { component, .. } => Ok(VisualBody::SsedStream {
+            InternalTarget::SsedAddress {
                 component,
-                offset: 0,
-                length: None,
-            }),
+                block,
+                offset,
+            } => self.visual_body_for_ssed_address(&component, block, offset),
             _ => Ok(VisualBody::Unsupported {
                 reason: "body provider deferred".to_owned(),
                 diagnostics: vec![Diagnostic::info(
@@ -546,6 +546,93 @@ impl BodyProvider for StubBookPackage {
                 )],
             }),
         }
+    }
+}
+
+impl StubBookPackage {
+    fn visual_body_for_ssed_address(
+        &self,
+        requested_component: &str,
+        block: u32,
+        offset: u32,
+    ) -> Result<VisualBody> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(VisualBody::Unsupported {
+                reason: "SSED catalog is unavailable".to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "ssed_catalog_missing",
+                    "SSED address targets require a parsed SSEDINFO catalog",
+                )],
+            });
+        };
+        let component = catalog
+            .component_named(requested_component)
+            .or_else(|| catalog.component_for_address(block));
+        let Some(component) = component else {
+            return Ok(VisualBody::Unsupported {
+                reason: "SSED address does not resolve to a catalog component".to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "ssed_address_outside_components",
+                    format!("no component contains logical block {block}"),
+                )],
+            });
+        };
+        let Some(component_offset) = component.relative_offset(block, offset) else {
+            return Ok(VisualBody::Unsupported {
+                reason: "SSED address is outside the resolved component".to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "ssed_address_invalid_for_component",
+                    format!(
+                        "{} does not contain logical block {block} offset {offset}",
+                        component.filename
+                    ),
+                )],
+            });
+        };
+        if let Err(diagnostic) = self.validate_plain_component(component) {
+            return Ok(VisualBody::Unsupported {
+                reason: "SSED component is not readable as plain SSEDDATA".to_owned(),
+                diagnostics: vec![diagnostic],
+            });
+        }
+        Ok(VisualBody::SsedStream {
+            component: component.filename.clone(),
+            offset: component_offset,
+            length: None,
+        })
+    }
+
+    fn validate_plain_component(
+        &self,
+        component: &SsedComponent,
+    ) -> std::result::Result<(), Diagnostic> {
+        if !component.has_positive_range() {
+            return Err(Diagnostic::warning(
+                "ssed_component_optional_absent",
+                format!("{} has no positive block range", component.filename),
+            ));
+        }
+        let relative = Path::new(&component.filename);
+        let Some(path) = self
+            .storage
+            .resolve_casefolded(relative)
+            .map_err(|err| Diagnostic::error("ssed_component_lookup_failed", err.to_string()))?
+        else {
+            return Err(Diagnostic::warning(
+                "ssed_component_file_missing",
+                format!("{} is declared but not present on disk", component.filename),
+            ));
+        };
+        SsedDataHeader::parse_file(&path).map_err(|err| {
+            Diagnostic::warning(
+                "ssed_component_decode_deferred",
+                format!(
+                    "{} does not expose a readable plain SSEDDATA header yet: {err}",
+                    component.filename
+                ),
+            )
+        })?;
+        Ok(())
     }
 }
 

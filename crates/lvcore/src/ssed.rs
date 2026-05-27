@@ -1,4 +1,5 @@
 use std::cmp::{Reverse, min};
+use std::io::Read;
 use std::path::Path;
 
 use encoding_rs::SHIFT_JIS;
@@ -56,6 +57,18 @@ impl SsedComponent {
     pub fn has_positive_range(&self) -> bool {
         self.block_count() > 0
     }
+
+    pub fn contains_block(&self, block: u32) -> bool {
+        self.has_positive_range() && (self.start_block..=self.end_block).contains(&block)
+    }
+
+    pub fn relative_offset(&self, block: u32, offset: u32) -> Option<u64> {
+        if !self.contains_block(block) || offset >= BLOCK_SIZE {
+            return None;
+        }
+        let block_delta = u64::from(block - self.start_block);
+        Some(block_delta * u64::from(BLOCK_SIZE) + u64::from(offset))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +97,22 @@ pub struct SsedDataHeader {
 }
 
 impl SsedDataHeader {
+    pub fn parse_file(path: &Path) -> Result<Self> {
+        let mut file = std::fs::File::open(path)?;
+        let mut fixed_header = [0u8; 0x40];
+        file.read_exact(&mut fixed_header)?;
+        if &fixed_header[..8] != SSEDDATA_MAGIC {
+            return Err(Error::Driver("not plain SSEDDATA".to_owned()));
+        }
+        let chunk_count = be16(&fixed_header, 0x16);
+        let offset_table_len = usize::from(chunk_count) * 4;
+        let mut header = Vec::with_capacity(0x40 + offset_table_len);
+        header.extend_from_slice(&fixed_header);
+        header.resize(0x40 + offset_table_len, 0);
+        file.read_exact(&mut header[0x40..])?;
+        parse_sseddata_header(&header)
+    }
+
     pub fn expanded_size(&self) -> usize {
         self.end_block
             .saturating_sub(self.start_block)
@@ -193,6 +222,18 @@ impl SsedCatalog {
         self.components
             .iter()
             .find(|component| component.role == SsedComponentRole::Honmon)
+    }
+
+    pub fn component_named(&self, name: &str) -> Option<&SsedComponent> {
+        self.components
+            .iter()
+            .find(|component| component.filename.eq_ignore_ascii_case(name))
+    }
+
+    pub fn component_for_address(&self, block: u32) -> Option<&SsedComponent> {
+        self.components
+            .iter()
+            .find(|component| component.contains_block(block))
     }
 }
 
@@ -445,6 +486,17 @@ mod tests {
         let catalog = SsedCatalog::parse_bytes(&data).unwrap();
         assert_eq!(catalog.layout.component_count_offset, 0x4c);
         assert_eq!(catalog.layout.record_start, 0x7f);
+    }
+
+    #[test]
+    fn maps_logical_block_address_to_component_offset() {
+        let data = fixture_ssedinfo(0x4d, 0x80);
+        let catalog = SsedCatalog::parse_bytes(&data).unwrap();
+        let honmon = catalog.component_named("honmon.dic").unwrap();
+        assert_eq!(honmon.relative_offset(1, 2), Some(2));
+        assert_eq!(honmon.relative_offset(2, 0), Some(2048));
+        assert_eq!(honmon.relative_offset(11, 0), None);
+        assert!(catalog.component_for_address(11).is_some());
     }
 
     #[test]

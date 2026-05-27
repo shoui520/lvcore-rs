@@ -3,8 +3,8 @@ use std::path::Path;
 
 use lvcore::{
     Capability, DriverRegistry, FormatFamily, GaijiPolicy, GaijiSourcePreference, InternalTarget,
-    NavigationStatus, NavigationSurfaceKind, RenderOptions, SSEDINFO_MAGIC, StorageBackend,
-    TargetToken, VisualBody,
+    NavigationStatus, NavigationSurfaceKind, RenderOptions, SSEDDATA_MAGIC, SSEDINFO_MAGIC,
+    StorageBackend, TargetToken, VisualBody,
 };
 use tempfile::tempdir;
 
@@ -124,6 +124,57 @@ fn continuous_view_api_returns_typed_deferred_window() {
 }
 
 #[test]
+fn ssed_address_targets_resolve_through_catalog_components() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"abcdef"),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "honmon.dic".to_owned(),
+        block: 1,
+        offset: 2,
+    })
+    .unwrap();
+
+    let body = package.visual_body_for_target(&token).unwrap();
+    assert_eq!(
+        body,
+        VisualBody::SsedStream {
+            component: "HONMON.DIC".to_owned(),
+            offset: 2,
+            length: None,
+        }
+    );
+}
+
+#[test]
+fn ssed_address_targets_report_missing_declared_components() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 2,
+    })
+    .unwrap();
+
+    let body = package.visual_body_for_target(&token).unwrap();
+    let VisualBody::Unsupported { diagnostics, .. } = body else {
+        panic!("missing component must not produce renderable body");
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_component_file_missing")
+    );
+}
+
+#[test]
 fn gaiji_policy_is_backend_owned_and_reorderable() {
     let policy = GaijiPolicy {
         priority: vec![
@@ -229,4 +280,22 @@ fn write_record(rec: &mut [u8], component_type: u8, start: u32, end: u32, filena
     rec[8..12].copy_from_slice(&end.to_be_bytes());
     rec[0x10] = filename.len() as u8;
     rec[0x11..0x11 + filename.len()].copy_from_slice(filename.as_bytes());
+}
+
+fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
+    let chunk_offset = 0x44usize;
+    let mut data = vec![0u8; chunk_offset];
+    data[..8].copy_from_slice(SSEDDATA_MAGIC);
+    data[0x0f] = 1;
+    data[0x16..0x18].copy_from_slice(&1u16.to_be_bytes());
+    data[0x18..0x1c].copy_from_slice(&1u32.to_be_bytes());
+    data[0x1c..0x20].copy_from_slice(&1u32.to_be_bytes());
+    data[0x40..0x44].copy_from_slice(&(chunk_offset as u32).to_be_bytes());
+    data.extend_from_slice(&[0, 0]);
+    data.extend_from_slice(&(literals.len() as u16).to_be_bytes());
+    data.push(0);
+    for literal in literals {
+        data.extend_from_slice(&[0, 0, *literal]);
+    }
+    data
 }
