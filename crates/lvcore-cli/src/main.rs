@@ -50,6 +50,13 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         window_after: usize,
     },
+    /// Open a reader navigation surface for one package.
+    Surface {
+        /// Package root or payload path to inspect.
+        path: PathBuf,
+        /// Surface identifier, for example `lved-list`, `info`, or `title-index`.
+        surface_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -182,6 +189,19 @@ fn main() -> Result<()> {
                     "diagnostics": page.diagnostics,
                     "rendered_first": rendered_first,
                     "target_window": target_window,
+                }))?
+            );
+        }
+        Command::Surface { path, surface_id } => {
+            let registry = DriverRegistry::default();
+            let package = registry.open_best(&path)?;
+            let metadata = package.metadata();
+            let surface = package.open_surface(&surface_id)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "metadata": metadata,
+                    "surface": surface,
                 }))?
             );
         }

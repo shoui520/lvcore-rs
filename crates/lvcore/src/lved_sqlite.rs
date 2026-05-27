@@ -48,6 +48,17 @@ pub struct LvedInfoPage {
     pub title_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvedListItem {
+    pub list_id: i64,
+    pub content_id: i64,
+    pub anchor: Option<String>,
+    pub title_html: String,
+    pub title_text: String,
+    pub subtitle_html: String,
+    pub list_type: Option<i64>,
+}
+
 impl LvedSqliteStore {
     pub fn discover(root: &Path) -> Result<Option<Self>> {
         let Some(payload_path) = lved_payload_path(root)? else {
@@ -154,6 +165,17 @@ impl LvedSqliteStore {
             .map_err(Error::from)
     }
 
+    pub fn list_items(&self, limit: usize) -> Result<Vec<LvedListItem>> {
+        let connection = self.open_readonly()?;
+        let list_columns = sqlite_columns(&connection, "list")?;
+        if limit == 0 || !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
+            return Ok(Vec::new());
+        }
+        let rows =
+            lved_list_hits_by_id_clause(&connection, &list_columns, "1 = ?", "l.id", 1, limit)?;
+        Ok(rows.into_iter().map(LvedListItem::from).collect())
+    }
+
     pub fn media_blob(&self, store: &str, key: &str) -> Result<Option<Vec<u8>>> {
         let connection = self.open_readonly()?;
         let table = match store {
@@ -238,6 +260,20 @@ impl LvedSqliteStore {
             before: before_rows,
             after: after_rows,
         }))
+    }
+}
+
+impl From<LvedSearchHit> for LvedListItem {
+    fn from(value: LvedSearchHit) -> Self {
+        Self {
+            list_id: value.list_id,
+            content_id: value.content_id,
+            anchor: value.anchor,
+            title_html: value.title_html,
+            title_text: value.title_text,
+            subtitle_html: value.subtitle_html,
+            list_type: value.list_type,
+        }
     }
 }
 

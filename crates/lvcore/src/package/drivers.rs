@@ -381,6 +381,10 @@ impl NavigationProvider for StubBookPackage {
                 }
             }
             FormatFamily::LvedSqlite3 => {
+                let list_available = self
+                    .lved_store
+                    .as_ref()
+                    .is_some_and(|store| store.list_items(1).is_ok_and(|items| !items.is_empty()));
                 let info_available = self
                     .lved_store
                     .as_ref()
@@ -388,14 +392,22 @@ impl NavigationProvider for StubBookPackage {
                 surfaces.push(HomeSurface {
                     surface_id: "lved-list".to_owned(),
                     kind: NavigationSurfaceKind::TitleIndexBrowse,
-                    status: NavigationStatus::Deferred,
+                    status: if list_available {
+                        NavigationStatus::Available
+                    } else {
+                        NavigationStatus::Missing
+                    },
                     title_html: "LVED list".to_owned(),
                     title_text: "LVED list".to_owned(),
-                    target: None,
-                    diagnostics: vec![Diagnostic::info(
-                        "surface_deferred",
-                        "LVED_SQLITE3 list browsing is deferred; search hits can resolve content rows",
-                    )],
+                    target: list_available
+                        .then(|| {
+                            TargetToken::new(&InternalTarget::TitleIndexItem {
+                                surface_id: "lved-list".to_owned(),
+                                item_id: "root".to_owned(),
+                            })
+                        })
+                        .transpose()?,
+                    diagnostics: Vec::new(),
                 });
                 surfaces.push(HomeSurface {
                     surface_id: "info".to_owned(),
@@ -455,6 +467,9 @@ impl NavigationProvider for StubBookPackage {
     fn open_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "title-index" {
             return self.open_ssed_title_index_surface(surface_id, 100);
+        }
+        if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "lved-list" {
+            return self.open_lved_list_surface(surface_id, 100);
         }
         if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "info" {
             return self.open_lved_info_surface(surface_id, 100);
@@ -798,6 +813,53 @@ impl StubBookPackage {
                 target,
             });
         }
+        Ok(NavigationSurface::TitleIndexBrowse {
+            surface_id: surface_id.to_owned(),
+            items,
+            next_cursor: None,
+        })
+    }
+
+    fn open_lved_list_surface(&self, surface_id: &str, limit: usize) -> Result<NavigationSurface> {
+        let Some(store) = &self.lved_store else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "lved_store_missing",
+                    "LVED_SQLITE3 list surface requires an opened SQLCipher store",
+                )],
+            });
+        };
+        let rows = store.list_items(limit)?;
+        if rows.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "surface_missing",
+                    "LVED_SQLITE3 list table did not expose renderable rows",
+                )],
+            });
+        }
+        let items = rows
+            .into_iter()
+            .map(|row| {
+                let label_text = if row.subtitle_html.is_empty() {
+                    row.title_text.clone()
+                } else {
+                    format!("{} {}", row.title_text, html_label_text(&row.subtitle_html))
+                };
+                Ok(NavigationItem {
+                    item_id: row.list_id.to_string(),
+                    label_html: lved_list_label_html(&row.title_html, &row.subtitle_html),
+                    label_text,
+                    target: TargetToken::new(&InternalTarget::LvedRow {
+                        table: "content".to_owned(),
+                        row_id: row.content_id,
+                        anchor: row.anchor,
+                    })?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(NavigationSurface::TitleIndexBrowse {
             surface_id: surface_id.to_owned(),
             items,
@@ -1567,6 +1629,33 @@ fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
     })
 }
 
+fn lved_list_label_html(title_html: &str, subtitle_html: &str) -> String {
+    if subtitle_html.is_empty() {
+        title_html.to_owned()
+    } else {
+        format!(r#"{title_html}<span class="lvcore-subtitle"> {subtitle_html}</span>"#)
+    }
+}
+
+fn html_label_text(fragment: &str) -> String {
+    let mut text = String::with_capacity(fragment.len());
+    let mut in_tag = false;
+    for ch in fragment.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if in_tag => {}
+            _ => text.push(ch),
+        }
+    }
+    text.replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .trim()
+        .to_owned()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LvedHtmlRefKind {
     Media,
@@ -1817,9 +1906,30 @@ mod tests {
         let package = LvedSqliteDriver.open(dir.path()).unwrap();
         let surfaces = package.home_surfaces().unwrap();
         assert!(surfaces.iter().any(|surface| {
+            surface.kind == NavigationSurfaceKind::TitleIndexBrowse
+                && surface.surface_id == "lved-list"
+                && surface.status == NavigationStatus::Available
+                && surface.target.is_some()
+        }));
+        assert!(surfaces.iter().any(|surface| {
             surface.kind == NavigationSurfaceKind::Info
                 && surface.status == NavigationStatus::Available
         }));
+        let list_surface = package.open_surface("lved-list").unwrap();
+        let list_items = match list_surface {
+            NavigationSurface::TitleIndexBrowse { items, .. } => items,
+            _ => panic!("expected LVED list title/index surface"),
+        };
+        assert_eq!(list_items.len(), 3);
+        assert_eq!(list_items[0].label_text, "alpha subtitle");
+        assert!(matches!(
+            list_items[0].target.decode().unwrap(),
+            InternalTarget::LvedRow {
+                table,
+                row_id: 100,
+                anchor: Some(anchor)
+            } if table == "content" && anchor == "body-anchor"
+        ));
         let info_surface = package.open_surface("info").unwrap();
         let info_target = match info_surface {
             NavigationSurface::InfoPages { pages, .. } => pages[0].target.clone(),
