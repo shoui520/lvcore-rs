@@ -33,7 +33,7 @@ pub use render::{
     RenderCapability, RenderMode, RenderOptions, RendererProvider, ResolvedTargetKind,
     ResolvedTargetView,
 };
-pub use resources::{ResourceKind, ResourceProvider, ResourceRef, ResourceToken};
+pub use resources::{InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken};
 pub use search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery, SearchScope};
 pub use sequence::{SequenceHint, SequenceProvider, TargetWindow};
 pub use ssed::{

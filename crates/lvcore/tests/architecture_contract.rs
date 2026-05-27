@@ -2,9 +2,10 @@ use std::fs;
 use std::path::Path;
 
 use lvcore::{
-    Capability, DriverRegistry, FormatFamily, GaijiPolicy, GaijiSourcePreference, InternalTarget,
-    NavigationStatus, NavigationSurfaceKind, RenderOptions, ResolvedTargetKind, SSEDDATA_MAGIC,
-    SSEDINFO_MAGIC, StorageBackend, TargetToken, VisualBody,
+    Capability, DriverRegistry, FormatFamily, GaijiPolicy, GaijiSourcePreference, InternalResource,
+    InternalTarget, NavigationStatus, NavigationSurfaceKind, RenderOptions, ResolvedTargetKind,
+    ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, StorageBackend, TargetToken,
+    VisualBody,
 };
 use tempfile::tempdir;
 
@@ -261,6 +262,33 @@ fn casefolded_paths_find_real_casing() {
         .unwrap()
         .unwrap();
     assert_eq!(resolved.file_name().unwrap(), "HONMON.DIN");
+}
+
+#[test]
+fn package_file_resources_resolve_and_read_with_preserved_casing() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    fs::write(dir.path().join("Templates/B123.SVG"), b"<svg/>").unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = ResourceToken::new(&InternalResource::PackageFile {
+        path: "templates/b123.svg".to_owned(),
+        resource_kind: ResourceKind::Template,
+    })
+    .unwrap();
+
+    let resource = package.resolve_resource(&token).unwrap();
+    assert_eq!(resource.kind, ResourceKind::Template);
+    assert_eq!(resource.label.as_deref(), Some("B123.SVG"));
+    assert!(
+        resource
+            .href
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("lvcore://resource/")
+    );
+    assert!(resource.diagnostics.is_empty());
+    assert_eq!(package.read_resource(&token).unwrap(), b"<svg/>");
 }
 
 fn ssedinfo_fixture() -> Vec<u8> {

@@ -13,7 +13,9 @@ use crate::navigation::{
     HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
 };
 use crate::render::{RenderOptions, RendererProvider, ResolvedTargetView};
-use crate::resources::{ResourceKind, ResourceProvider, ResourceRef, ResourceToken};
+use crate::resources::{
+    InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
+};
 use crate::search::{SearchPage, SearchProvider, SearchQuery};
 use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
 use crate::ssed::{SsedCatalog, SsedComponent, SsedComponentRole, SsedDataHeader};
@@ -455,22 +457,70 @@ impl RendererProvider for StubBookPackage {
 
 impl ResourceProvider for StubBookPackage {
     fn resolve_resource(&self, token: &ResourceToken) -> Result<ResourceRef> {
-        Ok(ResourceRef {
-            token: token.clone(),
-            kind: ResourceKind::Other,
-            label: None,
-            href: None,
-            diagnostics: vec![Diagnostic::info(
-                "resource_deferred",
-                "resource provider is not implemented yet",
-            )],
-        })
+        match token.decode()? {
+            InternalResource::PackageFile {
+                path,
+                resource_kind,
+            } => {
+                let relative = Path::new(&path);
+                let resolved = self.storage.resolve_casefolded(relative)?;
+                let mut diagnostics = Vec::new();
+                let href = if resolved.is_some() {
+                    Some(format!("lvcore://resource/{}", token.as_str()))
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!("{path} was not found in the package"),
+                    ));
+                    None
+                };
+                let label = resolved
+                    .as_ref()
+                    .and_then(|path| path.file_name())
+                    .or_else(|| relative.file_name())
+                    .map(|value| value.to_string_lossy().to_string());
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: resource_kind,
+                    label,
+                    href,
+                    diagnostics,
+                })
+            }
+            InternalResource::MediaBlob { resource_kind, .. } => Ok(ResourceRef {
+                token: token.clone(),
+                kind: resource_kind,
+                label: None,
+                href: None,
+                diagnostics: vec![Diagnostic::info(
+                    "resource_deferred",
+                    "media blob resource resolution is not implemented yet",
+                )],
+            }),
+            InternalResource::Unsupported { reason } => Ok(ResourceRef {
+                token: token.clone(),
+                kind: ResourceKind::Other,
+                label: None,
+                href: None,
+                diagnostics: vec![Diagnostic::warning("resource_unsupported", reason)],
+            }),
+        }
     }
 
-    fn read_resource(&self, _token: &ResourceToken) -> Result<Vec<u8>> {
-        Err(Error::Driver(
-            "resource provider is not implemented yet".to_owned(),
-        ))
+    fn read_resource(&self, token: &ResourceToken) -> Result<Vec<u8>> {
+        match token.decode()? {
+            InternalResource::PackageFile { path, .. } => {
+                let relative = Path::new(&path);
+                let Some(resolved) = self.storage.resolve_casefolded(relative)? else {
+                    return Err(Error::Driver(format!("resource not found: {path}")));
+                };
+                Ok(fs::read(resolved)?)
+            }
+            InternalResource::MediaBlob { .. } => Err(Error::Driver(
+                "media blob resource reading is not implemented yet".to_owned(),
+            )),
+            InternalResource::Unsupported { reason } => Err(Error::Driver(reason)),
+        }
     }
 }
 
