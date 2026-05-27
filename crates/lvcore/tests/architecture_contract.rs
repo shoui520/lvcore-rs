@@ -879,6 +879,11 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
     fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
     fs::write(dir.path().join("GA16HALF"), ga16_fixture(0xA121, 8)).unwrap();
     fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"0123456789"),
+    )
+    .unwrap();
+    fs::write(
         dir.path().join("FHTITLE.DIC"),
         sseddata_literal_fixture(b"alpha <zB123> zA128 zB999\x1f\x0a"),
     )
@@ -926,6 +931,19 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
             .iter()
             .any(|diagnostic| diagnostic.code == "gaiji_unresolved")
     );
+
+    let window = package
+        .resolve_target_window(
+            &hit.target,
+            Some(&lvcore::SequenceHint::TitleIndexOrder(
+                "title-index".to_owned(),
+            )),
+            0,
+            0,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.center.title.as_deref(), Some("alpha 一 〓 〓"));
 }
 
 #[test]

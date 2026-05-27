@@ -1745,7 +1745,9 @@ impl StubBookPackage {
         };
 
         let mut center = self.render_target(target, options)?;
-        center.title = Some(self.ssed_index_row_label(&rows[center_index]));
+        let center_label = self.ssed_index_row_label(&rows[center_index]);
+        center.title = Some(center_label.text);
+        center.diagnostics.extend(center_label.diagnostics);
         let before_start = center_index.saturating_sub(before);
         let after_end = rows
             .len()
@@ -1786,7 +1788,9 @@ impl StubBookPackage {
             }
         };
         let mut view = self.render_target(&target, options)?;
-        view.title = Some(self.ssed_index_row_label(row));
+        let label = self.ssed_index_row_label(row);
+        view.title = Some(label.text);
+        view.diagnostics.extend(label.diagnostics);
         Ok(Some(view))
     }
 
@@ -2233,9 +2237,11 @@ impl StubBookPackage {
         Ok(view)
     }
 
-    fn ssed_index_row_label(&self, row: &SsedIndexRow) -> String {
-        self.ssed_title_text(row.title)
-            .unwrap_or_else(|| row.key.clone())
+    fn ssed_index_row_label(&self, row: &SsedIndexRow) -> RichLabel {
+        let label = self
+            .ssed_title_text(row.title)
+            .unwrap_or_else(|| row.key.clone());
+        self.ssed_rich_label(&label)
     }
 
     fn ssed_component_for_index_pointer(&self, pointer: SsedIndexPointer) -> Option<&str> {
