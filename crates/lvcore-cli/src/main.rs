@@ -288,11 +288,7 @@ fn discover_packages(
     if path.is_dir() && is_obvious_resource_only_dir(path) {
         return Ok(());
     }
-    if is_obvious_package_candidate(path)? {
-        out.push(path.to_path_buf());
-        return Ok(());
-    }
-    if !registry.detect(path)?.is_empty() {
+    if is_obvious_package_candidate(path)? && !registry.detect(path)?.is_empty() {
         out.push(path.to_path_buf());
         return Ok(());
     }
@@ -402,4 +398,28 @@ fn directory_has_multiview_payload(path: &Path) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_ignores_resource_directories_with_non_package_idx_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path().join("Viewer.app/Contents/Resources");
+        fs::create_dir_all(&resources).unwrap();
+        fs::write(resources.join("Localizable.idx"), b"not an SSED catalog").unwrap();
+
+        let mut discovered = Vec::new();
+        discover_packages(
+            &DriverRegistry::default(),
+            dir.path(),
+            None,
+            &mut discovered,
+        )
+        .unwrap();
+
+        assert!(discovered.is_empty());
+    }
 }

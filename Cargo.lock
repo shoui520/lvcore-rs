@@ -434,6 +434,7 @@ dependencies = [
  "clap",
  "lvcore",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

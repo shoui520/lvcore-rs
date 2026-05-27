@@ -13,3 +13,6 @@ path = "src/main.rs"
 clap.workspace = true
 lvcore = { path = "../lvcore" }
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
