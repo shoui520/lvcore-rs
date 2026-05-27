@@ -1018,18 +1018,25 @@ impl StubBookPackage {
         }
 
         let mut diagnostics = Vec::new();
+        let offset = decode_offset_cursor(query.cursor.as_deref());
+        let page_limit = query.limit.saturating_add(1);
         let needle = query.query.to_lowercase();
         let mut hits = Vec::new();
+        let mut matched_count = 0usize;
         let scan_diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
             let key = row.key.to_lowercase();
-            let matched = match query.mode {
+            let row_matches = match query.mode {
                 SearchMode::Exact => key == needle,
                 SearchMode::Forward => key.starts_with(&needle),
                 SearchMode::Backward => key.ends_with(&needle),
                 SearchMode::Partial => key.contains(&needle),
                 SearchMode::FullText | SearchMode::Advanced(_) => false,
             };
-            if !matched {
+            if !row_matches {
+                return Ok(true);
+            }
+            if matched_count < offset {
+                matched_count = matched_count.saturating_add(1);
                 return Ok(true);
             }
             let target = match self.ssed_target_for_index_pointer(row.body)? {
@@ -1051,13 +1058,16 @@ impl StubBookPackage {
                 snippet_html: None,
                 diagnostics: label.diagnostics,
             });
-            Ok(hits.len() < query.limit)
+            matched_count = matched_count.saturating_add(1);
+            Ok(hits.len() < page_limit)
         })?;
         diagnostics.extend(scan_diagnostics);
+        let next_cursor = (hits.len() > query.limit).then(|| (offset + query.limit).to_string());
+        hits.truncate(query.limit);
 
         Ok(SearchPage {
             hits,
-            next_cursor: None,
+            next_cursor,
             diagnostics,
         })
     }

@@ -1043,6 +1043,58 @@ fn ssed_simple_index_search_supports_backward_matching() {
 }
 
 #[test]
+fn ssed_simple_index_search_uses_cursor_pagination() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0agamma\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("beta", 1, 4, 13, 7),
+            ("gamma", 1, 6, 13, 12),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let first = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Partial,
+            query: "a".to_owned(),
+            cursor: None,
+            limit: 2,
+        })
+        .unwrap();
+    assert_eq!(
+        first
+            .hits
+            .iter()
+            .map(|hit| hit.title_text.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "beta"]
+    );
+    assert_eq!(first.next_cursor.as_deref(), Some("2"));
+
+    let second = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Partial,
+            query: "a".to_owned(),
+            cursor: first.next_cursor,
+            limit: 2,
+        })
+        .unwrap();
+    assert_eq!(second.hits[0].title_text, "gamma");
+    assert!(second.next_cursor.is_none());
+}
+
+#[test]
 fn ssed_simple_index_search_does_not_limit_candidates_before_filtering() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
