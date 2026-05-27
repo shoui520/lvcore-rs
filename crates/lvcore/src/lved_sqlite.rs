@@ -1,10 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use encoding_rs::SHIFT_JIS;
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::search::SearchMode;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LvedKeyFile {
@@ -17,6 +20,17 @@ pub struct LvedSqliteStore {
     pub payload_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_file: Option<LvedKeyFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvedSearchHit {
+    pub list_id: i64,
+    pub content_id: i64,
+    pub anchor: Option<String>,
+    pub title_html: String,
+    pub title_text: String,
+    pub subtitle_html: String,
+    pub list_type: Option<i64>,
 }
 
 impl LvedSqliteStore {
@@ -52,6 +66,34 @@ impl LvedSqliteStore {
     pub fn title(&self) -> Result<Option<String>> {
         let connection = self.open_readonly()?;
         Ok(lved_sqlite_title_from_connection(&connection))
+    }
+
+    pub fn search(
+        &self,
+        query: &str,
+        mode: &SearchMode,
+        limit: usize,
+    ) -> Result<Vec<LvedSearchHit>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let connection = self.open_readonly()?;
+        search_lved_sqlite_connection(&connection, query, mode, limit)
+    }
+
+    pub fn content_html(&self, content_id: i64) -> Result<Option<String>> {
+        let connection = self.open_readonly()?;
+        if !sqlite_table_exists(&connection, "content")
+            || !sqlite_table_has_columns(&connection, "content", &["id", "body"])
+        {
+            return Ok(None);
+        }
+        let mut statement = connection.prepare("select body from content where id = ? limit 1")?;
+        let mut rows = statement.query([content_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
     }
 }
 
@@ -170,6 +212,231 @@ pub fn sqlite_table_names(connection: &Connection) -> Result<Vec<String>> {
         .map_err(Error::from)
 }
 
+fn search_lved_sqlite_connection(
+    connection: &Connection,
+    query: &str,
+    mode: &SearchMode,
+    limit: usize,
+) -> Result<Vec<LvedSearchHit>> {
+    if !sqlite_table_exists(connection, "search") || !sqlite_table_exists(connection, "list") {
+        return Ok(Vec::new());
+    }
+    let search_columns = sqlite_columns(connection, "search")?;
+    let list_columns = sqlite_columns(connection, "list")?;
+    if !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
+        return Ok(Vec::new());
+    }
+    let normalized = normalize_lved_query(query);
+    if normalized.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some((where_clause, parameter)) = lved_search_where(&normalized, mode, &search_columns)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let anchor_column = optional_column_expr(&list_columns, "anchor", "''");
+    let title_column = optional_column_expr(&list_columns, "title", "''");
+    let subtitle_column = if has_column(&list_columns, "titlesub") {
+        "l.titlesub"
+    } else if has_column(&list_columns, "subtext") {
+        "l.subtext"
+    } else if has_column(&list_columns, "titleplain") {
+        "l.titleplain"
+    } else {
+        "''"
+    };
+    let type_column = optional_column_expr(&list_columns, "type", "null");
+    let sql = format!(
+        "select l.id, l.refid, {anchor_column}, {title_column}, {subtitle_column}, {type_column} \
+         from search s join list l on l.id = s.rowid where {where_clause} order by l.id limit ?"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map((parameter, limit as i64), |row| {
+        let title_html = sqlite_value_to_string(row.get_ref(3)?)?;
+        Ok(LvedSearchHit {
+            list_id: row.get(0)?,
+            content_id: row.get(1)?,
+            anchor: nonempty_string(sqlite_value_to_string(row.get_ref(2)?)?),
+            title_text: html_to_text(&title_html),
+            title_html,
+            subtitle_html: sqlite_value_to_string(row.get_ref(4)?)?,
+            list_type: row.get(5)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
+fn lved_search_where(
+    normalized: &str,
+    mode: &SearchMode,
+    search_columns: &[String],
+) -> Option<(String, String)> {
+    match mode {
+        SearchMode::Exact => {
+            if has_column(search_columns, "filter") {
+                Some((
+                    "s.filter like ? escape '\\'".to_owned(),
+                    format!("%∥{}∥%", escape_sql_like(normalized)),
+                ))
+            } else if has_column(search_columns, "forward") {
+                Some(("s.forward = ?".to_owned(), normalized.to_owned()))
+            } else {
+                None
+            }
+        }
+        SearchMode::Forward => fts_match("forward", normalized, search_columns, true, false),
+        SearchMode::Backward => {
+            let reversed = normalized.chars().rev().collect::<String>();
+            fts_match("back", &reversed, search_columns, true, false)
+        }
+        SearchMode::Partial => fts_match("part", normalized, search_columns, false, true),
+        SearchMode::FullText => fts_match(
+            "fts",
+            normalized,
+            search_columns,
+            false,
+            should_split_chars(normalized),
+        ),
+        SearchMode::Advanced(column) => fts_match(
+            column,
+            normalized,
+            search_columns,
+            false,
+            should_split_chars(normalized),
+        ),
+    }
+}
+
+fn fts_match(
+    column: &str,
+    normalized: &str,
+    search_columns: &[String],
+    prefix_last: bool,
+    split_chars: bool,
+) -> Option<(String, String)> {
+    if !has_column(search_columns, column) {
+        return None;
+    }
+    let tokens = fts_tokens(normalized, split_chars);
+    let terms = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| {
+            let term = fts_term(token, prefix_last && index + 1 == tokens.len());
+            (!term.is_empty()).then(|| format!("{column}:{term}"))
+        })
+        .collect::<Vec<_>>();
+    (!terms.is_empty()).then(|| {
+        (
+            "s.rowid in (select rowid from search where search match ?)".to_owned(),
+            terms.join(" "),
+        )
+    })
+}
+
+fn normalize_lved_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn fts_tokens(query: &str, split_chars: bool) -> Vec<String> {
+    if split_chars {
+        return query
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .map(|ch| ch.to_string())
+            .collect();
+    }
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for ch in query.chars() {
+        if ch.is_alphanumeric() || matches!(ch, '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{9fff}') {
+            current.push(ch);
+        } else if !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn fts_term(term: &str, prefix: bool) -> String {
+    let cleaned = term
+        .chars()
+        .filter(|ch| !matches!(ch, '"' | '\'' | ':' | '*' | '(' | ')') && !ch.is_whitespace())
+        .collect::<String>();
+    if cleaned.is_empty() {
+        String::new()
+    } else if prefix {
+        format!("{cleaned}*")
+    } else {
+        cleaned
+    }
+}
+
+fn should_split_chars(query: &str) -> bool {
+    !query.chars().any(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn optional_column_expr<'a>(columns: &'a [String], column: &'a str, fallback: &'a str) -> &'a str {
+    if has_column(columns, column) {
+        match column {
+            "anchor" => "l.anchor",
+            "title" => "l.title",
+            "type" => "l.type",
+            _ => fallback,
+        }
+    } else {
+        fallback
+    }
+}
+
+fn nonempty_string(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
+fn escape_sql_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
+fn sqlite_value_to_string(value: ValueRef<'_>) -> rusqlite::Result<String> {
+    match value {
+        ValueRef::Null => Ok(String::new()),
+        ValueRef::Integer(value) => Ok(value.to_string()),
+        ValueRef::Real(value) => Ok(value.to_string()),
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => Ok(decode_sqlite_text(bytes)),
+    }
+}
+
+fn decode_sqlite_text(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    if let Ok(value) = std::str::from_utf8(bytes) {
+        return value.to_owned();
+    }
+    let (decoded, _encoding, had_errors) = SHIFT_JIS.decode(bytes);
+    if had_errors {
+        String::new()
+    } else {
+        decoded.into_owned()
+    }
+}
+
 fn validate_sqlite_connection(connection: &Connection) -> Result<()> {
     let _: i64 =
         connection.query_row("select count(*) from sqlite_master", [], |row| row.get(0))?;
@@ -242,21 +509,31 @@ fn sqlite_table_exists(connection: &Connection, table: &str) -> bool {
 }
 
 fn sqlite_table_has_columns(connection: &Connection, table: &str, required: &[&str]) -> bool {
+    let Ok(columns) = sqlite_columns(connection, table) else {
+        return false;
+    };
+    required.iter().all(|column| has_column(&columns, column))
+}
+
+fn sqlite_columns(connection: &Connection, table: &str) -> Result<Vec<String>> {
     let Ok(mut statement) =
         connection.prepare(&format!("pragma table_info({})", quote_identifier(table)))
     else {
-        return false;
+        return Ok(Vec::new());
     };
-    let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(1)) else {
-        return false;
-    };
-    let columns = rows
-        .filter_map(std::result::Result::ok)
-        .map(|column| column.to_lowercase())
-        .collect::<Vec<_>>();
-    required
-        .iter()
-        .all(|column| columns.iter().any(|found| found == &column.to_lowercase()))
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map(|columns| {
+            columns
+                .into_iter()
+                .map(|column| column.to_lowercase())
+                .collect()
+        })
+        .map_err(Error::from)
+}
+
+fn has_column(columns: &[String], column: &str) -> bool {
+    columns.iter().any(|found| found == &column.to_lowercase())
 }
 
 fn html_text_lines(fragment: &str) -> Vec<String> {
@@ -291,6 +568,10 @@ fn html_text_lines(fragment: &str) -> Vec<String> {
         })
         .filter(|line| !line.is_empty())
         .collect()
+}
+
+fn html_to_text(fragment: &str) -> String {
+    html_text_lines(fragment).join(" ")
 }
 
 fn normalize_title_candidate(value: &str) -> Option<String> {
@@ -473,6 +754,59 @@ mod tests {
         assert_eq!(
             store.title().unwrap().as_deref(),
             Some("Example Dictionary 第2版")
+        );
+    }
+
+    #[test]
+    fn searches_lved_list_rows_and_preserves_content_html() {
+        let dir = tempdir().unwrap();
+        let payload = dir.path().join("main.data");
+        let key = "test-key";
+        {
+            let connection = Connection::open(&payload).unwrap();
+            apply_sqlcipher_key(&connection, key).unwrap();
+            connection
+                .execute_batch(
+                    "
+                    create table info (id integer, type integer, name text primary key, body text, media text);
+                    create table content (id integer primary key, type integer, body text, media text);
+                    create table list (
+                      id integer primary key,
+                      refid integer,
+                      type integer,
+                      anchor text,
+                      title text,
+                      titlesub text
+                    );
+                    create virtual table search using fts4(
+                      forward,
+                      back,
+                      part,
+                      fts,
+                      advanced1,
+                      advanced2,
+                      filter
+                    );
+                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p></article>', '');
+                    insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
+                    insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                      values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
+                    ",
+                )
+                .unwrap();
+        }
+        fs::write(dir.path().join("main.key"), key).unwrap();
+        let store = LvedSqliteStore::discover(dir.path()).unwrap().unwrap();
+
+        let hits = store.search("alp", &SearchMode::Forward, 10).unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].content_id, 100);
+        assert_eq!(hits[0].anchor.as_deref(), Some("body-anchor"));
+        assert_eq!(hits[0].title_text, "alpha");
+        assert_eq!(
+            store.content_html(100).unwrap().as_deref(),
+            Some("<article><h1>Alpha</h1><p>body</p></article>")
         );
     }
 

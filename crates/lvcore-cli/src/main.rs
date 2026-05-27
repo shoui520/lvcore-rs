@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand};
-use lvcore::{DriverRegistry, Result};
+use clap::{Parser, Subcommand, ValueEnum};
+use lvcore::{DriverRegistry, RenderOptions, Result, SearchMode, SearchQuery, SearchScope};
 use serde_json::json;
 
 #[derive(Debug, Parser)]
@@ -28,6 +28,43 @@ enum Command {
         #[arg(long)]
         max: Option<usize>,
     },
+    /// Open one package, run native search, and optionally render the first hit.
+    Search {
+        /// Package root or payload path to inspect.
+        path: PathBuf,
+        /// Query text.
+        query: String,
+        /// Search mode to run.
+        #[arg(long, default_value = "forward")]
+        mode: CliSearchMode,
+        /// Maximum hits to return.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Resolve and render the first hit.
+        #[arg(long)]
+        render_first: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSearchMode {
+    Exact,
+    Forward,
+    Backward,
+    Partial,
+    Fulltext,
+}
+
+impl From<CliSearchMode> for SearchMode {
+    fn from(value: CliSearchMode) -> Self {
+        match value {
+            CliSearchMode::Exact => Self::Exact,
+            CliSearchMode::Forward => Self::Forward,
+            CliSearchMode::Backward => Self::Backward,
+            CliSearchMode::Partial => Self::Partial,
+            CliSearchMode::Fulltext => Self::FullText,
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -86,6 +123,42 @@ fn main() -> Result<()> {
                 rows.push(row);
             }
             println!("{}", serde_json::to_string_pretty(&rows)?);
+        }
+        Command::Search {
+            path,
+            query,
+            mode,
+            limit,
+            render_first,
+        } => {
+            let registry = DriverRegistry::default();
+            let package = registry.open_best(&path)?;
+            let metadata = package.metadata();
+            let page = package.search(&SearchQuery {
+                scope: SearchScope::CurrentBook(metadata.book_id.clone()),
+                mode: mode.into(),
+                query,
+                cursor: None,
+                limit,
+            })?;
+            let rendered_first = if render_first {
+                page.hits
+                    .first()
+                    .map(|hit| package.render_target(&hit.target, &RenderOptions::default()))
+                    .transpose()?
+            } else {
+                None
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "metadata": metadata,
+                    "hits": page.hits,
+                    "next_cursor": page.next_cursor,
+                    "diagnostics": page.diagnostics,
+                    "rendered_first": rendered_first,
+                }))?
+            );
         }
     }
     Ok(())

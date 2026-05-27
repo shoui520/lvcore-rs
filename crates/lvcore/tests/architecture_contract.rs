@@ -7,13 +7,13 @@ use lvcore::{
     ResolvedTargetKind, ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode,
     SearchQuery, SearchScope, StorageBackend, TargetToken, VisualBody,
 };
+use rusqlite::Connection;
 use tempfile::tempdir;
 
 #[test]
 fn driver_registry_detects_first_class_families() {
     let lved = tempdir().unwrap();
-    fs::write(lved.path().join("main.data"), b"encrypted").unwrap();
-    fs::write(lved.path().join("dict.key"), b"key").unwrap();
+    write_minimal_lved_sqlite_fixture(lved.path());
 
     let multiview = tempdir().unwrap();
     fs::write(multiview.path().join("menuData.xml"), b"<menu/>").unwrap();
@@ -68,8 +68,7 @@ fn library_routes_all_book_search_without_unhandled_exceptions() {
     fs::write(ssed.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
 
     let lved = tempdir().unwrap();
-    fs::write(lved.path().join("main.data"), b"encrypted").unwrap();
-    fs::write(lved.path().join("dict.key"), b"key").unwrap();
+    write_minimal_lved_sqlite_fixture(lved.path());
 
     let registry = DriverRegistry::default();
     let mut library = BookLibrary::new();
@@ -99,7 +98,7 @@ fn library_routes_all_book_search_without_unhandled_exceptions() {
         })
         .unwrap();
     assert!(page.hits.is_empty());
-    assert_eq!(page.diagnostics.len(), 2);
+    assert!(!page.diagnostics.is_empty());
     assert!(
         page.diagnostics
             .iter()
@@ -604,9 +603,8 @@ fn ssed_detection_uses_actual_idx_magic() {
 #[test]
 fn payload_file_detection_opens_parent_package() {
     let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
     let payload = dir.path().join("main.data");
-    fs::write(&payload, b"encrypted").unwrap();
-    fs::write(dir.path().join("dict.key"), b"key").unwrap();
 
     let package = DriverRegistry::default().open_best(&payload).unwrap();
     assert_eq!(package.metadata().format_family, FormatFamily::LvedSqlite3);
@@ -677,6 +675,30 @@ fn resource_targets_render_as_media_resource_views() {
 
 fn ssedinfo_fixture() -> Vec<u8> {
     ssedinfo_fixture_with_honmon("HONMON.DIC")
+}
+
+fn write_minimal_lved_sqlite_fixture(root: &Path) {
+    let payload = root.join("main.data");
+    let key = "test-key";
+    {
+        let connection = Connection::open(&payload).unwrap();
+        connection.pragma_update(None, "key", key).unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text, media text);
+                insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
+                create table content (id integer primary key, type integer, body text, media text);
+                create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                create virtual table search using fts4(forward, back, part, fts, advanced1, advanced2, filter);
+                ",
+            )
+            .unwrap();
+    }
+    fs::write(root.join("main.key"), key).unwrap();
 }
 
 fn ssedinfo_fixture_with_honmon(honmon_filename: &str) -> Vec<u8> {

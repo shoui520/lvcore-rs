@@ -26,7 +26,7 @@ pub use diagnostics::{Diagnostic, DiagnosticSeverity};
 pub use error::{Error, Result};
 pub use gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference};
 pub use library::BookLibrary;
-pub use lved_sqlite::{LvedKeyFile, LvedSqliteStore};
+pub use lved_sqlite::{LvedKeyFile, LvedSearchHit, LvedSqliteStore};
 pub use navigation::{
     HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
 };

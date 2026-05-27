@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::body::{BodyProvider, VisualBody};
+use crate::body::{BodyProvider, BodySourceKind, VisualBody};
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution};
@@ -83,6 +83,7 @@ impl PackageDriver for SsedDriver {
             detection,
             capabilities,
             Some(catalog),
+            None,
         )))
     }
 }
@@ -105,11 +106,10 @@ impl PackageDriver for LvedSqliteDriver {
             if let Some(key_file) = &store.key_file {
                 evidence.push(format!("key_file:{}", key_file.match_kind));
             }
-            let title = store
-                .title()
-                .ok()
-                .flatten()
-                .or_else(|| inferred_folder_title(package_root));
+            let title = match store.title() {
+                Ok(title) => title.or_else(|| inferred_folder_title(package_root)),
+                Err(_) => return Ok(None),
+            };
             return Ok(Some(DetectedPackage {
                 root: package_root.to_path_buf(),
                 format_family: FormatFamily::LvedSqlite3,
@@ -126,11 +126,13 @@ impl PackageDriver for LvedSqliteDriver {
             .detect(root)?
             .ok_or_else(|| Error::Driver("not an LVED_SQLITE3 package".to_owned()))?;
         let package_root = detection.root.clone();
+        let store = LvedSqliteStore::discover(root)?;
         Ok(Box::new(StubBookPackage::new(
             &package_root,
             detection,
             lved_capabilities(),
             None,
+            store,
         )))
     }
 }
@@ -177,6 +179,7 @@ impl PackageDriver for LvlMultiViewDriver {
             detection,
             multiview_capabilities(),
             None,
+            None,
         )))
     }
 }
@@ -218,6 +221,7 @@ impl PackageDriver for HoureiDriver {
             detection,
             hourei_capabilities(),
             None,
+            None,
         )))
     }
 }
@@ -227,6 +231,7 @@ pub struct StubBookPackage {
     storage: DirectoryStorage,
     metadata: BookMetadata,
     ssed_catalog: Option<SsedCatalog>,
+    lved_store: Option<LvedSqliteStore>,
 }
 
 impl StubBookPackage {
@@ -235,6 +240,7 @@ impl StubBookPackage {
         detected: DetectedPackage,
         capabilities: Vec<Capability>,
         ssed_catalog: Option<SsedCatalog>,
+        lved_store: Option<LvedSqliteStore>,
     ) -> Self {
         let format_label = detected.format_family.ui_label().to_owned();
         let book_id = BookId(format!(
@@ -258,6 +264,7 @@ impl StubBookPackage {
             storage: DirectoryStorage::new(root),
             metadata,
             ssed_catalog,
+            lved_store,
         }
     }
 }
@@ -276,6 +283,9 @@ impl SearchProvider for StubBookPackage {
     fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         if self.metadata.format_family == FormatFamily::Ssed {
             return self.search_ssed_simple_indexes(query);
+        }
+        if self.metadata.format_family == FormatFamily::LvedSqlite3 {
+            return self.search_lved_sqlite(query);
         }
         Ok(SearchPage::deferred(format!(
             "{} search provider is not implemented yet",
@@ -373,7 +383,7 @@ impl NavigationProvider for StubBookPackage {
                     target: None,
                     diagnostics: vec![Diagnostic::info(
                         "surface_deferred",
-                        "LVED_SQLITE3 list/content opening is not wired in this milestone",
+                        "LVED_SQLITE3 list browsing is deferred; search hits can resolve content rows",
                     )],
                 });
                 surfaces.push(HomeSurface {
@@ -606,6 +616,11 @@ impl BodyProvider for StubBookPackage {
                 block,
                 offset,
             } => self.visual_body_for_ssed_address(&component, block, offset),
+            InternalTarget::LvedRow {
+                table,
+                row_id,
+                anchor: _,
+            } => self.visual_body_for_lved_row(&table, row_id),
             _ => Ok(VisualBody::Unsupported {
                 reason: "body provider deferred".to_owned(),
                 diagnostics: vec![Diagnostic::info(
@@ -618,6 +633,38 @@ impl BodyProvider for StubBookPackage {
 }
 
 impl StubBookPackage {
+    fn search_lved_sqlite(&self, query: &SearchQuery) -> Result<SearchPage> {
+        let Some(store) = &self.lved_store else {
+            return Ok(SearchPage::deferred(
+                "LVED_SQLITE3 search requires an opened SQLCipher store",
+            ));
+        };
+        let hits = store.search(&query.query, &query.mode, query.limit)?;
+        let hits = hits
+            .into_iter()
+            .map(|hit| {
+                let target = TargetToken::new(&InternalTarget::LvedRow {
+                    table: "content".to_owned(),
+                    row_id: hit.content_id,
+                    anchor: hit.anchor,
+                })?;
+                Ok(SearchHit {
+                    book_id: self.metadata.book_id.clone(),
+                    target,
+                    title_html: hit.title_html,
+                    title_text: hit.title_text,
+                    snippet_html: (!hit.subtitle_html.is_empty()).then_some(hit.subtitle_html),
+                    diagnostics: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(SearchPage {
+            hits,
+            next_cursor: None,
+            diagnostics: Vec::new(),
+        })
+    }
+
     fn search_ssed_simple_indexes(&self, query: &SearchQuery) -> Result<SearchPage> {
         if query.limit == 0 {
             return Ok(SearchPage {
@@ -1126,6 +1173,40 @@ impl StubBookPackage {
         })
     }
 
+    fn visual_body_for_lved_row(&self, table: &str, row_id: i64) -> Result<VisualBody> {
+        if !table.eq_ignore_ascii_case("content") {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVED_SQLITE3 target table is not renderable yet".to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "lved_row_table_deferred",
+                    format!("LVED_SQLITE3 table {table} is not a renderable content table"),
+                )],
+            });
+        }
+        let Some(store) = &self.lved_store else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVED_SQLITE3 store is unavailable".to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "lved_store_missing",
+                    "LVED_SQLITE3 content targets require an opened SQLCipher store",
+                )],
+            });
+        };
+        let Some(html) = store.content_html(row_id)? else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVED_SQLITE3 content row was not found".to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "lved_content_missing",
+                    format!("LVED_SQLITE3 content row {row_id} was not found"),
+                )],
+            });
+        };
+        Ok(VisualBody::PreservedHtml {
+            html,
+            source: BodySourceKind::LvedSqlite,
+        })
+    }
+
     fn validate_plain_component(
         &self,
         component: &SsedComponent,
@@ -1345,15 +1426,17 @@ fn hourei_capabilities() -> Vec<Capability> {
 mod tests {
     use std::fs;
 
+    use rusqlite::Connection;
     use tempfile::tempdir;
+
+    use crate::lved_sqlite::apply_sqlcipher_key;
 
     use super::*;
 
     #[test]
     fn detects_lved_sqlite3_by_main_data_and_key() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("main.data"), b"encrypted").unwrap();
-        fs::write(dir.path().join("book.key"), b"key").unwrap();
+        write_lved_search_fixture(dir.path());
 
         let detected = LvedSqliteDriver.detect(dir.path()).unwrap().unwrap();
         assert_eq!(detected.format_family, FormatFamily::LvedSqlite3);
@@ -1388,6 +1471,43 @@ mod tests {
     }
 
     #[test]
+    fn lved_search_hits_resolve_to_preserved_content_html() {
+        let dir = tempdir().unwrap();
+        write_lved_search_fixture(dir.path());
+        let package = LvedSqliteDriver.open(dir.path()).unwrap();
+        let page = package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                mode: SearchMode::Forward,
+                query: "alp".to_owned(),
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(page.hits.len(), 1);
+        assert_eq!(page.hits[0].title_text, "alpha");
+        assert!(matches!(
+            page.hits[0].target.decode().unwrap(),
+            InternalTarget::LvedRow {
+                table,
+                row_id: 100,
+                anchor: Some(_)
+            } if table == "content"
+        ));
+
+        let view = package
+            .render_target(&page.hits[0].target, &RenderOptions::default())
+            .unwrap();
+
+        assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+        assert_eq!(
+            view.display_html.as_deref(),
+            Some("<article><h1>Alpha</h1><p>body</p></article>")
+        );
+    }
+
+    #[test]
     fn dense_honmon_body_is_not_exposed_as_numeric_text() {
         let dir = tempdir().unwrap();
         let package = StubBookPackage::new(
@@ -1411,6 +1531,7 @@ mod tests {
                 },
             }),
             None,
+            None,
         );
         let token = TargetToken::new(&InternalTarget::SsedDenseAnchor {
             anchor: "00100050".to_owned(),
@@ -1421,5 +1542,45 @@ mod tests {
         let text = serde_json::to_string(&body).unwrap();
         assert!(!text.contains("00100050"));
         assert!(matches!(body, VisualBody::Unsupported { .. }));
+    }
+
+    fn write_lved_search_fixture(root: &Path) {
+        let payload = root.join("main.data");
+        let key = "test-key";
+        {
+            let connection = Connection::open(&payload).unwrap();
+            apply_sqlcipher_key(&connection, key).unwrap();
+            connection
+                .execute_batch(
+                    "
+                    create table info (id integer, type integer, name text primary key, body text, media text);
+                    insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
+                    create table content (id integer primary key, type integer, body text, media text);
+                    create table list (
+                      id integer primary key,
+                      refid integer,
+                      type integer,
+                      anchor text,
+                      title text,
+                      titlesub text
+                    );
+                    create virtual table search using fts4(
+                      forward,
+                      back,
+                      part,
+                      fts,
+                      advanced1,
+                      advanced2,
+                      filter
+                    );
+                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p></article>', '');
+                    insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
+                    insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                      values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
+                    ",
+                )
+                .unwrap();
+        }
+        fs::write(root.join("main.key"), key).unwrap();
     }
 }
