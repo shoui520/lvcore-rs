@@ -381,14 +381,17 @@ impl NavigationProvider for StubBookPackage {
                     surfaces.push(HomeSurface {
                         surface_id: "menu".to_owned(),
                         kind: NavigationSurfaceKind::Menu,
-                        status: NavigationStatus::Available,
+                        status: NavigationStatus::Deferred,
                         title_html: "MENU".to_owned(),
                         title_text: "MENU".to_owned(),
                         target: Some(TargetToken::new(&InternalTarget::MenuItem {
                             surface_id: "menu".to_owned(),
                             item_id: "root".to_owned(),
                         })?),
-                        diagnostics: Vec::new(),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_menu_deferred",
+                            "SSED MENU.DIC exists, but MENU parsing is not implemented yet",
+                        )],
                     });
                 }
                 if self
@@ -399,14 +402,17 @@ impl NavigationProvider for StubBookPackage {
                     surfaces.push(HomeSurface {
                         surface_id: "toc".to_owned(),
                         kind: NavigationSurfaceKind::Toc,
-                        status: NavigationStatus::Available,
+                        status: NavigationStatus::Deferred,
                         title_html: "TOC".to_owned(),
                         title_text: "TOC".to_owned(),
                         target: Some(TargetToken::new(&InternalTarget::TocItem {
                             surface_id: "toc".to_owned(),
                             item_id: "root".to_owned(),
                         })?),
-                        diagnostics: Vec::new(),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_toc_deferred",
+                            "SSED TOC.DIC exists, but TOC parsing is not implemented yet",
+                        )],
                     });
                 }
                 push_surface_if_exists(
@@ -590,6 +596,34 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::Hourei && surface_id == "law-tree" {
             return self.open_hourei_law_tree_surface(surface_id);
+        }
+        if self.metadata.format_family == FormatFamily::Ssed {
+            let (code, message) = match surface_id {
+                "menu" => (
+                    "ssed_menu_deferred",
+                    "SSED MENU.DIC parsing is not implemented yet",
+                ),
+                "toc" => (
+                    "ssed_toc_deferred",
+                    "SSED TOC.DIC parsing is not implemented yet",
+                ),
+                "hanrei" => (
+                    "ssed_hanrei_deferred",
+                    "SSED HANREI content wrapping/parsing is not implemented yet",
+                ),
+                "panels" => (
+                    "ssed_panels_deferred",
+                    "SSED Panels.xml/Panel parsing is not implemented yet",
+                ),
+                _ => (
+                    "surface_open_deferred",
+                    "surface parsing is not implemented yet",
+                ),
+            };
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(code, message)],
+            });
         }
         Ok(NavigationSurface::Deferred {
             surface_id: surface_id.to_owned(),
@@ -2547,17 +2581,34 @@ fn push_surface_if_exists(
         .iter()
         .any(|candidate| storage.exists(Path::new(candidate)).unwrap_or(false))
     {
+        let (status, diagnostics) = match kind {
+            NavigationSurfaceKind::Hanrei => (
+                NavigationStatus::Deferred,
+                vec![Diagnostic::info(
+                    "ssed_hanrei_deferred",
+                    "SSED HANREI content exists, but HANREI wrapping/parsing is not implemented yet",
+                )],
+            ),
+            NavigationSurfaceKind::Panel => (
+                NavigationStatus::Deferred,
+                vec![Diagnostic::info(
+                    "ssed_panels_deferred",
+                    "SSED panel files exist, but panel parsing is not implemented yet",
+                )],
+            ),
+            _ => (NavigationStatus::Available, Vec::new()),
+        };
         surfaces.push(HomeSurface {
             surface_id: surface_id.to_owned(),
             kind,
-            status: NavigationStatus::Available,
+            status,
             title_html: title.to_owned(),
             title_text: title.to_owned(),
             target: Some(TargetToken::new(&InternalTarget::MenuItem {
                 surface_id: surface_id.to_owned(),
                 item_id: "root".to_owned(),
             })?),
-            diagnostics: Vec::new(),
+            diagnostics,
         });
     }
     Ok(())

@@ -466,12 +466,30 @@ fn ssed_home_surfaces_are_capability_based() {
 
     let surfaces = package.home_surfaces().unwrap();
     assert!(surfaces.iter().any(|surface| {
-        surface.kind == NavigationSurfaceKind::Menu && surface.status == NavigationStatus::Available
+        surface.kind == NavigationSurfaceKind::Menu
+            && surface.status == NavigationStatus::Deferred
+            && surface
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "ssed_menu_deferred")
     }));
     assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::Panel
-            && surface.status == NavigationStatus::Available
+            && surface.status == NavigationStatus::Deferred
+            && surface
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "ssed_panels_deferred")
     }));
+    let menu_surface = package.open_surface("menu").unwrap();
+    let lvcore::NavigationSurface::Deferred { diagnostics, .. } = menu_surface else {
+        panic!("SSED MENU should be explicitly deferred until parsing is implemented");
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_menu_deferred")
+    );
 }
 
 #[test]
