@@ -867,6 +867,10 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
     write_minimal_lved_sqlite_fixture(dir.path());
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert_eq!(
+        package.metadata().title.as_deref(),
+        Some("Example Dictionary")
+    );
     let surfaces = package.home_surfaces().unwrap();
     assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::LvedTree

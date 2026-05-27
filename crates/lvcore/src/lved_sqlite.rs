@@ -105,6 +105,9 @@ impl LvedSqliteStore {
     }
 
     pub fn title(&self) -> Result<Option<String>> {
+        if let Some(title) = self.tree_index_title()? {
+            return Ok(Some(title));
+        }
         let connection = self.open_readonly()?;
         Ok(lved_sqlite_title_from_connection(&connection))
     }
@@ -112,7 +115,9 @@ impl LvedSqliteStore {
     pub fn summary(&self) -> Result<LvedSqliteSummary> {
         let connection = self.open_readonly()?;
         Ok(LvedSqliteSummary {
-            title: lved_sqlite_title_from_connection(&connection),
+            title: self
+                .tree_index_title()?
+                .or_else(|| lved_sqlite_title_from_connection(&connection)),
             list_available: lved_list_available(&connection)?,
             info_available: lved_info_available(&connection)?,
             tree_available: self.tree_index_path().is_some(),
@@ -212,6 +217,18 @@ impl LvedSqliteStore {
         let root = self.payload_path.parent()?;
         let candidates = [root.join("res/tree.idx"), root.join("tree.idx")];
         candidates.into_iter().find(|path| path.is_file())
+    }
+
+    pub fn tree_index_title(&self) -> Result<Option<String>> {
+        let Some(path) = self.tree_index_path() else {
+            return Ok(None);
+        };
+        let rows = parse_lved_tree_index(&fs::read(path)?)?;
+        Ok(rows.into_iter().find_map(|row| {
+            (row.level == 0)
+                .then_some(row.label)
+                .filter(|label| usable_lved_tree_title(label))
+        }))
     }
 
     pub fn media_blob(&self, store: &str, key: &str) -> Result<Option<Vec<u8>>> {
@@ -351,6 +368,11 @@ fn parse_lved_tree_index(bytes: &[u8]) -> Result<Vec<LvedTreeIndexItem>> {
         });
     }
     Ok(items)
+}
+
+fn usable_lved_tree_title(label: &str) -> bool {
+    let value = html_to_text(label).trim().to_owned();
+    !value.is_empty() && !matches!(value.as_str(), "見出し語索引" | "索引" | "目次")
 }
 
 impl From<LvedSearchHit> for LvedListItem {
@@ -971,11 +993,11 @@ fn title_score(value: &str, source_name: &str) -> i32 {
         score += 20;
     }
     let source_name = source_name.to_lowercase();
+    if source_name.contains("about") || source_name.contains("index") {
+        score += 40;
+    }
     if source_name.contains("copyright") || source_name.contains("license") {
         score -= 20;
-    }
-    if source_name.contains("index") {
-        score -= 120;
     }
     for weak in [
         "凡例",
@@ -1154,6 +1176,18 @@ mod tests {
         assert_eq!(
             normalize_title_candidate("『広辞苑 第七版』　　&copy;2018年").as_deref(),
             Some("広辞苑 第七版")
+        );
+    }
+
+    #[test]
+    fn title_probe_prefers_index_title_over_later_bibliography_lines() {
+        let index_title = normalize_title_candidate("研究社　類義語使い分け辞典 凡例").unwrap();
+        let bibliography =
+            normalize_title_candidate("『基礎日本語辞典』　森田良行、角川書店、1991、第 3 版")
+                .unwrap();
+
+        assert!(
+            title_score(&index_title, "index.html") > title_score(&bibliography, "shuyou.html")
         );
     }
 }
