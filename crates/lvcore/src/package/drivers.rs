@@ -381,6 +381,10 @@ impl NavigationProvider for StubBookPackage {
                 }
             }
             FormatFamily::LvedSqlite3 => {
+                let info_available = self
+                    .lved_store
+                    .as_ref()
+                    .is_some_and(|store| store.info_pages(1).is_ok_and(|pages| !pages.is_empty()));
                 surfaces.push(HomeSurface {
                     surface_id: "lved-list".to_owned(),
                     kind: NavigationSurfaceKind::TitleIndexBrowse,
@@ -396,7 +400,11 @@ impl NavigationProvider for StubBookPackage {
                 surfaces.push(HomeSurface {
                     surface_id: "info".to_owned(),
                     kind: NavigationSurfaceKind::Info,
-                    status: NavigationStatus::Deferred,
+                    status: if info_available {
+                        NavigationStatus::Available
+                    } else {
+                        NavigationStatus::Missing
+                    },
                     title_html: "Info".to_owned(),
                     title_text: "Info".to_owned(),
                     target: None,
@@ -447,6 +455,9 @@ impl NavigationProvider for StubBookPackage {
     fn open_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "title-index" {
             return self.open_ssed_title_index_surface(surface_id, 100);
+        }
+        if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "info" {
+            return self.open_lved_info_surface(surface_id, 100);
         }
         Ok(NavigationSurface::Deferred {
             surface_id: surface_id.to_owned(),
@@ -791,6 +802,47 @@ impl StubBookPackage {
             surface_id: surface_id.to_owned(),
             items,
             next_cursor: None,
+        })
+    }
+
+    fn open_lved_info_surface(&self, surface_id: &str, limit: usize) -> Result<NavigationSurface> {
+        let Some(store) = &self.lved_store else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "lved_store_missing",
+                    "LVED_SQLITE3 info surface requires an opened SQLCipher store",
+                )],
+            });
+        };
+        let pages = store.info_pages(limit)?;
+        if pages.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "surface_missing",
+                    "LVED_SQLITE3 info table did not expose renderable pages",
+                )],
+            });
+        }
+        let items = pages
+            .into_iter()
+            .map(|page| {
+                Ok(NavigationItem {
+                    item_id: page.name,
+                    label_html: page.title_html,
+                    label_text: page.title_text,
+                    target: TargetToken::new(&InternalTarget::LvedRow {
+                        table: "info".to_owned(),
+                        row_id: page.id,
+                        anchor: None,
+                    })?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(NavigationSurface::InfoPages {
+            surface_id: surface_id.to_owned(),
+            pages: items,
         })
     }
 
@@ -1147,6 +1199,7 @@ impl StubBookPackage {
     ) -> Result<ResolvedTargetView> {
         match body {
             VisualBody::PreservedHtml { html, source } => {
+                let view_kind = self.resolved_kind_for_body_target(&target)?;
                 let normalized = if source == BodySourceKind::LvedSqlite {
                     self.normalize_lved_html_refs(&html)?
                 } else {
@@ -1158,7 +1211,7 @@ impl StubBookPackage {
                     }
                 };
                 Ok(ResolvedTargetView {
-                    kind: crate::render::ResolvedTargetKind::EntryBody,
+                    kind: view_kind,
                     target,
                     title: Some("Entry".to_owned()),
                     display_html: Some(normalized.html),
@@ -1232,6 +1285,15 @@ impl StubBookPackage {
         }
     }
 
+    fn resolved_kind_for_body_target(&self, target: &TargetToken) -> Result<ResolvedTargetKind> {
+        match target.decode()? {
+            InternalTarget::LvedRow { table, .. } if table.eq_ignore_ascii_case("info") => {
+                Ok(ResolvedTargetKind::InfoPage)
+            }
+            _ => Ok(ResolvedTargetKind::EntryBody),
+        }
+    }
+
     fn visual_body_for_ssed_address(
         &self,
         requested_component: &str,
@@ -1285,6 +1347,9 @@ impl StubBookPackage {
     }
 
     fn visual_body_for_lved_row(&self, table: &str, row_id: i64) -> Result<VisualBody> {
+        if table.eq_ignore_ascii_case("info") {
+            return self.visual_body_for_lved_info_row(row_id);
+        }
         if !table.eq_ignore_ascii_case("content") {
             return Ok(VisualBody::Unsupported {
                 reason: "LVED_SQLITE3 target table is not renderable yet".to_owned(),
@@ -1309,6 +1374,31 @@ impl StubBookPackage {
                 diagnostics: vec![Diagnostic::warning(
                     "lved_content_missing",
                     format!("LVED_SQLITE3 content row {row_id} was not found"),
+                )],
+            });
+        };
+        Ok(VisualBody::PreservedHtml {
+            html,
+            source: BodySourceKind::LvedSqlite,
+        })
+    }
+
+    fn visual_body_for_lved_info_row(&self, row_id: i64) -> Result<VisualBody> {
+        let Some(store) = &self.lved_store else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVED_SQLITE3 store is unavailable".to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "lved_store_missing",
+                    "LVED_SQLITE3 info targets require an opened SQLCipher store",
+                )],
+            });
+        };
+        let Some(html) = store.info_html(row_id)? else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVED_SQLITE3 info row was not found".to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "lved_info_missing",
+                    format!("LVED_SQLITE3 info row {row_id} was not found"),
                 )],
             });
         };
@@ -1725,6 +1815,24 @@ mod tests {
         let dir = tempdir().unwrap();
         write_lved_search_fixture(dir.path());
         let package = LvedSqliteDriver.open(dir.path()).unwrap();
+        let surfaces = package.home_surfaces().unwrap();
+        assert!(surfaces.iter().any(|surface| {
+            surface.kind == NavigationSurfaceKind::Info
+                && surface.status == NavigationStatus::Available
+        }));
+        let info_surface = package.open_surface("info").unwrap();
+        let info_target = match info_surface {
+            NavigationSurface::InfoPages { pages, .. } => pages[0].target.clone(),
+            _ => panic!("expected LVED info pages surface"),
+        };
+        let info_view = package
+            .render_target(&info_target, &RenderOptions::default())
+            .unwrap();
+        assert_eq!(info_view.kind, ResolvedTargetKind::InfoPage);
+        assert_eq!(
+            info_view.display_html.as_deref(),
+            Some("<h1>Example Dictionary 第2版</h1>")
+        );
         let page = package
             .search(&SearchQuery {
                 scope: crate::search::SearchScope::CurrentBook(package.metadata().book_id.clone()),

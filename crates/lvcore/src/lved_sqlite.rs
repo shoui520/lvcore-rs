@@ -40,6 +40,14 @@ pub struct LvedListWindow {
     pub after: Vec<LvedSearchHit>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvedInfoPage {
+    pub id: i64,
+    pub name: String,
+    pub title_html: String,
+    pub title_text: String,
+}
+
 impl LvedSqliteStore {
     pub fn discover(root: &Path) -> Result<Option<Self>> {
         let Some(payload_path) = lved_payload_path(root)? else {
@@ -101,6 +109,49 @@ impl LvedSqliteStore {
             return Ok(None);
         };
         Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
+    }
+
+    pub fn info_html(&self, row_id: i64) -> Result<Option<String>> {
+        let connection = self.open_readonly()?;
+        if !sqlite_table_exists(&connection, "info")
+            || !sqlite_table_has_columns(&connection, "info", &["id", "body"])
+        {
+            return Ok(None);
+        }
+        let mut statement = connection.prepare("select body from info where id = ? limit 1")?;
+        let mut rows = statement.query([row_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
+    }
+
+    pub fn info_pages(&self, limit: usize) -> Result<Vec<LvedInfoPage>> {
+        let connection = self.open_readonly()?;
+        if limit == 0
+            || !sqlite_table_exists(&connection, "info")
+            || !sqlite_table_has_columns(&connection, "info", &["id", "name", "body"])
+        {
+            return Ok(Vec::new());
+        }
+        let mut statement =
+            connection.prepare("select id, name, body from info order by id limit ?")?;
+        let rows = statement.query_map([limit as i64], |row| {
+            let name = sqlite_value_to_string(row.get_ref(1)?)?;
+            let body = sqlite_value_to_string(row.get_ref(2)?)?;
+            let title_text = html_text_lines(&body)
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| name.clone());
+            Ok(LvedInfoPage {
+                id: row.get(0)?,
+                name: name.clone(),
+                title_html: title_text.clone(),
+                title_text,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::from)
     }
 
     pub fn media_blob(&self, store: &str, key: &str) -> Result<Option<Vec<u8>>> {
@@ -925,6 +976,7 @@ mod tests {
                       advanced2,
                       filter
                     );
+                    insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
                     insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p></article>', '');
                     insert into content values (101, 1, '<article><h1>Beta</h1></article>', '');
                     insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
@@ -950,6 +1002,14 @@ mod tests {
         assert_eq!(
             store.content_html(100).unwrap().as_deref(),
             Some("<article><h1>Alpha</h1><p>body</p></article>")
+        );
+        assert_eq!(
+            store.info_html(1).unwrap().as_deref(),
+            Some("<h1>Example Dictionary 第2版</h1>")
+        );
+        assert_eq!(
+            store.info_pages(10).unwrap()[0].title_text,
+            "Example Dictionary 第2版"
         );
         assert_eq!(
             store.media_blob("lved.mediasub", "00010033.mp3").unwrap(),
