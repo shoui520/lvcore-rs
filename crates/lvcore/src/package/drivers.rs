@@ -585,8 +585,17 @@ impl NavigationProvider for StubBookPackage {
     }
 
     fn open_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        self.open_surface_page(surface_id, None, 100)
+    }
+
+    fn open_surface_page(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "title-index" {
-            return self.open_ssed_title_index_surface(surface_id, 100);
+            return self.open_ssed_title_index_surface(surface_id, cursor, limit);
         }
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "menu" {
             return self.open_ssed_menu_surface(surface_id, SsedComponentRole::Menu, "MENU.DIC");
@@ -600,10 +609,10 @@ impl NavigationProvider for StubBookPackage {
             return self.open_ssed_panel_surface(surface_id);
         }
         if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "lved-list" {
-            return self.open_lved_list_surface(surface_id, 100);
+            return self.open_lved_list_surface(surface_id, cursor, limit);
         }
         if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "info" {
-            return self.open_lved_info_surface(surface_id, 100);
+            return self.open_lved_info_surface(surface_id, cursor, limit);
         }
         if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "lved-tree" {
             return self.open_lved_tree_surface(surface_id);
@@ -1116,9 +1125,21 @@ impl StubBookPackage {
     fn open_ssed_title_index_surface(
         &self,
         surface_id: &str,
+        cursor: Option<&str>,
         limit: usize,
     ) -> Result<NavigationSurface> {
-        let (rows, mut diagnostics) = self.ssed_simple_index_rows(limit)?;
+        if limit == 0 {
+            return Ok(NavigationSurface::TitleIndexBrowse {
+                surface_id: surface_id.to_owned(),
+                items: Vec::new(),
+                next_cursor: None,
+            });
+        }
+        let offset = decode_offset_cursor(cursor);
+        let (mut rows, mut diagnostics) =
+            self.ssed_simple_index_rows_page(offset, limit.saturating_add(1))?;
+        let next_cursor = (rows.len() > limit).then(|| (offset + limit).to_string());
+        rows.truncate(limit);
         if rows.is_empty() && !diagnostics.is_empty() {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -1126,7 +1147,7 @@ impl StubBookPackage {
             });
         }
         let mut items = Vec::new();
-        for (index, row) in rows.into_iter().enumerate().take(limit) {
+        for (index, row) in rows.into_iter().enumerate() {
             let label = self
                 .ssed_title_text(row.title)
                 .unwrap_or_else(|| row.key.clone());
@@ -1139,7 +1160,7 @@ impl StubBookPackage {
                 }
             };
             items.push(NavigationItem {
-                item_id: format!("{}:{}", row.component, index),
+                item_id: format!("{}:{}", row.component, offset + index),
                 label_html: label.html,
                 label_text: label.text,
                 target,
@@ -1149,7 +1170,7 @@ impl StubBookPackage {
         Ok(NavigationSurface::TitleIndexBrowse {
             surface_id: surface_id.to_owned(),
             items,
-            next_cursor: None,
+            next_cursor,
         })
     }
 
@@ -1337,7 +1358,12 @@ impl StubBookPackage {
         })
     }
 
-    fn open_lved_list_surface(&self, surface_id: &str, limit: usize) -> Result<NavigationSurface> {
+    fn open_lved_list_surface(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
         let Some(store) = &self.lved_store else {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -1347,7 +1373,17 @@ impl StubBookPackage {
                 )],
             });
         };
-        let rows = store.list_items(limit)?;
+        if limit == 0 {
+            return Ok(NavigationSurface::TitleIndexBrowse {
+                surface_id: surface_id.to_owned(),
+                items: Vec::new(),
+                next_cursor: None,
+            });
+        }
+        let offset = decode_offset_cursor(cursor);
+        let mut rows = store.list_items_page(offset, limit.saturating_add(1))?;
+        let next_cursor = (rows.len() > limit).then(|| (offset + limit).to_string());
+        rows.truncate(limit);
         if rows.is_empty() {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -1385,11 +1421,16 @@ impl StubBookPackage {
         Ok(NavigationSurface::TitleIndexBrowse {
             surface_id: surface_id.to_owned(),
             items,
-            next_cursor: None,
+            next_cursor,
         })
     }
 
-    fn open_lved_info_surface(&self, surface_id: &str, limit: usize) -> Result<NavigationSurface> {
+    fn open_lved_info_surface(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
         let Some(store) = &self.lved_store else {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -1399,7 +1440,17 @@ impl StubBookPackage {
                 )],
             });
         };
-        let pages = store.info_pages(limit)?;
+        if limit == 0 {
+            return Ok(NavigationSurface::InfoPages {
+                surface_id: surface_id.to_owned(),
+                pages: Vec::new(),
+                next_cursor: None,
+            });
+        }
+        let offset = decode_offset_cursor(cursor);
+        let mut pages = store.info_pages_page(offset, limit.saturating_add(1))?;
+        let next_cursor = (pages.len() > limit).then(|| (offset + limit).to_string());
+        pages.truncate(limit);
         if pages.is_empty() {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -1428,6 +1479,7 @@ impl StubBookPackage {
         Ok(NavigationSurface::InfoPages {
             surface_id: surface_id.to_owned(),
             pages: items,
+            next_cursor,
         })
     }
 
@@ -1521,10 +1573,21 @@ impl StubBookPackage {
         })
     }
 
-    fn ssed_simple_index_rows(&self, limit: usize) -> Result<(Vec<SsedIndexRow>, Vec<Diagnostic>)> {
+    fn ssed_simple_index_rows_page(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<SsedIndexRow>, Vec<Diagnostic>)> {
+        if limit == 0 {
+            return Ok((Vec::new(), Vec::new()));
+        }
         let mut rows = Vec::new();
-        let diagnostics = self.scan_ssed_simple_index_rows(Some(limit), |row| {
-            rows.push(row);
+        let mut seen = 0usize;
+        let diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
+            if seen >= offset {
+                rows.push(row);
+            }
+            seen = seen.saturating_add(1);
             Ok(rows.len() < limit)
         })?;
         Ok((rows, diagnostics))
@@ -3592,6 +3655,12 @@ fn escape_plain_label_html(value: &str) -> String {
         }
     }
     escaped
+}
+
+fn decode_offset_cursor(cursor: Option<&str>) -> usize {
+    cursor
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

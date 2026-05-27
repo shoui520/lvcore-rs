@@ -68,6 +68,17 @@ impl BookLibrary {
         self.required_book(book_id)?.open_surface(surface_id)
     }
 
+    pub fn open_surface_page(
+        &self,
+        book_id: &BookId,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
+        self.required_book(book_id)?
+            .open_surface_page(surface_id, cursor, limit)
+    }
+
     pub fn render_target(
         &self,
         book_id: &BookId,

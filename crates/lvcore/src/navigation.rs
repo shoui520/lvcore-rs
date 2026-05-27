@@ -65,6 +65,8 @@ pub enum NavigationSurface {
     InfoPages {
         surface_id: String,
         pages: Vec<NavigationItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_cursor: Option<String>,
     },
     FallbackSearch {
         surface_id: String,
@@ -114,4 +116,14 @@ pub struct PanelCell {
 pub trait NavigationProvider: Send + Sync {
     fn home_surfaces(&self) -> Result<Vec<HomeSurface>>;
     fn open_surface(&self, surface_id: &str) -> Result<NavigationSurface>;
+    fn open_surface_page(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
+        let _ = cursor;
+        let _ = limit;
+        self.open_surface(surface_id)
+    }
 }

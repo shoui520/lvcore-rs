@@ -183,6 +183,10 @@ impl LvedSqliteStore {
     }
 
     pub fn info_pages(&self, limit: usize) -> Result<Vec<LvedInfoPage>> {
+        self.info_pages_page(0, limit)
+    }
+
+    pub fn info_pages_page(&self, offset: usize, limit: usize) -> Result<Vec<LvedInfoPage>> {
         let connection = self.open_readonly()?;
         if limit == 0
             || !sqlite_table_exists(&connection, "info")
@@ -191,8 +195,8 @@ impl LvedSqliteStore {
             return Ok(Vec::new());
         }
         let mut statement =
-            connection.prepare("select id, name, body from info order by id limit ?")?;
-        let rows = statement.query_map([limit as i64], |row| {
+            connection.prepare("select id, name, body from info order by id limit ? offset ?")?;
+        let rows = statement.query_map((limit as i64, offset as i64), |row| {
             let name = sqlite_value_to_string(row.get_ref(1)?)?;
             let body = sqlite_value_to_string(row.get_ref(2)?)?;
             let title_text = html_text_lines(&body)
@@ -211,13 +215,24 @@ impl LvedSqliteStore {
     }
 
     pub fn list_items(&self, limit: usize) -> Result<Vec<LvedListItem>> {
+        self.list_items_page(0, limit)
+    }
+
+    pub fn list_items_page(&self, offset: usize, limit: usize) -> Result<Vec<LvedListItem>> {
         let connection = self.open_readonly()?;
         let list_columns = sqlite_columns(&connection, "list")?;
         if limit == 0 || !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
             return Ok(Vec::new());
         }
-        let rows =
-            lved_list_hits_by_id_clause(&connection, &list_columns, "1 = ?", "l.id", 1, limit)?;
+        let rows = lved_list_hits_by_id_clause_offset(
+            &connection,
+            &list_columns,
+            "1 = ?",
+            "l.id",
+            1,
+            limit,
+            offset,
+        )?;
         Ok(rows.into_iter().map(LvedListItem::from).collect())
     }
 
@@ -572,6 +587,26 @@ fn lved_list_hits_by_id_clause(
     id: i64,
     limit: usize,
 ) -> Result<Vec<LvedSearchHit>> {
+    lved_list_hits_by_id_clause_offset(
+        connection,
+        list_columns,
+        where_clause,
+        order_clause,
+        id,
+        limit,
+        0,
+    )
+}
+
+fn lved_list_hits_by_id_clause_offset(
+    connection: &Connection,
+    list_columns: &[String],
+    where_clause: &str,
+    order_clause: &str,
+    id: i64,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<LvedSearchHit>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -589,10 +624,10 @@ fn lved_list_hits_by_id_clause(
     let type_column = optional_column_expr(list_columns, "type", "null");
     let sql = format!(
         "select l.id, l.refid, {anchor_column}, {title_column}, {subtitle_column}, {type_column} \
-         from list l where {where_clause} order by {order_clause} limit ?"
+         from list l where {where_clause} order by {order_clause} limit ? offset ?"
     );
     let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map((id, limit as i64), lved_search_hit_from_row)?;
+    let rows = statement.query_map((id, limit as i64, offset as i64), lved_search_hit_from_row)?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::from)
 }

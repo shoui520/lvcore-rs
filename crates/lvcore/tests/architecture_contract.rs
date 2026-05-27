@@ -3,7 +3,7 @@ use std::path::Path;
 
 use lvcore::{
     BodySourceKind, BookLibrary, Capability, DriverRegistry, FormatFamily, GaijiPolicy,
-    GaijiSourcePreference, InternalResource, InternalTarget, NavigationStatus,
+    GaijiSourcePreference, InternalResource, InternalTarget, NavigationStatus, NavigationSurface,
     NavigationSurfaceKind, RenderMode, RenderOptions, RendererInput, ResolvedTargetKind,
     ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode, SearchQuery,
     SearchScope, StorageBackend, TargetToken, VisualBody,
@@ -840,6 +840,55 @@ fn ssed_simple_title_index_surface_resolves_entry_targets() {
 }
 
 #[test]
+fn title_index_surfaces_are_cursor_paged_by_backend() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0agamma\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("beta", 1, 4, 13, 7),
+            ("gamma", 1, 6, 13, 12),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let first = package.open_surface_page("title-index", None, 2).unwrap();
+    let NavigationSurface::TitleIndexBrowse {
+        items, next_cursor, ..
+    } = first
+    else {
+        panic!("expected paged SSED title/index browse");
+    };
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "beta"]
+    );
+    assert_eq!(next_cursor.as_deref(), Some("2"));
+
+    let second = package
+        .open_surface_page("title-index", next_cursor.as_deref(), 2)
+        .unwrap();
+    let NavigationSurface::TitleIndexBrowse {
+        items, next_cursor, ..
+    } = second
+    else {
+        panic!("expected second SSED title/index page");
+    };
+    assert_eq!(items[0].label_text, "gamma");
+    assert!(next_cursor.is_none());
+}
+
+#[test]
 fn ssed_simple_index_search_returns_title_backed_hits() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -1259,6 +1308,35 @@ fn payload_file_detection_opens_parent_package() {
 }
 
 #[test]
+fn lved_list_surface_is_cursor_paged_by_backend() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let first = package.open_surface_page("lved-list", None, 1).unwrap();
+    let NavigationSurface::TitleIndexBrowse {
+        items, next_cursor, ..
+    } = first
+    else {
+        panic!("expected paged LVED list surface");
+    };
+    assert_eq!(items[0].label_text, "alpha");
+    assert_eq!(next_cursor.as_deref(), Some("1"));
+
+    let second = package
+        .open_surface_page("lved-list", next_cursor.as_deref(), 1)
+        .unwrap();
+    let NavigationSurface::TitleIndexBrowse {
+        items, next_cursor, ..
+    } = second
+    else {
+        panic!("expected second LVED list page");
+    };
+    assert_eq!(items[0].label_text, "beta");
+    assert!(next_cursor.is_none());
+}
+
+#[test]
 fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());
@@ -1404,6 +1482,7 @@ fn write_minimal_lved_sqlite_fixture(root: &Path) {
                 insert into content values (105, 1, '<article><h1>Beta</h1><p>Tree body</p></article>', '');
                 create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
                 insert into list values (1, 100, 1, '', '<b>alpha</b>', '');
+                insert into list values (2, 105, 1, '', '<b>beta</b>', '');
                 create virtual table search using fts4(forward, back, part, fts, advanced1, advanced2, filter);
                 ",
             )
