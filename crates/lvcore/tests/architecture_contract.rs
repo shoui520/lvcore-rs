@@ -63,6 +63,53 @@ fn multiview_container_wins_over_retained_ssed_facade() {
 }
 
 #[test]
+fn multiview_menu_data_opens_as_hierarchical_tree() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+        <list>
+          <item label="模範六法" href="">
+            <item label="憲法編" href="">
+              <item genre="A1" index="" label="日本国憲法" href="A010">
+                <item label="前文部" href="A010_ZEN" anchor="top"></item>
+              </item>
+            </item>
+          </item>
+        </list>"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("blvdat"), b"payload").unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surface = package.open_surface("menuData").unwrap();
+    let lvcore::NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+        panic!("menuData should open as a MultiView tree");
+    };
+
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "模範六法");
+    assert!(nodes[0].target.is_none());
+    let law = &nodes[0].children[0].children[0];
+    assert_eq!(law.label_text, "日本国憲法");
+    assert_eq!(
+        law.target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::MultiviewHref {
+            href: "A010".to_owned(),
+            anchor: None,
+        }
+    );
+    let preface = &law.children[0];
+    assert_eq!(
+        preface.target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::MultiviewHref {
+            href: "A010_ZEN".to_owned(),
+            anchor: Some("top".to_owned()),
+        }
+    );
+}
+
+#[test]
 fn library_routes_all_book_search_without_unhandled_exceptions() {
     let ssed = tempdir().unwrap();
     fs::write(ssed.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

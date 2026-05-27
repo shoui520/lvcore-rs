@@ -10,9 +10,10 @@ use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{GaijiPolicy, GaijiProvider, GaijiResolution};
 use crate::lved_sqlite::LvedSqliteStore;
+use crate::multiview::{MultiviewMenuItem, parse_menu_data};
 use crate::navigation::{
-    HomeSurface, NavigationItem, NavigationProvider, NavigationStatus, NavigationSurface,
-    NavigationSurfaceKind,
+    HomeSurface, NavigationItem, NavigationNode, NavigationProvider, NavigationStatus,
+    NavigationSurface, NavigationSurfaceKind,
 };
 use crate::render::{RenderOptions, RendererProvider, ResolvedTargetKind, ResolvedTargetView};
 use crate::resources::{
@@ -432,6 +433,7 @@ impl NavigationProvider for StubBookPackage {
                     title_text: "MultiView menu".to_owned(),
                     target: Some(TargetToken::new(&InternalTarget::MultiviewHref {
                         href: "menuData.xml".to_owned(),
+                        anchor: None,
                     })?),
                     diagnostics: Vec::new(),
                 });
@@ -473,6 +475,9 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "info" {
             return self.open_lved_info_surface(surface_id, 100);
+        }
+        if self.metadata.format_family == FormatFamily::LvlMultiView && surface_id == "menuData" {
+            return self.open_multiview_menu_surface(surface_id);
         }
         Ok(NavigationSurface::Deferred {
             surface_id: surface_id.to_owned(),
@@ -905,6 +910,22 @@ impl StubBookPackage {
         Ok(NavigationSurface::InfoPages {
             surface_id: surface_id.to_owned(),
             pages: items,
+        })
+    }
+
+    fn open_multiview_menu_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        let bytes = self.storage.read(Path::new("menuData.xml"))?;
+        let xml = String::from_utf8(bytes)
+            .map_err(|error| Error::Driver(format!("menuData.xml is not valid UTF-8: {error}")))?;
+        let items = parse_menu_data(&xml)?;
+        let nodes = items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| multiview_menu_item_to_node(item, &index.to_string()))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(NavigationSurface::HierarchicalTree {
+            surface_id: surface_id.to_owned(),
+            nodes,
         })
     }
 
@@ -1635,6 +1656,47 @@ fn lved_list_label_html(title_html: &str, subtitle_html: &str) -> String {
     } else {
         format!(r#"{title_html}<span class="lvcore-subtitle"> {subtitle_html}</span>"#)
     }
+}
+
+fn multiview_menu_item_to_node(item: &MultiviewMenuItem, node_id: &str) -> Result<NavigationNode> {
+    let target = item
+        .href
+        .as_ref()
+        .map(|href| {
+            TargetToken::new(&InternalTarget::MultiviewHref {
+                href: href.clone(),
+                anchor: item.anchor.clone(),
+            })
+        })
+        .transpose()?;
+    let children = item
+        .children
+        .iter()
+        .enumerate()
+        .map(|(index, child)| multiview_menu_item_to_node(child, &format!("{node_id}.{index}")))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(NavigationNode {
+        node_id: node_id.to_owned(),
+        label_html: escape_plain_label_html(&item.label),
+        label_text: item.label.clone(),
+        target,
+        children,
+    })
+}
+
+fn escape_plain_label_html(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn html_label_text(fragment: &str) -> String {

@@ -50,6 +50,8 @@ pub enum InternalTarget {
     },
     MultiviewHref {
         href: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
     },
     MenuItem {
         surface_id: String,

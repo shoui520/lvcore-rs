@@ -10,6 +10,7 @@ pub mod error;
 pub mod gaiji;
 pub mod library;
 pub mod lved_sqlite;
+pub mod multiview;
 pub mod navigation;
 pub mod package;
 pub mod render;
