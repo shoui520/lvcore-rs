@@ -1096,6 +1096,7 @@ fn empty_ssed_menu_is_not_exposed_as_targetable_home_surface() {
     .unwrap();
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(!package.metadata().capabilities.contains(&Capability::Menu));
     let surfaces = package.home_surfaces().unwrap();
     let menu_surface = surfaces
         .iter()

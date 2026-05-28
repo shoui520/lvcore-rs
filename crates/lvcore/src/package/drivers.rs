@@ -6982,10 +6982,20 @@ fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
     if catalog.has_role(SsedComponentRole::Title) || catalog.has_role(SsedComponentRole::Index) {
         capabilities.push(Capability::TitleIndexBrowse);
     }
-    if catalog.has_role(SsedComponentRole::Menu) {
+    if ssed_navigation_component_has_non_empty_surface(
+        catalog,
+        &storage,
+        SsedComponentRole::Menu,
+        "MENU.DIC",
+    ) {
         capabilities.push(Capability::Menu);
     }
-    if catalog.has_role(SsedComponentRole::Toc) {
+    if ssed_navigation_component_has_non_empty_surface(
+        catalog,
+        &storage,
+        SsedComponentRole::Toc,
+        "TOC.DIC",
+    ) {
         capabilities.push(Capability::Toc);
     }
     if has_ssed_hanrei_casefolded(&storage) {
@@ -7000,6 +7010,47 @@ fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
         capabilities.push(Capability::Gaiji);
     }
     capabilities
+}
+
+fn ssed_navigation_component_has_non_empty_surface(
+    catalog: &SsedCatalog,
+    storage: &DirectoryStorage,
+    role: SsedComponentRole,
+    fallback_name: &str,
+) -> bool {
+    let Some(component) = catalog
+        .components_by_role(role)
+        .find(|component| component.has_positive_range())
+        .or_else(|| catalog.component_named(fallback_name))
+    else {
+        return false;
+    };
+
+    let mut candidates = Vec::new();
+    if let Ok(Some(path)) = storage.resolve_casefolded(Path::new(&component.filename)) {
+        candidates.push(path);
+    }
+    for alias in ssed_component_filename_aliases(component) {
+        if let Ok(Some(path)) = storage.resolve_casefolded(Path::new(&alias)) {
+            candidates.push(path);
+        }
+    }
+
+    for path in candidates {
+        let Ok(mut reader) = SsedDataFile::open(&path) else {
+            continue;
+        };
+        if reader.header().expanded_size() > BLOCK_SIZE as usize {
+            return true;
+        }
+        let Ok(data) = reader.read_range(0, reader.header().expanded_size()) else {
+            continue;
+        };
+        let parsed = parse_menu_stream(&data);
+        return !(parsed.records.is_empty() && parsed.empty_sentinel);
+    }
+
+    true
 }
 
 fn has_any_casefolded(storage: &DirectoryStorage, candidates: &[&str]) -> bool {
