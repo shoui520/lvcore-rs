@@ -308,6 +308,24 @@ fn multiview_law_list_targets_resolve_to_navigation_and_law_bodies() {
             .iter()
             .all(|diagnostic| diagnostic.code != "sequence_deferred")
     );
+
+    let body_order_window = package
+        .resolve_target_window(
+            &items[0].target,
+            Some(&lvcore::SequenceHint::BodyOrder),
+            1,
+            0,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(body_order_window.center.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(body_order_window.before.len(), 1);
+    assert!(
+        body_order_window
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
 }
 
 #[test]
@@ -420,6 +438,23 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
             .as_deref()
             .unwrap()
             .contains("商法本文")
+    );
+
+    let body_order = package
+        .resolve_target_window(
+            &page.hits[0].target,
+            Some(&lvcore::SequenceHint::BodyOrder),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(body_order.after.len(), 1);
+    assert!(
+        body_order
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
     );
 }
 
@@ -2034,6 +2069,25 @@ fn ssed_title_index_sequence_returns_before_and_after_views() {
             .iter()
             .any(|diagnostic| diagnostic.code == "sequence_deferred")
     );
+
+    let body_order = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::BodyOrder),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(body_order.center.title.as_deref(), Some("beta"));
+    assert_eq!(body_order.before[0].title.as_deref(), Some("alpha"));
+    assert_eq!(body_order.after[0].title.as_deref(), Some("gamma"));
+    assert!(
+        body_order
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
 }
 
 #[test]
@@ -2283,6 +2337,25 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
     assert_eq!(window.center.title.as_deref(), Some("Alpha"));
     assert_eq!(window.after.len(), 1);
     assert_eq!(window.after[0].title.as_deref(), Some("Beta"));
+
+    let body_order = package
+        .resolve_target_window(
+            alpha.target.as_ref().unwrap(),
+            Some(&lvcore::SequenceHint::BodyOrder),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(body_order.center.title.as_deref(), Some("alpha"));
+    assert_eq!(body_order.after.len(), 1);
+    assert_eq!(body_order.after[0].title.as_deref(), Some("beta"));
+    assert!(
+        body_order
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
 
     let info_surface = package.open_surface("info").unwrap();
     let NavigationSurface::InfoPages { pages, .. } = info_surface else {

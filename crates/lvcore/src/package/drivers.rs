@@ -1083,7 +1083,12 @@ impl SequenceProvider for StubBookPackage {
         options: &RenderOptions,
     ) -> Result<TargetWindow> {
         if self.metadata.format_family == FormatFamily::Ssed
-            && sequence_hint.is_none_or(|hint| matches!(hint, SequenceHint::TitleIndexOrder(_)))
+            && sequence_hint.is_none_or(|hint| {
+                matches!(
+                    hint,
+                    SequenceHint::TitleIndexOrder(_) | SequenceHint::BodyOrder
+                )
+            })
             && let Some(window) =
                 self.resolve_ssed_title_index_window(target, before, after, options)?
         {
@@ -1110,20 +1115,32 @@ impl SequenceProvider for StubBookPackage {
             return Ok(window);
         }
         if self.metadata.format_family == FormatFamily::LvedSqlite3
-            && sequence_hint.is_none_or(|hint| matches!(hint, SequenceHint::LvedListOrder))
+            && sequence_hint.is_none_or(|hint| {
+                matches!(hint, SequenceHint::LvedListOrder | SequenceHint::BodyOrder)
+            })
             && let Some(window) = self.resolve_lved_list_window(target, before, after, options)?
         {
             return Ok(window);
         }
         if self.metadata.format_family == FormatFamily::LvlMultiView
-            && sequence_hint.is_none_or(|hint| matches!(hint, SequenceHint::MultiviewTreeOrder))
+            && sequence_hint.is_none_or(|hint| {
+                matches!(
+                    hint,
+                    SequenceHint::MultiviewTreeOrder | SequenceHint::BodyOrder
+                )
+            })
             && let Some(window) =
                 self.resolve_multiview_menu_window(target, before, after, options)?
         {
             return Ok(window);
         }
         if self.metadata.format_family == FormatFamily::Hourei
-            && sequence_hint.is_none_or(|hint| matches!(hint, SequenceHint::HoureiLawArticleOrder))
+            && sequence_hint.is_none_or(|hint| {
+                matches!(
+                    hint,
+                    SequenceHint::HoureiLawArticleOrder | SequenceHint::BodyOrder
+                )
+            })
             && let Some(window) = self.resolve_hourei_law_window(target, before, after, options)?
         {
             return Ok(window);
