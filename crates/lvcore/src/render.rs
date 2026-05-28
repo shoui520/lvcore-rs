@@ -135,6 +135,8 @@ pub struct ResolvedTargetView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub basic_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface: Option<NavigationSurface>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<ResourceRef>,
@@ -156,6 +158,7 @@ impl ResolvedTargetView {
             title: Some(title.into()),
             display_html: None,
             basic_text: None,
+            scroll_anchor: None,
             surface: None,
             resources: Vec::new(),
             links: Vec::new(),
@@ -176,6 +179,7 @@ impl ResolvedTargetView {
             title: Some(title.into()),
             display_html: None,
             basic_text: None,
+            scroll_anchor: None,
             surface: None,
             resources: Vec::new(),
             links: Vec::new(),

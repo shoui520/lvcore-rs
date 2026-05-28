@@ -78,6 +78,8 @@ pub enum InternalTarget {
     },
     Resource {
         resource: ResourceToken,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
     },
     Unsupported {
         reason: String,

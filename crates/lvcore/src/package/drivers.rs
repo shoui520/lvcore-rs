@@ -801,7 +801,7 @@ impl RendererProvider for StubBookPackage {
                 "Unsupported target",
                 Diagnostic::warning("target_unsupported", reason),
             )),
-            InternalTarget::Resource { resource } => {
+            InternalTarget::Resource { resource, anchor } => {
                 let decoded_resource = resource.decode()?;
                 let resource_ref = self.resolve_resource(&resource)?;
                 if let InternalResource::PackageFile {
@@ -826,6 +826,7 @@ impl RendererProvider for StubBookPackage {
                     title: resource_ref.label.clone(),
                     display_html: None,
                     basic_text: None,
+                    scroll_anchor: anchor,
                     surface: None,
                     resources: vec![resource_ref],
                     links: Vec::new(),
@@ -1776,7 +1777,10 @@ impl StubBookPackage {
                     item_id: page.path,
                     label_html: escape_plain_label_html(&page.label),
                     label_text: page.label,
-                    target: TargetToken::new(&InternalTarget::Resource { resource })?,
+                    target: TargetToken::new(&InternalTarget::Resource {
+                        resource,
+                        anchor: None,
+                    })?,
                     diagnostics: page.diagnostics,
                 })
             })
@@ -2951,6 +2955,7 @@ impl StubBookPackage {
         surface_id: &str,
         title: Option<String>,
     ) -> Result<ResolvedTargetView> {
+        let scroll_anchor = scroll_anchor_for_token(&target)?;
         let surface = self.open_surface(surface_id)?;
         let kind = match &surface {
             NavigationSurface::Panel { .. } => ResolvedTargetKind::PanelSurface,
@@ -2977,6 +2982,7 @@ impl StubBookPackage {
             title: title.or_else(|| Some(surface_id.to_owned())),
             display_html: None,
             basic_text: None,
+            scroll_anchor,
             surface: Some(surface),
             resources: Vec::new(),
             links: Vec::new(),
@@ -2997,6 +3003,7 @@ impl StubBookPackage {
                 html,
                 source,
             } => {
+                let scroll_anchor = scroll_anchor_for_token(&target)?;
                 let view_kind = self.resolved_kind_for_body_target(&target)?;
                 let title = self.title_for_body_target(&target)?;
                 if options.mode == RenderMode::BasicText {
@@ -3006,6 +3013,7 @@ impl StubBookPackage {
                         title: Some(title.unwrap_or_else(|| "Entry".to_owned())),
                         display_html: None,
                         basic_text: Some(html_basic_text(&html)),
+                        scroll_anchor,
                         surface: None,
                         resources: Vec::new(),
                         links: Vec::new(),
@@ -3033,6 +3041,7 @@ impl StubBookPackage {
                     title: Some(title.unwrap_or_else(|| "Entry".to_owned())),
                     display_html: Some(normalized.html),
                     basic_text: None,
+                    scroll_anchor,
                     surface: None,
                     resources: normalized.resources,
                     links: normalized.links,
@@ -3048,69 +3057,81 @@ impl StubBookPackage {
                 length,
                 profile_hint,
                 mut diagnostics,
-            } => Ok(ResolvedTargetView {
-                kind: crate::render::ResolvedTargetKind::Deferred,
-                target,
-                title: Some("SSED entry stream".to_owned()),
-                display_html: None,
-                basic_text: None,
-                surface: None,
-                resources: Vec::new(),
-                links: Vec::new(),
-                capabilities: vec![crate::render::RenderCapability::HcRenderInput],
-                diagnostics: {
-                    diagnostics.push(Diagnostic::info(
-                        "hc_render_deferred",
-                        "SSED stream resolved successfully; HC/profile rendering is not implemented yet",
-                    ));
-                    diagnostics
-                },
-                debug_trace: options.include_debug_trace.then(|| {
-                    json!({
-                        "body": {
-                            "kind": "ssed_stream",
-                            "component": component,
-                            "offset": offset,
-                            "length": length,
-                            "profile_hint": profile_hint,
-                        }
-                    })
-                    .to_string()
-                }),
-            }),
-            RendererInput::SemanticFallback { target, text } => Ok(ResolvedTargetView {
-                kind: crate::render::ResolvedTargetKind::EntryBody,
-                target,
-                title: Some("Semantic fallback".to_owned()),
-                display_html: None,
-                basic_text: Some(text),
-                surface: None,
-                resources: Vec::new(),
-                links: Vec::new(),
-                capabilities: Vec::new(),
-                diagnostics: vec![Diagnostic::info(
-                    "semantic_fallback",
-                    "visual renderer is unavailable; semantic fallback was returned",
-                )],
-                debug_trace: None,
-            }),
+            } => {
+                let scroll_anchor = scroll_anchor_for_token(&target)?;
+                Ok(ResolvedTargetView {
+                    kind: crate::render::ResolvedTargetKind::Deferred,
+                    target,
+                    title: Some("SSED entry stream".to_owned()),
+                    display_html: None,
+                    basic_text: None,
+                    scroll_anchor,
+                    surface: None,
+                    resources: Vec::new(),
+                    links: Vec::new(),
+                    capabilities: vec![crate::render::RenderCapability::HcRenderInput],
+                    diagnostics: {
+                        diagnostics.push(Diagnostic::info(
+                            "hc_render_deferred",
+                            "SSED stream resolved successfully; HC/profile rendering is not implemented yet",
+                        ));
+                        diagnostics
+                    },
+                    debug_trace: options.include_debug_trace.then(|| {
+                        json!({
+                            "body": {
+                                "kind": "ssed_stream",
+                                "component": component,
+                                "offset": offset,
+                                "length": length,
+                                "profile_hint": profile_hint,
+                            }
+                        })
+                        .to_string()
+                    }),
+                })
+            }
+            RendererInput::SemanticFallback { target, text } => {
+                let scroll_anchor = scroll_anchor_for_token(&target)?;
+                Ok(ResolvedTargetView {
+                    kind: crate::render::ResolvedTargetKind::EntryBody,
+                    target,
+                    title: Some("Semantic fallback".to_owned()),
+                    display_html: None,
+                    basic_text: Some(text),
+                    scroll_anchor,
+                    surface: None,
+                    resources: Vec::new(),
+                    links: Vec::new(),
+                    capabilities: Vec::new(),
+                    diagnostics: vec![Diagnostic::info(
+                        "semantic_fallback",
+                        "visual renderer is unavailable; semantic fallback was returned",
+                    )],
+                    debug_trace: None,
+                })
+            }
             RendererInput::Unsupported {
                 target,
                 reason,
                 diagnostics,
-            } => Ok(ResolvedTargetView {
-                kind: crate::render::ResolvedTargetKind::Unsupported,
-                target,
-                title: Some(reason),
-                display_html: None,
-                basic_text: None,
-                surface: None,
-                resources: Vec::new(),
-                links: Vec::new(),
-                capabilities: Vec::new(),
-                diagnostics,
-                debug_trace: None,
-            }),
+            } => {
+                let scroll_anchor = scroll_anchor_for_token(&target)?;
+                Ok(ResolvedTargetView {
+                    kind: crate::render::ResolvedTargetKind::Unsupported,
+                    target,
+                    title: Some(reason),
+                    display_html: None,
+                    basic_text: None,
+                    scroll_anchor,
+                    surface: None,
+                    resources: Vec::new(),
+                    links: Vec::new(),
+                    capabilities: Vec::new(),
+                    diagnostics,
+                    debug_trace: None,
+                })
+            }
         }
     }
 
@@ -3122,6 +3143,7 @@ impl StubBookPackage {
         resource_ref: ResourceRef,
         options: &RenderOptions,
     ) -> Result<ResolvedTargetView> {
+        let scroll_anchor = scroll_anchor_for_token(&target)?;
         let data = self.read_resource(resource)?;
         let html = decode_package_html_text(&data);
         let title = resource_ref.label.clone();
@@ -3132,6 +3154,7 @@ impl StubBookPackage {
                 title,
                 display_html: None,
                 basic_text: Some(html_basic_text(&html)),
+                scroll_anchor,
                 surface: None,
                 resources: Vec::new(),
                 links: Vec::new(),
@@ -3151,6 +3174,7 @@ impl StubBookPackage {
             title,
             display_html: Some(normalized.html),
             basic_text: None,
+            scroll_anchor,
             surface: None,
             resources,
             links: normalized.links,
@@ -3732,16 +3756,15 @@ impl StubBookPackage {
                         resource_kind: ResourceKind::Html,
                     };
                     let resource = ResourceToken::new(&resource)?;
-                    let target = InternalTarget::Resource { resource };
+                    let target = InternalTarget::Resource {
+                        resource,
+                        anchor: reference.anchor,
+                    };
                     let token = TargetToken::new(&target)?;
                     if seen_target_tokens.insert(token.as_str().to_owned()) {
                         links.push(TargetLink::new(raw_value, &target)?);
                     }
                     output.push_str(&format!("lvcore://target/{}", token.as_str()));
-                    if let Some(anchor) = reference.anchor {
-                        output.push('#');
-                        output.push_str(&anchor);
-                    }
                 } else {
                     let resource = InternalResource::PackageFile {
                         resource_kind: resource_kind_from_path(&reference.path),
@@ -5103,6 +5126,17 @@ fn resolved_kind_for_package_html_path(path: &str) -> ResolvedTargetKind {
     } else {
         ResolvedTargetKind::InfoPage
     }
+}
+
+fn scroll_anchor_for_token(target: &TargetToken) -> Result<Option<String>> {
+    Ok(match target.decode()? {
+        InternalTarget::LvedRow { anchor, .. }
+        | InternalTarget::LvedInfoPage { anchor, .. }
+        | InternalTarget::HoureiLaw { anchor, .. }
+        | InternalTarget::MultiviewHref { anchor, .. }
+        | InternalTarget::Resource { anchor, .. } => anchor,
+        _ => None,
+    })
 }
 
 fn ssed_hanrei_page_label(path: &str) -> String {

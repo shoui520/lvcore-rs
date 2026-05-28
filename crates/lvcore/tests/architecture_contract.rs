@@ -837,7 +837,11 @@ fn package_html_resource_targets_decode_cp932_and_rewrite_html_links() {
         resource_kind: ResourceKind::Html,
     })
     .unwrap();
-    let target = TargetToken::new(&InternalTarget::Resource { resource }).unwrap();
+    let target = TargetToken::new(&InternalTarget::Resource {
+        resource,
+        anchor: None,
+    })
+    .unwrap();
 
     let view = package
         .render_target(&target, &RenderOptions::default())
@@ -846,7 +850,7 @@ fn package_html_resource_targets_decode_cp932_and_rewrite_html_links() {
     let html = view.display_html.as_deref().unwrap();
     assert!(html.contains("本文"));
     assert!(html.contains("lvcore://target/"));
-    assert!(html.contains("#x"));
+    assert!(!html.contains("#x"));
     assert!(html.contains("lvcore://resource/"));
     assert!(!html.contains("sub/page.html"));
     assert!(!html.contains("pic.png"));
@@ -858,10 +862,16 @@ fn package_html_resource_targets_decode_cp932_and_rewrite_html_links() {
                 path: "HELP/sub/page.html".to_owned(),
                 resource_kind: ResourceKind::Html,
             })
-            .unwrap()
+            .unwrap(),
+            anchor: Some("x".to_owned()),
         }
     );
     assert_eq!(view.resources.len(), 1);
+    let linked_view = package
+        .render_target(&view.links[0].token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(linked_view.kind, ResolvedTargetKind::InfoPage);
+    assert_eq!(linked_view.scroll_anchor.as_deref(), Some("x"));
 
     let basic = package
         .render_target(
@@ -2178,7 +2188,11 @@ fn resource_targets_render_as_media_resource_views() {
         resource_kind: ResourceKind::Template,
     })
     .unwrap();
-    let target = TargetToken::new(&InternalTarget::Resource { resource }).unwrap();
+    let target = TargetToken::new(&InternalTarget::Resource {
+        resource,
+        anchor: None,
+    })
+    .unwrap();
 
     let view = package
         .render_target(&target, &RenderOptions::default())
