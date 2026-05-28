@@ -22,6 +22,7 @@ pub mod resources;
 pub mod search;
 pub mod sequence;
 pub mod ssed;
+pub mod ssed_color_sample;
 pub mod ssed_index;
 pub mod ssed_loose_media;
 pub mod ssed_menu;
@@ -64,6 +65,7 @@ pub use ssed::{
     ANDROID_LVEDINFO_MAGIC, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent,
     SsedComponentRole, SsedDataFile, SsedDataHeader, SsedDataReader, SsedInfoLayout,
 };
+pub use ssed_color_sample::{ColorSampleRecord, ColorSampleTable};
 pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
 pub use ssed_loose_media::{PcmuIndex, PcmuMapRecord};
 pub use ssed_menu::{
