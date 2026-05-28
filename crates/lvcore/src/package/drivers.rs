@@ -1833,7 +1833,7 @@ impl StubBookPackage {
                     label_text: page.label,
                     target: TargetToken::new(&InternalTarget::Resource {
                         resource,
-                        anchor: None,
+                        anchor: page.anchor,
                     })?,
                     diagnostics: page.diagnostics,
                 })
@@ -4546,6 +4546,7 @@ impl StubBookPackage {
                 path: normalized,
                 resource_kind,
             },
+            anchor: None,
             diagnostics: Vec::new(),
         });
         Ok(())
@@ -4575,6 +4576,7 @@ impl StubBookPackage {
                             path: item_id,
                             resource_kind: ResourceKind::Other,
                         },
+                        anchor: None,
                         diagnostics: vec![Diagnostic::info(
                             "ssed_hanrei_chm_deferred",
                             format!("HANREI.chm was found, but CHM decoding failed: {err}"),
@@ -4585,26 +4587,64 @@ impl StubBookPackage {
             }
         };
         entries.sort_by_key(|entry| chm_hanrei_entry_sort_key(&entry.path));
+        let mut hhc_items = Vec::new();
+        for entry in &entries {
+            if !path_has_extension(&entry.path, &["hhc"]) {
+                continue;
+            }
+            if let Ok(bytes) = read_chm_entry(&resolved, &entry.path) {
+                let html = decode_package_html_text(&bytes);
+                hhc_items.extend(parse_chm_hhc_toc(&html));
+            }
+        }
         let mut html_count = 0usize;
+        for entry in entries.iter().filter(|entry| {
+            path_has_extension(&entry.path, &["html", "htm"])
+                && chm_hanrei_entry_sort_key(&entry.path).0 == 0
+        }) {
+            if self.push_ssed_hanrei_chm_entry_page(
+                chm_path,
+                &entry.path,
+                None,
+                None,
+                pages,
+                seen,
+            )? {
+                html_count += 1;
+            }
+        }
+        for item in hhc_items {
+            let Some(reference) = chm_local_reference(&item.local) else {
+                continue;
+            };
+            if !path_has_extension(&reference.path, &["html", "htm"]) {
+                continue;
+            }
+            if self.push_ssed_hanrei_chm_entry_page(
+                chm_path,
+                &reference.path,
+                reference.anchor,
+                Some(item.name),
+                pages,
+                seen,
+            )? {
+                html_count += 1;
+            }
+        }
         for entry in entries {
             if !path_has_extension(&entry.path, &["html", "htm"]) {
                 continue;
             }
-            let item_id = format!("{chm_path}!/{}", entry.path);
-            if !seen.insert(item_id.to_ascii_lowercase()) {
-                continue;
+            if self.push_ssed_hanrei_chm_entry_page(
+                chm_path,
+                &entry.path,
+                None,
+                None,
+                pages,
+                seen,
+            )? {
+                html_count += 1;
             }
-            html_count += 1;
-            pages.push(SsedHanreiPage {
-                item_id: item_id.clone(),
-                label: ssed_hanrei_page_label(&item_id),
-                resource: InternalResource::ChmFile {
-                    chm_path: chm_path.to_owned(),
-                    entry_path: entry.path,
-                    resource_kind: ResourceKind::Html,
-                },
-                diagnostics: Vec::new(),
-            });
         }
         if html_count == 0 {
             let item_id = chm_path.replace('\\', "/");
@@ -4616,6 +4656,7 @@ impl StubBookPackage {
                         path: item_id,
                         resource_kind: ResourceKind::Other,
                     },
+                    anchor: None,
                     diagnostics: vec![Diagnostic::info(
                         "ssed_hanrei_chm_deferred",
                         "HANREI.chm was found, but no HTML entries were discovered",
@@ -4624,6 +4665,37 @@ impl StubBookPackage {
             }
         }
         Ok(())
+    }
+
+    fn push_ssed_hanrei_chm_entry_page(
+        &self,
+        chm_path: &str,
+        entry_path: &str,
+        anchor: Option<String>,
+        label: Option<String>,
+        pages: &mut Vec<SsedHanreiPage>,
+        seen: &mut BTreeSet<String>,
+    ) -> Result<bool> {
+        let item_id = if let Some(anchor) = &anchor {
+            format!("{chm_path}!/{entry_path}#{anchor}")
+        } else {
+            format!("{chm_path}!/{entry_path}")
+        };
+        if !seen.insert(item_id.to_ascii_lowercase()) {
+            return Ok(false);
+        }
+        pages.push(SsedHanreiPage {
+            item_id: item_id.clone(),
+            label: label.unwrap_or_else(|| ssed_hanrei_page_label(&item_id)),
+            resource: InternalResource::ChmFile {
+                chm_path: chm_path.to_owned(),
+                entry_path: entry_path.to_owned(),
+                resource_kind: ResourceKind::Html,
+            },
+            anchor,
+            diagnostics: Vec::new(),
+        });
+        Ok(true)
     }
 }
 
@@ -4660,6 +4732,7 @@ struct SsedHanreiPage {
     item_id: String,
     label: String,
     resource: InternalResource,
+    anchor: Option<String>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -5454,6 +5527,111 @@ fn chm_hanrei_entry_sort_key(path: &str) -> (u8, String) {
     (priority, path.to_ascii_lowercase())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChmHhcTocItem {
+    name: String,
+    local: String,
+}
+
+fn parse_chm_hhc_toc(html: &str) -> Vec<ChmHhcTocItem> {
+    let lower = html.to_ascii_lowercase();
+    let mut items = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find("<object") {
+        let start = cursor + relative_start;
+        let Some(relative_end) = lower[start..].find("</object>") else {
+            break;
+        };
+        let end = start + relative_end + "</object>".len();
+        let block = &html[start..end];
+        if block.to_ascii_lowercase().contains("text/sitemap")
+            && let (Some(name), Some(local)) = (
+                chm_hhc_param_value(block, "name"),
+                chm_hhc_param_value(block, "local"),
+            )
+        {
+            items.push(ChmHhcTocItem { name, local });
+        }
+        cursor = end;
+    }
+    items
+}
+
+fn chm_hhc_param_value(block: &str, wanted_name: &str) -> Option<String> {
+    let lower = block.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find("<param") {
+        let start = cursor + relative_start;
+        let Some(relative_end) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + relative_end + 1;
+        let tag = &block[start..end];
+        let name = html_attr_value(tag, "name")?;
+        if name.eq_ignore_ascii_case(wanted_name) {
+            return html_attr_value(tag, "value");
+        }
+        cursor = end;
+    }
+    None
+}
+
+fn html_attr_value(tag: &str, attr: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let attr = attr.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find(&attr) {
+        let start = cursor + relative_start;
+        let before = lower[..start].chars().next_back();
+        if before.is_some_and(|ch| !ch.is_ascii_whitespace() && ch != '<') {
+            cursor = start + attr.len();
+            continue;
+        }
+        let mut index = start + attr.len();
+        index = skip_ascii_whitespace(&lower, index)?;
+        if !lower[index..].starts_with('=') {
+            cursor = start + attr.len();
+            continue;
+        }
+        index += 1;
+        index = skip_ascii_whitespace(&lower, index)?;
+        let quote = lower[index..].chars().next()?;
+        if quote != '"' && quote != '\'' {
+            return None;
+        }
+        index += quote.len_utf8();
+        let rest = &tag[index..];
+        let end = rest.find(quote)?;
+        return Some(html_unescape_minimal(&rest[..end]));
+    }
+    None
+}
+
+fn skip_ascii_whitespace(value: &str, mut index: usize) -> Option<usize> {
+    while index < value.len() {
+        let ch = value[index..].chars().next()?;
+        if !ch.is_ascii_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    Some(index)
+}
+
+fn chm_local_reference(raw_value: &str) -> Option<PackageHtmlReference> {
+    let value = html_unescape_minimal(raw_value).trim().replace('\\', "/");
+    let value = value.trim_start_matches('/');
+    let (path_part, anchor) = value.split_once('#').unwrap_or((value, ""));
+    let path_part = path_part.split('?').next().unwrap_or("").trim();
+    if path_part.is_empty() {
+        return None;
+    }
+    Some(PackageHtmlReference {
+        path: normalize_package_relative_path(path_part)?,
+        anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
+    })
+}
+
 fn html_label_text(fragment: &str) -> String {
     let mut text = String::with_capacity(fragment.len());
     let mut in_tag = false;
@@ -5931,6 +6109,27 @@ mod tests {
     use crate::lved_sqlite::apply_sqlcipher_key;
 
     use super::*;
+
+    #[test]
+    fn parses_chm_hhc_toc_labels_and_anchors() {
+        let items = parse_chm_hhc_toc(
+            r#"
+            <OBJECT type="text/sitemap">
+              <param name="Name" value="編集方針">
+              <param name="Local" value="Source/contents/hanrei_01.htm#midasigo">
+            </OBJECT>
+            <OBJECT type="text/sitemap">
+              <param name="Name" value="著作権">
+              <param name="Local" value="Source/contents/copyright.htm">
+            </OBJECT>
+            "#,
+        );
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "編集方針");
+        let reference = chm_local_reference(&items[0].local).unwrap();
+        assert_eq!(reference.path, "Source/contents/hanrei_01.htm");
+        assert_eq!(reference.anchor.as_deref(), Some("midasigo"));
+    }
 
     #[test]
     fn detects_lved_sqlite3_by_main_data_and_key() {

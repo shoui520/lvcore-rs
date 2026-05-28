@@ -112,7 +112,7 @@ known structures.
 - SSED internal-page traversal is currently implemented only for simple
   exact/forward title-index paths. Backward, partial, keyword, cross-reference,
   and multi-selector performance still need format-specific indexing work.
-- CHM table-of-contents semantics are still basic: lvcore enumerates and renders
-  HTML entries from `HANREI.chm`, but it does not yet parse `.hhc` ordering into
-  a polished navigation tree. Higher-level reader wrapping/styling remains
-  frontend work.
+- CHM table-of-contents semantics are still basic: lvcore reads `.hhc`
+  Name/Local entries for labels, order, and anchors, but it does not yet expose
+  the nested help tree as a polished navigation surface. Higher-level reader
+  wrapping/styling remains frontend work.
