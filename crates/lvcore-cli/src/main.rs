@@ -345,6 +345,7 @@ fn validate_package_json(registry: &DriverRegistry, path: &Path, deep: bool) -> 
                         "format_label": metadata.format_label,
                         "title": metadata.title,
                         "capabilities": metadata.capabilities,
+                        "search_modes": metadata.search_modes,
                         "surface_count": surfaces.len(),
                         "surfaces": surfaces,
                         "exercises": exercises,
@@ -357,6 +358,8 @@ fn validate_package_json(registry: &DriverRegistry, path: &Path, deep: bool) -> 
                     "format_family": metadata.format_family,
                     "format_label": metadata.format_label,
                     "title": metadata.title,
+                    "capabilities": metadata.capabilities,
+                    "search_modes": metadata.search_modes,
                     "error": error.to_string(),
                 }),
             }
@@ -836,6 +839,28 @@ mod tests {
         assert!(has_scoped_resource_href(display_html));
         assert!(!title_html.contains("src=\"AC6E.svg\""));
         assert!(!display_html.contains("data=\"AC6E.svg\""));
+    }
+
+    #[test]
+    fn validate_command_reports_advertised_search_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        write_lved_cli_fixture(dir.path());
+
+        let output = validate_package_json(&DriverRegistry::default(), dir.path(), false);
+
+        assert_eq!(output["status"], "ok");
+        assert_eq!(
+            output["search_modes"],
+            serde_json::json!([
+                "exact",
+                "forward",
+                "backward",
+                "partial",
+                "full_text",
+                { "advanced": "advanced1" },
+                { "advanced": "advanced2" },
+            ])
+        );
     }
 
     #[test]
