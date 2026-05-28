@@ -2384,6 +2384,20 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
     fs::create_dir(&destination_dir).unwrap();
     write_lved_cross_book_source_fixture(&source_dir);
     write_minimal_lved_sqlite_fixture(&destination_dir);
+    {
+        let connection = Connection::open(destination_dir.join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><h1>Alpha</h1><p>Tree body</p><img src=\"pic.png\"></article>' where id = 100",
+                [],
+            )
+            .unwrap();
+    }
+    fs::write(destination_dir.join("res/pic.png"), b"png").unwrap();
 
     let registry = DriverRegistry::default();
     let mut library = BookLibrary::new();
@@ -2422,7 +2436,34 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
             .display_html
             .as_deref()
             .unwrap()
-            .contains("<article><h1>Alpha</h1><p>Tree body</p></article>")
+            .contains("<article><h1>Alpha</h1><p>Tree body</p>")
+    );
+    assert!(
+        routed
+            .view
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("lvcore://resource/")
+    );
+    assert!(
+        routed.view.resources.len() == 1,
+        "destination resource should be retained in routed views"
+    );
+    let resource_href = routed.view.resources[0].href.as_deref().unwrap();
+    let scoped_suffix = resource_href.strip_prefix("lvcore://resource/").unwrap();
+    assert_eq!(
+        scoped_suffix.split('/').count(),
+        2,
+        "routed resource href should include book scope and resource token"
+    );
+    assert!(
+        routed
+            .view
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains(resource_href)
     );
     assert!(matches!(
         routed.view.target.decode().unwrap(),

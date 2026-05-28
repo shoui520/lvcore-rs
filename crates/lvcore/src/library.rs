@@ -9,7 +9,7 @@ use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::navigation::{HomeSurface, NavigationSurface};
 use crate::package::{BookAliasKind, BookId, BookMetadata, BookPackage, DriverRegistry};
-use crate::render::{RenderOptions, RendererInput, ResolvedTargetView};
+use crate::render::{RenderOptions, RendererInput, ResolvedTargetKind, ResolvedTargetView};
 use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::{SearchPage, SearchQuery, SearchScope};
 use crate::sequence::{SequenceHint, TargetWindow};
@@ -150,11 +150,15 @@ impl BookLibrary {
                 anchor,
                 options,
             }),
-            _ => Ok(RoutedTargetView {
-                book_id: book_id.clone(),
-                view: source_book.render_target(target, options)?,
-                diagnostics: Vec::new(),
-            }),
+            _ => {
+                let mut view = source_book.render_target(target, options)?;
+                scope_view_resource_hrefs(book_id, &mut view);
+                Ok(RoutedTargetView {
+                    book_id: book_id.clone(),
+                    view,
+                    diagnostics: Vec::new(),
+                })
+            }
         }
     }
 
@@ -198,7 +202,7 @@ impl BookLibrary {
     ) -> Result<RoutedTargetWindow> {
         let routed = self.render_target_routed(book_id, target, options)?;
         if &routed.book_id == book_id {
-            if routed.view.kind == crate::render::ResolvedTargetKind::Unsupported {
+            if routed.view.kind == ResolvedTargetKind::Unsupported {
                 return Ok(RoutedTargetWindow {
                     book_id: routed.book_id,
                     window: TargetWindow {
@@ -212,13 +216,16 @@ impl BookLibrary {
             }
             return Ok(RoutedTargetWindow {
                 book_id: book_id.clone(),
-                window: self.required_book(book_id)?.resolve_target_window(
-                    target,
-                    sequence_hint,
-                    before,
-                    after,
-                    options,
-                )?,
+                window: scope_target_window_resource_hrefs(
+                    book_id,
+                    self.required_book(book_id)?.resolve_target_window(
+                        target,
+                        sequence_hint,
+                        before,
+                        after,
+                        options,
+                    )?,
+                ),
                 diagnostics: routed.diagnostics,
             });
         }
@@ -232,6 +239,7 @@ impl BookLibrary {
             options,
         )?;
         window.diagnostics.extend(routed.diagnostics.clone());
+        window = scope_target_window_resource_hrefs(&routed.book_id, window);
         Ok(RoutedTargetWindow {
             book_id: routed.book_id,
             window,
@@ -289,6 +297,7 @@ impl BookLibrary {
                     .source_book
                     .render_target(request.original_target, request.options)?;
                 view.diagnostics.push(diagnostic.clone());
+                scope_view_resource_hrefs(request.source_book_id, &mut view);
                 return Ok(RoutedTargetView {
                     book_id: request.source_book_id.clone(),
                     view,
@@ -313,6 +322,7 @@ impl BookLibrary {
                 .source_book
                 .render_target(request.original_target, request.options)?;
             view.diagnostics.push(diagnostic.clone());
+            scope_view_resource_hrefs(request.source_book_id, &mut view);
             return Ok(RoutedTargetView {
                 book_id: request.source_book_id.clone(),
                 view,
@@ -325,7 +335,8 @@ impl BookLibrary {
             row_id,
             anchor: request.anchor,
         })?;
-        let view = destination_book.render_target(&destination_target, request.options)?;
+        let mut view = destination_book.render_target(&destination_target, request.options)?;
+        scope_view_resource_hrefs(destination_book_id, &mut view);
         Ok(RoutedTargetView {
             book_id: destination_book_id.clone(),
             view,
@@ -422,6 +433,47 @@ impl BookLibrary {
         }
         Ok(page)
     }
+}
+
+fn scope_target_window_resource_hrefs(book_id: &BookId, mut window: TargetWindow) -> TargetWindow {
+    scope_view_resource_hrefs(book_id, &mut window.center);
+    for view in &mut window.before {
+        scope_view_resource_hrefs(book_id, view);
+    }
+    for view in &mut window.after {
+        scope_view_resource_hrefs(book_id, view);
+    }
+    window
+}
+
+fn scope_view_resource_hrefs(book_id: &BookId, view: &mut ResolvedTargetView) {
+    let Some(display_html) = &mut view.display_html else {
+        for resource in &mut view.resources {
+            scope_resource_ref_href(book_id, resource);
+        }
+        return;
+    };
+    for resource in &mut view.resources {
+        let old_href = resource.href.clone();
+        scope_resource_ref_href(book_id, resource);
+        if let (Some(old_href), Some(new_href)) = (old_href, resource.href.as_ref()) {
+            *display_html = display_html.replace(&old_href, new_href);
+        }
+    }
+}
+
+fn scope_resource_ref_href(book_id: &BookId, resource: &mut ResourceRef) {
+    if resource.href.is_some() {
+        resource.href = Some(scoped_resource_href(book_id, &resource.token));
+    }
+}
+
+fn scoped_resource_href(book_id: &BookId, token: &ResourceToken) -> String {
+    format!(
+        "lvcore://resource/{}/{}",
+        URL_SAFE_NO_PAD.encode(book_id.0.as_bytes()),
+        token.as_str()
+    )
 }
 
 fn encode_library_search_cursor(book_index: usize, book_cursor: Option<String>) -> String {
