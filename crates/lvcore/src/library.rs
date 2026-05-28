@@ -270,7 +270,9 @@ impl BookLibrary {
                 let book = self
                     .book(book_id)
                     .ok_or_else(|| Error::BookNotFound(book_id.0.clone()))?;
-                book.search(query)
+                let mut page = book.search(query)?;
+                scope_search_page_resource_hrefs(book_id, &mut page);
+                Ok(page)
             }
             SearchScope::SelectedBooks(book_ids) => self.search_many(book_ids.iter(), query),
             SearchScope::AllBooks => self.search_many(self.books.keys(), query),
@@ -417,6 +419,7 @@ impl BookLibrary {
             };
             book_query.limit = query.limit.saturating_sub(page.hits.len());
             let mut book_page = book.search(&book_query)?;
+            scope_search_page_resource_hrefs(book_id, &mut book_page);
             for diagnostic in &mut book_page.diagnostics {
                 diagnostic
                     .context
@@ -459,12 +462,9 @@ fn scope_view_resource_hrefs(book_id: &BookId, view: &mut ResolvedTargetView) {
         return;
     };
     for resource in &mut view.resources {
-        let old_href = resource.href.clone();
         scope_resource_ref_href(book_id, resource);
-        if let (Some(old_href), Some(new_href)) = (old_href, resource.href.as_ref()) {
-            *display_html = display_html.replace(&old_href, new_href);
-        }
     }
+    *display_html = scope_resource_hrefs_in_html(book_id, display_html);
 }
 
 fn scope_resource_ref_href(book_id: &BookId, resource: &mut ResourceRef) {
@@ -479,6 +479,46 @@ fn scoped_resource_href(book_id: &BookId, token: &ResourceToken) -> String {
         URL_SAFE_NO_PAD.encode(book_id.0.as_bytes()),
         token.as_str()
     )
+}
+
+fn scope_search_page_resource_hrefs(book_id: &BookId, page: &mut SearchPage) {
+    for hit in &mut page.hits {
+        hit.title_html = scope_resource_hrefs_in_html(book_id, &hit.title_html);
+        if let Some(snippet_html) = &mut hit.snippet_html {
+            *snippet_html = scope_resource_hrefs_in_html(book_id, snippet_html);
+        }
+    }
+}
+
+fn scope_resource_hrefs_in_html(book_id: &BookId, html: &str) -> String {
+    const PREFIX: &str = "lvcore://resource/";
+    let mut output = String::with_capacity(html.len());
+    let mut cursor = 0;
+    while let Some(relative_start) = html[cursor..].find(PREFIX) {
+        let start = cursor + relative_start;
+        output.push_str(&html[cursor..start]);
+        output.push_str(PREFIX);
+        let value_start = start + PREFIX.len();
+        let value_end = html[value_start..]
+            .find(is_resource_href_delimiter)
+            .map(|offset| value_start + offset)
+            .unwrap_or(html.len());
+        let value = &html[value_start..value_end];
+        if value.is_empty() || value.contains('/') {
+            output.push_str(value);
+        } else {
+            output.push_str(&URL_SAFE_NO_PAD.encode(book_id.0.as_bytes()));
+            output.push('/');
+            output.push_str(value);
+        }
+        cursor = value_end;
+    }
+    output.push_str(&html[cursor..]);
+    output
+}
+
+fn is_resource_href_delimiter(value: char) -> bool {
+    value.is_whitespace() || matches!(value, '"' | '\'' | '<' | '>' | ')' | '(')
 }
 
 fn parse_scoped_resource_href(href: &str) -> Result<(BookId, ResourceToken)> {

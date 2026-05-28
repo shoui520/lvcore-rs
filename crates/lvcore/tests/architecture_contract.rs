@@ -507,6 +507,60 @@ fn library_routes_all_book_search_without_unhandled_exceptions() {
 }
 
 #[test]
+fn library_scopes_resource_hrefs_in_search_result_labels() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update list set title = '<img src=\"pic.png\"><b>alpha</b>' where id = 1",
+                [],
+            )
+            .unwrap();
+    }
+    fs::write(dir.path().join("res/pic.png"), b"png").unwrap();
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let book_id = library.open_path(dir.path(), &registry).unwrap();
+    let page = library
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(book_id),
+            mode: SearchMode::Forward,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    let hit = page.hits.first().expect("expected alpha search hit");
+    assert_eq!(hit.title_text, "alpha");
+    let href_start = hit
+        .title_html
+        .find("lvcore://resource/")
+        .expect("search label should include rewritten resource href");
+    let href = &hit.title_html[href_start..]
+        .split('"')
+        .next()
+        .expect("resource href should be quoted");
+    let scoped_suffix = href.strip_prefix("lvcore://resource/").unwrap();
+    assert_eq!(
+        scoped_suffix.split('/').count(),
+        2,
+        "library search result resource href should include book scope and resource token"
+    );
+    assert_eq!(
+        library.read_scoped_resource_href(href).unwrap(),
+        b"png".to_vec()
+    );
+}
+
+#[test]
 fn library_selected_book_search_uses_backend_cursor_pagination() {
     let first = tempdir().unwrap();
     fs::write(first.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
