@@ -712,6 +712,7 @@ fn library_scopes_resource_hrefs_in_local_entry_views_and_windows() {
         table: "content".to_owned(),
         row_id: 100,
         anchor: None,
+        query: None,
     })
     .unwrap();
 
@@ -954,6 +955,7 @@ fn target_tokens_are_frontend_safe_and_round_trippable() {
         table: "content".to_owned(),
         row_id: 42,
         anchor: Some("main".to_owned()),
+        query: None,
     };
     let token = TargetToken::new(&target).unwrap();
     assert_eq!(token.decode().unwrap(), target);
@@ -2756,6 +2758,7 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
             table: "content".to_owned(),
             row_id: 100,
             anchor: None,
+            query: None,
         }
     );
 
@@ -2858,6 +2861,7 @@ fn lved_retained_product_idx_opens_as_navigation_tree() {
             table: "content".to_owned(),
             row_id: 102,
             anchor: None,
+            query: Some("key=visible".to_owned()),
         }
     );
     assert!(nodes.iter().all(|node| node.label_text != "Rank A"));
@@ -2896,6 +2900,7 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
         table: "content".to_owned(),
         row_id: 10,
         anchor: None,
+        query: None,
     })
     .unwrap();
     let source_view = library
@@ -2962,7 +2967,8 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
         InternalTarget::LvedRow {
             table,
             row_id: 100,
-            anchor: Some(anchor)
+            anchor: Some(anchor),
+            query: None
         } if table == "content" && anchor == "dest"
     ));
     assert!(
@@ -3022,6 +3028,7 @@ fn library_reports_lved_cross_book_targets_when_destination_is_not_open() {
         table: "content".to_owned(),
         row_id: 10,
         anchor: None,
+        query: None,
     })
     .unwrap();
     let source_view = library

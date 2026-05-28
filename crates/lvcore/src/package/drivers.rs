@@ -1361,6 +1361,7 @@ impl BodyProvider for StubBookPackage {
                 table,
                 row_id,
                 anchor: _,
+                query: _,
             } => self.visual_body_for_lved_row(&table, row_id),
             InternalTarget::LvedInfoPage { name, anchor: _ } => {
                 self.visual_body_for_lved_info_name(&name)
@@ -1414,6 +1415,7 @@ impl StubBookPackage {
                     table: "content".to_owned(),
                     row_id: hit.content_id,
                     anchor: hit.anchor,
+                    query: None,
                 })?;
                 let title_html = self.normalize_lved_label_html(&hit.title_html)?;
                 let snippet_html = if hit.subtitle_html.is_empty() {
@@ -2409,6 +2411,7 @@ impl StubBookPackage {
                         table: "content".to_owned(),
                         row_id: row.content_id,
                         anchor: row.anchor,
+                        query: None,
                     })?,
                     diagnostics: Vec::new(),
                 })
@@ -2467,6 +2470,7 @@ impl StubBookPackage {
                         table: "info".to_owned(),
                         row_id: page.id,
                         anchor: None,
+                        query: None,
                     })?,
                     diagnostics: Vec::new(),
                 })
@@ -3299,6 +3303,7 @@ impl StubBookPackage {
             table,
             row_id,
             anchor: _,
+            query: _,
         } = target.decode()?
         else {
             return Ok(None);
@@ -3350,6 +3355,7 @@ impl StubBookPackage {
             table: "content".to_owned(),
             row_id: hit.content_id,
             anchor: hit.anchor.clone(),
+            query: None,
         })?;
         let mut view = self.render_target(&target, options)?;
         view.title = Some(hit.title_text.clone());
@@ -3367,6 +3373,7 @@ impl StubBookPackage {
             table,
             row_id,
             anchor: _,
+            query: _,
         } = target.decode()?
         else {
             return Ok(None);
@@ -3425,6 +3432,7 @@ impl StubBookPackage {
             table: "content".to_owned(),
             row_id: item.data_id,
             anchor: None,
+            query: item.query.clone(),
         })?;
         let mut view = self.render_target(&target, options)?;
         view.title = Some(item.label.clone());
@@ -5672,6 +5680,7 @@ fn lved_tree_level_to_nodes(
                 table: "content".to_owned(),
                 row_id: item.data_id,
                 anchor: None,
+                query: item.query.clone(),
             })?)
         } else {
             None
@@ -7020,6 +7029,7 @@ fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {
         table: "content".to_owned(),
         row_id,
         anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
+        query: None,
     })
 }
 
@@ -7719,7 +7729,8 @@ mod tests {
             InternalTarget::LvedRow {
                 table,
                 row_id: 100,
-                anchor: Some(anchor)
+                anchor: Some(anchor),
+                query: None
             } if table == "content" && anchor == "body-anchor"
         ));
         let info_surface = package.open_surface("info").unwrap();
@@ -7756,7 +7767,8 @@ mod tests {
             InternalTarget::LvedRow {
                 table,
                 row_id: 100,
-                anchor: Some(_)
+                anchor: Some(_),
+                query: None
             } if table == "content"
         ));
 
@@ -7777,7 +7789,8 @@ mod tests {
             InternalTarget::LvedRow {
                 table,
                 row_id: 101,
-                anchor: Some(anchor)
+                anchor: Some(anchor),
+                query: None
             } if table == "content" && anchor == "jump"
         )));
         let help_token = view
@@ -8006,6 +8019,7 @@ mod tests {
             table: "content".to_owned(),
             row_id: 200,
             anchor: None,
+            query: None,
         })
         .unwrap();
         let view = package

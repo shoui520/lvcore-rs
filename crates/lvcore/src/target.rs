@@ -46,6 +46,8 @@ pub enum InternalTarget {
         row_id: i64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         anchor: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
     },
     LvedInfoPage {
         name: String,

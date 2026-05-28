@@ -355,6 +355,7 @@ impl BookLibrary {
             table: "content".to_owned(),
             row_id,
             anchor: request.anchor,
+            query: None,
         })?;
         let mut view = destination_book.render_target(&destination_target, request.options)?;
         scope_view_resource_hrefs(destination_book_id, &mut view);
