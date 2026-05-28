@@ -546,14 +546,25 @@ impl NavigationProvider for StubBookPackage {
                         diagnostics: Vec::new(),
                     });
                 }
-                push_surface_if_exists(
-                    &mut surfaces,
-                    &self.storage,
-                    "hanrei",
-                    NavigationSurfaceKind::Hanrei,
-                    "凡例",
-                    &["HANREI.chm", "HANREI", "hanrei.html"],
-                )?;
+                let hanrei_pages = self.discover_ssed_hanrei_pages()?;
+                if !hanrei_pages.is_empty() {
+                    let diagnostics = hanrei_pages
+                        .iter()
+                        .flat_map(|page| page.diagnostics.clone())
+                        .collect::<Vec<_>>();
+                    surfaces.push(HomeSurface {
+                        surface_id: "hanrei".to_owned(),
+                        kind: NavigationSurfaceKind::Hanrei,
+                        status: NavigationStatus::Available,
+                        title_html: "凡例".to_owned(),
+                        title_text: "凡例".to_owned(),
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: "hanrei".to_owned(),
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics,
+                    });
+                }
                 push_surface_if_exists(
                     &mut surfaces,
                     &self.storage,
@@ -578,7 +589,7 @@ impl NavigationProvider for StubBookPackage {
                         })?),
                         diagnostics: vec![Diagnostic::info(
                             "surface_partial",
-                            "SSED title/index browsing is available for supported leaf row grammars; internal tree pages are scanned linearly",
+                            "SSED title/index browsing is available for supported leaf row grammars; exact/forward simple-index search can use internal tree pages while other paths may still scan linearly",
                         )],
                     });
                 }
@@ -728,6 +739,9 @@ impl NavigationProvider for StubBookPackage {
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "toc" {
             return self.open_ssed_menu_surface(surface_id, SsedComponentRole::Toc, "TOC.DIC");
         }
+        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "hanrei" {
+            return self.open_ssed_hanrei_surface(surface_id, cursor, limit);
+        }
         if self.metadata.format_family == FormatFamily::Ssed
             && (surface_id == "panels" || surface_id.starts_with("panels:"))
         {
@@ -792,7 +806,23 @@ impl RendererProvider for StubBookPackage {
                 Diagnostic::warning("target_unsupported", reason),
             )),
             InternalTarget::Resource { resource } => {
+                let decoded_resource = resource.decode()?;
                 let resource_ref = self.resolve_resource(&resource)?;
+                if let InternalResource::PackageFile {
+                    path,
+                    resource_kind,
+                } = decoded_resource
+                    && (resource_kind == ResourceKind::Html
+                        || path_has_extension(&path, &["html", "htm"]))
+                {
+                    return self.render_package_html_resource(
+                        token.clone(),
+                        &resource,
+                        &path,
+                        resource_ref,
+                        options,
+                    );
+                }
                 let diagnostics = resource_ref.diagnostics.clone();
                 Ok(ResolvedTargetView {
                     kind: ResolvedTargetKind::MediaResource,
@@ -1709,6 +1739,56 @@ impl StubBookPackage {
         Ok(NavigationSurface::Panel {
             surface_id: surface_id.to_owned(),
             cells,
+        })
+    }
+
+    fn open_ssed_hanrei_surface(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
+        if limit == 0 {
+            return Ok(NavigationSurface::InfoPages {
+                surface_id: surface_id.to_owned(),
+                pages: Vec::new(),
+                next_cursor: None,
+            });
+        }
+        let offset = decode_offset_cursor(cursor);
+        let mut pages = self.discover_ssed_hanrei_pages()?;
+        if pages.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_hanrei_missing",
+                    "SSED HANREI files were not found",
+                )],
+            });
+        }
+        let next_cursor = (pages.len() > offset + limit).then(|| (offset + limit).to_string());
+        pages = pages.into_iter().skip(offset).take(limit).collect();
+        let items = pages
+            .into_iter()
+            .map(|page| {
+                let resource = InternalResource::PackageFile {
+                    path: page.path.clone(),
+                    resource_kind: page.resource_kind,
+                };
+                let resource = ResourceToken::new(&resource)?;
+                Ok(NavigationItem {
+                    item_id: page.path,
+                    label_html: escape_plain_label_html(&page.label),
+                    label_text: page.label,
+                    target: TargetToken::new(&InternalTarget::Resource { resource })?,
+                    diagnostics: page.diagnostics,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(NavigationSurface::InfoPages {
+            surface_id: surface_id.to_owned(),
+            pages: items,
+            next_cursor,
         })
     }
 
@@ -3038,6 +3118,52 @@ impl StubBookPackage {
         }
     }
 
+    fn render_package_html_resource(
+        &self,
+        target: TargetToken,
+        resource: &ResourceToken,
+        path: &str,
+        resource_ref: ResourceRef,
+        options: &RenderOptions,
+    ) -> Result<ResolvedTargetView> {
+        let data = self.read_resource(resource)?;
+        let html = decode_package_html_text(&data);
+        let title = resource_ref.label.clone();
+        if options.mode == RenderMode::BasicText {
+            return Ok(ResolvedTargetView {
+                kind: resolved_kind_for_package_html_path(path),
+                target,
+                title,
+                display_html: None,
+                basic_text: Some(html_basic_text(&html)),
+                surface: None,
+                resources: Vec::new(),
+                links: Vec::new(),
+                capabilities: Vec::new(),
+                diagnostics: resource_ref.diagnostics,
+                debug_trace: None,
+            });
+        }
+
+        let mut normalized = self.normalize_package_file_html_refs(&html, path)?;
+        let resources = normalized.resources;
+        let mut diagnostics = resource_ref.diagnostics;
+        diagnostics.append(&mut normalized.diagnostics);
+        Ok(ResolvedTargetView {
+            kind: resolved_kind_for_package_html_path(path),
+            target,
+            title,
+            display_html: Some(normalized.html),
+            basic_text: None,
+            surface: None,
+            resources,
+            links: normalized.links,
+            capabilities: vec![crate::render::RenderCapability::Html],
+            diagnostics,
+            debug_trace: None,
+        })
+    }
+
     fn resolved_kind_for_body_target(&self, target: &TargetToken) -> Result<ResolvedTargetKind> {
         match target.decode()? {
             InternalTarget::LvedRow { table, .. } if table.eq_ignore_ascii_case("info") => {
@@ -3584,6 +3710,75 @@ impl StubBookPackage {
         })
     }
 
+    fn normalize_package_file_html_refs(
+        &self,
+        html: &str,
+        path: &str,
+    ) -> Result<NormalizedHtmlRefs> {
+        let base_dir = package_html_base_dir(path);
+        let mut output = String::with_capacity(html.len());
+        let mut resources = Vec::new();
+        let mut links = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut seen_resource_tokens = BTreeSet::new();
+        let mut seen_target_tokens = BTreeSet::new();
+        let mut cursor = 0usize;
+
+        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+            output.push_str(&html[cursor..attr.value_start]);
+            let raw_value = &html[attr.value_start..attr.value_end];
+            if let Some(reference) = package_relative_html_reference(&base_dir, raw_value) {
+                if attr.name == HtmlAttrName::Href
+                    && path_has_extension(&reference.path, &["html", "htm"])
+                {
+                    let resource = InternalResource::PackageFile {
+                        path: reference.path.clone(),
+                        resource_kind: ResourceKind::Html,
+                    };
+                    let resource = ResourceToken::new(&resource)?;
+                    let target = InternalTarget::Resource { resource };
+                    let token = TargetToken::new(&target)?;
+                    if seen_target_tokens.insert(token.as_str().to_owned()) {
+                        links.push(TargetLink::new(raw_value, &target)?);
+                    }
+                    output.push_str(&format!("lvcore://target/{}", token.as_str()));
+                    if let Some(anchor) = reference.anchor {
+                        output.push('#');
+                        output.push_str(&anchor);
+                    }
+                } else {
+                    let resource = InternalResource::PackageFile {
+                        resource_kind: resource_kind_from_path(&reference.path),
+                        path: reference.path,
+                    };
+                    let token = ResourceToken::new(&resource)?;
+                    let href = format!("lvcore://resource/{}", token.as_str());
+                    if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                        let resource_ref = self.resolve_resource(&token)?;
+                        diagnostics.extend(resource_ref.diagnostics.clone());
+                        resources.push(resource_ref);
+                    }
+                    output.push_str(&href);
+                    if let Some(anchor) = reference.anchor {
+                        output.push('#');
+                        output.push_str(&anchor);
+                    }
+                }
+            } else {
+                output.push_str(raw_value);
+            }
+            cursor = attr.value_end;
+        }
+        output.push_str(&html[cursor..]);
+
+        Ok(NormalizedHtmlRefs {
+            html: output,
+            resources,
+            links,
+            diagnostics,
+        })
+    }
+
     fn rewrite_hourei_href(
         &self,
         raw_value: &str,
@@ -4037,6 +4232,104 @@ impl StubBookPackage {
         hints.sort();
         Ok(hints.into_iter().next())
     }
+
+    fn discover_ssed_hanrei_pages(&self) -> Result<Vec<SsedHanreiPage>> {
+        let mut pages = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        for candidate in [
+            "hanrei.html",
+            "HANREI.html",
+            "HANREI/index.html",
+            "HANREI/index.htm",
+            "HANREI/hanrei.html",
+            "HANREI/hanrei.htm",
+            "HANREI.chm",
+        ] {
+            self.push_ssed_hanrei_page(candidate, &mut pages, &mut seen)?;
+        }
+
+        for path in self.storage.list_dir(Path::new(""))? {
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
+                continue;
+            };
+            if name.starts_with("._") || !name.to_ascii_lowercase().ends_with("_help.localized") {
+                continue;
+            }
+            let root = name.replace('\\', "/");
+            for candidate in [
+                format!("{root}/index.html"),
+                format!("{root}/index.htm"),
+                format!("{root}/menu.html"),
+                format!("{root}/top.html"),
+                format!("{root}/contents/hanrei.html"),
+                format!("{root}/contents/hanrei.htm"),
+                format!("{root}/contents/copyright.html"),
+                format!("{root}/contents/copyright.htm"),
+            ] {
+                self.push_ssed_hanrei_page(&candidate, &mut pages, &mut seen)?;
+            }
+
+            let contents_dir = format!("{root}/contents");
+            for child in self.storage.list_dir(Path::new(&contents_dir))? {
+                if !child.is_file() {
+                    continue;
+                }
+                let Some(file_name) = child.file_name().map(|value| value.to_string_lossy()) else {
+                    continue;
+                };
+                if file_name.starts_with("._") {
+                    continue;
+                }
+                if !path_has_extension(&file_name, &["html", "htm"]) {
+                    continue;
+                }
+                let candidate = format!("{contents_dir}/{file_name}");
+                self.push_ssed_hanrei_page(&candidate, &mut pages, &mut seen)?;
+            }
+        }
+
+        Ok(pages)
+    }
+
+    fn push_ssed_hanrei_page(
+        &self,
+        candidate: &str,
+        pages: &mut Vec<SsedHanreiPage>,
+        seen: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        let normalized = candidate.replace('\\', "/");
+        if normalized
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+        {
+            return Ok(());
+        }
+        if !self.storage.exists(Path::new(&normalized))? {
+            return Ok(());
+        }
+        if !seen.insert(normalized.to_ascii_lowercase()) {
+            return Ok(());
+        }
+        let resource_kind = resource_kind_from_path(&normalized);
+        let mut diagnostics = Vec::new();
+        if path_has_extension(&normalized, &["chm"]) {
+            diagnostics.push(Diagnostic::info(
+                "ssed_hanrei_chm_deferred",
+                "HANREI.chm was found, but CHM extraction/wrapping is not implemented yet",
+            ));
+        }
+        pages.push(SsedHanreiPage {
+            label: ssed_hanrei_page_label(&normalized),
+            path: normalized,
+            resource_kind,
+            diagnostics,
+        });
+        Ok(())
+    }
 }
 
 fn push_surface_if_exists(
@@ -4076,6 +4369,14 @@ fn push_surface_if_exists(
         });
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct SsedHanreiPage {
+    path: String,
+    label: String,
+    resource_kind: ResourceKind,
+    diagnostics: Vec<Diagnostic>,
 }
 
 fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
@@ -4705,6 +5006,74 @@ fn html_unescape_minimal(value: &str) -> String {
         .replace("&amp;", "&")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackageHtmlReference {
+    path: String,
+    anchor: Option<String>,
+}
+
+fn package_html_base_dir(path: &str) -> String {
+    path.rsplit_once('/')
+        .map(|(base, _)| base.to_owned())
+        .unwrap_or_default()
+}
+
+fn package_relative_html_reference(
+    base_dir: &str,
+    raw_value: &str,
+) -> Option<PackageHtmlReference> {
+    let value = html_unescape_minimal(raw_value).trim().replace('\\', "/");
+    if value.is_empty()
+        || value.starts_with('#')
+        || value.starts_with('/')
+        || value.starts_with("http://")
+        || value.starts_with("https://")
+        || value.starts_with("mailto:")
+        || value.starts_with("javascript:")
+        || value.starts_with("data:")
+        || value.starts_with("lvcore://")
+    {
+        return None;
+    }
+    let (path_part, anchor) = value.split_once('#').unwrap_or((value.as_str(), ""));
+    let path_part = path_part.split('?').next().unwrap_or("").trim();
+    if path_part.is_empty() {
+        return None;
+    }
+    let joined = if base_dir.is_empty() {
+        path_part.to_owned()
+    } else {
+        format!("{base_dir}/{path_part}")
+    };
+    Some(PackageHtmlReference {
+        path: normalize_package_relative_path(&joined)?,
+        anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
+    })
+}
+
+fn normalize_package_relative_path(path: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            _ => parts.push(part),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+fn path_has_extension(path: &str, extensions: &[&str]) -> bool {
+    let extension = path.rsplit_once('.').map(|(_, extension)| extension);
+    extension.is_some_and(|extension| {
+        extensions
+            .iter()
+            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    })
+}
+
 fn resource_kind_from_path(path: &str) -> ResourceKind {
     let lower = path.to_ascii_lowercase();
     if lower.ends_with(".mp3") || lower.ends_with(".wav") {
@@ -4721,9 +5090,56 @@ fn resource_kind_from_path(path: &str) -> ResourceKind {
         ResourceKind::Css
     } else if lower.ends_with(".js") {
         ResourceKind::Javascript
+    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
+        ResourceKind::Html
     } else {
         ResourceKind::Other
     }
+}
+
+fn decode_package_html_text(data: &[u8]) -> String {
+    match std::str::from_utf8(data) {
+        Ok(value) => value.to_owned(),
+        Err(_) => {
+            let (decoded, _, _) = SHIFT_JIS.decode(data);
+            decoded.into_owned()
+        }
+    }
+}
+
+fn resolved_kind_for_package_html_path(path: &str) -> ResolvedTargetKind {
+    let lower = path.to_ascii_lowercase();
+    if lower.contains("hanrei")
+        || lower.contains("_help.localized/")
+        || lower.starts_with("hanrei/")
+        || lower.starts_with("hanrei.")
+    {
+        ResolvedTargetKind::HanreiPage
+    } else {
+        ResolvedTargetKind::InfoPage
+    }
+}
+
+fn ssed_hanrei_page_label(path: &str) -> String {
+    if path_has_extension(path, &["chm"]) {
+        return "HANREI.chm".to_owned();
+    }
+    if path.contains("_HELP.localized/contents/hanrei.") {
+        return "Mac help: 凡例".to_owned();
+    }
+    if path.contains("_HELP.localized/contents/copyright.") {
+        return "Mac help: copyright".to_owned();
+    }
+    if path.contains("_HELP.localized/menu.") {
+        return "Mac help: menu".to_owned();
+    }
+    if path.contains("_HELP.localized/top.") {
+        return "Mac help: top".to_owned();
+    }
+    if path.contains("_HELP.localized/index.") {
+        return "Mac help: index".to_owned();
+    }
+    path.to_owned()
 }
 
 fn html_label_text(fragment: &str) -> String {

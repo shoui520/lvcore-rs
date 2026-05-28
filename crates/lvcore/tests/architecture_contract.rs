@@ -627,10 +627,17 @@ fn ssed_home_surfaces_are_capability_based() {
         surface.kind == NavigationSurfaceKind::Panel
             && surface.status == NavigationStatus::Available
     }));
-    assert!(surfaces.iter().any(|surface| {
-        surface.kind == NavigationSurfaceKind::Hanrei
-            && surface.status == NavigationStatus::Deferred
-    }));
+    let hanrei_surface = surfaces
+        .iter()
+        .find(|surface| surface.kind == NavigationSurfaceKind::Hanrei)
+        .unwrap();
+    assert_eq!(hanrei_surface.status, NavigationStatus::Available);
+    assert!(
+        hanrei_surface
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_hanrei_chm_deferred")
+    );
     let menu_surface = package.open_surface("menu").unwrap();
     let lvcore::NavigationSurface::SimpleMenu { nodes, .. } = menu_surface else {
         panic!("SSED MENU should decode to a simple menu surface");
@@ -675,6 +682,167 @@ fn ssed_home_surfaces_are_capability_based() {
             offset: 2,
         } if component == "HONMON.DIC"
     ));
+}
+
+#[test]
+fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("hanrei.html"),
+        b"<html><head><title>Root</title></head><frameset><frame src=\"BOOK_HELP.localized/menu.html\"></frameset></html>",
+    )
+    .unwrap();
+    fs::write(dir.path().join("HANREI.chm"), b"chm").unwrap();
+    fs::create_dir_all(dir.path().join("BOOK_HELP.localized/contents/image")).unwrap();
+    fs::write(
+        dir.path().join("BOOK_HELP.localized/menu.html"),
+        b"<html><body><a href=\"contents/hanrei.html#usage\">Usage</a></body></html>",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BOOK_HELP.localized/top.html"),
+        b"<html><body>top</body></html>",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BOOK_HELP.localized/contents/hanrei.html"),
+        b"<html><head><link rel=\"stylesheet\" href=\"../contents.css\"></head><body><a name=\"usage\"></a><img src=\"image/B123.png\">Usage</body></html>",
+    )
+    .unwrap();
+    fs::write(
+        dir.path()
+            .join("BOOK_HELP.localized/contents/copyright.html"),
+        b"<html><body>copyright</body></html>",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BOOK_HELP.localized/contents.css"),
+        b"body{}",
+    )
+    .unwrap();
+    fs::write(
+        dir.path()
+            .join("BOOK_HELP.localized/contents/image/B123.png"),
+        b"png",
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surfaces = package.home_surfaces().unwrap();
+    let hanrei_home = surfaces
+        .iter()
+        .find(|surface| surface.kind == NavigationSurfaceKind::Hanrei)
+        .unwrap();
+    assert_eq!(hanrei_home.status, NavigationStatus::Available);
+    assert!(hanrei_home.target.is_some());
+    assert!(
+        hanrei_home
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_hanrei_chm_deferred")
+    );
+
+    let surface = package.open_surface("hanrei").unwrap();
+    let NavigationSurface::InfoPages { pages, .. } = surface else {
+        panic!("SSED HANREI should open as info pages");
+    };
+    assert!(
+        pages
+            .iter()
+            .any(|page| page.item_id == "hanrei.html" && page.label_text == "hanrei.html")
+    );
+    assert!(pages.iter().any(|page| {
+        page.item_id == "HANREI.chm"
+            && page
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "ssed_hanrei_chm_deferred")
+    }));
+    let mac_hanrei = pages
+        .iter()
+        .find(|page| page.item_id == "BOOK_HELP.localized/contents/hanrei.html")
+        .unwrap();
+    assert_eq!(mac_hanrei.label_text, "Mac help: 凡例");
+    assert!(matches!(
+        mac_hanrei.target.decode().unwrap(),
+        InternalTarget::Resource { .. }
+    ));
+
+    let view = package
+        .render_target(&mac_hanrei.target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::HanreiPage);
+    let html = view.display_html.as_deref().unwrap();
+    assert!(html.contains("Usage"));
+    assert!(html.contains("lvcore://resource/"));
+    assert!(!html.contains("../contents.css"));
+    assert!(!html.contains("image/B123.png"));
+    assert_eq!(view.resources.len(), 2);
+    assert_eq!(view.links.len(), 0);
+}
+
+#[test]
+fn package_html_resource_targets_decode_cp932_and_rewrite_html_links() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir_all(dir.path().join("HELP/sub")).unwrap();
+    fs::write(
+        dir.path().join("HELP/index.html"),
+        [
+            b"<html><head><title>".as_slice(),
+            &[0x96, 0x7b, 0x95, 0xb6],
+            b"</title></head><body><a href=\"sub/page.html#x\">next</a><img src=\"pic.png\"></body></html>",
+        ]
+        .concat(),
+    )
+    .unwrap();
+    fs::write(dir.path().join("HELP/sub/page.html"), b"<html>sub</html>").unwrap();
+    fs::write(dir.path().join("HELP/pic.png"), b"png").unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let resource = ResourceToken::new(&InternalResource::PackageFile {
+        path: "HELP/index.html".to_owned(),
+        resource_kind: ResourceKind::Html,
+    })
+    .unwrap();
+    let target = TargetToken::new(&InternalTarget::Resource { resource }).unwrap();
+
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::InfoPage);
+    let html = view.display_html.as_deref().unwrap();
+    assert!(html.contains("本文"));
+    assert!(html.contains("lvcore://target/"));
+    assert!(html.contains("#x"));
+    assert!(html.contains("lvcore://resource/"));
+    assert!(!html.contains("sub/page.html"));
+    assert!(!html.contains("pic.png"));
+    assert_eq!(view.links.len(), 1);
+    assert_eq!(
+        view.links[0].token.decode().unwrap(),
+        InternalTarget::Resource {
+            resource: ResourceToken::new(&InternalResource::PackageFile {
+                path: "HELP/sub/page.html".to_owned(),
+                resource_kind: ResourceKind::Html,
+            })
+            .unwrap()
+        }
+    );
+    assert_eq!(view.resources.len(), 1);
+
+    let basic = package
+        .render_target(
+            &target,
+            &RenderOptions {
+                mode: RenderMode::BasicText,
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(basic.basic_text.as_deref(), Some("本文next"));
+    assert!(basic.display_html.is_none());
 }
 
 #[test]
