@@ -25,6 +25,10 @@ pub fn decrypt_logofont_cipher_prefix(data: &[u8], size: usize) -> Result<Vec<u8
     decrypt_logofont_cipher_prefix_with_variant(data, size, LogoFontCipherVariant::Windows)
 }
 
+pub fn decrypt_logofont_cipher_bytes(data: &[u8]) -> Result<Vec<u8>> {
+    decrypt_logofont_cipher_bytes_with_variant(data, LogoFontCipherVariant::Windows)
+}
+
 pub fn decrypt_macos_logofont_cipher_prefix(data: &[u8], size: usize) -> Result<Vec<u8>> {
     decrypt_logofont_cipher_prefix_with_variant(data, size, LogoFontCipherVariant::MacOs)
 }
@@ -147,6 +151,26 @@ fn decrypt_logofont_cipher_blocks_with_variant(
         let plain = decrypt_cbc_block(&cipher, chunk, &previous_cipher);
         previous_cipher.copy_from_slice(chunk);
         plaintext.extend_from_slice(&plain);
+    }
+    Ok(plaintext)
+}
+
+fn decrypt_logofont_cipher_bytes_with_variant(
+    data: &[u8],
+    variant: LogoFontCipherVariant,
+) -> Result<Vec<u8>> {
+    let mut plaintext = decrypt_logofont_cipher_blocks_with_variant(data, variant)?;
+    if let Some(&last) = plaintext.last() {
+        let padding = usize::from(last);
+        if padding > 0
+            && padding <= BLOCK_SIZE
+            && padding <= plaintext.len()
+            && plaintext[plaintext.len() - padding..]
+                .iter()
+                .all(|byte| usize::from(*byte) == padding)
+        {
+            plaintext.truncate(plaintext.len() - padding);
+        }
     }
     Ok(plaintext)
 }
@@ -401,6 +425,18 @@ mod tests {
         let decrypted = decrypt_macos_logofont_cipher_prefix(&encrypted, encrypted.len()).unwrap();
 
         assert!(decrypted.starts_with(b"SSEDDATA"));
+    }
+
+    #[test]
+    fn logofont_cipher_byte_decrypt_strips_full_payload_padding() {
+        let encrypted = encrypt_cbc_for_test(
+            b"ID3\x03\x00\x00sample mp3 bytes",
+            LogoFontCipherVariant::Windows,
+        );
+
+        let decrypted = decrypt_logofont_cipher_bytes(&encrypted).unwrap();
+
+        assert_eq!(decrypted, b"ID3\x03\x00\x00sample mp3 bytes");
     }
 
     #[test]

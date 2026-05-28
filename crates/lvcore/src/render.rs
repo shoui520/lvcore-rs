@@ -43,6 +43,7 @@ pub enum RenderCapability {
     MathJax,
     VerticalText,
     Audio,
+    Video,
     Images,
     Panels,
     HcRenderInput,

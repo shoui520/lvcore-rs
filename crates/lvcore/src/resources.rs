@@ -15,6 +15,7 @@ pub enum ResourceKind {
     Colscr,
     PcmData,
     SoundData,
+    Video,
     MediaBlob,
     Pdf,
     Html,
@@ -42,6 +43,9 @@ pub enum InternalResource {
         key: String,
         resource_kind: ResourceKind,
     },
+    LooseMovie {
+        movie_id: String,
+    },
     ChmFile {
         chm_path: String,
         entry_path: String,
@@ -57,8 +61,9 @@ impl InternalResource {
         match self {
             Self::PackageFile { resource_kind, .. }
             | Self::SsedComponentAddress { resource_kind, .. }
-            | Self::MediaBlob { resource_kind, .. }
             | Self::ChmFile { resource_kind, .. } => *resource_kind,
+            Self::MediaBlob { resource_kind, .. } => *resource_kind,
+            Self::LooseMovie { .. } => ResourceKind::Video,
             Self::Unsupported { .. } => ResourceKind::Other,
         }
     }
@@ -162,5 +167,15 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("HANREI"));
+    }
+
+    #[test]
+    fn token_round_trips_loose_movie_resource() {
+        let resource = InternalResource::LooseMovie {
+            movie_id: "05011360".to_owned(),
+        };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("05011360"));
     }
 }

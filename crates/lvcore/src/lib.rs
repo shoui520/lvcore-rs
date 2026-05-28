@@ -22,6 +22,7 @@ pub mod search;
 pub mod sequence;
 pub mod ssed;
 pub mod ssed_index;
+pub mod ssed_loose_media;
 pub mod ssed_menu;
 pub mod ssed_panel;
 pub mod ssed_screen_menu;
@@ -62,6 +63,7 @@ pub use ssed::{
     SsedComponentRole, SsedDataFile, SsedDataHeader, SsedDataReader, SsedInfoLayout,
 };
 pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
+pub use ssed_loose_media::{PcmuIndex, PcmuMapRecord};
 pub use ssed_menu::{
     SsedMenuDestination, SsedMenuDestinationEncoding, SsedMenuLink, SsedMenuParse, SsedMenuRecord,
 };

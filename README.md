@@ -116,6 +116,9 @@ provider slices:
 - SSED screen-menu decoding for the KOJIEN6-style `SCRMENU.DIC` component:
   background images are exposed as COLSCR resource tokens, screen jumps remain
   navigation targets, and body hotspots resolve to normal SSED address targets;
+- SSED loose KOJIEN6-style media: `_PCM_U/WaveFile.map` can back `PCMDATA.DIC`
+  address resources with decrypted MP3 bytes, and `_MOVIE` entries are exposed
+  as typed video resources;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
 `logovista-tools` remains the research oracle while `lvcore-rs` ports stable
@@ -135,8 +138,8 @@ known structures.
 - SSED internal-page traversal is currently implemented only for simple
   exact/forward title-index paths. Backward, partial, keyword, cross-reference,
   and multi-selector performance still need format-specific indexing work.
-- KOJIEN6-specific MONOSCR/COLSMPL/`_PCM_U`/movie resources are recognized as
-  architecture requirements but are not fully reader-rendered yet.
+- KOJIEN6-specific MONOSCR/COLSMPL resources are recognized as architecture
+  requirements but are not fully reader-rendered yet.
 - CHM table-of-contents semantics are supported at the reader-core level:
   lvcore reads `.hhc` Name/Local entries and exposes them as nested HANREI
   navigation trees with target tokens and scroll anchors. Higher-level reader

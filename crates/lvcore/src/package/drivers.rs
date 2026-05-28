@@ -49,6 +49,7 @@ use crate::ssed_index::{
     decode_title_text, is_leaf_page, is_simple_leaf_index_type, is_supported_index_type,
     parse_internal_page, parse_simple_leaf_page, parse_supported_leaf_page,
 };
+use crate::ssed_loose_media::{find_movie_file, read_pcmu_record, resolve_pcmu_record};
 use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
 use crate::ssed_panel::{
     SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, parse_panel_bin,
@@ -1070,6 +1071,18 @@ impl ResourceProvider for StubBookPackage {
                 offset,
                 resource_kind,
             } => {
+                if resource_kind == ResourceKind::PcmData
+                    && let Some(record) = resolve_pcmu_record(&self.root, block)?
+                {
+                    return Ok(ResourceRef {
+                        token: token.clone(),
+                        kind: resource_kind,
+                        label: Some(format!("_PCM_U/{}", record.stem)),
+                        href: Some(format!("lvcore://resource/{}", token.as_str())),
+                        mime_type: Some("audio/mpeg".to_owned()),
+                        diagnostics: Vec::new(),
+                    });
+                }
                 let resolved = self
                     .ssed_component_by_name(&component)
                     .and_then(|component| self.resolve_readable_ssed_component_path(component).ok())
@@ -1091,6 +1104,27 @@ impl ResourceProvider for StubBookPackage {
                     href,
                     mime_type: resource_mime_type(resource_kind, Some(&component))
                         .map(str::to_owned),
+                    diagnostics,
+                })
+            }
+            InternalResource::LooseMovie { movie_id } => {
+                let resolved = find_movie_file(&self.root, &movie_id)?;
+                let mut diagnostics = Vec::new();
+                let href = if resolved.is_some() {
+                    Some(format!("lvcore://resource/{}", token.as_str()))
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!("_MOVIE file {movie_id} was not found in the package"),
+                    ));
+                    None
+                };
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: ResourceKind::Video,
+                    label: Some(movie_id),
+                    href,
+                    mime_type: Some("video/mpeg".to_owned()),
                     diagnostics,
                 })
             }
@@ -1171,12 +1205,26 @@ impl ResourceProvider for StubBookPackage {
                 offset,
                 resource_kind,
             } => {
-                if resource_kind != ResourceKind::Colscr {
+                if resource_kind == ResourceKind::Colscr {
+                    return self.read_ssed_colscr_image(&component, block, offset);
+                }
+                if resource_kind == ResourceKind::PcmData {
+                    if let Some(bytes) = read_pcmu_record(&self.root, block)? {
+                        return Ok(bytes);
+                    }
                     return Err(Error::Driver(format!(
-                        "SSED component-address resources are not readable for {resource_kind:?}"
+                        "_PCM_U audio for PCMDATA.DIC block {block} was not found"
                     )));
                 }
-                self.read_ssed_colscr_image(&component, block, offset)
+                Err(Error::Driver(format!(
+                    "SSED component-address resources are not readable for {resource_kind:?}"
+                )))
+            }
+            InternalResource::LooseMovie { movie_id } => {
+                let Some(path) = find_movie_file(&self.root, &movie_id)? else {
+                    return Err(Error::Driver(format!("_MOVIE file not found: {movie_id}")));
+                };
+                Ok(fs::read(path)?)
             }
             InternalResource::ChmFile {
                 chm_path,
@@ -5585,8 +5633,17 @@ fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
         || lower_key.ends_with(".gif")
         || lower_key.ends_with(".svg")
         || lower_key.ends_with(".bmp");
+    let video = lower_namespace.contains("video")
+        || lower_namespace.contains("movie")
+        || lower_key.ends_with(".mp4")
+        || lower_key.ends_with(".m4v")
+        || lower_key.ends_with(".mpg")
+        || lower_key.ends_with(".mpeg")
+        || lower_key.ends_with(".mov");
     let resource_kind = if audio {
         ResourceKind::Audio
+    } else if video {
+        ResourceKind::Video
     } else if image {
         ResourceKind::Image
     } else {
@@ -6356,6 +6413,13 @@ fn resource_kind_from_path(path: &str) -> ResourceKind {
     let lower = path.to_ascii_lowercase();
     if lower.ends_with(".mp3") || lower.ends_with(".wav") {
         ResourceKind::Audio
+    } else if lower.ends_with(".mp4")
+        || lower.ends_with(".m4v")
+        || lower.ends_with(".mpg")
+        || lower.ends_with(".mpeg")
+        || lower.ends_with(".mov")
+    {
+        ResourceKind::Video
     } else if lower.ends_with(".png")
         || lower.ends_with(".jpg")
         || lower.ends_with(".jpeg")
@@ -6399,6 +6463,12 @@ fn resource_mime_type(kind: ResourceKind, path_hint: Option<&str>) -> Option<&'s
         Some("audio/ogg")
     } else if lower.ends_with(".m4a") {
         Some("audio/mp4")
+    } else if lower.ends_with(".mp4") || lower.ends_with(".m4v") {
+        Some("video/mp4")
+    } else if lower.ends_with(".mpg") || lower.ends_with(".mpeg") {
+        Some("video/mpeg")
+    } else if lower.ends_with(".mov") {
+        Some("video/quicktime")
     } else if lower.ends_with(".css") {
         Some("text/css; charset=utf-8")
     } else if lower.ends_with(".js") {
@@ -6426,6 +6496,7 @@ fn resource_mime_type(kind: ResourceKind, path_hint: Option<&str>) -> Option<&'s
         ResourceKind::Colscr => Some("image/bmp"),
         ResourceKind::PcmData => Some("audio/wav"),
         ResourceKind::SoundData => Some("audio/mpeg"),
+        ResourceKind::Video => Some("video/mpeg"),
         _ => None,
     })
 }
@@ -6943,6 +7014,9 @@ fn update_visual_capabilities(view: &mut ResolvedTargetView) {
             }
             ResourceKind::Audio | ResourceKind::PcmData | ResourceKind::SoundData => {
                 push_render_capability_once(&mut view.capabilities, RenderCapability::Audio);
+            }
+            ResourceKind::Video => {
+                push_render_capability_once(&mut view.capabilities, RenderCapability::Video);
             }
             ResourceKind::Css => {
                 push_render_capability_once(&mut view.capabilities, RenderCapability::Css);
@@ -7586,7 +7660,10 @@ fn ssed_search_modes(catalog: &SsedCatalog, root: &Path) -> Vec<SearchMode> {
 mod tests {
     use std::fs;
 
+    use aes::Aes128;
+    use aes::cipher::{BlockEncrypt, KeyInit};
     use rusqlite::Connection;
+    use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
     use crate::lved_sqlite::apply_sqlcipher_key;
@@ -8237,6 +8314,86 @@ mod tests {
                 offset: 0
             } if component == "HONMON.DIC"
         ));
+    }
+
+    #[test]
+    fn ssed_pcmdata_address_uses_loose_pcmu_audio_when_component_is_absent() {
+        let dir = tempdir().unwrap();
+        let package_root = dir.path().join("_DCT_SAMPLE");
+        let pcmu_root = dir.path().join("_DCT_SAMPLE_PCM_U");
+        fs::create_dir(&package_root).unwrap();
+        fs::create_dir(&pcmu_root).unwrap();
+        fs::write(pcmu_root.join("WaveFile.map"), b"00000001 269094\n").unwrap();
+        fs::write(
+            pcmu_root.join("00000001"),
+            encrypt_logofont_cipher_for_test(b"ID3\x03\x00\x00sample mp3 bytes"),
+        )
+        .unwrap();
+
+        let package = StubBookPackage::new(
+            &package_root,
+            DetectedPackage {
+                root: package_root.clone(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Sample".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores::default(),
+        );
+        let token = ResourceToken::new(&InternalResource::SsedComponentAddress {
+            component: "PCMDATA.DIC".to_owned(),
+            block: 269094,
+            offset: 0,
+            resource_kind: ResourceKind::PcmData,
+        })
+        .unwrap();
+
+        let resource = package.resolve_resource(&token).unwrap();
+        assert_eq!(resource.kind, ResourceKind::PcmData);
+        assert_eq!(resource.label.as_deref(), Some("_PCM_U/00000001"));
+        assert_eq!(resource.mime_type.as_deref(), Some("audio/mpeg"));
+        assert!(resource.href.is_some());
+        assert!(resource.diagnostics.is_empty());
+        assert_eq!(
+            package.read_resource(&token).unwrap(),
+            b"ID3\x03\x00\x00sample mp3 bytes"
+        );
+    }
+
+    #[test]
+    fn loose_movie_resource_resolves_and_reads_movie_file() {
+        let dir = tempdir().unwrap();
+        let package_root = dir.path().join("_DCT_SAMPLE");
+        let movie_root = dir.path().join("_DCT_SAMPLE_MOVIE");
+        fs::create_dir(&package_root).unwrap();
+        fs::create_dir(&movie_root).unwrap();
+        fs::write(movie_root.join("12345678"), b"movie bytes").unwrap();
+
+        let package = StubBookPackage::new(
+            &package_root,
+            DetectedPackage {
+                root: package_root.clone(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Sample".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores::default(),
+        );
+        let token = ResourceToken::new(&InternalResource::LooseMovie {
+            movie_id: "12345678".to_owned(),
+        })
+        .unwrap();
+
+        let resource = package.resolve_resource(&token).unwrap();
+        assert_eq!(resource.kind, ResourceKind::Video);
+        assert_eq!(resource.mime_type.as_deref(), Some("video/mpeg"));
+        assert!(resource.href.is_some());
+        assert!(resource.diagnostics.is_empty());
+        assert_eq!(package.read_resource(&token).unwrap(), b"movie bytes");
     }
 
     #[test]
@@ -8931,6 +9088,29 @@ mod tests {
             ((s.as_bytes()[4] - b'0') << 4) | (s.as_bytes()[5] - b'0'),
             ((s.as_bytes()[6] - b'0') << 4) | (s.as_bytes()[7] - b'0'),
         ]
+    }
+
+    fn encrypt_logofont_cipher_for_test(data: &[u8]) -> Vec<u8> {
+        let digest = Sha256::digest(b"LogoFontCipher");
+        let key = &digest[..16];
+        let mut previous = [0_u8; 16];
+        previous.copy_from_slice(&digest[16..32]);
+        let cipher = Aes128::new_from_slice(key).unwrap();
+        let mut padded = data.to_vec();
+        let padding = 16 - (padded.len() % 16);
+        padded.extend(std::iter::repeat_n(padding as u8, padding));
+        let mut encrypted = Vec::with_capacity(padded.len());
+        for chunk in padded.chunks_exact(16) {
+            let mut block = [0_u8; 16];
+            for index in 0..16 {
+                block[index] = chunk[index] ^ previous[index];
+            }
+            let mut block = aes::Block::from(block);
+            cipher.encrypt_block(&mut block);
+            previous.copy_from_slice(&block);
+            encrypted.extend_from_slice(&block);
+        }
+        encrypted
     }
 
     fn fixture_sseddata_literal_chunks(
