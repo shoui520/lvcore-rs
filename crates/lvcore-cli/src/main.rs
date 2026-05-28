@@ -1,5 +1,7 @@
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
@@ -34,6 +36,9 @@ enum Command {
         /// Also open available surfaces, render their first target, and run a small search.
         #[arg(long)]
         deep: bool,
+        /// Stream one JSON object per package as soon as it is validated.
+        #[arg(long)]
+        jsonl: bool,
     },
     /// Open one package, run native search, and optionally render the first hit.
     Search {
@@ -128,7 +133,12 @@ fn main() -> Result<()> {
             let detected = registry.detect(&path)?;
             println!("{}", serde_json::to_string_pretty(&detected)?);
         }
-        Command::Validate { paths, max, deep } => {
+        Command::Validate {
+            paths,
+            max,
+            deep,
+            jsonl,
+        } => {
             let registry = DriverRegistry::default();
             let mut package_paths = Vec::new();
             for path in paths {
@@ -141,49 +151,24 @@ fn main() -> Result<()> {
             let mut rows = Vec::new();
             for path in package_paths {
                 eprintln!("lvcore: validating {}", path.display());
-                let row = match open_single_book_library(&registry, &path) {
-                    Ok((library, book_id)) => {
-                        let metadata = metadata_for(&library, &book_id);
-                        match library.home_surfaces(&book_id) {
-                            Ok(surfaces) => {
-                                let exercises = if deep {
-                                    Some(exercise_reader_paths(&library, &book_id, &surfaces))
-                                } else {
-                                    None
-                                };
-                                json!({
-                                    "path": path,
-                                    "status": "ok",
-                                    "book_id": metadata.book_id,
-                                    "format_family": metadata.format_family,
-                                    "format_label": metadata.format_label,
-                                    "title": metadata.title,
-                                    "capabilities": metadata.capabilities,
-                                    "surface_count": surfaces.len(),
-                                    "surfaces": surfaces,
-                                    "exercises": exercises,
-                                })
-                            }
-                            Err(error) => json!({
-                                "path": path,
-                                "status": "surface_error",
-                                "book_id": metadata.book_id,
-                                "format_family": metadata.format_family,
-                                "format_label": metadata.format_label,
-                                "title": metadata.title,
-                                "error": error.to_string(),
-                            }),
-                        }
-                    }
-                    Err(error) => json!({
-                        "path": path,
-                        "status": "open_error",
-                        "error": error.to_string(),
-                    }),
-                };
-                rows.push(row);
+                let started = Instant::now();
+                let mut row = validate_package_json(&registry, &path, deep);
+                if let Some(object) = row.as_object_mut() {
+                    object.insert(
+                        "elapsed_ms".to_owned(),
+                        json!(started.elapsed().as_millis()),
+                    );
+                }
+                if jsonl {
+                    println!("{}", serde_json::to_string(&row)?);
+                    io::stdout().flush()?;
+                } else {
+                    rows.push(row);
+                }
             }
-            println!("{}", serde_json::to_string_pretty(&rows)?);
+            if !jsonl {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            }
         }
         Command::Search {
             path,
@@ -278,6 +263,49 @@ fn metadata_for(library: &BookLibrary, book_id: &BookId) -> BookMetadata {
         .expect("book id returned by open_path must exist")
         .metadata()
         .clone()
+}
+
+fn validate_package_json(registry: &DriverRegistry, path: &Path, deep: bool) -> serde_json::Value {
+    match open_single_book_library(registry, path) {
+        Ok((library, book_id)) => {
+            let metadata = metadata_for(&library, &book_id);
+            match library.home_surfaces(&book_id) {
+                Ok(surfaces) => {
+                    let exercises = if deep {
+                        Some(exercise_reader_paths(&library, &book_id, &surfaces))
+                    } else {
+                        None
+                    };
+                    json!({
+                        "path": path,
+                        "status": "ok",
+                        "book_id": metadata.book_id,
+                        "format_family": metadata.format_family,
+                        "format_label": metadata.format_label,
+                        "title": metadata.title,
+                        "capabilities": metadata.capabilities,
+                        "surface_count": surfaces.len(),
+                        "surfaces": surfaces,
+                        "exercises": exercises,
+                    })
+                }
+                Err(error) => json!({
+                    "path": path,
+                    "status": "surface_error",
+                    "book_id": metadata.book_id,
+                    "format_family": metadata.format_family,
+                    "format_label": metadata.format_label,
+                    "title": metadata.title,
+                    "error": error.to_string(),
+                }),
+            }
+        }
+        Err(error) => json!({
+            "path": path,
+            "status": "open_error",
+            "error": error.to_string(),
+        }),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
