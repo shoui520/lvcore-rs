@@ -259,6 +259,11 @@ impl BookLibrary {
         self.required_book(book_id)?.read_resource(resource)
     }
 
+    pub fn read_scoped_resource_href(&self, href: &str) -> Result<Vec<u8>> {
+        let (book_id, resource) = parse_scoped_resource_href(href)?;
+        self.read_resource(&book_id, &resource)
+    }
+
     pub fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         match &query.scope {
             SearchScope::CurrentBook(book_id) => {
@@ -474,6 +479,27 @@ fn scoped_resource_href(book_id: &BookId, token: &ResourceToken) -> String {
         URL_SAFE_NO_PAD.encode(book_id.0.as_bytes()),
         token.as_str()
     )
+}
+
+fn parse_scoped_resource_href(href: &str) -> Result<(BookId, ResourceToken)> {
+    let Some(rest) = href.strip_prefix("lvcore://resource/") else {
+        return Err(Error::InvalidResourceHref);
+    };
+    let mut parts = rest.split('/');
+    let Some(book_scope) = parts.next().filter(|value| !value.is_empty()) else {
+        return Err(Error::InvalidResourceHref);
+    };
+    let Some(resource_token) = parts.next().filter(|value| !value.is_empty()) else {
+        return Err(Error::InvalidResourceHref);
+    };
+    if parts.next().is_some() {
+        return Err(Error::InvalidResourceHref);
+    }
+    let book_id_bytes = URL_SAFE_NO_PAD
+        .decode(book_scope)
+        .map_err(|_| Error::InvalidResourceHref)?;
+    let book_id = String::from_utf8(book_id_bytes).map_err(|_| Error::InvalidResourceHref)?;
+    Ok((BookId(book_id), ResourceToken::from_opaque(resource_token)))
 }
 
 fn encode_library_search_cursor(book_index: usize, book_cursor: Option<String>) -> String {

@@ -2465,6 +2465,10 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
             .unwrap()
             .contains(resource_href)
     );
+    assert_eq!(
+        library.read_scoped_resource_href(resource_href).unwrap(),
+        b"png".to_vec()
+    );
     assert!(matches!(
         routed.view.target.decode().unwrap(),
         InternalTarget::LvedRow {
@@ -2500,6 +2504,19 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
             .iter()
             .any(|diagnostic| diagnostic.code == "lved_cross_book_routed")
     );
+}
+
+#[test]
+fn library_rejects_invalid_scoped_resource_hrefs() {
+    let library = BookLibrary::new();
+    assert!(matches!(
+        library.read_scoped_resource_href("lvcore://resource/not-scoped"),
+        Err(lvcore::Error::InvalidResourceHref)
+    ));
+    assert!(matches!(
+        library.read_scoped_resource_href("https://example.test/resource"),
+        Err(lvcore::Error::InvalidResourceHref)
+    ));
 }
 
 #[test]

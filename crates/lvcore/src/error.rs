@@ -19,6 +19,9 @@ pub enum Error {
     #[error("invalid resource token")]
     InvalidResourceToken,
 
+    #[error("invalid resource href")]
+    InvalidResourceHref,
+
     #[error("unsupported package family: {0}")]
     UnsupportedFamily(String),
 

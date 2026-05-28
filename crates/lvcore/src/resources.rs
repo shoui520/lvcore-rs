@@ -61,6 +61,10 @@ impl InternalResource {
 pub struct ResourceToken(String);
 
 impl ResourceToken {
+    pub fn from_opaque(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     pub fn new(resource: &InternalResource) -> Result<Self> {
         let envelope = ResourceEnvelope {
             version: 1,
