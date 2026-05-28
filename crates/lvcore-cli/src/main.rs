@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
-    BookPackage, DriverRegistry, HomeSurface, NavigationStatus, NavigationSurface, RenderOptions,
-    Result, SearchMode, SearchQuery, SearchScope, TargetToken,
+    BookId, BookLibrary, BookMetadata, DriverRegistry, HomeSurface, NavigationStatus,
+    NavigationSurface, RenderOptions, Result, SearchMode, SearchQuery, SearchScope, TargetToken,
 };
 use serde_json::json;
 
@@ -140,13 +140,13 @@ fn main() -> Result<()> {
             let mut rows = Vec::new();
             for path in package_paths {
                 eprintln!("lvcore: validating {}", path.display());
-                let row = match registry.open_best(&path) {
-                    Ok(package) => {
-                        let metadata = package.metadata();
-                        match package.home_surfaces() {
+                let row = match open_single_book_library(&registry, &path) {
+                    Ok((library, book_id)) => {
+                        let metadata = metadata_for(&library, &book_id);
+                        match library.home_surfaces(&book_id) {
                             Ok(surfaces) => {
                                 let exercises = if deep {
-                                    Some(exercise_reader_paths(package.as_ref(), &surfaces))
+                                    Some(exercise_reader_paths(&library, &book_id, &surfaces))
                                 } else {
                                     None
                                 };
@@ -196,50 +196,18 @@ fn main() -> Result<()> {
             window_after,
         } => {
             let registry = DriverRegistry::default();
-            let package = registry.open_best(&path)?;
-            let metadata = package.metadata();
-            let page = package.search(&SearchQuery {
-                scope: SearchScope::CurrentBook(metadata.book_id.clone()),
-                mode: cli_search_mode(mode, advanced_column),
+            let output = search_command_json(
+                &registry,
+                &path,
                 query,
-                cursor,
+                cli_search_mode(mode, advanced_column),
                 limit,
-            })?;
-            let rendered_first = if render_first {
-                page.hits
-                    .first()
-                    .map(|hit| package.render_target(&hit.target, &RenderOptions::default()))
-                    .transpose()?
-            } else {
-                None
-            };
-            let target_window = if window_before > 0 || window_after > 0 {
-                page.hits
-                    .first()
-                    .map(|hit| {
-                        package.resolve_target_window(
-                            &hit.target,
-                            None,
-                            window_before,
-                            window_after,
-                            &RenderOptions::default(),
-                        )
-                    })
-                    .transpose()?
-            } else {
-                None
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "metadata": metadata,
-                    "hits": page.hits,
-                    "next_cursor": page.next_cursor,
-                    "diagnostics": page.diagnostics,
-                    "rendered_first": rendered_first,
-                    "target_window": target_window,
-                }))?
-            );
+                cursor,
+                render_first,
+                window_before,
+                window_after,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&output)?);
         }
         Command::Surface {
             path,
@@ -248,9 +216,10 @@ fn main() -> Result<()> {
             limit,
         } => {
             let registry = DriverRegistry::default();
-            let package = registry.open_best(&path)?;
-            let metadata = package.metadata();
-            let surface = package.open_surface_page(&surface_id, cursor.as_deref(), limit)?;
+            let (library, book_id) = open_single_book_library(&registry, &path)?;
+            let metadata = metadata_for(&library, &book_id);
+            let surface =
+                library.open_surface_page(&book_id, &surface_id, cursor.as_deref(), limit)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
@@ -263,10 +232,10 @@ fn main() -> Result<()> {
         }
         Command::Render { path, token } => {
             let registry = DriverRegistry::default();
-            let package = registry.open_best(&path)?;
-            let metadata = package.metadata();
+            let (library, book_id) = open_single_book_library(&registry, &path)?;
+            let metadata = metadata_for(&library, &book_id);
             let target = TargetToken::from_opaque(token);
-            let view = package.render_target(&target, &RenderOptions::default())?;
+            let view = library.render_target(&book_id, &target, &RenderOptions::default())?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
@@ -277,10 +246,10 @@ fn main() -> Result<()> {
         }
         Command::RendererInput { path, token } => {
             let registry = DriverRegistry::default();
-            let package = registry.open_best(&path)?;
-            let metadata = package.metadata();
+            let (library, book_id) = open_single_book_library(&registry, &path)?;
+            let metadata = metadata_for(&library, &book_id);
             let target = TargetToken::from_opaque(token);
-            let input = package.renderer_input_for_target(&target)?;
+            let input = library.renderer_input_for_target(&book_id, &target)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
@@ -293,8 +262,83 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn open_single_book_library(
+    registry: &DriverRegistry,
+    path: &Path,
+) -> Result<(BookLibrary, BookId)> {
+    let mut library = BookLibrary::new();
+    let book_id = library.open_path(path, registry)?;
+    Ok((library, book_id))
+}
+
+fn metadata_for(library: &BookLibrary, book_id: &BookId) -> BookMetadata {
+    library
+        .book(book_id)
+        .expect("book id returned by open_path must exist")
+        .metadata()
+        .clone()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_command_json(
+    registry: &DriverRegistry,
+    path: &Path,
+    query: String,
+    mode: SearchMode,
+    limit: usize,
+    cursor: Option<String>,
+    render_first: bool,
+    window_before: usize,
+    window_after: usize,
+) -> Result<serde_json::Value> {
+    let (library, book_id) = open_single_book_library(registry, path)?;
+    let metadata = metadata_for(&library, &book_id);
+    let page = library.search(&SearchQuery {
+        scope: SearchScope::CurrentBook(book_id.clone()),
+        mode,
+        query,
+        cursor,
+        limit,
+    })?;
+    let first_target = page.hits.first().map(|hit| hit.target.clone());
+    let rendered_first = if render_first {
+        first_target
+            .as_ref()
+            .map(|target| library.render_target(&book_id, target, &RenderOptions::default()))
+            .transpose()?
+    } else {
+        None
+    };
+    let target_window = if window_before > 0 || window_after > 0 {
+        first_target
+            .as_ref()
+            .map(|target| {
+                library.resolve_target_window(
+                    &book_id,
+                    target,
+                    None,
+                    window_before,
+                    window_after,
+                    &RenderOptions::default(),
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(json!({
+        "metadata": metadata,
+        "hits": page.hits,
+        "next_cursor": page.next_cursor,
+        "diagnostics": page.diagnostics,
+        "rendered_first": rendered_first,
+        "target_window": target_window,
+    }))
+}
+
 fn exercise_reader_paths(
-    package: &dyn BookPackage,
+    library: &BookLibrary,
+    book_id: &BookId,
     surfaces: &[HomeSurface],
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
@@ -302,7 +346,7 @@ fn exercise_reader_paths(
         if surface.status != NavigationStatus::Available || surface.surface_id == "search" {
             continue;
         }
-        let row = match package.open_surface(&surface.surface_id) {
+        let row = match library.open_surface(book_id, &surface.surface_id) {
             Ok(opened) => {
                 if let NavigationSurface::Deferred { diagnostics, .. } = &opened {
                     json!({
@@ -319,7 +363,8 @@ fn exercise_reader_paths(
                         .unwrap_or((None, String::new()));
                     match target {
                         Some(target) => {
-                            match package.render_target(&target, &RenderOptions::default()) {
+                            match library.render_target(book_id, &target, &RenderOptions::default())
+                            {
                                 Ok(view) => json!({
                                     "kind": "surface_first_target",
                                     "surface_id": surface.surface_id,
@@ -362,15 +407,15 @@ fn exercise_reader_paths(
         rows.push(row);
     }
 
-    let query = package
-        .metadata()
+    let metadata = metadata_for(library, book_id);
+    let query = metadata
         .title
         .as_deref()
         .and_then(search_probe_prefix)
         .unwrap_or("a")
         .to_owned();
-    let search_row = match package.search(&SearchQuery {
-        scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+    let search_row = match library.search(&SearchQuery {
+        scope: SearchScope::CurrentBook(book_id.clone()),
         mode: SearchMode::Forward,
         query: query.clone(),
         cursor: None,
@@ -378,8 +423,8 @@ fn exercise_reader_paths(
     }) {
         Ok(page) => {
             let rendered_first = page.hits.first().map(|hit| {
-                package
-                    .render_target(&hit.target, &RenderOptions::default())
+                library
+                    .render_target(book_id, &hit.target, &RenderOptions::default())
                     .map(|view| {
                         json!({
                             "status": "ok",
@@ -591,6 +636,8 @@ fn directory_has_multiview_payload(path: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lvcore::lved_sqlite::apply_sqlcipher_key;
+    use rusqlite::Connection;
 
     #[test]
     fn discovery_ignores_resource_directories_with_non_package_idx_files() {
@@ -621,5 +668,86 @@ mod tests {
             cli_search_mode(CliSearchMode::Exact, Some(" ".to_owned())),
             SearchMode::Exact
         );
+    }
+
+    #[test]
+    fn search_command_uses_library_scoped_resource_hrefs() {
+        let dir = tempfile::tempdir().unwrap();
+        write_lved_cli_fixture(dir.path());
+
+        let output = search_command_json(
+            &DriverRegistry::default(),
+            dir.path(),
+            "alp".to_owned(),
+            SearchMode::Forward,
+            10,
+            None,
+            true,
+            0,
+            0,
+        )
+        .unwrap();
+
+        let title_html = output["hits"][0]["title_html"].as_str().unwrap();
+        let display_html = output["rendered_first"]["display_html"].as_str().unwrap();
+        assert!(has_scoped_resource_href(title_html));
+        assert!(has_scoped_resource_href(display_html));
+        assert!(!title_html.contains("src=\"AC6E.svg\""));
+        assert!(!display_html.contains("data=\"AC6E.svg\""));
+    }
+
+    fn has_scoped_resource_href(html: &str) -> bool {
+        const PREFIX: &str = "lvcore://resource/";
+        let Some(start) = html.find(PREFIX) else {
+            return false;
+        };
+        let rest = &html[start + PREFIX.len()..];
+        let value = rest
+            .split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>'))
+            .next()
+            .unwrap_or_default();
+        value.split('/').count() == 2
+    }
+
+    fn write_lved_cli_fixture(root: &Path) {
+        let payload = root.join("main.data");
+        let key = "test-key";
+        {
+            let connection = Connection::open(&payload).unwrap();
+            apply_sqlcipher_key(&connection, key).unwrap();
+            connection
+                .execute_batch(
+                    r#"
+                    create table info (id integer, type integer, name text primary key, body text, media text);
+                    insert into info values (1, 1, 'about.html', '<h1>Example Dictionary</h1>', '');
+                    create table content (id integer primary key, type integer, body text, media text);
+                    create table media (id integer primary key, name text, type integer, main blob);
+                    create table list (
+                      id integer primary key,
+                      refid integer,
+                      type integer,
+                      anchor text,
+                      title text,
+                      titlesub text
+                    );
+                    create virtual table search using fts4(
+                      forward,
+                      back,
+                      part,
+                      fts,
+                      advanced1,
+                      advanced2,
+                      filter
+                    );
+                    insert into content values (100, 1, '<article><object data="AC6E.svg"></object><p>body</p></article>', '');
+                    insert into media values (1, 'AC6E', 4, X'3C7376672F3E');
+                    insert into list values (1, 100, 1, '', '<img src="AC6E.svg"><b>alpha</b>', '');
+                    insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                      values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
+                    "#,
+                )
+                .unwrap();
+        }
+        fs::write(root.join("main.key"), key).unwrap();
     }
 }

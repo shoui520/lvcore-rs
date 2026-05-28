@@ -15,4 +15,5 @@ lvcore = { path = "../lvcore" }
 serde_json.workspace = true
 
 [dev-dependencies]
+rusqlite = { version = "0.40.0", features = ["sqlcipher"] }
 tempfile.workspace = true
