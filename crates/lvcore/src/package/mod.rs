@@ -68,8 +68,6 @@ pub struct BookMetadata {
     pub format_label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub icon_hint: Option<String>,
     pub root_fingerprint: String,
     pub capabilities: Vec<Capability>,
 }

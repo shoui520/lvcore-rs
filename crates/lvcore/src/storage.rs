@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::error::Error;
 use crate::error::Result;
 
 pub trait StorageBackend: Send + Sync {
@@ -31,9 +32,12 @@ impl StorageBackend for DirectoryStorage {
     }
 
     fn read(&self, relative: &Path) -> Result<Vec<u8>> {
-        let path = self
-            .resolve_casefolded(relative)?
-            .unwrap_or_else(|| self.root().join(relative));
+        let Some(path) = self.resolve_casefolded(relative)? else {
+            return Err(Error::Driver(format!(
+                "storage path is missing or outside the package: {}",
+                relative.display()
+            )));
+        };
         Ok(fs::read(path)?)
     }
 
@@ -46,9 +50,9 @@ impl StorageBackend for DirectoryStorage {
     }
 
     fn list_dir(&self, relative: &Path) -> Result<Vec<PathBuf>> {
-        let base = self
-            .resolve_casefolded(relative)?
-            .unwrap_or_else(|| self.root().join(relative));
+        let Some(base) = self.resolve_casefolded(relative)? else {
+            return Ok(Vec::new());
+        };
         if !base.is_dir() {
             return Ok(Vec::new());
         }
@@ -161,5 +165,27 @@ mod tests {
             .unwrap();
         assert_eq!(resolved.file_name().unwrap(), "HONMON.DIN");
         assert_eq!(storage.read(Path::new("honmon.din")).unwrap(), b"data");
+    }
+
+    #[test]
+    fn read_does_not_escape_package_root() {
+        let dir = tempdir().unwrap();
+        let outside = dir.path().with_file_name("outside-lvcore-storage-test.txt");
+        fs::write(&outside, b"outside").unwrap();
+        let storage = DirectoryStorage::new(dir.path());
+
+        let error = storage.read(Path::new("../outside-lvcore-storage-test.txt"));
+
+        fs::remove_file(outside).unwrap();
+        assert!(error.is_err());
+    }
+
+    #[test]
+    fn list_dir_missing_or_parent_paths_stay_inside_package() {
+        let dir = tempdir().unwrap();
+        let storage = DirectoryStorage::new(dir.path());
+
+        assert!(storage.list_dir(Path::new("missing")).unwrap().is_empty());
+        assert!(storage.list_dir(Path::new("..")).unwrap().is_empty());
     }
 }

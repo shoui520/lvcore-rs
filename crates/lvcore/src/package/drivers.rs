@@ -455,7 +455,6 @@ impl StubBookPackage {
             format_family: detected.format_family,
             format_label,
             title: detected.title,
-            icon_hint: None,
             root_fingerprint,
             capabilities,
         };
