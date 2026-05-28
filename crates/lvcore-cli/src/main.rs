@@ -6,8 +6,8 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
     BookId, BookLibrary, BookMetadata, DriverRegistry, HomeSurface, NavigationStatus,
-    NavigationSurface, RenderOptions, Result, SearchMode, SearchQuery, SearchScope, TargetToken,
-    lved_sqlite::is_lved_payload_name,
+    NavigationSurface, RenderMode, RenderOptions, Result, SearchMode, SearchQuery, SearchScope,
+    TargetToken, lved_sqlite::is_lved_payload_name,
 };
 use serde_json::json;
 
@@ -61,6 +61,12 @@ enum Command {
         /// Resolve and render the first hit.
         #[arg(long)]
         render_first: bool,
+        /// Render mode to use with --render-first or continuous view output.
+        #[arg(long, default_value = "native")]
+        render_mode: CliRenderMode,
+        /// Include backend debug trace in rendered output.
+        #[arg(long)]
+        debug_trace: bool,
         /// Resolve a continuous-view window before the first hit.
         #[arg(long, default_value_t = 0)]
         window_before: usize,
@@ -87,6 +93,12 @@ enum Command {
         path: PathBuf,
         /// Target token previously returned by search, navigation, or links.
         token: String,
+        /// Render mode to request.
+        #[arg(long, default_value = "native")]
+        mode: CliRenderMode,
+        /// Include backend debug trace in rendered output.
+        #[arg(long)]
+        debug_trace: bool,
     },
     /// Resolve one opaque target token into backend-owned renderer input.
     RendererInput {
@@ -106,6 +118,14 @@ enum CliSearchMode {
     Fulltext,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliRenderMode {
+    Native,
+    GenericHtml,
+    BasicText,
+    Debug,
+}
+
 impl From<CliSearchMode> for SearchMode {
     fn from(value: CliSearchMode) -> Self {
         match value {
@@ -122,6 +142,25 @@ fn cli_search_mode(mode: CliSearchMode, advanced_column: Option<String>) -> Sear
     match advanced_column {
         Some(column) if !column.trim().is_empty() => SearchMode::Advanced(column.trim().to_owned()),
         _ => mode.into(),
+    }
+}
+
+impl From<CliRenderMode> for RenderMode {
+    fn from(value: CliRenderMode) -> Self {
+        match value {
+            CliRenderMode::Native => Self::Native,
+            CliRenderMode::GenericHtml => Self::GenericHtml,
+            CliRenderMode::BasicText => Self::BasicText,
+            CliRenderMode::Debug => Self::Debug,
+        }
+    }
+}
+
+fn cli_render_options(mode: CliRenderMode, debug_trace: bool) -> RenderOptions {
+    RenderOptions {
+        mode: mode.into(),
+        include_debug_trace: debug_trace,
+        ..RenderOptions::default()
     }
 }
 
@@ -178,6 +217,8 @@ fn main() -> Result<()> {
             limit,
             cursor,
             render_first,
+            render_mode,
+            debug_trace,
             window_before,
             window_after,
         } => {
@@ -189,6 +230,7 @@ fn main() -> Result<()> {
                 cli_search_mode(mode, advanced_column),
                 limit,
                 cursor,
+                cli_render_options(render_mode, debug_trace),
                 render_first,
                 window_before,
                 window_after,
@@ -216,16 +258,23 @@ fn main() -> Result<()> {
                 }))?
             );
         }
-        Command::Render { path, token } => {
+        Command::Render {
+            path,
+            token,
+            mode,
+            debug_trace,
+        } => {
             let registry = DriverRegistry::default();
             let (library, book_id) = open_single_book_library(&registry, &path)?;
             let metadata = metadata_for(&library, &book_id);
             let target = TargetToken::from_opaque(token);
-            let view = library.render_target(&book_id, &target, &RenderOptions::default())?;
+            let render_options = cli_render_options(mode, debug_trace);
+            let view = library.render_target(&book_id, &target, &render_options)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
                     "metadata": metadata,
+                    "render_options": render_options,
                     "view": view,
                 }))?
             );
@@ -316,6 +365,7 @@ fn search_command_json(
     mode: SearchMode,
     limit: usize,
     cursor: Option<String>,
+    render_options: RenderOptions,
     render_first: bool,
     window_before: usize,
     window_after: usize,
@@ -333,7 +383,7 @@ fn search_command_json(
     let rendered_first = if render_first {
         first_target
             .as_ref()
-            .map(|target| library.render_target(&book_id, target, &RenderOptions::default()))
+            .map(|target| library.render_target(&book_id, target, &render_options))
             .transpose()?
     } else {
         None
@@ -348,7 +398,7 @@ fn search_command_json(
                     None,
                     window_before,
                     window_after,
-                    &RenderOptions::default(),
+                    &render_options,
                 )
             })
             .transpose()?
@@ -717,6 +767,22 @@ mod tests {
     }
 
     #[test]
+    fn cli_render_mode_maps_to_reader_render_options() {
+        assert_eq!(
+            cli_render_options(CliRenderMode::GenericHtml, true),
+            RenderOptions {
+                mode: RenderMode::GenericHtml,
+                include_debug_trace: true,
+                ..RenderOptions::default()
+            }
+        );
+        assert_eq!(
+            cli_render_options(CliRenderMode::BasicText, false).mode,
+            RenderMode::BasicText
+        );
+    }
+
+    #[test]
     fn search_command_uses_library_scoped_resource_hrefs() {
         let dir = tempfile::tempdir().unwrap();
         write_lved_cli_fixture(dir.path());
@@ -728,6 +794,7 @@ mod tests {
             SearchMode::Forward,
             10,
             None,
+            RenderOptions::default(),
             true,
             0,
             0,
@@ -740,6 +807,34 @@ mod tests {
         assert!(has_scoped_resource_href(display_html));
         assert!(!title_html.contains("src=\"AC6E.svg\""));
         assert!(!display_html.contains("data=\"AC6E.svg\""));
+    }
+
+    #[test]
+    fn search_command_can_render_first_hit_as_basic_text() {
+        let dir = tempfile::tempdir().unwrap();
+        write_lved_cli_fixture(dir.path());
+
+        let output = search_command_json(
+            &DriverRegistry::default(),
+            dir.path(),
+            "alp".to_owned(),
+            SearchMode::Forward,
+            10,
+            None,
+            cli_render_options(CliRenderMode::BasicText, false),
+            true,
+            0,
+            0,
+        )
+        .unwrap();
+
+        assert!(output["rendered_first"]["display_html"].is_null());
+        assert!(
+            output["rendered_first"]["basic_text"]
+                .as_str()
+                .unwrap()
+                .contains("body")
+        );
     }
 
     fn has_scoped_resource_href(html: &str) -> bool {
