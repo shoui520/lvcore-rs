@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
-use crate::navigation::{HomeSurface, NavigationSurface};
+use crate::navigation::{HomeSurface, NavigationNode, NavigationSurface};
 use crate::package::{BookAliasKind, BookId, BookMetadata, BookPackage, DriverRegistry};
 use crate::render::{RenderOptions, RendererInput, ResolvedTargetKind, ResolvedTargetView};
 use crate::resources::{ResourceRef, ResourceToken};
@@ -99,11 +99,15 @@ impl BookLibrary {
     }
 
     pub fn home_surfaces(&self, book_id: &BookId) -> Result<Vec<HomeSurface>> {
-        self.required_book(book_id)?.home_surfaces()
+        let mut surfaces = self.required_book(book_id)?.home_surfaces()?;
+        scope_home_surfaces_resource_hrefs(book_id, &mut surfaces);
+        Ok(surfaces)
     }
 
     pub fn open_surface(&self, book_id: &BookId, surface_id: &str) -> Result<NavigationSurface> {
-        self.required_book(book_id)?.open_surface(surface_id)
+        let mut surface = self.required_book(book_id)?.open_surface(surface_id)?;
+        scope_navigation_surface_resource_hrefs(book_id, &mut surface);
+        Ok(surface)
     }
 
     pub fn open_surface_page(
@@ -113,8 +117,11 @@ impl BookLibrary {
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<NavigationSurface> {
-        self.required_book(book_id)?
-            .open_surface_page(surface_id, cursor, limit)
+        let mut surface = self
+            .required_book(book_id)?
+            .open_surface_page(surface_id, cursor, limit)?;
+        scope_navigation_surface_resource_hrefs(book_id, &mut surface);
+        Ok(surface)
     }
 
     pub fn render_target(
@@ -452,6 +459,44 @@ fn scope_target_window_resource_hrefs(book_id: &BookId, mut window: TargetWindow
         scope_view_resource_hrefs(book_id, view);
     }
     window
+}
+
+fn scope_home_surfaces_resource_hrefs(book_id: &BookId, surfaces: &mut [HomeSurface]) {
+    for surface in surfaces {
+        surface.title_html = scope_resource_hrefs_in_html(book_id, &surface.title_html);
+    }
+}
+
+fn scope_navigation_surface_resource_hrefs(book_id: &BookId, surface: &mut NavigationSurface) {
+    match surface {
+        NavigationSurface::SimpleMenu { nodes, .. }
+        | NavigationSurface::HierarchicalTree { nodes, .. } => {
+            scope_navigation_node_resource_hrefs(book_id, nodes);
+        }
+        NavigationSurface::TitleIndexBrowse { items, .. } => {
+            for item in items {
+                item.label_html = scope_resource_hrefs_in_html(book_id, &item.label_html);
+            }
+        }
+        NavigationSurface::Panel { cells, .. } => {
+            for cell in cells {
+                cell.label_html = scope_resource_hrefs_in_html(book_id, &cell.label_html);
+            }
+        }
+        NavigationSurface::InfoPages { pages, .. } => {
+            for page in pages {
+                page.label_html = scope_resource_hrefs_in_html(book_id, &page.label_html);
+            }
+        }
+        NavigationSurface::FallbackSearch { .. } | NavigationSurface::Deferred { .. } => {}
+    }
+}
+
+fn scope_navigation_node_resource_hrefs(book_id: &BookId, nodes: &mut [NavigationNode]) {
+    for node in nodes {
+        node.label_html = scope_resource_hrefs_in_html(book_id, &node.label_html);
+        scope_navigation_node_resource_hrefs(book_id, &mut node.children);
+    }
 }
 
 fn scope_view_resource_hrefs(book_id: &BookId, view: &mut ResolvedTargetView) {

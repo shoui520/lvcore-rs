@@ -561,6 +561,58 @@ fn library_scopes_resource_hrefs_in_search_result_labels() {
 }
 
 #[test]
+fn library_scopes_resource_hrefs_in_navigation_surface_labels() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update list set title = '<img src=\"pic.png\"><b>alpha</b>' where id = 1",
+                [],
+            )
+            .unwrap();
+    }
+    fs::write(dir.path().join("res/pic.png"), b"png").unwrap();
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let book_id = library.open_path(dir.path(), &registry).unwrap();
+    let surface = library
+        .open_surface_page(&book_id, "lved-list", None, 1)
+        .unwrap();
+
+    let NavigationSurface::TitleIndexBrowse { ref items, .. } = surface else {
+        panic!("expected LVED list title/index surface");
+    };
+    let item = items.first().expect("expected first list item");
+    assert_eq!(item.label_text, "alpha");
+    let href_start = item
+        .label_html
+        .find("lvcore://resource/")
+        .expect("navigation label should include rewritten resource href");
+    let href = &item.label_html[href_start..]
+        .split('"')
+        .next()
+        .expect("resource href should be quoted");
+    let scoped_suffix = href.strip_prefix("lvcore://resource/").unwrap();
+    assert_eq!(
+        scoped_suffix.split('/').count(),
+        2,
+        "library navigation label resource href should include book scope and resource token"
+    );
+    assert_eq!(
+        library.read_scoped_resource_href(href).unwrap(),
+        b"png".to_vec()
+    );
+    assert_eq!(surface.actionable_targets()[0].label_html, item.label_html);
+}
+
+#[test]
 fn library_selected_book_search_uses_backend_cursor_pagination() {
     let first = tempdir().unwrap();
     fs::write(first.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
