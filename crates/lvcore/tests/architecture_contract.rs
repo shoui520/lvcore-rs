@@ -1086,6 +1086,42 @@ fn ssed_home_surfaces_are_capability_based() {
 }
 
 #[test]
+fn empty_ssed_menu_is_not_exposed_as_targetable_home_surface() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        sseddata_literal_fixture(b"\x1f\x03"),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surfaces = package.home_surfaces().unwrap();
+    let menu_surface = surfaces
+        .iter()
+        .find(|surface| surface.kind == NavigationSurfaceKind::Menu)
+        .expect("declared MENU.DIC should still be reported as a surface");
+    assert_eq!(menu_surface.status, NavigationStatus::Empty);
+    assert!(menu_surface.target.is_none());
+    assert!(
+        menu_surface
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_navigation_empty_sentinel")
+    );
+
+    let opened = package.open_surface("menu").unwrap();
+    let NavigationSurface::Deferred { diagnostics, .. } = opened else {
+        panic!("empty MENU.DIC should open as diagnostic-only navigation");
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_navigation_empty_sentinel")
+    );
+}
+
+#[test]
 fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

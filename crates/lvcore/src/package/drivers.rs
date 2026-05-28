@@ -40,7 +40,8 @@ use crate::resources::{
 use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery};
 use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
 use crate::ssed::{
-    SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile, SsedDataHeader,
+    BLOCK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
+    SsedDataHeader,
 };
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_jis_pair,
@@ -571,17 +572,30 @@ impl NavigationProvider for StubBookPackage {
                     .is_some_and(|catalog| catalog.has_role(SsedComponentRole::Menu))
                     || self.storage.exists(Path::new("MENU.DIC"))?
                 {
+                    let empty_diagnostic = self.ssed_navigation_empty_sentinel_diagnostic(
+                        SsedComponentRole::Menu,
+                        "MENU.DIC",
+                    )?;
+                    let is_empty = empty_diagnostic.is_some();
                     surfaces.push(HomeSurface {
                         surface_id: "menu".to_owned(),
                         kind: NavigationSurfaceKind::Menu,
-                        status: NavigationStatus::Available,
+                        status: if is_empty {
+                            NavigationStatus::Empty
+                        } else {
+                            NavigationStatus::Available
+                        },
                         title_html: "MENU".to_owned(),
                         title_text: "MENU".to_owned(),
-                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
-                            surface_id: "menu".to_owned(),
-                            item_id: "root".to_owned(),
-                        })?),
-                        diagnostics: Vec::new(),
+                        target: if is_empty {
+                            None
+                        } else {
+                            Some(TargetToken::new(&InternalTarget::MenuItem {
+                                surface_id: "menu".to_owned(),
+                                item_id: "root".to_owned(),
+                            })?)
+                        },
+                        diagnostics: empty_diagnostic.into_iter().collect(),
                     });
                 }
                 if self
@@ -589,17 +603,30 @@ impl NavigationProvider for StubBookPackage {
                     .as_ref()
                     .is_some_and(|catalog| catalog.has_role(SsedComponentRole::Toc))
                 {
+                    let empty_diagnostic = self.ssed_navigation_empty_sentinel_diagnostic(
+                        SsedComponentRole::Toc,
+                        "TOC.DIC",
+                    )?;
+                    let is_empty = empty_diagnostic.is_some();
                     surfaces.push(HomeSurface {
                         surface_id: "toc".to_owned(),
                         kind: NavigationSurfaceKind::Toc,
-                        status: NavigationStatus::Available,
+                        status: if is_empty {
+                            NavigationStatus::Empty
+                        } else {
+                            NavigationStatus::Available
+                        },
                         title_html: "TOC".to_owned(),
                         title_text: "TOC".to_owned(),
-                        target: Some(TargetToken::new(&InternalTarget::TocItem {
-                            surface_id: "toc".to_owned(),
-                            item_id: "root".to_owned(),
-                        })?),
-                        diagnostics: Vec::new(),
+                        target: if is_empty {
+                            None
+                        } else {
+                            Some(TargetToken::new(&InternalTarget::TocItem {
+                                surface_id: "toc".to_owned(),
+                                item_id: "root".to_owned(),
+                            })?)
+                        },
+                        diagnostics: empty_diagnostic.into_iter().collect(),
                     });
                 }
                 let hanrei_pages = self.discover_ssed_hanrei_pages()?;
@@ -1802,14 +1829,24 @@ impl StubBookPackage {
         let data = reader.read_range(0, reader.header().expanded_size())?;
         let parsed = parse_menu_stream(&data);
         if parsed.records.is_empty() {
+            let (code, message) = if parsed.empty_sentinel {
+                (
+                    "ssed_navigation_empty_sentinel",
+                    format!(
+                        "{} contains an explicit empty navigation sentinel",
+                        component.filename
+                    ),
+                )
+            } else {
+                (
+                    "ssed_navigation_empty",
+                    format!("{} did not decode any navigation rows", component.filename),
+                )
+            };
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics: vec![
-                    Diagnostic::info(
-                        "ssed_navigation_empty",
-                        format!("{} did not decode any navigation rows", component.filename),
-                    )
-                    .with_context("component", &component.filename),
+                    Diagnostic::info(code, message).with_context("component", &component.filename),
                 ],
             });
         }
@@ -1825,6 +1862,49 @@ impl StubBookPackage {
             surface_id: surface_id.to_owned(),
             nodes,
         })
+    }
+
+    fn ssed_navigation_empty_sentinel_diagnostic(
+        &self,
+        role: SsedComponentRole,
+        fallback_name: &str,
+    ) -> Result<Option<Diagnostic>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(None);
+        };
+        let Some(component) = catalog
+            .components_by_role(role)
+            .find(|component| component.has_positive_range())
+            .or_else(|| catalog.component_named(fallback_name))
+        else {
+            return Ok(None);
+        };
+        let path = match self.resolve_readable_ssed_component_path(component) {
+            Ok(Some(path)) => path,
+            Ok(None) | Err(_) => return Ok(None),
+        };
+        let mut reader = match SsedDataFile::open(&path) {
+            Ok(reader) => reader,
+            Err(_) => return Ok(None),
+        };
+        if reader.header().expanded_size() > BLOCK_SIZE as usize {
+            return Ok(None);
+        }
+        let data = reader.read_range(0, reader.header().expanded_size())?;
+        let parsed = parse_menu_stream(&data);
+        if parsed.records.is_empty() && parsed.empty_sentinel {
+            return Ok(Some(
+                Diagnostic::info(
+                    "ssed_navigation_empty_sentinel",
+                    format!(
+                        "{} contains an explicit empty navigation sentinel",
+                        component.filename
+                    ),
+                )
+                .with_context("component", &component.filename),
+            ));
+        }
+        Ok(None)
     }
 
     fn open_ssed_panel_surface(&self, surface_id: &str) -> Result<NavigationSurface> {

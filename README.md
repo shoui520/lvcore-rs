@@ -43,6 +43,9 @@ LogoVista internals. The frontend receives:
 - explicitly available search modes, including LVED advanced search columns when
   present;
 - home/navigation/search surfaces;
+- home-surface status values distinguish available, missing, empty,
+  unsupported, and deferred surfaces so dead placeholder components do not
+  become clickable UI;
 - stable opaque `TargetToken` values;
 - rendered target views with HTML/text/resources/links/diagnostics;
 - resource tokens for images, audio, PDFs, media BLOBs, gaiji assets, and other
@@ -104,6 +107,8 @@ provider slices:
   sibling pages, and Mac OS X `_HELP.localized` bundles. All three use
   package-local/CHM HTML resource rendering and relative CSS/image/link
   rewriting;
+- SSED MENU/TOC decoding reports explicit empty sentinel components as
+  diagnostic-only surfaces rather than targetable menus;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
 `logovista-tools` remains the research oracle while `lvcore-rs` ports stable

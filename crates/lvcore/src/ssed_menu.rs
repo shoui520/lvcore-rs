@@ -60,6 +60,7 @@ impl SsedMenuRecord {
 pub struct SsedMenuParse {
     pub records: Vec<SsedMenuRecord>,
     pub unknown_controls: usize,
+    pub empty_sentinel: bool,
 }
 
 #[derive(Debug)]
@@ -251,11 +252,17 @@ pub fn parse_menu_stream(data: &[u8]) -> SsedMenuParse {
     }
 
     flush_line(&mut records, line);
+    let empty_sentinel = records.is_empty() && is_empty_menu_sentinel(data);
     annotate_depths(&mut records);
     SsedMenuParse {
         records,
         unknown_controls,
+        empty_sentinel,
     }
+}
+
+pub fn is_empty_menu_sentinel(data: &[u8]) -> bool {
+    data.starts_with(&[0x1f, 0x03]) && data[2..].iter().all(|byte| *byte == 0)
 }
 
 fn finish_active_link(line: &mut LineBuilder, destination: Option<SsedMenuDestination>) {
@@ -469,11 +476,22 @@ mod tests {
         let parsed = parse_menu_stream(data);
 
         assert_eq!(parsed.records.len(), 1);
+        assert!(!parsed.empty_sentinel);
         assert_eq!(parsed.records[0].label(), "あ");
         assert_eq!(parsed.records[0].depth, 1);
         let destination = parsed.records[0].links[0].destination.as_ref().unwrap();
         assert_eq!(destination.block, 10);
         assert_eq!(destination.offset, 5);
         assert_eq!(destination.encoding, SsedMenuDestinationEncoding::Bcd);
+    }
+
+    #[test]
+    fn recognizes_empty_navigation_sentinel() {
+        let data = b"\x1f\x03\x00\x00\x00\x00";
+        let parsed = parse_menu_stream(data);
+
+        assert!(parsed.records.is_empty());
+        assert!(parsed.empty_sentinel);
+        assert!(is_empty_menu_sentinel(data));
     }
 }

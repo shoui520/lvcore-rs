@@ -25,6 +25,7 @@ pub enum NavigationStatus {
     Available,
     Unsupported,
     Missing,
+    Empty,
     Deferred,
 }
 
