@@ -2541,6 +2541,40 @@ fn lved_search_is_cursor_paged_by_backend() {
 }
 
 #[test]
+fn lved_advanced_search_mode_uses_named_search_column() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update search set advanced1 = 'domain marker' where rowid = 1",
+                [],
+            )
+            .unwrap();
+    }
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Advanced("advanced1".to_owned()),
+            query: "domain".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+    assert!(page.diagnostics.is_empty());
+}
+
+#[test]
 fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());

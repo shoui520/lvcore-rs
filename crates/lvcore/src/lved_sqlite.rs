@@ -1256,7 +1256,7 @@ mod tests {
                     insert into list values (2, 101, 1, '', '<b>beta</b>', '');
                     insert into list values (3, 102, 1, '', '<b>gamma</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
-                      values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
+                      values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', 'topic marker', '', '∥alpha∥');
                     ",
                 )
                 .unwrap();
@@ -1268,6 +1268,19 @@ mod tests {
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].content_id, 100);
+        let advanced_hits = store
+            .search("topic", &SearchMode::Advanced("advanced1".to_owned()), 10)
+            .unwrap();
+        assert_eq!(advanced_hits.len(), 1);
+        assert_eq!(advanced_hits[0].content_id, 100);
+        let missing_advanced_hits = store
+            .search(
+                "topic",
+                &SearchMode::Advanced("missing_column".to_owned()),
+                10,
+            )
+            .unwrap();
+        assert!(missing_advanced_hits.is_empty());
         assert_eq!(hits[0].anchor.as_deref(), Some("body-anchor"));
         assert_eq!(hits[0].title_text, "alpha");
         assert_eq!(

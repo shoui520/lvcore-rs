@@ -43,6 +43,9 @@ enum Command {
         /// Search mode to run.
         #[arg(long, default_value = "forward")]
         mode: CliSearchMode,
+        /// LVED advanced FTS column to search, for example `advanced1` or `advanced2`.
+        #[arg(long)]
+        advanced_column: Option<String>,
         /// Maximum hits to return.
         #[arg(long, default_value_t = 10)]
         limit: usize,
@@ -106,6 +109,13 @@ impl From<CliSearchMode> for SearchMode {
             CliSearchMode::Partial => Self::Partial,
             CliSearchMode::Fulltext => Self::FullText,
         }
+    }
+}
+
+fn cli_search_mode(mode: CliSearchMode, advanced_column: Option<String>) -> SearchMode {
+    match advanced_column {
+        Some(column) if !column.trim().is_empty() => SearchMode::Advanced(column.trim().to_owned()),
+        _ => mode.into(),
     }
 }
 
@@ -178,6 +188,7 @@ fn main() -> Result<()> {
             path,
             query,
             mode,
+            advanced_column,
             limit,
             cursor,
             render_first,
@@ -189,7 +200,7 @@ fn main() -> Result<()> {
             let metadata = package.metadata();
             let page = package.search(&SearchQuery {
                 scope: SearchScope::CurrentBook(metadata.book_id.clone()),
-                mode: mode.into(),
+                mode: cli_search_mode(mode, advanced_column),
                 query,
                 cursor,
                 limit,
@@ -598,5 +609,17 @@ mod tests {
         .unwrap();
 
         assert!(discovered.is_empty());
+    }
+
+    #[test]
+    fn advanced_column_overrides_unit_search_mode() {
+        assert_eq!(
+            cli_search_mode(CliSearchMode::Forward, Some(" advanced1 ".to_owned())),
+            SearchMode::Advanced("advanced1".to_owned())
+        );
+        assert_eq!(
+            cli_search_mode(CliSearchMode::Exact, Some(" ".to_owned())),
+            SearchMode::Exact
+        );
     }
 }
