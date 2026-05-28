@@ -500,6 +500,9 @@ fn scope_navigation_node_resource_hrefs(book_id: &BookId, nodes: &mut [Navigatio
 }
 
 fn scope_view_resource_hrefs(book_id: &BookId, view: &mut ResolvedTargetView) {
+    if let Some(surface) = &mut view.surface {
+        scope_navigation_surface_resource_hrefs(book_id, surface);
+    }
     let Some(display_html) = &mut view.display_html else {
         for resource in &mut view.resources {
             scope_resource_ref_href(book_id, resource);
