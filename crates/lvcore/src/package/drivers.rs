@@ -347,6 +347,13 @@ struct SsedFulltextRow {
     row: SsedIndexRow,
 }
 
+#[derive(Debug, Default)]
+struct SsedNearKeyScanResult {
+    scanned_components: usize,
+    needs_linear_fallback: bool,
+    diagnostics: Vec<Diagnostic>,
+}
+
 struct SsedIndexSearchCollector<'a> {
     package: &'a StubBookPackage,
     mode: &'a SearchMode,
@@ -381,7 +388,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
     }
 
     fn push_row(&mut self, row: SsedIndexRow) -> Result<bool> {
-        let key = row.key.to_lowercase();
+        let key = normalize_search_match_text(&row.key);
         let row_matches = match self.mode {
             SearchMode::Exact => key == self.needle,
             SearchMode::Forward => key.starts_with(self.needle),
@@ -1331,17 +1338,21 @@ impl StubBookPackage {
 
         let offset = decode_offset_cursor(query.cursor.as_deref());
         let page_limit = query.limit.saturating_add(1);
-        let needle = query.query.to_lowercase();
+        let needle = normalize_search_match_text(&query.query);
         let mut collector =
             SsedIndexSearchCollector::new(self, &query.mode, &needle, offset, page_limit);
+        let mut optimized_scan_components = 0usize;
+        let mut scan_needs_linear_fallback = false;
         if matches!(query.mode, SearchMode::Exact | SearchMode::Forward) {
-            let scan_diagnostics =
+            let scan_result =
                 self.scan_ssed_simple_leaf_index_rows_near_key(&query.mode, &needle, |row| {
                     collector.push_row(row)
                 })?;
-            collector.extend_diagnostics(scan_diagnostics);
+            optimized_scan_components = scan_result.scanned_components;
+            scan_needs_linear_fallback = scan_result.needs_linear_fallback;
+            collector.extend_diagnostics(scan_result.diagnostics);
         }
-        if !collector.has_hits() {
+        if !collector.has_hits() && (optimized_scan_components == 0 || scan_needs_linear_fallback) {
             let scan_diagnostics =
                 self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?;
             collector.extend_diagnostics(scan_diagnostics);
@@ -2260,14 +2271,28 @@ impl StubBookPackage {
         mode: &SearchMode,
         needle: &str,
         mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
-    ) -> Result<Vec<Diagnostic>> {
+    ) -> Result<SsedNearKeyScanResult> {
         let Some(catalog) = &self.ssed_catalog else {
-            return Ok(vec![Diagnostic::error(
-                "ssed_catalog_missing",
-                "SSED index scanning requires a parsed SSEDINFO catalog",
-            )]);
+            return Ok(SsedNearKeyScanResult {
+                scanned_components: 0,
+                needs_linear_fallback: true,
+                diagnostics: vec![Diagnostic::error(
+                    "ssed_catalog_missing",
+                    "SSED index scanning requires a parsed SSEDINFO catalog",
+                )],
+            });
         };
         let mut diagnostics = Vec::new();
+        let mut scanned_components = 0usize;
+        let mut needs_linear_fallback = false;
+        let needle_key = encode_ssed_index_search_key(needle);
+        if needle_key.is_empty() && !needle.is_empty() {
+            return Ok(SsedNearKeyScanResult {
+                scanned_components: 0,
+                needs_linear_fallback: true,
+                diagnostics,
+            });
+        }
         'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
             if !is_simple_leaf_index_type(component.component_type) {
                 continue;
@@ -2296,13 +2321,17 @@ impl StubBookPackage {
             };
             let mut reader = SsedDataFile::open(&path)?;
             let page_count = component.block_count() as usize;
-            let start_page =
-                match self.ssed_simple_index_candidate_leaf_page(component, &mut reader, needle)? {
-                    Some(page_index) => page_index,
-                    None => continue,
-                };
-            let mut saw_match = false;
-            for page_index in start_page..page_count {
+            let start_page = match self.ssed_simple_index_candidate_leaf_page(
+                component,
+                &mut reader,
+                &needle_key,
+            )? {
+                Some(page_index) => page_index,
+                None => continue,
+            };
+            scanned_components = scanned_components.saturating_add(1);
+            let mut last_key = None::<Vec<u8>>;
+            'pages: for page_index in start_page..page_count {
                 let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
                 if page.len() < 4 {
                     break;
@@ -2318,6 +2347,11 @@ impl StubBookPackage {
                     page_index as u32,
                     logical_block,
                 );
+                if rows.windows(2).any(|pair| {
+                    ssed_index_row_order_key(&pair[1]) < ssed_index_row_order_key(&pair[0])
+                }) {
+                    needs_linear_fallback = true;
+                }
                 if unknown > 0 {
                     diagnostics.push(
                         Diagnostic::warning(
@@ -2331,38 +2365,55 @@ impl StubBookPackage {
                     );
                 }
                 for row in rows {
-                    let key = row.key.to_lowercase();
+                    let key = normalize_search_match_text(&row.key);
+                    let key_bytes = ssed_index_row_order_key(&row);
+                    let key_has_needle_prefix =
+                        !needle_key.is_empty() && key_bytes.starts_with(&needle_key);
+                    if last_key
+                        .as_ref()
+                        .is_some_and(|last_key| key_bytes.as_slice() < last_key.as_slice())
+                    {
+                        needs_linear_fallback = true;
+                    }
+                    last_key = Some(key_bytes.clone());
                     let row_matches = match mode {
                         SearchMode::Exact => key == needle,
                         SearchMode::Forward => key.starts_with(needle),
                         _ => false,
                     };
                     let passed_match_region = match mode {
-                        SearchMode::Exact => key.as_str() > needle,
+                        SearchMode::Exact => {
+                            !needs_linear_fallback && key_bytes.as_slice() > needle_key.as_slice()
+                        }
                         SearchMode::Forward => {
-                            saw_match && !key.starts_with(needle) && key.as_str() > needle
+                            !needs_linear_fallback
+                                && !key_has_needle_prefix
+                                && key_bytes.as_slice() > needle_key.as_slice()
                         }
                         _ => false,
                     };
                     if row_matches {
-                        saw_match = true;
                         if !on_row(row)? {
                             break 'components;
                         }
                     } else if passed_match_region {
-                        break;
+                        break 'pages;
                     }
                 }
             }
         }
-        Ok(diagnostics)
+        Ok(SsedNearKeyScanResult {
+            scanned_components,
+            needs_linear_fallback,
+            diagnostics,
+        })
     }
 
     fn ssed_simple_index_candidate_leaf_page(
         &self,
         component: &SsedComponent,
         reader: &mut SsedDataFile,
-        needle: &str,
+        needle_key: &[u8],
     ) -> Result<Option<usize>> {
         let page_count = component.block_count() as usize;
         if page_count == 0 {
@@ -2390,7 +2441,7 @@ impl StubBookPackage {
                 .iter()
                 .find(|row| {
                     row.raw_key.iter().all(|value| *value == 0xff)
-                        || row.key.to_lowercase().as_str() >= needle
+                        || row.raw_key.as_slice() >= needle_key
                 })
                 .or_else(|| rows.last())
                 .map(|row| row.child_block)
@@ -5614,6 +5665,64 @@ fn normalize_search_match_text(value: &str) -> String {
     narrow_fullwidth_ascii_text(value).to_lowercase()
 }
 
+fn ssed_index_row_order_key(row: &SsedIndexRow) -> Vec<u8> {
+    if row.raw_key.is_empty() {
+        encode_ssed_index_search_key(&row.key.to_lowercase())
+    } else {
+        row.raw_key.clone()
+    }
+}
+
+fn encode_ssed_index_search_key(value: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for ch in value.chars() {
+        let ch = match ch {
+            ' ' => '\u{3000}',
+            ch if (0x21..=0x7e).contains(&(ch as u32)) => {
+                char::from_u32(ch as u32 + 0xfee0).unwrap_or(ch)
+            }
+            ch => ch,
+        };
+        let mut text = [0_u8; 4];
+        let text = ch.encode_utf8(&mut text);
+        let (encoded, _encoding, had_errors) = SHIFT_JIS.encode(text);
+        if had_errors {
+            continue;
+        }
+        match encoded.as_ref() {
+            [single] => out.push(*single),
+            [lead, trail] => {
+                if let Some((first, second)) = shift_jis_pair_to_jis_key_pair(*lead, *trail) {
+                    out.push(first);
+                    out.push(second);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn shift_jis_pair_to_jis_key_pair(lead: u8, trail: u8) -> Option<(u8, u8)> {
+    let row = if (0x81..=0x9f).contains(&lead) {
+        (lead - 0x81) * 2
+    } else if (0xe0..=0xef).contains(&lead) {
+        (lead - 0xc1) * 2
+    } else {
+        return None;
+    };
+    let (row, cell) = if trail >= 0x9f {
+        (row + 1, trail.checked_sub(0x9f)?)
+    } else if trail >= 0x80 {
+        (row, trail.checked_sub(0x41)?)
+    } else if trail >= 0x40 {
+        (row, trail.checked_sub(0x40)?)
+    } else {
+        return None;
+    };
+    Some((row.checked_add(0x21)?, cell.checked_add(0x21)?))
+}
+
 fn looks_like_raw_anchor_label(value: &str) -> bool {
     let value = value.trim();
     value.len() >= 4 && value.chars().all(|ch| ch.is_ascii_digit())
@@ -7461,6 +7570,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(page.hits.len(), 1);
+    }
+
+    #[test]
+    fn ssed_index_search_key_uses_jis_fullwidth_ascii_order() {
+        assert_eq!(encode_ssed_index_search_key(".c"), body_jis(".c"));
+        assert_eq!(encode_ssed_index_search_key("30"), body_jis("30"));
+        assert_eq!(encode_ssed_index_search_key("３０"), body_jis("30"));
     }
 
     enum DenseSidecarFixture {

@@ -16,6 +16,7 @@ pub struct SsedIndexRow {
     pub logical_block: u32,
     pub row_index: u32,
     pub key: String,
+    pub raw_key: Vec<u8>,
     pub target_key: String,
     pub body: SsedIndexPointer,
     pub title: SsedIndexPointer,
@@ -162,6 +163,7 @@ pub fn parse_simple_leaf_page(
                         logical_block,
                         row_index: rows.len() as u32 + 1,
                         key: String::new(),
+                        raw_key: Vec::new(),
                         target_key: String::new(),
                         body,
                         title,
@@ -176,7 +178,8 @@ pub fn parse_simple_leaf_page(
             unknown += 1;
             break;
         }
-        let key = decode_index_key(&page[pos..pos + key_len]);
+        let raw_key = page[pos..pos + key_len].to_vec();
+        let key = decode_index_key(&raw_key);
         pos += key_len;
         let body = SsedIndexPointer {
             block: be32(page, pos),
@@ -193,6 +196,7 @@ pub fn parse_simple_leaf_page(
             logical_block,
             row_index,
             key: key.clone(),
+            raw_key,
             target_key: key,
             body,
             title,
@@ -271,7 +275,8 @@ fn parse_body_only_simple_leaf_page(
             unknown += 1;
             break;
         }
-        let key = decode_index_key(&page[pos..pos + key_len]);
+        let raw_key = page[pos..pos + key_len].to_vec();
+        let key = decode_index_key(&raw_key);
         pos += key_len;
         let body = SsedIndexPointer {
             block: be32(page, pos),
@@ -284,6 +289,7 @@ fn parse_body_only_simple_leaf_page(
             logical_block,
             row_index,
             key: key.clone(),
+            raw_key,
             target_key: key,
             body,
             title: body,
@@ -333,7 +339,8 @@ fn parse_tagged_leaf_page(
                     unknown += 1;
                     break;
                 }
-                let key = decode_index_key(&page[pos..pos + key_len]);
+                let raw_key = page[pos..pos + key_len].to_vec();
+                let key = decode_index_key(&raw_key);
                 pos += key_len;
                 let body = read_body_pointer(page, pos);
                 let title = match layout {
@@ -347,6 +354,7 @@ fn parse_tagged_leaf_page(
                     logical_block,
                     row_index: rows.len() as u32 + 1,
                     key: key.clone(),
+                    raw_key,
                     target_key: key,
                     body,
                     title,
@@ -390,6 +398,7 @@ fn parse_tagged_leaf_page(
                     logical_block,
                     row_index: rows.len() as u32 + 1,
                     key,
+                    raw_key: Vec::new(),
                     target_key,
                     body,
                     title,
@@ -441,7 +450,8 @@ fn parse_kw_leaf_page(
                     unknown += 1;
                     break;
                 }
-                let key = decode_index_key(&page[pos..pos + key_len]);
+                let raw_key = page[pos..pos + key_len].to_vec();
+                let key = decode_index_key(&raw_key);
                 pos += key_len;
                 let (body, title) = read_pointer_pair(page, pos);
                 pos += 12;
@@ -451,6 +461,7 @@ fn parse_kw_leaf_page(
                     logical_block,
                     row_index: rows.len() as u32 + 1,
                     key: key.clone(),
+                    raw_key,
                     target_key: key,
                     body,
                     title,
@@ -492,6 +503,7 @@ fn parse_kw_leaf_page(
                     logical_block,
                     row_index: rows.len() as u32 + 1,
                     key: key.clone(),
+                    raw_key: Vec::new(),
                     target_key: key,
                     body,
                     title,
@@ -538,7 +550,8 @@ fn parse_cr_leaf_page(
                     unknown += 1;
                     break;
                 }
-                let key = decode_index_key(&page[pos..pos + key_len]);
+                let raw_key = page[pos..pos + key_len].to_vec();
+                let key = decode_index_key(&raw_key);
                 pos += key_len;
                 let (body, title) = read_pointer_pair(page, pos);
                 pos += 12;
@@ -548,6 +561,7 @@ fn parse_cr_leaf_page(
                     logical_block,
                     row_index: rows.len() as u32 + 1,
                     key: key.clone(),
+                    raw_key,
                     target_key: key,
                     body,
                     title,
@@ -587,6 +601,7 @@ fn parse_cr_leaf_page(
                     logical_block,
                     row_index: rows.len() as u32 + 1,
                     key: key.clone(),
+                    raw_key: Vec::new(),
                     target_key: key,
                     body,
                     title,
@@ -635,7 +650,8 @@ fn parse_multi_leaf_page(
                     unknown += 1;
                     break;
                 }
-                let key = decode_index_key(&page[pos + 2..pos + 2 + key_len]);
+                let raw_key = page[pos + 2..pos + 2 + key_len].to_vec();
+                let key = decode_index_key(&raw_key);
                 pos += 2 + key_len;
                 let (body, title) = read_pointer_pair(page, pos);
                 pos += 12;
@@ -645,6 +661,7 @@ fn parse_multi_leaf_page(
                     logical_block,
                     row_index: rows.len() as u32 + 1,
                     key: key.clone(),
+                    raw_key,
                     target_key: key,
                     body,
                     title,
@@ -678,6 +695,7 @@ fn parse_multi_leaf_page(
                     logical_block,
                     row_index: rows.len() as u32 + 1,
                     key: key.clone(),
+                    raw_key: Vec::new(),
                     target_key: key,
                     body,
                     title,
