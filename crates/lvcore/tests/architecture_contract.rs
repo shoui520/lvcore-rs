@@ -7,7 +7,7 @@ use lvcore::{
     GaijiSourcePreference, InternalResource, InternalTarget, NavigationStatus, NavigationSurface,
     NavigationSurfaceKind, RenderMode, RenderOptions, RendererInput, ResolvedTargetKind,
     ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode, SearchQuery,
-    SearchScope, StorageBackend, TargetToken, VisualBody,
+    SearchScope, StorageBackend, TargetKind, TargetToken, VisualBody,
 };
 use rusqlite::Connection;
 use tempfile::tempdir;
@@ -2376,6 +2376,122 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
 }
 
 #[test]
+fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
+    let root = tempdir().unwrap();
+    let source_dir = root.path().join("_DCT_SOURCE");
+    let destination_dir = root.path().join("_DCT_BUREI");
+    fs::create_dir(&source_dir).unwrap();
+    fs::create_dir(&destination_dir).unwrap();
+    write_lved_cross_book_source_fixture(&source_dir);
+    write_minimal_lved_sqlite_fixture(&destination_dir);
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let source_book_id = library.open_path(&source_dir, &registry).unwrap();
+    let destination_book_id = library.open_path(&destination_dir, &registry).unwrap();
+
+    let source_target = TargetToken::new(&InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id: 10,
+        anchor: None,
+    })
+    .unwrap();
+    let source_view = library
+        .render_target(&source_book_id, &source_target, &RenderOptions::default())
+        .unwrap();
+    let cross_book_link = source_view
+        .links
+        .iter()
+        .find(|link| link.kind == TargetKind::LvedCrossBook)
+        .expect("source entry should expose a typed cross-book LVED link");
+
+    let routed = library
+        .render_target_routed(
+            &source_book_id,
+            &cross_book_link.token,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(routed.book_id, destination_book_id);
+    assert_eq!(routed.view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(routed.view.scroll_anchor.as_deref(), Some("dest"));
+    assert!(
+        routed
+            .view
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("<article><h1>Alpha</h1><p>Tree body</p></article>")
+    );
+    assert!(matches!(
+        routed.view.target.decode().unwrap(),
+        InternalTarget::LvedRow {
+            table,
+            row_id: 100,
+            anchor: Some(anchor)
+        } if table == "content" && anchor == "dest"
+    ));
+    assert!(
+        routed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lved_cross_book_routed")
+    );
+}
+
+#[test]
+fn library_reports_lved_cross_book_targets_when_destination_is_not_open() {
+    let root = tempdir().unwrap();
+    let source_dir = root.path().join("_DCT_SOURCE");
+    fs::create_dir(&source_dir).unwrap();
+    write_lved_cross_book_source_fixture(&source_dir);
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let source_book_id = library.open_path(&source_dir, &registry).unwrap();
+
+    let source_target = TargetToken::new(&InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id: 10,
+        anchor: None,
+    })
+    .unwrap();
+    let source_view = library
+        .render_target(&source_book_id, &source_target, &RenderOptions::default())
+        .unwrap();
+    let cross_book_link = source_view
+        .links
+        .iter()
+        .find(|link| link.kind == TargetKind::LvedCrossBook)
+        .expect("source entry should expose a typed cross-book LVED link");
+
+    let routed = library
+        .render_target_routed(
+            &source_book_id,
+            &cross_book_link.token,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(routed.book_id, source_book_id);
+    assert_eq!(routed.view.kind, ResolvedTargetKind::Unsupported);
+    assert!(
+        routed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lved_cross_book_destination_missing")
+    );
+    assert!(
+        routed
+            .view
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lved_cross_book_destination_missing")
+    );
+}
+
+#[test]
 fn casefolded_paths_find_real_casing() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("HONMON.DIN"), b"body").unwrap();
@@ -2489,6 +2605,34 @@ fn write_minimal_lved_sqlite_fixture(root: &Path) {
         "\u{feff}0\t0\tExample Dictionary\r\n0\t1\tBrowse\r\n100\t2\tAlpha\r\n105\t2\tBeta\r\n",
     )
     .unwrap();
+    fs::write(root.join("main.key"), key).unwrap();
+}
+
+fn write_lved_cross_book_source_fixture(root: &Path) {
+    let payload = root.join("main.data");
+    let key = "test-key";
+    {
+        let connection = Connection::open(&payload).unwrap();
+        connection.pragma_update(None, "key", key).unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute_batch(
+                "
+                create table content (id integer primary key, type integer, body text, media text);
+                insert into content values (
+                  10,
+                  1,
+                  '<article><h1>Source</h1><a href=\"lved.contentlink:BUREI.100#dest\">target</a></article>',
+                  ''
+                );
+                create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                insert into list values (1, 10, 1, '', 'source', '');
+                ",
+            )
+            .unwrap();
+    }
     fs::write(root.join("main.key"), key).unwrap();
 }
 

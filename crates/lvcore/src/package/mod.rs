@@ -72,6 +72,20 @@ pub struct BookMetadata {
     pub capabilities: Vec<Capability>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BookAliasKind {
+    LvedDictCode,
+}
+
+/// Non-stable backend routing hint used to resolve native links between open
+/// books. This is not a book identity and should not replace `BookId`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookAlias {
+    pub kind: BookAliasKind,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectedPackage {
     pub root: PathBuf,
@@ -96,6 +110,10 @@ pub trait BookPackage:
 {
     fn metadata(&self) -> &BookMetadata;
     fn root(&self) -> &Path;
+
+    fn routing_aliases(&self) -> &[BookAlias] {
+        &[]
+    }
 }
 
 pub trait BookPackageExt: BookPackage {

@@ -36,7 +36,7 @@ pub use gaiji::{
     resolve_rich_label,
 };
 pub use hourei::{HoureiLawEntry, HoureiLawWindow, HoureiSearchHit, HoureiStore};
-pub use library::BookLibrary;
+pub use library::{BookLibrary, RoutedTargetView};
 pub use lved_sqlite::{
     LvedInfoPage, LvedKeyFile, LvedListItem, LvedListWindow, LvedSearchHit, LvedSqliteStore,
     LvedSqliteSummary, LvedTreeIndexItem,
@@ -46,8 +46,8 @@ pub use navigation::{
     NavigationTarget,
 };
 pub use package::{
-    BookId, BookMetadata, BookPackage, BookPackageExt, Capability, DetectedPackage, DriverRegistry,
-    FormatFamily, PackageDriver,
+    BookAlias, BookAliasKind, BookId, BookMetadata, BookPackage, BookPackageExt, Capability,
+    DetectedPackage, DriverRegistry, FormatFamily, PackageDriver,
 };
 pub use render::{
     RenderCapability, RenderMode, RenderOptions, RendererInput, RendererInputKind,

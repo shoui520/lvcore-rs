@@ -23,7 +23,7 @@ use crate::gaiji::{
     normalize_gaiji_identity, parse_uni_gaiji_map, resolve_rich_label,
 };
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
-use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary};
+use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
 use crate::multiview::{MultiviewMenuItem, MultiviewStore, parse_menu_data};
 use crate::navigation::{
     HomeSurface, NavigationItem, NavigationNode, NavigationProvider, NavigationStatus,
@@ -59,7 +59,8 @@ use crate::storage::{DirectoryStorage, StorageBackend};
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
 use super::{
-    BookId, BookMetadata, BookPackage, Capability, DetectedPackage, FormatFamily, PackageDriver,
+    BookAlias, BookAliasKind, BookId, BookMetadata, BookPackage, Capability, DetectedPackage,
+    FormatFamily, PackageDriver,
 };
 
 pub struct SsedDriver;
@@ -297,6 +298,7 @@ pub struct StubBookPackage {
     root: PathBuf,
     storage: DirectoryStorage,
     metadata: BookMetadata,
+    routing_aliases: Vec<BookAlias>,
     ssed_catalog: Option<SsedCatalog>,
     lved_store: Option<LvedSqliteStore>,
     lved_summary: Option<LvedSqliteSummary>,
@@ -458,10 +460,12 @@ impl StubBookPackage {
             root_fingerprint,
             capabilities,
         };
+        let routing_aliases = routing_aliases_for_package(detected.format_family, &stores);
         Self {
             root: root.to_path_buf(),
             storage: DirectoryStorage::new(root),
             metadata,
+            routing_aliases,
             ssed_catalog: stores.ssed_catalog,
             lved_store: stores.lved_store,
             lved_summary: stores.lved_summary,
@@ -481,6 +485,32 @@ impl BookPackage for StubBookPackage {
     fn root(&self) -> &Path {
         &self.root
     }
+
+    fn routing_aliases(&self) -> &[BookAlias] {
+        &self.routing_aliases
+    }
+}
+
+fn routing_aliases_for_package(
+    format_family: FormatFamily,
+    stores: &StubPackageStores,
+) -> Vec<BookAlias> {
+    if format_family != FormatFamily::LvedSqlite3 {
+        return Vec::new();
+    }
+    stores
+        .lved_store
+        .as_ref()
+        .and_then(|store| infer_lved_dict_code(&store.payload_path))
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            vec![BookAlias {
+                kind: BookAliasKind::LvedDictCode,
+                value,
+            }]
+        })
+        .unwrap_or_default()
 }
 
 impl SearchProvider for StubBookPackage {

@@ -8,16 +8,24 @@ use serde::{Deserialize, Serialize};
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::navigation::{HomeSurface, NavigationSurface};
-use crate::package::{BookId, BookMetadata, BookPackage, DriverRegistry};
+use crate::package::{BookAliasKind, BookId, BookMetadata, BookPackage, DriverRegistry};
 use crate::render::{RenderOptions, RendererInput, ResolvedTargetView};
 use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::{SearchPage, SearchQuery, SearchScope};
 use crate::sequence::{SequenceHint, TargetWindow};
-use crate::target::TargetToken;
+use crate::target::{InternalTarget, TargetToken};
 
 #[derive(Default)]
 pub struct BookLibrary {
     books: BTreeMap<BookId, Box<dyn BookPackage>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutedTargetView {
+    pub book_id: BookId,
+    pub view: ResolvedTargetView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +34,16 @@ struct LibrarySearchCursor {
     book_index: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     book_cursor: Option<String>,
+}
+
+struct LvedCrossBookRequest<'a> {
+    source_book_id: &'a BookId,
+    source_book: &'a dyn BookPackage,
+    original_target: &'a TargetToken,
+    dict_code: &'a str,
+    content_id: &'a str,
+    anchor: Option<String>,
+    options: &'a RenderOptions,
 }
 
 impl BookLibrary {
@@ -100,6 +118,38 @@ impl BookLibrary {
         self.required_book(book_id)?.render_target(target, options)
     }
 
+    /// Resolve a target that may leave the source book, such as LVED
+    /// cross-dictionary links. Local targets are delegated to the source book.
+    pub fn render_target_routed(
+        &self,
+        book_id: &BookId,
+        target: &TargetToken,
+        options: &RenderOptions,
+    ) -> Result<RoutedTargetView> {
+        let source_book = self.required_book(book_id)?;
+        match target.decode()? {
+            InternalTarget::LvedCrossBook {
+                dict_code,
+                content_id,
+                anchor,
+                ..
+            } => self.render_lved_cross_book_target(LvedCrossBookRequest {
+                source_book_id: book_id,
+                source_book,
+                original_target: target,
+                dict_code: &dict_code,
+                content_id: &content_id,
+                anchor,
+                options,
+            }),
+            _ => Ok(RoutedTargetView {
+                book_id: book_id.clone(),
+                view: source_book.render_target(target, options)?,
+                diagnostics: Vec::new(),
+            }),
+        }
+    }
+
     pub fn renderer_input_for_target(
         &self,
         book_id: &BookId,
@@ -155,6 +205,93 @@ impl BookLibrary {
     fn required_book(&self, book_id: &BookId) -> Result<&dyn BookPackage> {
         self.book(book_id)
             .ok_or_else(|| Error::BookNotFound(book_id.0.clone()))
+    }
+
+    fn render_lved_cross_book_target(
+        &self,
+        request: LvedCrossBookRequest<'_>,
+    ) -> Result<RoutedTargetView> {
+        let row_id = match request.content_id.parse::<i64>() {
+            Ok(value) => value,
+            Err(_) => {
+                let diagnostic = Diagnostic::warning(
+                    "lved_cross_book_content_id_invalid",
+                    format!(
+                        "LVED cross-book content id {:?} is not numeric",
+                        request.content_id
+                    ),
+                )
+                .with_context("dict_code", request.dict_code)
+                .with_context("content_id", request.content_id);
+                let mut view = request
+                    .source_book
+                    .render_target(request.original_target, request.options)?;
+                view.diagnostics.push(diagnostic.clone());
+                return Ok(RoutedTargetView {
+                    book_id: request.source_book_id.clone(),
+                    view,
+                    diagnostics: vec![diagnostic],
+                });
+            }
+        };
+
+        let Some((destination_book_id, destination_book)) =
+            self.find_lved_dict_code_alias(request.dict_code)
+        else {
+            let diagnostic = Diagnostic::info(
+                "lved_cross_book_destination_missing",
+                format!(
+                    "LVED cross-book destination dictionary {} is not open in the library",
+                    request.dict_code
+                ),
+            )
+            .with_context("dict_code", request.dict_code)
+            .with_context("source_book_id", &request.source_book_id.0);
+            let mut view = request
+                .source_book
+                .render_target(request.original_target, request.options)?;
+            view.diagnostics.push(diagnostic.clone());
+            return Ok(RoutedTargetView {
+                book_id: request.source_book_id.clone(),
+                view,
+                diagnostics: vec![diagnostic],
+            });
+        };
+
+        let destination_target = TargetToken::new(&InternalTarget::LvedRow {
+            table: "content".to_owned(),
+            row_id,
+            anchor: request.anchor,
+        })?;
+        let view = destination_book.render_target(&destination_target, request.options)?;
+        Ok(RoutedTargetView {
+            book_id: destination_book_id.clone(),
+            view,
+            diagnostics: vec![
+                Diagnostic::info(
+                    "lved_cross_book_routed",
+                    format!(
+                        "LVED cross-book target routed to dictionary {}",
+                        request.dict_code
+                    ),
+                )
+                .with_context("dict_code", request.dict_code)
+                .with_context("source_book_id", &request.source_book_id.0)
+                .with_context("destination_book_id", &destination_book_id.0),
+            ],
+        })
+    }
+
+    fn find_lved_dict_code_alias(&self, dict_code: &str) -> Option<(&BookId, &dyn BookPackage)> {
+        self.books.iter().find_map(|(book_id, book)| {
+            book.routing_aliases()
+                .iter()
+                .any(|alias| {
+                    alias.kind == BookAliasKind::LvedDictCode
+                        && alias.value.eq_ignore_ascii_case(dict_code)
+                })
+                .then_some((book_id, book.as_ref()))
+        })
     }
 
     fn search_many<'a>(
