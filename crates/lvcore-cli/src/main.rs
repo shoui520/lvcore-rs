@@ -294,38 +294,51 @@ fn exercise_reader_paths(
         }
         let row = match package.open_surface(&surface.surface_id) {
             Ok(opened) => {
-                let (target, label) = first_surface_target(&opened)
-                    .map(|(target, label)| (Some(target), label))
-                    .unwrap_or((None, String::new()));
-                match target {
-                    Some(target) => match package.render_target(&target, &RenderOptions::default())
-                    {
-                        Ok(view) => json!({
+                if let NavigationSurface::Deferred { diagnostics, .. } = &opened {
+                    json!({
+                        "kind": "surface_first_target",
+                        "surface_id": surface.surface_id,
+                        "surface_kind": surface.kind,
+                        "opened_kind": navigation_surface_kind_name(&opened),
+                        "status": "deferred",
+                        "diagnostic_count": diagnostics.len(),
+                    })
+                } else {
+                    let (target, label) = first_surface_target(&opened)
+                        .map(|(target, label)| (Some(target), label))
+                        .unwrap_or((None, String::new()));
+                    match target {
+                        Some(target) => {
+                            match package.render_target(&target, &RenderOptions::default()) {
+                                Ok(view) => json!({
+                                    "kind": "surface_first_target",
+                                    "surface_id": surface.surface_id,
+                                    "surface_kind": surface.kind,
+                                    "opened_kind": navigation_surface_kind_name(&opened),
+                                    "status": "ok",
+                                    "label": label,
+                                    "view_kind": view.kind,
+                                    "diagnostic_count": view.diagnostics.len(),
+                                    "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+                                }),
+                                Err(error) => json!({
+                                    "kind": "surface_first_target",
+                                    "surface_id": surface.surface_id,
+                                    "surface_kind": surface.kind,
+                                    "status": "render_error",
+                                    "label": label,
+                                    "error": error.to_string(),
+                                }),
+                            }
+                        }
+                        None => json!({
                             "kind": "surface_first_target",
                             "surface_id": surface.surface_id,
                             "surface_kind": surface.kind,
                             "opened_kind": navigation_surface_kind_name(&opened),
-                            "status": "ok",
-                            "label": label,
-                            "view_kind": view.kind,
-                            "diagnostic_count": view.diagnostics.len(),
-                            "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+                            "status": "no_target",
                         }),
-                        Err(error) => json!({
-                            "kind": "surface_first_target",
-                            "surface_id": surface.surface_id,
-                            "surface_kind": surface.kind,
-                            "status": "render_error",
-                            "label": label,
-                            "error": error.to_string(),
-                        }),
-                    },
-                    None => json!({
-                        "kind": "surface_first_target",
-                        "surface_id": surface.surface_id,
-                        "surface_kind": surface.kind,
-                        "status": "no_target",
-                    }),
+                    }
                 }
             }
             Err(error) => json!({
