@@ -132,6 +132,10 @@ provider slices:
   `PCMDATA.DIC`, `MONOSCR.DIC`, and `FIGURE.DIC` targets. This gives the
   future HC/profile renderer the resource tokens it needs without claiming HC
   rendering parity yet;
+- SSED plain HONMON renderer inputs infer conservative stream lengths from
+  generic `1f09 0001` entry markers and native index body boundaries for
+  marker-variant entries, keeping renderer/resource scans scoped to the focused
+  entry where the boundary is known;
 - SSED KOJIEN6-style `COLSMPL.DIC` records are parsed as typed color-sample
   metadata preserving exact Munsell notation and JIS labels;
 - explicit deferred/unsupported diagnostics instead of fake output.
@@ -145,8 +149,9 @@ known structures.
 
 - SSED HC renderer parity is not ported yet. Plain SSED body targets currently
   resolve to explicit HC renderer input plus discovered resource refs rather
-  than claiming rendered HTML; supported dense sidecar targets resolve to
-  preserved HTML or exact sidecar text where available.
+  than claiming rendered HTML; known entry boundaries are used when available,
+  while supported dense sidecar targets resolve to preserved HTML or exact
+  sidecar text.
 - SSED full-text search is implemented as a bounded, index-anchored HONMON scan;
   it is not a substitute for HC-rendered semantic text and may need more product
   tuning for dense/sidecar-heavy dictionaries.

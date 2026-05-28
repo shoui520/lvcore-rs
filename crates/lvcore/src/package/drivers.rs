@@ -359,6 +359,7 @@ const SSED_FULLTEXT_BODY_WINDOW_BYTES: usize = 16 * 1024;
 const SSED_FULLTEXT_SCAN_WINDOW_BYTES: usize = 256 * 1024;
 const SSED_FULLTEXT_SCAN_OVERLAP_BYTES: usize = 512;
 const SSED_FULLTEXT_SNIPPET_CHARS: usize = 160;
+const SSED_ENTRY_MARKER: [u8; 4] = [0x1f, 0x09, 0x00, 0x01];
 const MONOSCR_WIDTH: u32 = 64;
 const MONOSCR_HEIGHT: u32 = 64;
 const MONOSCR_BITMAP_BYTES: usize = (MONOSCR_WIDTH as usize * MONOSCR_HEIGHT as usize) / 8;
@@ -3857,9 +3858,8 @@ impl StubBookPackage {
         let start = usize::try_from(offset)
             .map_err(|_| Error::Driver("SSED stream offset is too large".to_owned()))?;
         let available = reader.header().expanded_size().saturating_sub(start);
-        let requested = length
-            .and_then(|length| usize::try_from(length).ok())
-            .unwrap_or(RESOURCE_SCAN_LIMIT);
+        let explicit_length = length.and_then(|length| usize::try_from(length).ok());
+        let requested = explicit_length.unwrap_or(RESOURCE_SCAN_LIMIT);
         let size = available.min(requested).min(RESOURCE_SCAN_LIMIT);
         let data = reader.read_range(start, size)?;
         let candidates = self.ssed_renderer_resource_candidates(&data);
@@ -3880,7 +3880,7 @@ impl StubBookPackage {
                 )),
             }
         }
-        if available > size {
+        if explicit_length.is_none() && available > size {
             diagnostics.push(Diagnostic::info(
                 "ssed_renderer_resource_scan_bounded",
                 format!(
@@ -4385,11 +4385,84 @@ impl StubBookPackage {
         {
             return self.visual_body_for_ssed_dense_anchor(&anchor_id, None);
         }
+        let length = self.infer_ssed_stream_length(component, component_offset);
         Ok(VisualBody::SsedStream {
             component: component.filename.clone(),
             offset: component_offset,
-            length: None,
+            length,
         })
+    }
+
+    fn infer_ssed_stream_length(
+        &self,
+        component: &SsedComponent,
+        component_offset: u64,
+    ) -> Option<u64> {
+        if component.role != SsedComponentRole::Honmon {
+            return None;
+        }
+        let path = self
+            .resolve_readable_ssed_component_path(component)
+            .ok()
+            .flatten()?;
+        let mut reader = SsedDataFile::open(path).ok()?;
+        let start = usize::try_from(component_offset).ok()?;
+        if start >= reader.header().expanded_size() {
+            return None;
+        }
+        if ssed_reader_starts_generic_entry_marker(&mut reader, start).ok()? {
+            return ssed_find_next_entry_marker_offset(&mut reader, start.saturating_add(1))
+                .ok()
+                .flatten()
+                .map(|next| next.saturating_sub(start) as u64)
+                .or_else(|| Some((reader.header().expanded_size() - start) as u64));
+        }
+        if let Some(next_offset) =
+            self.infer_next_ssed_index_body_offset(component, component_offset)
+            && next_offset > component_offset
+        {
+            return Some(next_offset - component_offset);
+        }
+        ssed_find_next_entry_marker_offset(&mut reader, start.saturating_add(1))
+            .ok()
+            .flatten()
+            .filter(|next| *next > start)
+            .map(|next| (next - start) as u64)
+    }
+
+    fn infer_next_ssed_index_body_offset(
+        &self,
+        component: &SsedComponent,
+        component_offset: u64,
+    ) -> Option<u64> {
+        let mut next_offset: Option<u64> = None;
+        self.scan_ssed_simple_index_rows(None, |row| {
+            let Some(row_component) = self
+                .ssed_catalog
+                .as_ref()
+                .and_then(|catalog| catalog.component_for_address(row.body.block))
+            else {
+                return Ok(true);
+            };
+            if !row_component
+                .filename
+                .eq_ignore_ascii_case(&component.filename)
+            {
+                return Ok(true);
+            }
+            let Some(row_offset) = row_component.relative_offset(row.body.block, row.body.offset)
+            else {
+                return Ok(true);
+            };
+            if row_offset > component_offset
+                && next_offset.is_none_or(|current| row_offset < current)
+            {
+                next_offset = Some(row_offset);
+            }
+            Ok(true)
+        })
+        .ok()?;
+        next_offset
     }
 
     fn visual_body_for_ssed_dense_anchor(
@@ -6778,6 +6851,83 @@ fn find_ssed_dense_anchor_record_end(data: &[u8]) -> Option<usize> {
                 .skip(1)
                 .find_map(|(index, window)| (window == [0x1f, 0x09, 0x00, 0x01]).then_some(index))
         })
+}
+
+fn ssed_reader_starts_generic_entry_marker(
+    reader: &mut SsedDataFile,
+    offset: usize,
+) -> Result<bool> {
+    let data = reader.read_range(offset, SSED_ENTRY_MARKER.len() + 2)?;
+    Ok(data.starts_with(&SSED_ENTRY_MARKER)
+        || data.starts_with(&[0x1f, 0x02])
+            && data
+                .get(2..2 + SSED_ENTRY_MARKER.len())
+                .is_some_and(|marker| marker == SSED_ENTRY_MARKER))
+}
+
+fn ssed_find_next_entry_marker_offset(
+    reader: &mut SsedDataFile,
+    start_offset: usize,
+) -> Result<Option<usize>> {
+    const SCAN_CHUNK_BYTES: usize = 64 * 1024;
+    let expanded_size = reader.header().expanded_size();
+    if start_offset >= expanded_size {
+        return Ok(None);
+    }
+    let mut read_offset = start_offset;
+    let mut carry = Vec::new();
+    let mut carry_base = start_offset;
+    let tail_size = SSED_ENTRY_MARKER.len() + 2 - 1;
+
+    while read_offset < expanded_size {
+        let read_size = expanded_size
+            .saturating_sub(read_offset)
+            .min(SCAN_CHUNK_BYTES);
+        let chunk = reader.read_range(read_offset, read_size)?;
+        if chunk.is_empty() {
+            break;
+        }
+        let base = if carry.is_empty() {
+            read_offset
+        } else {
+            carry_base
+        };
+        let mut buffer = Vec::with_capacity(carry.len() + chunk.len());
+        buffer.extend_from_slice(&carry);
+        buffer.extend_from_slice(&chunk);
+
+        let mut search_from = 0usize;
+        while let Some(found) = find_bytes(&buffer[search_from..], &SSED_ENTRY_MARKER) {
+            let marker_position = search_from + found;
+            let absolute = base + marker_position;
+            let start = if marker_position >= 2
+                && buffer[marker_position - 2..marker_position] == [0x1f, 0x02]
+            {
+                absolute.saturating_sub(2)
+            } else {
+                absolute
+            };
+            if start >= start_offset {
+                return Ok(Some(start));
+            }
+            search_from = marker_position.saturating_add(1);
+        }
+
+        let retained = tail_size.min(buffer.len());
+        carry = buffer[buffer.len() - retained..].to_vec();
+        carry_base = base + buffer.len() - retained;
+        read_offset = read_offset.saturating_add(chunk.len());
+    }
+    Ok(None)
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn ssed_fulltext_body_window_len(rows: &[SsedFulltextRow], index: usize) -> usize {
@@ -9321,6 +9471,211 @@ mod tests {
     }
 
     #[test]
+    fn ssed_hc_renderer_input_uses_marker_entry_length_for_resource_scan() {
+        let dir = tempdir().unwrap();
+        let first_pcm = pcmdata_wave_chunks_for_test(1, b"\x80");
+        let second_pcm = pcmdata_wave_chunks_for_test(1, b"\x81");
+        let first_audio = pcmdata_range_control_for_test(
+            500,
+            0,
+            500,
+            u32::try_from(first_pcm.len() - 1).unwrap(),
+        );
+        let second_audio = pcmdata_range_control_for_test(
+            501,
+            0,
+            501,
+            u32::try_from(second_pcm.len() - 1).unwrap(),
+        );
+        let mut honmon = Vec::new();
+        honmon.extend_from_slice(&SSED_ENTRY_MARKER);
+        honmon.extend_from_slice(b"first");
+        honmon.extend_from_slice(&first_audio);
+        let second_entry_offset = honmon.len();
+        honmon.extend_from_slice(&SSED_ENTRY_MARKER);
+        honmon.extend_from_slice(b"second");
+        honmon.extend_from_slice(&second_audio);
+
+        fs::write(
+            dir.path().join("HONMON.DIC"),
+            fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("PCMDATA.DIC"),
+            fixture_sseddata_literal_chunks(&[&first_pcm, &second_pcm], 500, 501),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "Bounded renderer scan".to_owned(),
+            components: vec![
+                SsedComponent {
+                    index: 0,
+                    multi: 0,
+                    component_type: 0x00,
+                    start_block: 100,
+                    end_block: 100,
+                    data: [0; 4],
+                    filename: "HONMON.DIC".to_owned(),
+                    role: SsedComponentRole::Honmon,
+                },
+                SsedComponent {
+                    index: 1,
+                    multi: 0,
+                    component_type: 0xd8,
+                    start_block: 500,
+                    end_block: 501,
+                    data: [0; 4],
+                    filename: "PCMDATA.DIC".to_owned(),
+                    role: SsedComponentRole::PcmData,
+                },
+            ],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 2,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Bounded renderer scan".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let token = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 0,
+        })
+        .unwrap();
+
+        let input = package.renderer_input_for_target(&token).unwrap();
+        let RendererInput::HcSsedStream {
+            length,
+            resources,
+            diagnostics,
+            ..
+        } = input
+        else {
+            panic!("SSED address should produce HC renderer input");
+        };
+        assert_eq!(length, Some(second_entry_offset as u64));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "ssed_renderer_resource_scan_bounded")
+        );
+        assert_eq!(resources.len(), 1);
+        let expected_label = format!(
+            "PCMDATA.DIC:00000500:0000-00000500:{:04}",
+            first_pcm.len() - 1
+        );
+        assert_eq!(resources[0].label.as_deref(), Some(expected_label.as_str()));
+    }
+
+    #[test]
+    fn ssed_hc_renderer_input_uses_index_boundary_for_marker_variants() {
+        let dir = tempdir().unwrap();
+        let mut honmon = Vec::new();
+        honmon.extend_from_slice(&[0x1f, 0x09, 0x00, 0x02]);
+        honmon.extend_from_slice(b"first");
+        let second_entry_offset = honmon.len();
+        honmon.extend_from_slice(&[0x1f, 0x09, 0x00, 0x02]);
+        honmon.extend_from_slice(b"second");
+        fs::write(
+            dir.path().join("HONMON.DIC"),
+            fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("FHINDEX.DIC"),
+            fixture_sseddata_literal_chunks(
+                &[&simple_index_page_for_test(&[
+                    (&[0x24, 0x22], 100, 0),
+                    (
+                        &[0x24, 0x24],
+                        100,
+                        u16::try_from(second_entry_offset).unwrap(),
+                    ),
+                ])],
+                200,
+                200,
+            ),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "Index boundaries".to_owned(),
+            components: vec![
+                SsedComponent {
+                    index: 0,
+                    multi: 0,
+                    component_type: 0x00,
+                    start_block: 100,
+                    end_block: 100,
+                    data: [0; 4],
+                    filename: "HONMON.DIC".to_owned(),
+                    role: SsedComponentRole::Honmon,
+                },
+                SsedComponent {
+                    index: 1,
+                    multi: 0,
+                    component_type: 0x71,
+                    start_block: 200,
+                    end_block: 200,
+                    data: [0; 4],
+                    filename: "FHINDEX.DIC".to_owned(),
+                    role: SsedComponentRole::Index,
+                },
+            ],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 2,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Index boundaries".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let token = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 0,
+        })
+        .unwrap();
+
+        let input = package.renderer_input_for_target(&token).unwrap();
+        let RendererInput::HcSsedStream { length, .. } = input else {
+            panic!("SSED address should produce HC renderer input");
+        };
+        assert_eq!(length, Some(second_entry_offset as u64));
+    }
+
+    #[test]
     fn loose_movie_resource_resolves_and_reads_movie_file() {
         let dir = tempdir().unwrap();
         let package_root = dir.path().join("_DCT_SAMPLE");
@@ -10130,6 +10485,54 @@ mod tests {
         chunks.extend_from_slice(&(data.len() as u32).to_le_bytes());
         chunks.extend_from_slice(data);
         chunks
+    }
+
+    fn pcmdata_range_control_for_test(
+        start_block: u32,
+        start_offset: u32,
+        end_block: u32,
+        end_offset: u32,
+    ) -> Vec<u8> {
+        let mut control = vec![0x1f, 0x4a, 0x00, 0x01, 0x00, 0x00];
+        control.extend_from_slice(&bcd_decimal_for_test(start_block, 4));
+        control.extend_from_slice(&bcd_decimal_for_test(start_offset, 2));
+        control.extend_from_slice(&bcd_decimal_for_test(end_block, 4));
+        control.extend_from_slice(&bcd_decimal_for_test(end_offset, 2));
+        control
+    }
+
+    fn simple_index_page_for_test(rows: &[(&[u8], u32, u16)]) -> Vec<u8> {
+        let mut page = vec![0_u8; crate::ssed::BLOCK_SIZE as usize];
+        page[0..2].copy_from_slice(&0xc000_u16.to_be_bytes());
+        page[2..4].copy_from_slice(&(rows.len() as u16).to_be_bytes());
+        let mut pos = 4usize;
+        for (key, block, offset) in rows {
+            page[pos] = key.len() as u8;
+            pos += 1;
+            page[pos..pos + key.len()].copy_from_slice(key);
+            pos += key.len();
+            page[pos..pos + 4].copy_from_slice(&block.to_be_bytes());
+            pos += 4;
+            page[pos..pos + 2].copy_from_slice(&offset.to_be_bytes());
+            pos += 2;
+            page[pos..pos + 4].copy_from_slice(&0_u32.to_be_bytes());
+            pos += 4;
+            page[pos..pos + 2].copy_from_slice(&0_u16.to_be_bytes());
+            pos += 2;
+        }
+        page
+    }
+
+    fn bcd_decimal_for_test(mut value: u32, bytes: usize) -> Vec<u8> {
+        let mut out = vec![0_u8; bytes];
+        for byte in out.iter_mut().rev() {
+            let low = value % 10;
+            value /= 10;
+            let high = value % 10;
+            value /= 10;
+            *byte = ((high as u8) << 4) | low as u8;
+        }
+        out
     }
 
     fn fixture_sseddata_literal_chunks(
