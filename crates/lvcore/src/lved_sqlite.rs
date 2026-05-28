@@ -193,6 +193,26 @@ impl LvedSqliteStore {
         Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
     }
 
+    pub fn named_html_by_name(&self, table: &str, name: &str) -> Result<Option<String>> {
+        let connection = self.open_readonly()?;
+        if !is_safe_sqlite_identifier(table)
+            || !sqlite_table_exists(&connection, table)
+            || !sqlite_table_has_columns(&connection, table, &["name", "body"])
+        {
+            return Ok(None);
+        }
+        let sql = format!(
+            "select body from {} where name = ? limit 1",
+            quote_identifier(table)
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let mut rows = statement.query([name])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
+    }
+
     pub fn info_pages(&self, limit: usize) -> Result<Vec<LvedInfoPage>> {
         self.info_pages_page(0, limit)
     }
@@ -1117,6 +1137,13 @@ fn title_score(value: &str, source_name: &str) -> i32 {
 
 fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn is_safe_sqlite_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn strip_dct_prefix(value: &str) -> String {

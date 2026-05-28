@@ -801,6 +801,29 @@ impl RendererProvider for StubBookPackage {
                 "Unsupported target",
                 Diagnostic::warning("target_unsupported", reason),
             )),
+            InternalTarget::LvedCrossBook {
+                link_kind,
+                dict_code,
+                content_id,
+                ..
+            } => Ok(ResolvedTargetView::unsupported(
+                token.clone(),
+                "Cross-dictionary LVED link",
+                Diagnostic::info(
+                    "lved_cross_book_deferred",
+                    format!(
+                        "LVED {link_kind} link to dictionary {dict_code} content {content_id} requires library-wide routing"
+                    ),
+                ),
+            )),
+            InternalTarget::LvedViewerHook { hook, value } => Ok(ResolvedTargetView::unsupported(
+                token.clone(),
+                "LVED viewer hook",
+                Diagnostic::info(
+                    "lved_viewer_hook_deferred",
+                    format!("LVED viewer hook {hook} is intentionally not executed: {value}"),
+                ),
+            )),
             InternalTarget::Resource { resource, anchor } => {
                 let decoded_resource = resource.decode()?;
                 let resource_ref = self.resolve_resource(&resource)?;
@@ -1176,6 +1199,11 @@ impl BodyProvider for StubBookPackage {
             InternalTarget::LvedInfoPage { name, anchor: _ } => {
                 self.visual_body_for_lved_info_name(&name)
             }
+            InternalTarget::LvedNamedPage {
+                table,
+                name,
+                anchor: _,
+            } => self.visual_body_for_lved_named_page(&table, &name),
             InternalTarget::MultiviewHref { href, anchor } => {
                 self.visual_body_for_multiview_href(&href, anchor.as_deref())
             }
@@ -3428,6 +3456,7 @@ impl StubBookPackage {
                 Ok(ResolvedTargetKind::InfoPage)
             }
             InternalTarget::LvedInfoPage { .. } => Ok(ResolvedTargetKind::InfoPage),
+            InternalTarget::LvedNamedPage { .. } => Ok(ResolvedTargetKind::InfoPage),
             InternalTarget::HoureiLaw { .. } => Ok(ResolvedTargetKind::LawArticle),
             _ => Ok(ResolvedTargetKind::EntryBody),
         }
@@ -3670,6 +3699,31 @@ impl StubBookPackage {
         })
     }
 
+    fn visual_body_for_lved_named_page(&self, table: &str, name: &str) -> Result<VisualBody> {
+        let Some(store) = &self.lved_store else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVED_SQLITE3 store is unavailable".to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "lved_store_missing",
+                    "LVED_SQLITE3 named page targets require an opened SQLCipher store",
+                )],
+            });
+        };
+        let Some(html) = store.named_html_by_name(table, name)? else {
+            return Ok(VisualBody::Unsupported {
+                reason: "LVED_SQLITE3 named page was not found".to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "lved_named_page_missing",
+                    format!("LVED_SQLITE3 {table} page {name} was not found"),
+                )],
+            });
+        };
+        Ok(VisualBody::PreservedHtml {
+            html,
+            source: BodySourceKind::LvedSqlite,
+        })
+    }
+
     fn visual_body_for_multiview_href(
         &self,
         href: &str,
@@ -3760,6 +3814,42 @@ impl StubBookPackage {
                         ));
                     }
                 }
+                LvedHtmlRefKind::Image => {
+                    if let Some(resource) = lved_image_resource(raw_ref) {
+                        let token = ResourceToken::new(&resource)?;
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            let resource_ref = self.resolve_resource(&token)?;
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_image_ref_unparsed",
+                            format!("could not parse LVED image reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::Pdf => {
+                    if let Some(resource) = lved_pdf_resource(raw_ref) {
+                        let token = ResourceToken::new(&resource)?;
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            let resource_ref = self.resolve_resource(&token)?;
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_pdf_ref_unparsed",
+                            format!("could not parse LVED PDF reference {raw_ref}"),
+                        ));
+                    }
+                }
                 LvedHtmlRefKind::DataId => {
                     if let Some(target) = lved_dataid_target(raw_ref) {
                         let token = TargetToken::new(&target)?;
@@ -3773,6 +3863,27 @@ impl StubBookPackage {
                         diagnostics.push(Diagnostic::warning(
                             "lved_dataid_ref_unparsed",
                             format!("could not parse LVED dataid reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::CrossBook => {
+                    if let Some(target) = lved_cross_book_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            link.diagnostics.push(Diagnostic::info(
+                                "lved_cross_book_deferred",
+                                "cross-dictionary LVED link requires library-wide routing",
+                            ));
+                            links.push(link);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_cross_book_ref_unparsed",
+                            format!("could not parse cross-dictionary LVED reference {raw_ref}"),
                         ));
                     }
                 }
@@ -3791,6 +3902,36 @@ impl StubBookPackage {
                             format!("could not parse LVED info reference {raw_ref}"),
                         ));
                     }
+                }
+                LvedHtmlRefKind::Binran => {
+                    if let Some(target) = lved_binran_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            links.push(TargetLink::new(raw_ref, &target)?);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_binran_ref_unparsed",
+                            format!("could not parse LVED binran reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::ViewerHook => {
+                    let target = lved_viewer_hook_target(raw_ref);
+                    let token = TargetToken::new(&target)?;
+                    let href = format!("lvcore://target/{}", token.as_str());
+                    if seen_target_tokens.insert(token.as_str().to_owned()) {
+                        let mut link = TargetLink::new(raw_ref, &target)?;
+                        link.diagnostics.push(Diagnostic::info(
+                            "lved_viewer_hook_deferred",
+                            "LVED viewer hook is preserved as a non-executed target",
+                        ));
+                        links.push(link);
+                    }
+                    output.push_str(&href);
                 }
             }
             cursor = end;
@@ -4885,7 +5026,16 @@ struct SsedHanreiPage {
 }
 
 fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
-    let (namespace, key) = raw_ref.strip_prefix("lved.media.")?.split_once(':')?;
+    let (namespace, key) = if let Some(value) = raw_ref.strip_prefix("lved.media.") {
+        value.split_once(':')?
+    } else if let Some(key) = raw_ref.strip_prefix("lved.media:") {
+        ("media", key)
+    } else if let Some(key) = raw_ref.strip_prefix("lved.sound:") {
+        ("sound", key)
+    } else {
+        return None;
+    };
+    let key = lved_resource_key(key)?;
     if key.is_empty() {
         return None;
     }
@@ -4913,9 +5063,42 @@ fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
     let store = if audio { "lved.mediasub" } else { "lved.media" };
     Some(InternalResource::MediaBlob {
         store: store.to_owned(),
-        key: key.to_owned(),
+        key,
         resource_kind,
     })
+}
+
+fn lved_image_resource(raw_ref: &str) -> Option<InternalResource> {
+    let key = raw_ref
+        .strip_prefix("lved.image:")
+        .or_else(|| raw_ref.strip_prefix("lved.imag:"))
+        .and_then(lved_resource_key)?;
+    Some(InternalResource::MediaBlob {
+        store: "lved.media".to_owned(),
+        key,
+        resource_kind: ResourceKind::Image,
+    })
+}
+
+fn lved_pdf_resource(raw_ref: &str) -> Option<InternalResource> {
+    let key = raw_ref
+        .strip_prefix("lved.pdf:")
+        .and_then(lved_resource_key)?;
+    Some(InternalResource::MediaBlob {
+        store: "lved.media".to_owned(),
+        key,
+        resource_kind: ResourceKind::Pdf,
+    })
+}
+
+fn lved_resource_key(value: &str) -> Option<String> {
+    let value = value
+        .split_once('?')
+        .map_or(value, |(head, _)| head)
+        .split_once('#')
+        .map_or(value, |(head, _)| head)
+        .trim();
+    (!value.is_empty()).then(|| html_unescape_minimal(value))
 }
 
 fn lved_list_label_html(title_html: &str, subtitle_html: &str) -> String {
@@ -5597,6 +5780,8 @@ fn resource_kind_from_path(path: &str) -> ResourceKind {
         ResourceKind::Javascript
     } else if lower.ends_with(".html") || lower.ends_with(".htm") {
         ResourceKind::Html
+    } else if lower.ends_with(".pdf") {
+        ResourceKind::Pdf
     } else {
         ResourceKind::Other
     }
@@ -6011,29 +6196,54 @@ fn html_basic_text(fragment: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LvedHtmlRefKind {
     Media,
+    Image,
+    Pdf,
     DataId,
+    CrossBook,
     Info,
+    Binran,
+    ViewerHook,
 }
 
 fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
-    let media = value
-        .find("lved.media.")
-        .map(|index| (index, LvedHtmlRefKind::Media));
-    let dataid = value
-        .find("lved.dataid:")
-        .map(|index| (index, LvedHtmlRefKind::DataId));
-    let info = value
-        .find("lved.info:")
-        .map(|index| (index, LvedHtmlRefKind::Info));
-    [media, dataid, info]
+    let patterns = [
+        ("lved.media.", LvedHtmlRefKind::Media),
+        ("lved.media:", LvedHtmlRefKind::Media),
+        ("lved.sound:", LvedHtmlRefKind::Media),
+        ("lved.image:", LvedHtmlRefKind::Image),
+        ("lved.imag:", LvedHtmlRefKind::Image),
+        ("lved.pdf:", LvedHtmlRefKind::Pdf),
+        ("lved.dataid.dict.", LvedHtmlRefKind::CrossBook),
+        ("lved.contentlink:", LvedHtmlRefKind::CrossBook),
+        ("lved.dataid.result:", LvedHtmlRefKind::DataId),
+        ("lved.dataid:", LvedHtmlRefKind::DataId),
+        ("lved.dataid", LvedHtmlRefKind::DataId),
+        ("lved.info:", LvedHtmlRefKind::Info),
+        ("lved.binran:", LvedHtmlRefKind::Binran),
+        ("lved.bookmark:", LvedHtmlRefKind::ViewerHook),
+        ("lved.plugin:", LvedHtmlRefKind::ViewerHook),
+        ("lved.sql:", LvedHtmlRefKind::ViewerHook),
+        ("lved.findnum:", LvedHtmlRefKind::ViewerHook),
+        ("lved.select:", LvedHtmlRefKind::ViewerHook),
+        ("lved.group.", LvedHtmlRefKind::ViewerHook),
+        ("lved.browser.", LvedHtmlRefKind::ViewerHook),
+    ];
+    patterns
         .into_iter()
-        .flatten()
+        .filter_map(|(pattern, kind)| value.find(pattern).map(|index| (index, kind)))
         .min_by_key(|found| found.0)
 }
 
 fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {
-    let value = raw_ref.strip_prefix("lved.dataid:")?;
-    let (row_id, anchor) = value.split_once('#').unwrap_or((value, ""));
+    let value = raw_ref
+        .strip_prefix("lved.dataid.result:")
+        .or_else(|| raw_ref.strip_prefix("lved.dataid:"))
+        .or_else(|| raw_ref.strip_prefix("lved.dataid"))?;
+    let value = value.strip_prefix(':').unwrap_or(value);
+    if value.is_empty() || !value.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    let (row_id, anchor) = split_lved_target_anchor(value);
     let row_id = row_id.parse::<i64>().ok()?;
     Some(InternalTarget::LvedRow {
         table: "content".to_owned(),
@@ -6042,9 +6252,39 @@ fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {
     })
 }
 
+fn lved_cross_book_target(raw_ref: &str) -> Option<InternalTarget> {
+    if let Some(value) = raw_ref.strip_prefix("lved.dataid.dict.") {
+        let (dict_code, target) = value.split_once(':')?;
+        let (content_id, anchor) = split_lved_target_anchor(target);
+        if dict_code.is_empty() || content_id.is_empty() {
+            return None;
+        }
+        return Some(InternalTarget::LvedCrossBook {
+            link_kind: "dataid-dict".to_owned(),
+            dict_code: dict_code.to_owned(),
+            content_id: content_id.to_owned(),
+            anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
+        });
+    }
+    if let Some(value) = raw_ref.strip_prefix("lved.contentlink:") {
+        let (dict_code, target) = value.split_once('.')?;
+        let (content_id, anchor) = split_lved_target_anchor(target);
+        if dict_code.is_empty() || content_id.is_empty() {
+            return None;
+        }
+        return Some(InternalTarget::LvedCrossBook {
+            link_kind: "contentlink".to_owned(),
+            dict_code: dict_code.to_owned(),
+            content_id: content_id.to_owned(),
+            anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
+        });
+    }
+    None
+}
+
 fn lved_info_target(raw_ref: &str) -> Option<InternalTarget> {
     let value = raw_ref.strip_prefix("lved.info:")?;
-    let (name, anchor) = value.split_once('#').unwrap_or((value, ""));
+    let (name, anchor) = split_lved_target_anchor(value);
     if name.is_empty() {
         return None;
     }
@@ -6052,6 +6292,39 @@ fn lved_info_target(raw_ref: &str) -> Option<InternalTarget> {
         name: html_unescape_minimal(name),
         anchor: (!anchor.is_empty()).then(|| html_unescape_minimal(anchor)),
     })
+}
+
+fn lved_binran_target(raw_ref: &str) -> Option<InternalTarget> {
+    let value = raw_ref.strip_prefix("lved.binran:")?;
+    let (name, anchor) = split_lved_target_anchor(value);
+    if name.is_empty() {
+        return None;
+    }
+    Some(InternalTarget::LvedNamedPage {
+        table: "binran".to_owned(),
+        name: html_unescape_minimal(name),
+        anchor: (!anchor.is_empty()).then(|| html_unescape_minimal(anchor)),
+    })
+}
+
+fn lved_viewer_hook_target(raw_ref: &str) -> InternalTarget {
+    let hook = raw_ref
+        .strip_prefix("lved.")
+        .and_then(|rest| {
+            rest.split([':', '.'])
+                .next()
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("unknown");
+    InternalTarget::LvedViewerHook {
+        hook: hook.to_owned(),
+        value: html_unescape_minimal(raw_ref),
+    }
+}
+
+fn split_lved_target_anchor(value: &str) -> (&str, &str) {
+    let value = value.split_once('?').map_or(value, |(head, _)| head);
+    value.split_once('#').unwrap_or((value, ""))
 }
 
 fn is_lved_ref_terminator(ch: char) -> bool {
@@ -6439,6 +6712,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::lved_sqlite::apply_sqlcipher_key;
+    use crate::target::TargetKind;
 
     use super::*;
 
@@ -6695,6 +6969,119 @@ mod tests {
         assert_eq!(window.after.len(), 2);
         assert_eq!(window.after[0].title.as_deref(), Some("beta"));
         assert_eq!(window.after[1].title.as_deref(), Some("gamma"));
+    }
+
+    #[test]
+    fn lved_protocol_router_preserves_observed_non_entry_hooks() {
+        let dir = tempdir().unwrap();
+        let payload = dir.path().join("main.data");
+        let key = "test-key";
+        {
+            let connection = Connection::open(&payload).unwrap();
+            apply_sqlcipher_key(&connection, key).unwrap();
+            connection
+                .execute_batch(
+                    r#"
+                    create table content (id integer primary key, type integer, body text, media text);
+                    create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                    create table media (id integer primary key, name text, type integer, main blob);
+                    create table binran (id integer primary key, name text, body text);
+                    insert into content values (
+                      200,
+                      1,
+                      '<article>
+                        <a href="lved.dataid.result:201#detail">result</a>
+                        <a href="lved.dataid202#legacy">legacy</a>
+                        <a href="lved.dataid.dict.STEDABBR:300#cross">dict</a>
+                        <a href="lved.contentlink:BUREI.400#note">contentlink</a>
+                        <a href="lved.binran:usage.html#top">binran</a>
+                        <a href="lved.bookmark:C001">bookmark</a>
+                        <img src="lved.image:fig01.png">
+                        <a href="lved.pdf:manual.pdf">pdf</a>
+                      </article>',
+                      ''
+                    );
+                    insert into content values (201, 1, '<article>result detail</article>', '');
+                    insert into content values (202, 1, '<article>legacy detail</article>', '');
+                    insert into list values (1, 200, 1, '', 'router', '');
+                    insert into media values (1, 'fig01', 4, X'89504E470D0A1A0A');
+                    insert into media values (2, 'manual', 6, X'255044462D312E37');
+                    insert into binran values (1, 'usage.html', '<h1>Binran</h1>');
+                    "#,
+                )
+                .unwrap();
+        }
+        fs::write(dir.path().join("main.key"), key).unwrap();
+
+        let package = LvedSqliteDriver.open(dir.path()).unwrap();
+        let target = TargetToken::new(&InternalTarget::LvedRow {
+            table: "content".to_owned(),
+            row_id: 200,
+            anchor: None,
+        })
+        .unwrap();
+        let view = package
+            .render_target(&target, &RenderOptions::default())
+            .unwrap();
+        let html = view.display_html.as_deref().unwrap();
+
+        for raw in [
+            "lved.dataid.result:",
+            "lved.dataid202",
+            "lved.dataid.dict.",
+            "lved.contentlink:",
+            "lved.binran:",
+            "lved.bookmark:",
+            "lved.image:",
+            "lved.pdf:",
+        ] {
+            assert!(!html.contains(raw), "{raw} leaked through normalized HTML");
+        }
+        assert_eq!(
+            view.resources
+                .iter()
+                .map(|resource| resource.kind)
+                .collect::<Vec<_>>(),
+            vec![ResourceKind::Image, ResourceKind::Pdf]
+        );
+        assert_eq!(
+            view.links.iter().map(|link| link.kind).collect::<Vec<_>>(),
+            vec![
+                TargetKind::LvedRow,
+                TargetKind::LvedRow,
+                TargetKind::LvedCrossBook,
+                TargetKind::LvedCrossBook,
+                TargetKind::LvedNamedPage,
+                TargetKind::LvedViewerHook,
+            ]
+        );
+
+        let binran = view
+            .links
+            .iter()
+            .find(|link| link.kind == TargetKind::LvedNamedPage)
+            .unwrap();
+        let binran_view = package
+            .render_target(&binran.token, &RenderOptions::default())
+            .unwrap();
+        assert_eq!(binran_view.kind, ResolvedTargetKind::InfoPage);
+        assert_eq!(binran_view.display_html.as_deref(), Some("<h1>Binran</h1>"));
+
+        let cross = view
+            .links
+            .iter()
+            .find(|link| link.kind == TargetKind::LvedCrossBook)
+            .unwrap();
+        let cross_view = package
+            .render_target(&cross.token, &RenderOptions::default())
+            .unwrap();
+        assert_eq!(cross_view.kind, ResolvedTargetKind::Unsupported);
+        assert!(
+            cross_view
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "lved_cross_book_deferred")
+        );
     }
 
     #[test]

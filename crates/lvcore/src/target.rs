@@ -15,6 +15,9 @@ pub enum TargetKind {
     SsedDenseAnchor,
     LvedRow,
     LvedInfoPage,
+    LvedNamedPage,
+    LvedCrossBook,
+    LvedViewerHook,
     HoureiLaw,
     MultiviewHref,
     MenuItem,
@@ -48,6 +51,23 @@ pub enum InternalTarget {
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         anchor: Option<String>,
+    },
+    LvedNamedPage {
+        table: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
+    },
+    LvedCrossBook {
+        link_kind: String,
+        dict_code: String,
+        content_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
+    },
+    LvedViewerHook {
+        hook: String,
+        value: String,
     },
     HoureiLaw {
         hore_id: String,
@@ -93,6 +113,9 @@ impl InternalTarget {
             Self::SsedDenseAnchor { .. } => TargetKind::SsedDenseAnchor,
             Self::LvedRow { .. } => TargetKind::LvedRow,
             Self::LvedInfoPage { .. } => TargetKind::LvedInfoPage,
+            Self::LvedNamedPage { .. } => TargetKind::LvedNamedPage,
+            Self::LvedCrossBook { .. } => TargetKind::LvedCrossBook,
+            Self::LvedViewerHook { .. } => TargetKind::LvedViewerHook,
             Self::HoureiLaw { .. } => TargetKind::HoureiLaw,
             Self::MultiviewHref { .. } => TargetKind::MultiviewHref,
             Self::MenuItem { .. } => TargetKind::MenuItem,
