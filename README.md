@@ -119,6 +119,8 @@ provider slices:
 - SSED loose KOJIEN6-style media: `_PCM_U/WaveFile.map` can back `PCMDATA.DIC`
   address resources with decrypted MP3 bytes, and `_MOVIE` entries are exposed
   as typed video resources;
+- SSED `PCMDATA.DIC` start/end range resources can be read as portable WAVE or
+  MP3 audio without expanding the whole component;
 - SSED loose `Sound/SoundData` stores are exposed as typed sound resources
   using `Sound/WaveFile.map`, including MWALEARN-style RIFF/WAVE records;
 - SSED KOJIEN6-style `MONOSCR.DIC` component-address resources can be decoded

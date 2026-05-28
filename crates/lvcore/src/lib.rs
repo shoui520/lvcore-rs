@@ -27,6 +27,7 @@ pub mod ssed_index;
 pub mod ssed_loose_media;
 pub mod ssed_menu;
 pub mod ssed_panel;
+pub mod ssed_pcmdata;
 pub mod ssed_screen_menu;
 pub mod ssed_sidecar;
 pub mod ssed_sound_data;

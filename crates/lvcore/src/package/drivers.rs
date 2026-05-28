@@ -56,6 +56,9 @@ use crate::ssed_panel::{
     SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, parse_panel_bin,
     parse_panel_xml_bytes,
 };
+use crate::ssed_pcmdata::{
+    PcmDataParseResult, pcmdata_audio_summary, pcmdata_portable_audio_bytes,
+};
 use crate::ssed_screen_menu::{
     SsedScreenMenuHotspot, SsedScreenMenuParse, parse_screen_menu_stream,
 };
@@ -1112,6 +1115,68 @@ impl ResourceProvider for StubBookPackage {
                     diagnostics,
                 })
             }
+            InternalResource::SsedPcmDataRange {
+                component,
+                start_block,
+                start_offset,
+                end_block,
+                end_offset,
+            } => {
+                if let Some(record) = resolve_pcmu_record(&self.root, start_block)? {
+                    return Ok(ResourceRef {
+                        token: token.clone(),
+                        kind: ResourceKind::PcmData,
+                        label: Some(format!("_PCM_U/{}", record.stem)),
+                        href: Some(format!("lvcore://resource/{}", token.as_str())),
+                        mime_type: Some("audio/mpeg".to_owned()),
+                        diagnostics: Vec::new(),
+                    });
+                }
+                let resolved = self
+                    .ssed_component_by_name(&component)
+                    .and_then(|component| self.resolve_readable_ssed_component_path(component).ok())
+                    .flatten();
+                let mut diagnostics = Vec::new();
+                let href = if resolved.is_some() {
+                    Some(format!("lvcore://resource/{}", token.as_str()))
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!("{component} was not found in the package"),
+                    ));
+                    None
+                };
+                let mime_type = if href.is_some() {
+                    match self.ssed_pcmdata_range_summary(
+                        &component,
+                        start_block,
+                        start_offset,
+                        end_block,
+                        end_offset,
+                    ) {
+                        Ok(summary) => Some(summary.media_kind.mime_type().to_owned()),
+                        Err(err) => {
+                            diagnostics.push(Diagnostic::warning(
+                                "resource_decode_deferred",
+                                err.to_string(),
+                            ));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: ResourceKind::PcmData,
+                    label: Some(format!(
+                        "{component}:{start_block:08}:{start_offset:04}-{end_block:08}:{end_offset:04}"
+                    )),
+                    href,
+                    mime_type,
+                    diagnostics,
+                })
+            }
             InternalResource::LooseMovie { movie_id } => {
                 let resolved = find_movie_file(&self.root, &movie_id)?;
                 let mut diagnostics = Vec::new();
@@ -1250,6 +1315,24 @@ impl ResourceProvider for StubBookPackage {
                 Err(Error::Driver(format!(
                     "SSED component-address resources are not readable for {resource_kind:?}"
                 )))
+            }
+            InternalResource::SsedPcmDataRange {
+                component,
+                start_block,
+                start_offset,
+                end_block,
+                end_offset,
+            } => {
+                if let Some(bytes) = read_pcmu_record(&self.root, start_block)? {
+                    return Ok(bytes);
+                }
+                self.read_ssed_pcmdata_range(
+                    &component,
+                    start_block,
+                    start_offset,
+                    end_block,
+                    end_offset,
+                )
             }
             InternalResource::LooseMovie { movie_id } => {
                 let Some(path) = find_movie_file(&self.root, &movie_id)? else {
@@ -5162,6 +5245,105 @@ impl StubBookPackage {
         )
     }
 
+    fn read_ssed_pcmdata_range(
+        &self,
+        component_name: &str,
+        start_block: u32,
+        start_offset: u32,
+        end_block: u32,
+        end_offset: u32,
+    ) -> Result<Vec<u8>> {
+        let (start_relative, raw, prefix) = self.read_ssed_pcmdata_raw_range(
+            component_name,
+            start_block,
+            start_offset,
+            end_block,
+            end_offset,
+        )?;
+        let (portable, _summary) = pcmdata_portable_audio_bytes(start_relative, &raw, &prefix)?;
+        Ok(portable)
+    }
+
+    fn ssed_pcmdata_range_summary(
+        &self,
+        component_name: &str,
+        start_block: u32,
+        start_offset: u32,
+        end_block: u32,
+        end_offset: u32,
+    ) -> Result<PcmDataParseResult> {
+        let (start_relative, raw, prefix) = self.read_ssed_pcmdata_raw_range(
+            component_name,
+            start_block,
+            start_offset,
+            end_block,
+            end_offset,
+        )?;
+        pcmdata_audio_summary(start_relative, &raw, &prefix)
+    }
+
+    fn read_ssed_pcmdata_raw_range(
+        &self,
+        component_name: &str,
+        start_block: u32,
+        start_offset: u32,
+        end_block: u32,
+        end_offset: u32,
+    ) -> Result<(usize, Vec<u8>, Vec<u8>)> {
+        let Some(component) = self.ssed_component_by_name(component_name) else {
+            return Err(Error::Driver(format!(
+                "SSED component not declared: {component_name}"
+            )));
+        };
+        if component.role != SsedComponentRole::PcmData
+            && !component.filename.eq_ignore_ascii_case("PCMDATA.DIC")
+        {
+            return Err(Error::Driver(format!(
+                "{} is not a PCMDATA component",
+                component.filename
+            )));
+        }
+        if start_offset >= BLOCK_SIZE || end_offset >= BLOCK_SIZE {
+            return Err(Error::Driver(format!(
+                "invalid PCMDATA offsets {start_offset}..{end_offset}; block offsets must be less than {BLOCK_SIZE}"
+            )));
+        }
+        let Some(start_relative) = component.relative_offset(start_block, start_offset) else {
+            return Err(Error::Driver(format!(
+                "PCMDATA start address {component_name}:{start_block:08}:{start_offset:04} is outside the component range"
+            )));
+        };
+        let Some(end_relative) = component.relative_offset(end_block, end_offset) else {
+            return Err(Error::Driver(format!(
+                "PCMDATA end address {component_name}:{end_block:08}:{end_offset:04} is outside the component range"
+            )));
+        };
+        if end_relative < start_relative {
+            return Err(Error::Driver(format!(
+                "PCMDATA range end is before start: {component_name}:{start_block:08}:{start_offset:04}-{end_block:08}:{end_offset:04}"
+            )));
+        }
+        let size = usize::try_from(end_relative - start_relative + 1)
+            .map_err(|_| Error::Driver("PCMDATA range is too large".to_owned()))?;
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Err(Error::Driver(format!(
+                "SSED component not found: {}",
+                component.filename
+            )));
+        };
+        let mut reader = SsedDataFile::open(path)?;
+        let start_relative = usize::try_from(start_relative)
+            .map_err(|_| Error::Driver("PCMDATA start offset is too large".to_owned()))?;
+        let raw = reader.read_range(start_relative, size)?;
+        if raw.len() != size {
+            return Err(Error::Driver(format!(
+                "PCMDATA range {component_name}:{start_block:08}:{start_offset:04}-{end_block:08}:{end_offset:04} is truncated"
+            )));
+        }
+        let prefix = reader.read_range(0, 2048)?;
+        Ok((start_relative, raw, prefix))
+    }
+
     fn materialize_readable_ssed_component_path(
         &self,
         component: &SsedComponent,
@@ -8469,6 +8651,68 @@ mod tests {
     }
 
     #[test]
+    fn ssed_pcmdata_range_reads_portable_wave_audio() {
+        let dir = tempdir().unwrap();
+        let pcm_chunks = pcmdata_wave_chunks_for_test(1, b"\x80\x81\x82");
+        fs::write(
+            dir.path().join("PCMDATA.DIC"),
+            fixture_sseddata_literal_chunks(&[&pcm_chunks], 500, 500),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "Pcm".to_owned(),
+            components: vec![SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0xd8,
+                start_block: 500,
+                end_block: 500,
+                data: [0; 4],
+                filename: "PCMDATA.DIC".to_owned(),
+                role: SsedComponentRole::PcmData,
+            }],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 1,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Pcm".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let token = ResourceToken::new(&InternalResource::SsedPcmDataRange {
+            component: "PCMDATA.DIC".to_owned(),
+            start_block: 500,
+            start_offset: 0,
+            end_block: 500,
+            end_offset: u32::try_from(pcm_chunks.len() - 1).unwrap(),
+        })
+        .unwrap();
+
+        let resource = package.resolve_resource(&token).unwrap();
+        assert_eq!(resource.kind, ResourceKind::PcmData);
+        assert_eq!(resource.mime_type.as_deref(), Some("audio/wav"));
+        assert!(resource.href.is_some());
+        let audio = package.read_resource(&token).unwrap();
+        assert!(audio.starts_with(b"RIFF"));
+        assert!(audio.ends_with(b"\x80\x81\x82"));
+    }
+
+    #[test]
     fn monoscr_component_address_reads_png_bitmap_cell() {
         let dir = tempdir().unwrap();
         let mut bitmap = vec![0_u8; MONOSCR_BITMAP_BYTES];
@@ -9320,6 +9564,25 @@ mod tests {
             encrypted.extend_from_slice(&block);
         }
         encrypted
+    }
+
+    fn pcmdata_wave_chunks_for_test(format_tag: u16, data: &[u8]) -> Vec<u8> {
+        let mut fmt_payload = Vec::new();
+        fmt_payload.extend_from_slice(&format_tag.to_le_bytes());
+        fmt_payload.extend_from_slice(&1_u16.to_le_bytes());
+        fmt_payload.extend_from_slice(&8000_u32.to_le_bytes());
+        fmt_payload.extend_from_slice(&8000_u32.to_le_bytes());
+        fmt_payload.extend_from_slice(&1_u16.to_le_bytes());
+        fmt_payload.extend_from_slice(&8_u16.to_le_bytes());
+
+        let mut chunks = Vec::new();
+        chunks.extend_from_slice(b"fmt ");
+        chunks.extend_from_slice(&(fmt_payload.len() as u32).to_le_bytes());
+        chunks.extend_from_slice(&fmt_payload);
+        chunks.extend_from_slice(b"data");
+        chunks.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        chunks.extend_from_slice(data);
+        chunks
     }
 
     fn fixture_sseddata_literal_chunks(

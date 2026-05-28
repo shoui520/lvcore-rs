@@ -38,6 +38,13 @@ pub enum InternalResource {
         offset: u32,
         resource_kind: ResourceKind,
     },
+    SsedPcmDataRange {
+        component: String,
+        start_block: u32,
+        start_offset: u32,
+        end_block: u32,
+        end_offset: u32,
+    },
     MediaBlob {
         store: String,
         key: String,
@@ -65,6 +72,7 @@ impl InternalResource {
             Self::PackageFile { resource_kind, .. }
             | Self::SsedComponentAddress { resource_kind, .. }
             | Self::ChmFile { resource_kind, .. } => *resource_kind,
+            Self::SsedPcmDataRange { .. } => ResourceKind::PcmData,
             Self::MediaBlob { resource_kind, .. } => *resource_kind,
             Self::SoundData { .. } => ResourceKind::SoundData,
             Self::LooseMovie { .. } => ResourceKind::Video,
@@ -189,5 +197,19 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("32768"));
+    }
+
+    #[test]
+    fn token_round_trips_ssed_pcmdata_range_resource() {
+        let resource = InternalResource::SsedPcmDataRange {
+            component: "PCMDATA.DIC".to_owned(),
+            start_block: 100,
+            start_offset: 32,
+            end_block: 100,
+            end_offset: 63,
+        };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("PCMDATA"));
     }
 }
