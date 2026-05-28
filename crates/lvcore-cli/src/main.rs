@@ -6,8 +6,8 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
     BookId, BookLibrary, BookMetadata, DriverRegistry, HomeSurface, NavigationStatus,
-    NavigationSurface, RenderMode, RenderOptions, Result, SearchMode, SearchQuery, SearchScope,
-    TargetToken, lved_sqlite::is_lved_payload_name,
+    NavigationSurface, RenderMode, RenderOptions, ResourceToken, Result, SearchMode, SearchQuery,
+    SearchScope, TargetToken, lved_sqlite::is_lved_payload_name,
 };
 use serde_json::json;
 
@@ -105,6 +105,13 @@ enum Command {
         /// Package root or payload path to inspect.
         path: PathBuf,
         /// Target token previously returned by search, navigation, or links.
+        token: String,
+    },
+    /// Resolve and read one opaque resource token for one package.
+    Resource {
+        /// Package root or payload path to inspect.
+        path: PathBuf,
+        /// Resource token previously returned by rendered views or navigation labels.
         token: String,
     },
 }
@@ -293,6 +300,11 @@ fn main() -> Result<()> {
                 }))?
             );
         }
+        Command::Resource { path, token } => {
+            let registry = DriverRegistry::default();
+            let output = resource_command_json(&registry, &path, token)?;
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
     }
     Ok(())
 }
@@ -412,6 +424,23 @@ fn search_command_json(
         "diagnostics": page.diagnostics,
         "rendered_first": rendered_first,
         "target_window": target_window,
+    }))
+}
+
+fn resource_command_json(
+    registry: &DriverRegistry,
+    path: &Path,
+    token: String,
+) -> Result<serde_json::Value> {
+    let (library, book_id) = open_single_book_library(registry, path)?;
+    let metadata = metadata_for(&library, &book_id);
+    let resource = ResourceToken::from_opaque(token);
+    let resource_ref = library.resolve_resource(&book_id, &resource)?;
+    let bytes = library.read_resource(&book_id, &resource)?;
+    Ok(json!({
+        "metadata": metadata,
+        "resource": resource_ref,
+        "byte_len": bytes.len(),
     }))
 }
 
@@ -835,6 +864,40 @@ mod tests {
                 .unwrap()
                 .contains("body")
         );
+    }
+
+    #[test]
+    fn resource_command_resolves_rendered_resource_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        write_lved_cli_fixture(dir.path());
+
+        let search_output = search_command_json(
+            &DriverRegistry::default(),
+            dir.path(),
+            "alp".to_owned(),
+            SearchMode::Forward,
+            10,
+            None,
+            RenderOptions::default(),
+            true,
+            0,
+            0,
+        )
+        .unwrap();
+        let token = search_output["rendered_first"]["resources"][0]["token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let resource_output =
+            resource_command_json(&DriverRegistry::default(), dir.path(), token).unwrap();
+
+        assert_eq!(resource_output["byte_len"].as_u64(), Some(6));
+        assert_eq!(resource_output["resource"]["kind"], "image");
+        assert_eq!(resource_output["resource"]["mime_type"], "image/svg+xml");
+        assert!(has_scoped_resource_href(
+            resource_output["resource"]["href"].as_str().unwrap()
+        ));
     }
 
     fn has_scoped_resource_href(html: &str) -> bool {
