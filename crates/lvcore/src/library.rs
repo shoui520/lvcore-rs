@@ -130,7 +130,11 @@ impl BookLibrary {
         target: &TargetToken,
         options: &RenderOptions,
     ) -> Result<ResolvedTargetView> {
-        self.required_book(book_id)?.render_target(target, options)
+        let mut view = self
+            .required_book(book_id)?
+            .render_target(target, options)?;
+        scope_view_resource_hrefs(book_id, &mut view);
+        Ok(view)
     }
 
     /// Resolve a target that may leave the source book, such as LVED
@@ -187,13 +191,14 @@ impl BookLibrary {
         after: usize,
         options: &RenderOptions,
     ) -> Result<TargetWindow> {
-        self.required_book(book_id)?.resolve_target_window(
+        let window = self.required_book(book_id)?.resolve_target_window(
             target,
             sequence_hint,
             before,
             after,
             options,
-        )
+        )?;
+        Ok(scope_target_window_resource_hrefs(book_id, window))
     }
 
     /// Resolve a continuous-view window for a target that may route to another
@@ -259,7 +264,9 @@ impl BookLibrary {
         book_id: &BookId,
         resource: &ResourceToken,
     ) -> Result<ResourceRef> {
-        self.required_book(book_id)?.resolve_resource(resource)
+        let mut resource = self.required_book(book_id)?.resolve_resource(resource)?;
+        scope_resource_ref_href(book_id, &mut resource);
+        Ok(resource)
     }
 
     pub fn read_resource(&self, book_id: &BookId, resource: &ResourceToken) -> Result<Vec<u8>> {

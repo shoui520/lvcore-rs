@@ -669,6 +669,106 @@ fn library_scopes_resource_hrefs_in_navigation_target_views() {
 }
 
 #[test]
+fn library_scopes_resource_hrefs_in_local_entry_views_and_windows() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><img src=\"pic.png\">Alpha body</article>' where id = 100",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><img src=\"pic.png\">Beta body</article>' where id = 105",
+                [],
+            )
+            .unwrap();
+    }
+    fs::write(dir.path().join("res/pic.png"), b"png").unwrap();
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let book_id = library.open_path(dir.path(), &registry).unwrap();
+    let target = TargetToken::new(&InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id: 100,
+        anchor: None,
+    })
+    .unwrap();
+
+    let view = library
+        .render_target(&book_id, &target, &RenderOptions::default())
+        .unwrap();
+    let html = view.display_html.as_deref().unwrap();
+    let href_start = html
+        .find("lvcore://resource/")
+        .expect("local render_target HTML should include rewritten resource href");
+    let href = &html[href_start..]
+        .split('"')
+        .next()
+        .expect("resource href should be quoted");
+    assert_eq!(
+        href.strip_prefix("lvcore://resource/")
+            .unwrap()
+            .split('/')
+            .count(),
+        2
+    );
+    assert_eq!(
+        library.read_scoped_resource_href(href).unwrap(),
+        b"png".to_vec()
+    );
+
+    let window = library
+        .resolve_target_window(
+            &book_id,
+            &target,
+            Some(&lvcore::SequenceHint::LvedListOrder),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert!(
+        window
+            .center
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains(href),
+        "local target window center should be scoped like direct render_target"
+    );
+    assert!(
+        window.after[0]
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("lvcore://resource/")
+    );
+    let resolved = library
+        .resolve_resource(&book_id, &view.resources[0].token)
+        .unwrap();
+    assert_eq!(
+        resolved
+            .href
+            .as_deref()
+            .unwrap()
+            .strip_prefix("lvcore://resource/")
+            .unwrap()
+            .split('/')
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn library_selected_book_search_uses_backend_cursor_pagination() {
     let first = tempdir().unwrap();
     fs::write(first.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
