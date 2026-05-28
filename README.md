@@ -89,6 +89,9 @@ provider slices:
   package key is available;
 - LVLMultiView menu/search/body access for decoded payloads;
 - Hourei law tree/search/body/resource access for decoded law packages;
+- SSED HANREI/info surface discovery for root HTML help, Windows CHM evidence,
+  and Mac OS X `_HELP.localized` bundles, with package-local HTML resource
+  rendering and relative CSS/image/link rewriting;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
 `logovista-tools` remains the research oracle while `lvcore-rs` ports stable
@@ -108,4 +111,6 @@ known structures.
 - SSED internal-page traversal is currently implemented only for simple
   exact/forward title-index paths. Backward, partial, keyword, cross-reference,
   and multi-selector performance still need format-specific indexing work.
-- CHM/HANREI wrapping is still reader-surface work, not finished rendering.
+- CHM extraction/wrapping is still deferred. SSED root HTML and Mac OS X
+  `_HELP.localized` HANREI pages are surfaced as HTML info pages; higher-level
+  reader wrapping/styling remains frontend work.
