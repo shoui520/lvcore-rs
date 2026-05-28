@@ -21,6 +21,17 @@ pub struct SsedIndexRow {
     pub title: SsedIndexPointer,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsedIndexInternalRow {
+    pub component: String,
+    pub page_index: u32,
+    pub logical_block: u32,
+    pub row_index: u32,
+    pub key: String,
+    pub child_block: u32,
+    pub raw_key: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SsedIndexScanState {
     current_key: Option<String>,
@@ -65,6 +76,50 @@ pub fn is_multi_leaf_index_type(component_type: u8) -> bool {
 
 pub fn is_leaf_page(page_word: u16) -> bool {
     page_word & 0x8000 != 0
+}
+
+pub fn internal_slot_size(page_word: u16) -> usize {
+    usize::from(page_word & 0x00ff) + 4
+}
+
+pub fn parse_internal_page(
+    component: &str,
+    page: &[u8],
+    page_index: u32,
+    logical_block: u32,
+) -> Vec<SsedIndexInternalRow> {
+    if page.len() < 4 {
+        return Vec::new();
+    }
+    let word = be16(page, 0);
+    let count = be16(page, 2);
+    let slot = internal_slot_size(word);
+    if slot < 6 {
+        return Vec::new();
+    }
+    let mut pos = 4usize;
+    let mut rows = Vec::new();
+    for row_index in 1..=u32::from(count) {
+        if pos + slot > page.len() {
+            break;
+        }
+        let row = &page[pos..pos + slot];
+        let raw_key = row[..slot - 4]
+            .split(|value| *value == 0)
+            .next()
+            .unwrap_or(&[]);
+        rows.push(SsedIndexInternalRow {
+            component: component.to_owned(),
+            page_index,
+            logical_block,
+            row_index,
+            key: decode_index_key(raw_key),
+            child_block: be32(row, slot - 4),
+            raw_key: raw_key.to_vec(),
+        });
+        pos += slot;
+    }
+    rows
 }
 
 pub fn parse_simple_leaf_page(

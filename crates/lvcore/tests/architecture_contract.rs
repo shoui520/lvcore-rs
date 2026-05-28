@@ -1446,6 +1446,51 @@ fn ssed_keyless_pointer_table_simple_leaf_is_supported() {
 }
 
 #[test]
+fn ssed_exact_search_uses_internal_page_tree_for_simple_indexes() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_index_type_and_blocks(0x91, 3),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0azeta\x1f\x0a"),
+    )
+    .unwrap();
+    let index = [
+        internal_page_fixture(&[("m", 16), ("\u{10ffff}", 17)]),
+        simple_index_fixture_rows(&[("alpha", 1, 2, 13, 0)]),
+        simple_index_fixture_rows(&[("zeta", 1, 4, 13, 7)]),
+    ]
+    .concat();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&index),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            mode: SearchMode::Exact,
+            query: "zeta".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "zeta");
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_index_internal_page_deferred")
+    );
+}
+
+#[test]
 fn ssed_simple_index_search_uses_cursor_pagination() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -1950,7 +1995,11 @@ fn ssedinfo_fixture() -> Vec<u8> {
 }
 
 fn ssedinfo_fixture_with_index_type(index_type: u8) -> Vec<u8> {
-    ssedinfo_fixture_with_honmon_and_index_type("HONMON.DIC", index_type)
+    ssedinfo_fixture_with_honmon_index_type_and_blocks("HONMON.DIC", index_type, 2)
+}
+
+fn ssedinfo_fixture_with_index_type_and_blocks(index_type: u8, index_blocks: u32) -> Vec<u8> {
+    ssedinfo_fixture_with_honmon_index_type_and_blocks("HONMON.DIC", index_type, index_blocks)
 }
 
 fn write_minimal_lved_sqlite_fixture(root: &Path) {
@@ -2080,10 +2129,14 @@ fn write_minimal_hourei_fixture(root: &Path) {
 }
 
 fn ssedinfo_fixture_with_honmon(honmon_filename: &str) -> Vec<u8> {
-    ssedinfo_fixture_with_honmon_and_index_type(honmon_filename, 0x91)
+    ssedinfo_fixture_with_honmon_index_type_and_blocks(honmon_filename, 0x91, 2)
 }
 
-fn ssedinfo_fixture_with_honmon_and_index_type(honmon_filename: &str, index_type: u8) -> Vec<u8> {
+fn ssedinfo_fixture_with_honmon_index_type_and_blocks(
+    honmon_filename: &str,
+    index_type: u8,
+    index_blocks: u32,
+) -> Vec<u8> {
     let record_start = 0x80;
     let mut data = vec![0u8; record_start + 5 * 0x30];
     data[..8].copy_from_slice(SSEDINFO_MAGIC);
@@ -2116,7 +2169,7 @@ fn ssedinfo_fixture_with_honmon_and_index_type(honmon_filename: &str, index_type
         &mut data[record_start + 0x90..record_start + 0xc0],
         index_type,
         15,
-        16,
+        15 + index_blocks.saturating_sub(1),
         "FHINDEX.DIC",
     );
     write_record(
@@ -2285,6 +2338,28 @@ fn leaf_page_fixture(records: &[Vec<u8>]) -> Vec<u8> {
     for record in records {
         page[pos..pos + record.len()].copy_from_slice(record);
         pos += record.len();
+    }
+    page
+}
+
+fn internal_page_fixture(rows: &[(&str, u32)]) -> Vec<u8> {
+    let mut page = vec![0u8; 2048];
+    let key_len = 2usize;
+    page[0..2].copy_from_slice(&(key_len as u16).to_be_bytes());
+    page[2..4].copy_from_slice(&(rows.len() as u16).to_be_bytes());
+    let mut pos = 4usize;
+    for (key, child_block) in rows {
+        let raw_key = if *key == "\u{10ffff}" {
+            vec![0xff; key_len]
+        } else {
+            let mut key = jis_fullwidth_ascii_key(key);
+            key.resize(key_len, 0);
+            key
+        };
+        page[pos..pos + key_len].copy_from_slice(&raw_key[..key_len]);
+        pos += key_len;
+        page[pos..pos + 4].copy_from_slice(&child_block.to_be_bytes());
+        pos += 4;
     }
     page
 }

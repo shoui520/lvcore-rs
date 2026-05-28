@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -42,7 +42,8 @@ use crate::ssed::{
 };
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_jis_pair,
-    decode_title_text, is_leaf_page, is_supported_index_type, parse_supported_leaf_page,
+    decode_title_text, is_leaf_page, is_simple_leaf_index_type, is_supported_index_type,
+    parse_internal_page, parse_simple_leaf_page, parse_supported_leaf_page,
 };
 use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
 use crate::ssed_panel::{
@@ -334,6 +335,98 @@ const SSED_FULLTEXT_SNIPPET_CHARS: usize = 160;
 struct SsedFulltextRow {
     offset: u64,
     row: SsedIndexRow,
+}
+
+struct SsedIndexSearchCollector<'a> {
+    package: &'a StubBookPackage,
+    mode: &'a SearchMode,
+    needle: &'a str,
+    offset: usize,
+    page_limit: usize,
+    matched_count: usize,
+    hits: Vec<SearchHit>,
+    diagnostics: Vec<Diagnostic>,
+    seen_targets: HashSet<String>,
+}
+
+impl<'a> SsedIndexSearchCollector<'a> {
+    fn new(
+        package: &'a StubBookPackage,
+        mode: &'a SearchMode,
+        needle: &'a str,
+        offset: usize,
+        page_limit: usize,
+    ) -> Self {
+        Self {
+            package,
+            mode,
+            needle,
+            offset,
+            page_limit,
+            matched_count: 0,
+            hits: Vec::new(),
+            diagnostics: Vec::new(),
+            seen_targets: HashSet::new(),
+        }
+    }
+
+    fn push_row(&mut self, row: SsedIndexRow) -> Result<bool> {
+        let key = row.key.to_lowercase();
+        let row_matches = match self.mode {
+            SearchMode::Exact => key == self.needle,
+            SearchMode::Forward => key.starts_with(self.needle),
+            SearchMode::Backward => key.ends_with(self.needle),
+            SearchMode::Partial => key.contains(self.needle),
+            SearchMode::FullText | SearchMode::Advanced(_) => false,
+        };
+        if !row_matches {
+            return Ok(true);
+        }
+        let target = match self.package.ssed_target_for_index_pointer(row.body)? {
+            Ok(target) => target,
+            Err(diagnostic) => {
+                self.diagnostics.push(diagnostic);
+                return Ok(true);
+            }
+        };
+        if !self.seen_targets.insert(target.as_str().to_owned()) {
+            return Ok(true);
+        }
+        if self.matched_count < self.offset {
+            self.matched_count = self.matched_count.saturating_add(1);
+            return Ok(true);
+        }
+        let title = self.package.ssed_display_text_for_index_row(&row);
+        let label = self.package.ssed_rich_label(&title);
+        self.hits.push(SearchHit {
+            book_id: self.package.metadata.book_id.clone(),
+            target,
+            title_html: label.html,
+            title_text: label.text,
+            snippet_html: None,
+            diagnostics: label.diagnostics,
+        });
+        self.matched_count = self.matched_count.saturating_add(1);
+        Ok(self.hits.len() < self.page_limit)
+    }
+
+    fn has_hits(&self) -> bool {
+        !self.hits.is_empty()
+    }
+
+    fn extend_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) {
+        self.diagnostics.extend(diagnostics);
+    }
+
+    fn into_search_page(mut self, limit: usize) -> SearchPage {
+        let next_cursor = (self.hits.len() > limit).then(|| (self.offset + limit).to_string());
+        self.hits.truncate(limit);
+        SearchPage {
+            hits: self.hits,
+            next_cursor,
+            diagnostics: self.diagnostics,
+        }
+    }
 }
 
 impl StubBookPackage {
@@ -1060,57 +1153,24 @@ impl StubBookPackage {
             ));
         }
 
-        let mut diagnostics = Vec::new();
         let offset = decode_offset_cursor(query.cursor.as_deref());
         let page_limit = query.limit.saturating_add(1);
         let needle = query.query.to_lowercase();
-        let mut hits = Vec::new();
-        let mut matched_count = 0usize;
-        let scan_diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
-            let key = row.key.to_lowercase();
-            let row_matches = match query.mode {
-                SearchMode::Exact => key == needle,
-                SearchMode::Forward => key.starts_with(&needle),
-                SearchMode::Backward => key.ends_with(&needle),
-                SearchMode::Partial => key.contains(&needle),
-                SearchMode::FullText | SearchMode::Advanced(_) => false,
-            };
-            if !row_matches {
-                return Ok(true);
-            }
-            if matched_count < offset {
-                matched_count = matched_count.saturating_add(1);
-                return Ok(true);
-            }
-            let target = match self.ssed_target_for_index_pointer(row.body)? {
-                Ok(target) => target,
-                Err(diagnostic) => {
-                    diagnostics.push(diagnostic);
-                    return Ok(true);
-                }
-            };
-            let title = self.ssed_display_text_for_index_row(&row);
-            let label = self.ssed_rich_label(&title);
-            hits.push(SearchHit {
-                book_id: self.metadata.book_id.clone(),
-                target,
-                title_html: label.html,
-                title_text: label.text,
-                snippet_html: None,
-                diagnostics: label.diagnostics,
-            });
-            matched_count = matched_count.saturating_add(1);
-            Ok(hits.len() < page_limit)
-        })?;
-        diagnostics.extend(scan_diagnostics);
-        let next_cursor = (hits.len() > query.limit).then(|| (offset + query.limit).to_string());
-        hits.truncate(query.limit);
-
-        Ok(SearchPage {
-            hits,
-            next_cursor,
-            diagnostics,
-        })
+        let mut collector =
+            SsedIndexSearchCollector::new(self, &query.mode, &needle, offset, page_limit);
+        if matches!(query.mode, SearchMode::Exact | SearchMode::Forward) {
+            let scan_diagnostics =
+                self.scan_ssed_simple_leaf_index_rows_near_key(&query.mode, &needle, |row| {
+                    collector.push_row(row)
+                })?;
+            collector.extend_diagnostics(scan_diagnostics);
+        }
+        if !collector.has_hits() {
+            let scan_diagnostics =
+                self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?;
+            collector.extend_diagnostics(scan_diagnostics);
+        }
+        Ok(collector.into_search_page(query.limit))
     }
 
     fn search_ssed_fulltext_body_windows(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -1885,6 +1945,156 @@ impl StubBookPackage {
             Ok(rows.len() < limit)
         })?;
         Ok((rows, diagnostics))
+    }
+
+    fn scan_ssed_simple_leaf_index_rows_near_key(
+        &self,
+        mode: &SearchMode,
+        needle: &str,
+        mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<Vec<Diagnostic>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(vec![Diagnostic::error(
+                "ssed_catalog_missing",
+                "SSED index scanning requires a parsed SSEDINFO catalog",
+            )]);
+        };
+        let mut diagnostics = Vec::new();
+        'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
+            if !is_simple_leaf_index_type(component.component_type) {
+                continue;
+            }
+            if matches!(mode, SearchMode::Exact | SearchMode::Forward)
+                && component.filename.to_ascii_uppercase().starts_with('B')
+            {
+                continue;
+            }
+            let path = match self.resolve_readable_ssed_component_path(component) {
+                Ok(Some(path)) => path,
+                Ok(None) => continue,
+                Err(error) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+            };
+            let mut reader = SsedDataFile::open(&path)?;
+            let page_count = component.block_count() as usize;
+            let start_page =
+                match self.ssed_simple_index_candidate_leaf_page(component, &mut reader, needle)? {
+                    Some(page_index) => page_index,
+                    None => continue,
+                };
+            let mut saw_match = false;
+            for page_index in start_page..page_count {
+                let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
+                if page.len() < 4 {
+                    break;
+                }
+                let word = u16::from_be_bytes([page[0], page[1]]);
+                if !is_leaf_page(word) {
+                    continue;
+                }
+                let logical_block = component.start_block + page_index as u32;
+                let (rows, unknown) = parse_simple_leaf_page(
+                    &component.filename,
+                    &page,
+                    page_index as u32,
+                    logical_block,
+                );
+                if unknown > 0 {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_unknown_leaf_bytes",
+                            format!(
+                                "{} had {unknown} unknown simple leaf row(s)",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                }
+                for row in rows {
+                    let key = row.key.to_lowercase();
+                    let row_matches = match mode {
+                        SearchMode::Exact => key == needle,
+                        SearchMode::Forward => key.starts_with(needle),
+                        _ => false,
+                    };
+                    let passed_match_region = match mode {
+                        SearchMode::Exact => key.as_str() > needle,
+                        SearchMode::Forward => {
+                            saw_match && !key.starts_with(needle) && key.as_str() > needle
+                        }
+                        _ => false,
+                    };
+                    if row_matches {
+                        saw_match = true;
+                        if !on_row(row)? {
+                            break 'components;
+                        }
+                    } else if passed_match_region {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(diagnostics)
+    }
+
+    fn ssed_simple_index_candidate_leaf_page(
+        &self,
+        component: &SsedComponent,
+        reader: &mut SsedDataFile,
+        needle: &str,
+    ) -> Result<Option<usize>> {
+        let page_count = component.block_count() as usize;
+        if page_count == 0 {
+            return Ok(None);
+        }
+        let mut page_index = 0usize;
+        let mut guard = 0usize;
+        while page_index < page_count && guard <= page_count {
+            guard = guard.saturating_add(1);
+            let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
+            if page.len() < 4 {
+                return Ok(None);
+            }
+            let word = u16::from_be_bytes([page[0], page[1]]);
+            if is_leaf_page(word) {
+                return Ok(Some(page_index));
+            }
+            let rows = parse_internal_page(
+                &component.filename,
+                &page,
+                page_index as u32,
+                component.start_block + page_index as u32,
+            );
+            let Some(child_block) = rows
+                .iter()
+                .find(|row| {
+                    row.raw_key.iter().all(|value| *value == 0xff)
+                        || row.key.to_lowercase().as_str() >= needle
+                })
+                .or_else(|| rows.last())
+                .map(|row| row.child_block)
+            else {
+                return Ok(None);
+            };
+            if child_block < component.start_block {
+                return Ok(None);
+            }
+            page_index = (child_block - component.start_block) as usize;
+        }
+        Ok(None)
     }
 
     fn scan_ssed_simple_index_rows(
