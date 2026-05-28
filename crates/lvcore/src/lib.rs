@@ -36,7 +36,7 @@ pub use gaiji::{
     resolve_rich_label,
 };
 pub use hourei::{HoureiLawEntry, HoureiLawWindow, HoureiSearchHit, HoureiStore};
-pub use library::{BookLibrary, RoutedTargetView};
+pub use library::{BookLibrary, RoutedTargetView, RoutedTargetWindow};
 pub use lved_sqlite::{
     LvedInfoPage, LvedKeyFile, LvedListItem, LvedListWindow, LvedSearchHit, LvedSqliteStore,
     LvedSqliteSummary, LvedTreeIndexItem,

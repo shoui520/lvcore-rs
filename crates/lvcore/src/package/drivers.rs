@@ -2897,7 +2897,7 @@ impl StubBookPackage {
             }));
         };
 
-        let mut center = self.render_lved_list_hit(&window.center, options)?;
+        let mut center = self.render_target(target, options)?;
         center.title = Some(window.center.title_text);
         let before = window
             .before

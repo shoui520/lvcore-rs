@@ -29,6 +29,14 @@ pub struct RoutedTargetView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutedTargetWindow {
+    pub book_id: BookId,
+    pub window: TargetWindow,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LibrarySearchCursor {
     version: u8,
     book_index: usize,
@@ -175,6 +183,60 @@ impl BookLibrary {
             after,
             options,
         )
+    }
+
+    /// Resolve a continuous-view window for a target that may route to another
+    /// loaded book before sequencing.
+    pub fn resolve_target_window_routed(
+        &self,
+        book_id: &BookId,
+        target: &TargetToken,
+        sequence_hint: Option<&SequenceHint>,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<RoutedTargetWindow> {
+        let routed = self.render_target_routed(book_id, target, options)?;
+        if &routed.book_id == book_id {
+            if routed.view.kind == crate::render::ResolvedTargetKind::Unsupported {
+                return Ok(RoutedTargetWindow {
+                    book_id: routed.book_id,
+                    window: TargetWindow {
+                        center: routed.view,
+                        before: Vec::new(),
+                        after: Vec::new(),
+                        diagnostics: routed.diagnostics.clone(),
+                    },
+                    diagnostics: routed.diagnostics,
+                });
+            }
+            return Ok(RoutedTargetWindow {
+                book_id: book_id.clone(),
+                window: self.required_book(book_id)?.resolve_target_window(
+                    target,
+                    sequence_hint,
+                    before,
+                    after,
+                    options,
+                )?,
+                diagnostics: routed.diagnostics,
+            });
+        }
+
+        let destination_target = routed.view.target.clone();
+        let mut window = self.required_book(&routed.book_id)?.resolve_target_window(
+            &destination_target,
+            sequence_hint,
+            before,
+            after,
+            options,
+        )?;
+        window.diagnostics.extend(routed.diagnostics.clone());
+        Ok(RoutedTargetWindow {
+            book_id: routed.book_id,
+            window,
+            diagnostics: routed.diagnostics,
+        })
     }
 
     pub fn resolve_resource(

@@ -2438,6 +2438,27 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
             .iter()
             .any(|diagnostic| diagnostic.code == "lved_cross_book_routed")
     );
+
+    let window = library
+        .resolve_target_window_routed(
+            &source_book_id,
+            &cross_book_link.token,
+            Some(&lvcore::SequenceHint::LvedListOrder),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.book_id, destination_book_id);
+    assert_eq!(window.window.center.scroll_anchor.as_deref(), Some("dest"));
+    assert_eq!(window.window.after.len(), 1);
+    assert_eq!(window.window.after[0].title.as_deref(), Some("beta"));
+    assert!(
+        window
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lved_cross_book_routed")
+    );
 }
 
 #[test]
@@ -2489,6 +2510,21 @@ fn library_reports_lved_cross_book_targets_when_destination_is_not_open() {
             .iter()
             .any(|diagnostic| diagnostic.code == "lved_cross_book_destination_missing")
     );
+
+    let window = library
+        .resolve_target_window_routed(
+            &source_book_id,
+            &cross_book_link.token,
+            Some(&lvcore::SequenceHint::LvedListOrder),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.book_id, source_book_id);
+    assert_eq!(window.window.center.kind, ResolvedTargetKind::Unsupported);
+    assert!(window.window.before.is_empty());
+    assert!(window.window.after.is_empty());
 }
 
 #[test]
