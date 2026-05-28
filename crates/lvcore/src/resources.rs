@@ -36,6 +36,11 @@ pub enum InternalResource {
         key: String,
         resource_kind: ResourceKind,
     },
+    ChmFile {
+        chm_path: String,
+        entry_path: String,
+        resource_kind: ResourceKind,
+    },
     Unsupported {
         reason: String,
     },
@@ -44,9 +49,9 @@ pub enum InternalResource {
 impl InternalResource {
     pub fn resource_kind(&self) -> ResourceKind {
         match self {
-            Self::PackageFile { resource_kind, .. } | Self::MediaBlob { resource_kind, .. } => {
-                *resource_kind
-            }
+            Self::PackageFile { resource_kind, .. }
+            | Self::MediaBlob { resource_kind, .. }
+            | Self::ChmFile { resource_kind, .. } => *resource_kind,
             Self::Unsupported { .. } => ResourceKind::Other,
         }
     }
@@ -132,5 +137,17 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("Templates"));
+    }
+
+    #[test]
+    fn token_round_trips_chm_file_resource() {
+        let resource = InternalResource::ChmFile {
+            chm_path: "HANREI.chm".to_owned(),
+            entry_path: "Source/top.htm".to_owned(),
+            resource_kind: ResourceKind::Html,
+        };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("HANREI"));
     }
 }

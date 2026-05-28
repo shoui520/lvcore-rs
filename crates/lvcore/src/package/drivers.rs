@@ -11,6 +11,7 @@ use zip::ZipArchive;
 use zip::result::ZipError;
 
 use crate::body::{BodyProvider, BodySourceKind, VisualBody};
+use crate::chm::{list_chm_entries, read_chm_entry};
 use crate::crypto::{
     decrypt_logofont_cipher_file_to_path, decrypt_logofont_cipher_prefix,
     decrypt_macos_logofont_cipher_file_to_path, decrypt_macos_logofont_cipher_prefix,
@@ -807,14 +808,31 @@ impl RendererProvider for StubBookPackage {
                 if let InternalResource::PackageFile {
                     path,
                     resource_kind,
-                } = decoded_resource
-                    && (resource_kind == ResourceKind::Html
-                        || path_has_extension(&path, &["html", "htm"]))
+                } = &decoded_resource
+                    && (*resource_kind == ResourceKind::Html
+                        || path_has_extension(path, &["html", "htm"]))
                 {
                     return self.render_package_html_resource(
                         token.clone(),
                         &resource,
-                        &path,
+                        path,
+                        resource_ref,
+                        options,
+                    );
+                }
+                if let InternalResource::ChmFile {
+                    chm_path,
+                    entry_path,
+                    resource_kind,
+                } = &decoded_resource
+                    && (*resource_kind == ResourceKind::Html
+                        || path_has_extension(entry_path, &["html", "htm"]))
+                {
+                    return self.render_chm_html_resource(
+                        token.clone(),
+                        &resource,
+                        chm_path,
+                        entry_path,
                         resource_ref,
                         options,
                     );
@@ -897,6 +915,35 @@ impl ResourceProvider for StubBookPackage {
                     diagnostics,
                 })
             }
+            InternalResource::ChmFile {
+                chm_path,
+                entry_path,
+                resource_kind,
+            } => {
+                let chm_relative = Path::new(&chm_path);
+                let resolved = self.storage.resolve_casefolded(chm_relative)?;
+                let mut diagnostics = Vec::new();
+                let href = if resolved.is_some() {
+                    Some(format!("lvcore://resource/{}", token.as_str()))
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!("{chm_path} was not found in the package"),
+                    ));
+                    None
+                };
+                let label = Path::new(&entry_path)
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .or(Some(entry_path));
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: resource_kind,
+                    label,
+                    href,
+                    diagnostics,
+                })
+            }
             InternalResource::MediaBlob { resource_kind, .. } => Ok(ResourceRef {
                 token: token.clone(),
                 kind: resource_kind,
@@ -932,6 +979,17 @@ impl ResourceProvider for StubBookPackage {
                     return Err(Error::Driver(format!("resource not found: {path}")));
                 };
                 Ok(fs::read(resolved)?)
+            }
+            InternalResource::ChmFile {
+                chm_path,
+                entry_path,
+                ..
+            } => {
+                let relative = Path::new(&chm_path);
+                let Some(resolved) = self.storage.resolve_casefolded(relative)? else {
+                    return Err(Error::Driver(format!("resource not found: {chm_path}")));
+                };
+                read_chm_entry(&resolved, &entry_path)
             }
             InternalResource::MediaBlob { store, key, .. } => {
                 let Some(lved_store) = &self.lved_store else {
@@ -1768,13 +1826,9 @@ impl StubBookPackage {
         let items = pages
             .into_iter()
             .map(|page| {
-                let resource = InternalResource::PackageFile {
-                    path: page.path.clone(),
-                    resource_kind: page.resource_kind,
-                };
-                let resource = ResourceToken::new(&resource)?;
+                let resource = ResourceToken::new(&page.resource)?;
                 Ok(NavigationItem {
-                    item_id: page.path,
+                    item_id: page.item_id,
                     label_html: escape_plain_label_html(&page.label),
                     label_text: page.label,
                     target: TargetToken::new(&InternalTarget::Resource {
@@ -3184,6 +3238,57 @@ impl StubBookPackage {
         })
     }
 
+    fn render_chm_html_resource(
+        &self,
+        target: TargetToken,
+        resource: &ResourceToken,
+        chm_path: &str,
+        entry_path: &str,
+        resource_ref: ResourceRef,
+        options: &RenderOptions,
+    ) -> Result<ResolvedTargetView> {
+        let scroll_anchor = scroll_anchor_for_token(&target)?;
+        let data = self.read_resource(resource)?;
+        let html = decode_package_html_text(&data);
+        let title = resource_ref.label.clone();
+        let kind = resolved_kind_for_package_html_path(&format!("{chm_path}/{entry_path}"));
+        if options.mode == RenderMode::BasicText {
+            return Ok(ResolvedTargetView {
+                kind,
+                target,
+                title,
+                display_html: None,
+                basic_text: Some(html_basic_text(&html)),
+                scroll_anchor,
+                surface: None,
+                resources: Vec::new(),
+                links: Vec::new(),
+                capabilities: Vec::new(),
+                diagnostics: resource_ref.diagnostics,
+                debug_trace: None,
+            });
+        }
+
+        let mut normalized = self.normalize_chm_html_refs(&html, chm_path, entry_path)?;
+        let resources = normalized.resources;
+        let mut diagnostics = resource_ref.diagnostics;
+        diagnostics.append(&mut normalized.diagnostics);
+        Ok(ResolvedTargetView {
+            kind,
+            target,
+            title,
+            display_html: Some(normalized.html),
+            basic_text: None,
+            scroll_anchor,
+            surface: None,
+            resources,
+            links: normalized.links,
+            capabilities: vec![crate::render::RenderCapability::Html],
+            diagnostics,
+            debug_trace: None,
+        })
+    }
+
     fn resolved_kind_for_body_target(&self, target: &TargetToken) -> Result<ResolvedTargetKind> {
         match target.decode()? {
             InternalTarget::LvedRow { table, .. } if table.eq_ignore_ascii_case("info") => {
@@ -3798,6 +3903,77 @@ impl StubBookPackage {
         })
     }
 
+    fn normalize_chm_html_refs(
+        &self,
+        html: &str,
+        chm_path: &str,
+        entry_path: &str,
+    ) -> Result<NormalizedHtmlRefs> {
+        let base_dir = package_html_base_dir(entry_path);
+        let mut output = String::with_capacity(html.len());
+        let mut resources = Vec::new();
+        let mut links = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut seen_resource_tokens = BTreeSet::new();
+        let mut seen_target_tokens = BTreeSet::new();
+        let mut cursor = 0usize;
+
+        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+            output.push_str(&html[cursor..attr.value_start]);
+            let raw_value = &html[attr.value_start..attr.value_end];
+            if let Some(reference) = package_relative_html_reference(&base_dir, raw_value) {
+                if attr.name == HtmlAttrName::Href
+                    && path_has_extension(&reference.path, &["html", "htm"])
+                {
+                    let resource = InternalResource::ChmFile {
+                        chm_path: chm_path.to_owned(),
+                        entry_path: reference.path,
+                        resource_kind: ResourceKind::Html,
+                    };
+                    let resource = ResourceToken::new(&resource)?;
+                    let target = InternalTarget::Resource {
+                        resource,
+                        anchor: reference.anchor,
+                    };
+                    let token = TargetToken::new(&target)?;
+                    if seen_target_tokens.insert(token.as_str().to_owned()) {
+                        links.push(TargetLink::new(raw_value, &target)?);
+                    }
+                    output.push_str(&format!("lvcore://target/{}", token.as_str()));
+                } else {
+                    let resource = InternalResource::ChmFile {
+                        resource_kind: resource_kind_from_path(&reference.path),
+                        chm_path: chm_path.to_owned(),
+                        entry_path: reference.path,
+                    };
+                    let token = ResourceToken::new(&resource)?;
+                    let href = format!("lvcore://resource/{}", token.as_str());
+                    if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                        let resource_ref = self.resolve_resource(&token)?;
+                        diagnostics.extend(resource_ref.diagnostics.clone());
+                        resources.push(resource_ref);
+                    }
+                    output.push_str(&href);
+                    if let Some(anchor) = reference.anchor {
+                        output.push('#');
+                        output.push_str(&anchor);
+                    }
+                }
+            } else {
+                output.push_str(raw_value);
+            }
+            cursor = attr.value_end;
+        }
+        output.push_str(&html[cursor..]);
+
+        Ok(NormalizedHtmlRefs {
+            html: output,
+            resources,
+            links,
+            diagnostics,
+        })
+    }
+
     fn rewrite_hourei_href(
         &self,
         raw_value: &str,
@@ -4263,12 +4439,12 @@ impl StubBookPackage {
             "HANREI/index.htm",
             "HANREI/hanrei.html",
             "HANREI/hanrei.htm",
-            "HANREI.chm",
         ] {
             self.push_ssed_hanrei_page(candidate, &mut pages, &mut seen)?;
         }
 
         self.push_ssed_hanrei_folder_pages("HANREI", &mut pages, &mut seen, 0)?;
+        self.push_ssed_hanrei_chm_pages("HANREI.chm", &mut pages, &mut seen)?;
 
         for path in self.storage.list_dir(Path::new(""))? {
             if !path.is_dir() {
@@ -4363,19 +4539,90 @@ impl StubBookPackage {
             return Ok(());
         }
         let resource_kind = resource_kind_from_path(&normalized);
-        let mut diagnostics = Vec::new();
-        if path_has_extension(&normalized, &["chm"]) {
-            diagnostics.push(Diagnostic::info(
-                "ssed_hanrei_chm_deferred",
-                "HANREI.chm was found, but CHM extraction/wrapping is not implemented yet",
-            ));
-        }
         pages.push(SsedHanreiPage {
+            item_id: normalized.clone(),
             label: ssed_hanrei_page_label(&normalized),
-            path: normalized,
-            resource_kind,
-            diagnostics,
+            resource: InternalResource::PackageFile {
+                path: normalized,
+                resource_kind,
+            },
+            diagnostics: Vec::new(),
         });
+        Ok(())
+    }
+
+    fn push_ssed_hanrei_chm_pages(
+        &self,
+        chm_path: &str,
+        pages: &mut Vec<SsedHanreiPage>,
+        seen: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        if !self.storage.exists(Path::new(chm_path))? {
+            return Ok(());
+        }
+        let Some(resolved) = self.storage.resolve_casefolded(Path::new(chm_path))? else {
+            return Ok(());
+        };
+        let mut entries = match list_chm_entries(&resolved) {
+            Ok(entries) => entries,
+            Err(err) => {
+                let item_id = chm_path.replace('\\', "/");
+                if seen.insert(item_id.to_ascii_lowercase()) {
+                    pages.push(SsedHanreiPage {
+                        item_id: item_id.clone(),
+                        label: ssed_hanrei_page_label(&item_id),
+                        resource: InternalResource::PackageFile {
+                            path: item_id,
+                            resource_kind: ResourceKind::Other,
+                        },
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_hanrei_chm_deferred",
+                            format!("HANREI.chm was found, but CHM decoding failed: {err}"),
+                        )],
+                    });
+                }
+                return Ok(());
+            }
+        };
+        entries.sort_by_key(|entry| chm_hanrei_entry_sort_key(&entry.path));
+        let mut html_count = 0usize;
+        for entry in entries {
+            if !path_has_extension(&entry.path, &["html", "htm"]) {
+                continue;
+            }
+            let item_id = format!("{chm_path}!/{}", entry.path);
+            if !seen.insert(item_id.to_ascii_lowercase()) {
+                continue;
+            }
+            html_count += 1;
+            pages.push(SsedHanreiPage {
+                item_id: item_id.clone(),
+                label: ssed_hanrei_page_label(&item_id),
+                resource: InternalResource::ChmFile {
+                    chm_path: chm_path.to_owned(),
+                    entry_path: entry.path,
+                    resource_kind: ResourceKind::Html,
+                },
+                diagnostics: Vec::new(),
+            });
+        }
+        if html_count == 0 {
+            let item_id = chm_path.replace('\\', "/");
+            if seen.insert(item_id.to_ascii_lowercase()) {
+                pages.push(SsedHanreiPage {
+                    item_id: item_id.clone(),
+                    label: ssed_hanrei_page_label(&item_id),
+                    resource: InternalResource::PackageFile {
+                        path: item_id,
+                        resource_kind: ResourceKind::Other,
+                    },
+                    diagnostics: vec![Diagnostic::info(
+                        "ssed_hanrei_chm_deferred",
+                        "HANREI.chm was found, but no HTML entries were discovered",
+                    )],
+                });
+            }
+        }
         Ok(())
     }
 }
@@ -4410,9 +4657,9 @@ fn push_surface_if_exists(
 
 #[derive(Debug, Clone)]
 struct SsedHanreiPage {
-    path: String,
+    item_id: String,
     label: String,
-    resource_kind: ResourceKind,
+    resource: InternalResource,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -5169,6 +5416,9 @@ fn scroll_anchor_for_token(target: &TargetToken) -> Result<Option<String>> {
 }
 
 fn ssed_hanrei_page_label(path: &str) -> String {
+    if let Some((_chm, entry)) = path.split_once("!/") {
+        return format!("CHM: {entry}");
+    }
     if path_has_extension(path, &["chm"]) {
         return "HANREI.chm".to_owned();
     }
@@ -5188,6 +5438,20 @@ fn ssed_hanrei_page_label(path: &str) -> String {
         return "Mac help: index".to_owned();
     }
     path.to_owned()
+}
+
+fn chm_hanrei_entry_sort_key(path: &str) -> (u8, String) {
+    let file_name = Path::new(path)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let priority = match file_name.as_str() {
+        "top.htm" | "top.html" | "index.htm" | "index.html" => 0,
+        "hanrei.htm" | "hanrei.html" => 1,
+        "copyright.htm" | "copyright.html" => 9,
+        _ => 5,
+    };
+    (priority, path.to_ascii_lowercase())
 }
 
 fn html_label_text(fragment: &str) -> String {

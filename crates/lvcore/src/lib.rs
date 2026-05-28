@@ -5,6 +5,7 @@
 //! capabilities, and all frontend navigation goes through stable target tokens.
 
 pub mod body;
+mod chm;
 pub mod crypto;
 pub mod diagnostics;
 pub mod error;
