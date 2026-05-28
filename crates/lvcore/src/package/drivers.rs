@@ -7259,7 +7259,9 @@ mod tests {
         );
         let page = package
             .search(&SearchQuery {
-                scope: crate::search::SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
                 mode: SearchMode::Forward,
                 query: "alp".to_owned(),
                 cursor: None,
@@ -7373,7 +7375,9 @@ mod tests {
         let package = LvedSqliteDriver.open(dir.path()).unwrap();
         let page = package
             .search(&SearchQuery {
-                scope: crate::search::SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
                 mode: SearchMode::Forward,
                 query: "alp".to_owned(),
                 cursor: None,
@@ -7692,7 +7696,9 @@ mod tests {
         );
         let page = package
             .search(&SearchQuery {
-                scope: crate::search::SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
                 mode: SearchMode::Exact,
                 query: "い".to_owned(),
                 cursor: None,
@@ -7860,7 +7866,9 @@ mod tests {
 
         let page = package
             .search(&SearchQuery {
-                scope: crate::search::SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
                 mode: SearchMode::FullText,
                 query: "window needle".to_owned(),
                 cursor: None,
@@ -7913,7 +7921,9 @@ mod tests {
 
         let page = package
             .search(&SearchQuery {
-                scope: crate::search::SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
                 mode: SearchMode::FullText,
                 query: "fullwidth".to_owned(),
                 cursor: None,

@@ -17,10 +17,10 @@ pub enum SearchMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SearchScope {
-    CurrentBook(BookId),
-    SelectedBooks(Vec<BookId>),
+    CurrentBook { book_id: BookId },
+    SelectedBooks { book_ids: Vec<BookId> },
     AllBooks,
 }
 
@@ -79,5 +79,42 @@ mod tests {
         let json = serde_json::to_value(&mode).unwrap();
         assert_eq!(json, serde_json::json!({ "advanced": "advanced1" }));
         assert_eq!(serde_json::from_value::<SearchMode>(json).unwrap(), mode);
+    }
+
+    #[test]
+    fn search_scope_has_frontend_safe_tagged_json_shape() {
+        let current = SearchScope::CurrentBook {
+            book_id: BookId("SSED:KOJIEN7".to_owned()),
+        };
+        let selected = SearchScope::SelectedBooks {
+            book_ids: vec![
+                BookId("SSED:KOJIEN7".to_owned()),
+                BookId("LVED_SQLITE3:DAIJIRN4".to_owned()),
+            ],
+        };
+
+        assert_eq!(
+            serde_json::to_value(&current).unwrap(),
+            serde_json::json!({ "kind": "current_book", "book_id": "SSED:KOJIEN7" })
+        );
+        assert_eq!(
+            serde_json::to_value(&selected).unwrap(),
+            serde_json::json!({
+                "kind": "selected_books",
+                "book_ids": ["SSED:KOJIEN7", "LVED_SQLITE3:DAIJIRN4"]
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(SearchScope::AllBooks).unwrap(),
+            serde_json::json!({ "kind": "all_books" })
+        );
+        assert_eq!(
+            serde_json::from_value::<SearchScope>(serde_json::json!({
+                "kind": "current_book",
+                "book_id": "SSED:KOJIEN7"
+            }))
+            .unwrap(),
+            current
+        );
     }
 }

@@ -160,7 +160,9 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
 
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Forward,
             query: "まえ".to_owned(),
             cursor: None,
@@ -187,7 +189,9 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
 
     let first = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Partial,
             query: "body".to_owned(),
             cursor: None,
@@ -198,7 +202,9 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     assert_eq!(first.next_cursor.as_deref(), Some("1"));
     let second = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Partial,
             query: "body".to_owned(),
             cursor: first.next_cursor,
@@ -364,7 +370,9 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
 
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Forward,
             query: "民".to_owned(),
             cursor: None,
@@ -376,7 +384,9 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
 
     let first = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Partial,
             query: "本文".to_owned(),
             cursor: None,
@@ -387,7 +397,9 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     assert_eq!(first.next_cursor.as_deref(), Some("1"));
     let second = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Partial,
             query: "本文".to_owned(),
             cursor: first.next_cursor,
@@ -530,7 +542,7 @@ fn library_scopes_resource_hrefs_in_search_result_labels() {
     let book_id = library.open_path(dir.path(), &registry).unwrap();
     let page = library
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(book_id),
+            scope: SearchScope::CurrentBook { book_id },
             mode: SearchMode::Forward,
             query: "alpha".to_owned(),
             cursor: None,
@@ -803,7 +815,9 @@ fn library_selected_book_search_uses_backend_cursor_pagination() {
 
     let first_page = library
         .search(&SearchQuery {
-            scope: SearchScope::SelectedBooks(vec![first_id.clone(), second_id.clone()]),
+            scope: SearchScope::SelectedBooks {
+                book_ids: vec![first_id.clone(), second_id.clone()],
+            },
             mode: SearchMode::Exact,
             query: "shared".to_owned(),
             cursor: None,
@@ -822,7 +836,9 @@ fn library_selected_book_search_uses_backend_cursor_pagination() {
 
     let second_page = library
         .search(&SearchQuery {
-            scope: SearchScope::SelectedBooks(vec![first_id, second_id]),
+            scope: SearchScope::SelectedBooks {
+                book_ids: vec![first_id, second_id],
+            },
             mode: SearchMode::Exact,
             query: "shared".to_owned(),
             cursor: first_page.next_cursor,
@@ -844,10 +860,9 @@ fn library_reports_missing_selected_books_as_diagnostics() {
 
     let page = library
         .search(&SearchQuery {
-            scope: SearchScope::SelectedBooks(vec![
-                ssed_id,
-                lvcore::BookId("missing-book".to_owned()),
-            ]),
+            scope: SearchScope::SelectedBooks {
+                book_ids: vec![ssed_id, lvcore::BookId("missing-book".to_owned())],
+            },
             mode: SearchMode::Exact,
             query: "test".to_owned(),
             cursor: None,
@@ -1801,7 +1816,9 @@ fn ssed_simple_index_search_returns_title_backed_hits() {
 
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Forward,
             query: "alp".to_owned(),
             cursor: None,
@@ -1846,7 +1863,9 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
 
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Forward,
             query: "alp".to_owned(),
             cursor: None,
@@ -1917,7 +1936,9 @@ fn ssed_simple_index_search_supports_backward_matching() {
 
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Backward,
             query: "ta".to_owned(),
             cursor: None,
@@ -1964,7 +1985,9 @@ fn ssed_tagged_index_search_supports_grouped_rows_across_pages() {
 
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Exact,
             query: "parent".to_owned(),
             cursor: None,
@@ -2016,7 +2039,9 @@ fn ssed_keyword_and_cross_reference_indexes_resolve_grouped_body_targets() {
 
         let page = package
             .search(&SearchQuery {
-                scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                scope: SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
                 mode: SearchMode::Exact,
                 query: "group".to_owned(),
                 cursor: None,
@@ -2086,7 +2111,9 @@ fn ssed_body_only_and_multi_selector_indexes_resolve_targets() {
 
         let page = package
             .search(&SearchQuery {
-                scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                scope: SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
                 mode: SearchMode::Exact,
                 query: query.to_owned(),
                 cursor: None,
@@ -2179,7 +2206,9 @@ fn ssed_exact_search_uses_internal_page_tree_for_simple_indexes() {
 
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Exact,
             query: "zeta".to_owned(),
             cursor: None,
@@ -2218,7 +2247,9 @@ fn ssed_simple_index_search_uses_cursor_pagination() {
 
     let first = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Partial,
             query: "a".to_owned(),
             cursor: None,
@@ -2237,7 +2268,9 @@ fn ssed_simple_index_search_uses_cursor_pagination() {
 
     let second = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Partial,
             query: "a".to_owned(),
             cursor: first.next_cursor,
@@ -2269,7 +2302,9 @@ fn ssed_simple_index_search_does_not_limit_candidates_before_filtering() {
 
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Exact,
             query: "alpha".to_owned(),
             cursor: None,
@@ -2311,7 +2346,9 @@ fn ssed_simple_index_targets_preserve_declared_honmon_component_name() {
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Exact,
             query: "alpha".to_owned(),
             cursor: None,
@@ -2569,7 +2606,9 @@ fn lved_search_is_cursor_paged_by_backend() {
 
     let first = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Exact,
             query: "shared".to_owned(),
             cursor: None,
@@ -2581,7 +2620,9 @@ fn lved_search_is_cursor_paged_by_backend() {
 
     let second = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Exact,
             query: "shared".to_owned(),
             cursor: first.next_cursor,
@@ -2625,7 +2666,9 @@ fn lved_advanced_search_mode_uses_named_search_column() {
 
     let page = package
         .search(&SearchQuery {
-            scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
             mode: SearchMode::Advanced("advanced1".to_owned()),
             query: "domain".to_owned(),
             cursor: None,

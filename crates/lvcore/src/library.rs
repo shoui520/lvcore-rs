@@ -280,7 +280,7 @@ impl BookLibrary {
 
     pub fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         match &query.scope {
-            SearchScope::CurrentBook(book_id) => {
+            SearchScope::CurrentBook { book_id } => {
                 let book = self
                     .book(book_id)
                     .ok_or_else(|| Error::BookNotFound(book_id.0.clone()))?;
@@ -288,7 +288,7 @@ impl BookLibrary {
                 scope_search_page_resource_hrefs(book_id, &mut page);
                 Ok(page)
             }
-            SearchScope::SelectedBooks(book_ids) => self.search_many(book_ids.iter(), query),
+            SearchScope::SelectedBooks { book_ids } => self.search_many(book_ids.iter(), query),
             SearchScope::AllBooks => self.search_many(self.books.keys(), query),
         }
     }
@@ -425,7 +425,9 @@ impl BookLibrary {
                 continue;
             };
             let mut book_query = query.clone();
-            book_query.scope = SearchScope::CurrentBook((*book_id).clone());
+            book_query.scope = SearchScope::CurrentBook {
+                book_id: (*book_id).clone(),
+            };
             book_query.cursor = if book_index == start_index {
                 inner_cursor.take()
             } else {

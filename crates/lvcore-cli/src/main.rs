@@ -388,7 +388,9 @@ fn search_command_json(
     let (library, book_id) = open_single_book_library(registry, path)?;
     let metadata = metadata_for(&library, &book_id);
     let page = library.search(&SearchQuery {
-        scope: SearchScope::CurrentBook(book_id.clone()),
+        scope: SearchScope::CurrentBook {
+            book_id: book_id.clone(),
+        },
         mode,
         query,
         cursor,
@@ -526,7 +528,9 @@ fn exercise_reader_paths(
         .unwrap_or("a")
         .to_owned();
     let search_row = match library.search(&SearchQuery {
-        scope: SearchScope::CurrentBook(book_id.clone()),
+        scope: SearchScope::CurrentBook {
+            book_id: book_id.clone(),
+        },
         mode: SearchMode::Forward,
         query: query.clone(),
         cursor: None,
