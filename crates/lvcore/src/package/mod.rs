@@ -51,6 +51,7 @@ pub enum Capability {
     FullTextSearch,
     TitleIndexBrowse,
     Menu,
+    ScreenMenu,
     Toc,
     Panels,
     Hanrei,

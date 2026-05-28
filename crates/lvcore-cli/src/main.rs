@@ -736,6 +736,7 @@ fn first_surface_target(surface: &NavigationSurface) -> Option<(TargetToken, Str
 fn navigation_surface_kind_name(surface: &NavigationSurface) -> &'static str {
     match surface {
         NavigationSurface::SimpleMenu { .. } => "simple_menu",
+        NavigationSurface::ScreenMenu { .. } => "screen_menu",
         NavigationSurface::TitleIndexBrowse { .. } => "title_index_browse",
         NavigationSurface::Panel { .. } => "panel",
         NavigationSurface::HierarchicalTree { .. } => "hierarchical_tree",

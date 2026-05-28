@@ -31,6 +31,12 @@ pub enum InternalResource {
         path: String,
         resource_kind: ResourceKind,
     },
+    SsedComponentAddress {
+        component: String,
+        block: u32,
+        offset: u32,
+        resource_kind: ResourceKind,
+    },
     MediaBlob {
         store: String,
         key: String,
@@ -50,6 +56,7 @@ impl InternalResource {
     pub fn resource_kind(&self) -> ResourceKind {
         match self {
             Self::PackageFile { resource_kind, .. }
+            | Self::SsedComponentAddress { resource_kind, .. }
             | Self::MediaBlob { resource_kind, .. }
             | Self::ChmFile { resource_kind, .. } => *resource_kind,
             Self::Unsupported { .. } => ResourceKind::Other,

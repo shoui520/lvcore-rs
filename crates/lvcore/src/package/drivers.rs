@@ -28,7 +28,8 @@ use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_cod
 use crate::multiview::{MultiviewMenuItem, MultiviewStore, parse_menu_data};
 use crate::navigation::{
     HomeSurface, NavigationItem, NavigationNode, NavigationProvider, NavigationStatus,
-    NavigationSurface, NavigationSurfaceKind, PanelCell,
+    NavigationSurface, NavigationSurfaceKind, PanelCell, ScreenMenuHotspot, ScreenMenuRect,
+    ScreenMenuScreen,
 };
 use crate::render::{
     RenderCapability, RenderMode, RenderOptions, RendererInput, RendererInputProvider,
@@ -52,6 +53,9 @@ use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
 use crate::ssed_panel::{
     SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, parse_panel_bin,
     parse_panel_xml_bytes,
+};
+use crate::ssed_screen_menu::{
+    SsedScreenMenuHotspot, SsedScreenMenuParse, parse_screen_menu_stream,
 };
 use crate::ssed_sidecar::{
     SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
@@ -629,6 +633,28 @@ impl NavigationProvider for StubBookPackage {
                         diagnostics: empty_diagnostic.into_iter().collect(),
                     });
                 }
+                if self
+                    .ssed_catalog
+                    .as_ref()
+                    .is_some_and(|catalog| catalog.has_role(SsedComponentRole::ScreenMenu))
+                    || self.storage.exists(Path::new("SCRMENU.DIC"))?
+                {
+                    surfaces.push(HomeSurface {
+                        surface_id: "screen-menu".to_owned(),
+                        kind: NavigationSurfaceKind::ScreenMenu,
+                        status: NavigationStatus::Available,
+                        title_html: "Screen Menu".to_owned(),
+                        title_text: "Screen Menu".to_owned(),
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: "screen-menu".to_owned(),
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_screen_menu",
+                            "SCRMENU.DIC exposes a bitmap-backed screen-map navigation surface",
+                        )],
+                    });
+                }
                 let hanrei_pages = self.discover_ssed_hanrei_pages()?;
                 if !hanrei_pages.is_empty() {
                     let diagnostics = hanrei_pages
@@ -821,6 +847,9 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "toc" {
             return self.open_ssed_menu_surface(surface_id, SsedComponentRole::Toc, "TOC.DIC");
+        }
+        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "screen-menu" {
+            return self.open_ssed_screen_menu_surface(surface_id);
         }
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "hanrei" {
             return self.open_ssed_hanrei_surface(surface_id, cursor, limit);
@@ -1035,6 +1064,36 @@ impl ResourceProvider for StubBookPackage {
                     diagnostics,
                 })
             }
+            InternalResource::SsedComponentAddress {
+                component,
+                block,
+                offset,
+                resource_kind,
+            } => {
+                let resolved = self
+                    .ssed_component_by_name(&component)
+                    .and_then(|component| self.resolve_readable_ssed_component_path(component).ok())
+                    .flatten();
+                let mut diagnostics = Vec::new();
+                let href = if resolved.is_some() {
+                    Some(format!("lvcore://resource/{}", token.as_str()))
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!("{component} was not found in the package"),
+                    ));
+                    None
+                };
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: resource_kind,
+                    label: Some(format!("{component}:{block:08}:{offset:04}")),
+                    href,
+                    mime_type: resource_mime_type(resource_kind, Some(&component))
+                        .map(str::to_owned),
+                    diagnostics,
+                })
+            }
             InternalResource::ChmFile {
                 chm_path,
                 entry_path,
@@ -1105,6 +1164,19 @@ impl ResourceProvider for StubBookPackage {
                     return Err(Error::Driver(format!("resource not found: {path}")));
                 };
                 Ok(fs::read(resolved)?)
+            }
+            InternalResource::SsedComponentAddress {
+                component,
+                block,
+                offset,
+                resource_kind,
+            } => {
+                if resource_kind != ResourceKind::Colscr {
+                    return Err(Error::Driver(format!(
+                        "SSED component-address resources are not readable for {resource_kind:?}"
+                    )));
+                }
+                self.read_ssed_colscr_image(&component, block, offset)
             }
             InternalResource::ChmFile {
                 chm_path,
@@ -1905,6 +1977,197 @@ impl StubBookPackage {
             ));
         }
         Ok(None)
+    }
+
+    fn open_ssed_screen_menu_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::error(
+                    "ssed_catalog_missing",
+                    "SSED screen-menu surfaces require a parsed SSEDINFO catalog",
+                )],
+            });
+        };
+        let Some(component) = catalog
+            .components_by_role(SsedComponentRole::ScreenMenu)
+            .find(|component| component.has_positive_range())
+            .or_else(|| catalog.component_named("SCRMENU.DIC"))
+        else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_screen_menu_missing",
+                    "SCRMENU.DIC is not declared in this SSED catalog",
+                )],
+            });
+        };
+        let path = match self.resolve_readable_ssed_component_path(component) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![
+                        Diagnostic::warning(
+                            "ssed_screen_menu_file_missing",
+                            format!("{} is declared but not present on disk", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                });
+            }
+            Err(error) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![
+                        Diagnostic::warning(
+                            "ssed_screen_menu_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                });
+            }
+        };
+        let mut reader = SsedDataFile::open(&path)?;
+        let data = reader.read_range(0, reader.header().expanded_size())?;
+        let parsed = parse_screen_menu_stream(&data, Some(catalog));
+        if parsed.screens.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![
+                    Diagnostic::info(
+                        "ssed_screen_menu_empty",
+                        format!(
+                            "{} did not decode any screen-menu screens",
+                            component.filename
+                        ),
+                    )
+                    .with_context("component", &component.filename),
+                ],
+            });
+        }
+        let screens = self.ssed_screen_menu_screens(surface_id, &parsed)?;
+        Ok(NavigationSurface::ScreenMenu {
+            surface_id: surface_id.to_owned(),
+            screens,
+            stats: parsed.stats,
+            diagnostics: Vec::new(),
+        })
+    }
+
+    fn ssed_screen_menu_screens(
+        &self,
+        surface_id: &str,
+        parsed: &SsedScreenMenuParse,
+    ) -> Result<Vec<ScreenMenuScreen>> {
+        parsed
+            .screens
+            .iter()
+            .map(|screen| {
+                let background = screen
+                    .image
+                    .as_ref()
+                    .and_then(|pointer| pointer.target.as_ref().map(|target| (pointer, target)))
+                    .filter(|(_, target)| target.role == SsedComponentRole::Colscr)
+                    .map(|(pointer, target)| {
+                        let resource =
+                            ResourceToken::new(&InternalResource::SsedComponentAddress {
+                                component: target.component.clone(),
+                                block: pointer.block,
+                                offset: pointer.offset,
+                                resource_kind: ResourceKind::Colscr,
+                            })?;
+                        self.resolve_resource(&resource)
+                    })
+                    .transpose()?;
+                let hotspots = screen
+                    .hotspots
+                    .iter()
+                    .enumerate()
+                    .map(|(index, hotspot)| {
+                        let (target, target_kind) =
+                            self.ssed_screen_menu_hotspot_target(surface_id, parsed, hotspot)?;
+                        Ok(ScreenMenuHotspot {
+                            hotspot_id: format!("hotspot-{index}"),
+                            rect: ScreenMenuRect {
+                                x: hotspot.rect.x,
+                                y: hotspot.rect.y,
+                                width: hotspot.rect.width,
+                                height: hotspot.rect.height,
+                            },
+                            target,
+                            target_kind,
+                            diagnostics: Vec::new(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ScreenMenuScreen {
+                    screen_id: format!("screen-{}", screen.screen_index),
+                    screen_index: screen.screen_index,
+                    width: screen.width,
+                    height: screen.height,
+                    background,
+                    hotspots,
+                    diagnostics: Vec::new(),
+                })
+            })
+            .collect()
+    }
+
+    fn ssed_screen_menu_hotspot_target(
+        &self,
+        surface_id: &str,
+        parsed: &SsedScreenMenuParse,
+        hotspot: &SsedScreenMenuHotspot,
+    ) -> Result<(Option<TargetToken>, Option<String>)> {
+        if let Some(target) = &hotspot.destination.target
+            && target.role == SsedComponentRole::Honmon
+        {
+            return Ok((
+                Some(TargetToken::new(&InternalTarget::SsedAddress {
+                    component: target.component.clone(),
+                    block: hotspot.destination.block,
+                    offset: hotspot.destination.offset,
+                })?),
+                Some("body".to_owned()),
+            ));
+        }
+        if let Some(screen_index) = hotspot.target_screen_index {
+            return Ok((
+                Some(TargetToken::new(&InternalTarget::MenuItem {
+                    surface_id: surface_id.to_owned(),
+                    item_id: format!("screen:{screen_index}"),
+                })?),
+                Some("screen".to_owned()),
+            ));
+        }
+        if let (Some(screen_index), Some(direct_index)) = (
+            hotspot.target_direct_screen_index,
+            hotspot.target_direct_index,
+        ) {
+            let direct = parsed
+                .screens
+                .get(screen_index as usize)
+                .and_then(|screen| screen.direct_targets.get(direct_index as usize));
+            if let Some(direct) = direct
+                && let Some(target) = &direct.destination.target
+                && target.role == SsedComponentRole::Honmon
+            {
+                return Ok((
+                    Some(TargetToken::new(&InternalTarget::SsedAddress {
+                        component: target.component.clone(),
+                        block: direct.destination.block,
+                        offset: direct.destination.offset,
+                    })?),
+                    Some("body".to_owned()),
+                ));
+            }
+        }
+        Ok((None, None))
     }
 
     fn open_ssed_panel_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
@@ -4694,6 +4957,64 @@ impl StubBookPackage {
         Ok(paths)
     }
 
+    fn ssed_component_by_name(&self, component_name: &str) -> Option<&SsedComponent> {
+        self.ssed_catalog
+            .as_ref()?
+            .components
+            .iter()
+            .find(|component| {
+                component.filename.eq_ignore_ascii_case(component_name)
+                    || (component_name.eq_ignore_ascii_case("COLSCR.DIC")
+                        && component.role == SsedComponentRole::Colscr)
+            })
+    }
+
+    fn read_ssed_colscr_image(
+        &self,
+        component_name: &str,
+        block: u32,
+        offset: u32,
+    ) -> Result<Vec<u8>> {
+        let Some(component) = self.ssed_component_by_name(component_name) else {
+            return Err(Error::Driver(format!(
+                "SSED component not declared: {component_name}"
+            )));
+        };
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Err(Error::Driver(format!(
+                "SSED component not found: {}",
+                component.filename
+            )));
+        };
+        let mut reader = SsedDataFile::open(path)?;
+        if offset >= BLOCK_SIZE {
+            return Err(Error::Driver(format!(
+                "invalid COLSCR offset {offset}; block offsets must be less than {BLOCK_SIZE}"
+            )));
+        }
+        let start_block = reader.header().start_block;
+        if block < start_block {
+            return Err(Error::Driver(format!(
+                "COLSCR block {block} is before component start block {start_block}"
+            )));
+        }
+        let relative_offset =
+            (block - start_block) as usize * BLOCK_SIZE as usize + offset as usize;
+        let header = reader.read_range(relative_offset, 70)?;
+        let Some(payload_size) = parse_colscr_wrapped_payload_size(&header) else {
+            return Err(Error::Driver(format!(
+                "COLSCR image header did not decode at {component_name}:{block:08}:{offset:04}"
+            )));
+        };
+        let wrapped = reader.read_range(relative_offset, 8 + payload_size)?;
+        if wrapped.len() != 8 + payload_size {
+            return Err(Error::Driver(format!(
+                "COLSCR image at {component_name}:{block:08}:{offset:04} is truncated"
+            )));
+        }
+        Ok(wrapped[8..].to_vec())
+    }
+
     fn materialize_readable_ssed_component_path(
         &self,
         component: &SsedComponent,
@@ -6100,6 +6421,24 @@ fn resource_mime_type(kind: ResourceKind, path_hint: Option<&str>) -> Option<&'s
     })
 }
 
+fn parse_colscr_wrapped_payload_size(data: &[u8]) -> Option<usize> {
+    if data.len() < 12 || &data[..4] != b"data" {
+        return None;
+    }
+    let payload_size = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
+    if payload_size == 0 {
+        return None;
+    }
+    let image = &data[8..];
+    if image.starts_with(b"BM")
+        || image.starts_with(b"\xff\xd8\xff")
+        || image.starts_with(b"\x89PNG\r\n\x1a\n")
+    {
+        return Some(payload_size);
+    }
+    None
+}
+
 fn decode_package_html_text(data: &[u8]) -> String {
     match std::str::from_utf8(data) {
         Ok(value) => value.to_owned(),
@@ -6998,6 +7337,14 @@ fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
     ) {
         capabilities.push(Capability::Toc);
     }
+    if catalog
+        .components_by_role(SsedComponentRole::ScreenMenu)
+        .any(|component| {
+            component.has_positive_range() && has_component_payload_casefolded(&storage, component)
+        })
+    {
+        capabilities.push(Capability::ScreenMenu);
+    }
     if has_ssed_hanrei_casefolded(&storage) {
         capabilities.push(Capability::Hanrei);
     }
@@ -7763,6 +8110,122 @@ mod tests {
     }
 
     #[test]
+    fn ssed_screen_menu_surface_exposes_backgrounds_and_hotspot_targets() {
+        let dir = tempdir().unwrap();
+        let mut screen_menu = Vec::new();
+        screen_menu.extend_from_slice(&[0x1f, 0x4c, 0x00, 0x00]);
+        screen_menu.extend_from_slice(&screen_menu_image_control(800, 600, 200, 0));
+        screen_menu.extend_from_slice(&screen_menu_hotspot_control(10, 20, 30, 40, 100, 0));
+        screen_menu.extend_from_slice(&[0x1f, 0x6c]);
+        fs::write(
+            dir.path().join("SCRMENU.DIC"),
+            fixture_sseddata_literal_chunks(&[&screen_menu], 50, 50),
+        )
+        .unwrap();
+        let bmp = b"BMscreen";
+        let mut colscr_record = Vec::new();
+        colscr_record.extend_from_slice(b"data");
+        colscr_record.extend_from_slice(&(bmp.len() as u32).to_le_bytes());
+        colscr_record.extend_from_slice(bmp);
+        fs::write(
+            dir.path().join("COLSCR.DIC"),
+            fixture_sseddata_literal_chunks(&[&colscr_record], 200, 200),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("HONMON.DIC"),
+            fixture_sseddata_literal_chunks(&[b"body"], 100, 100),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "Screen".to_owned(),
+            components: vec![
+                SsedComponent {
+                    index: 0,
+                    multi: 0,
+                    component_type: 0x10,
+                    start_block: 50,
+                    end_block: 50,
+                    data: [0; 4],
+                    filename: "SCRMENU.DIC".to_owned(),
+                    role: SsedComponentRole::ScreenMenu,
+                },
+                SsedComponent {
+                    index: 1,
+                    multi: 0,
+                    component_type: 0xd2,
+                    start_block: 200,
+                    end_block: 200,
+                    data: [0; 4],
+                    filename: "COLSCR.DIC".to_owned(),
+                    role: SsedComponentRole::Colscr,
+                },
+                SsedComponent {
+                    index: 2,
+                    multi: 0,
+                    component_type: 0x00,
+                    start_block: 100,
+                    end_block: 100,
+                    data: [0; 4],
+                    filename: "HONMON.DIC".to_owned(),
+                    role: SsedComponentRole::Honmon,
+                },
+            ],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 3,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("Screen".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            package
+                .metadata()
+                .capabilities
+                .contains(&Capability::ScreenMenu)
+        );
+        assert!(package.home_surfaces().unwrap().iter().any(|surface| {
+            surface.kind == NavigationSurfaceKind::ScreenMenu
+                && surface.status == NavigationStatus::Available
+        }));
+        let surface = package.open_surface("screen-menu").unwrap();
+        let NavigationSurface::ScreenMenu { screens, stats, .. } = surface else {
+            panic!("expected screen-menu surface");
+        };
+        assert_eq!(stats["screens"], 1);
+        assert_eq!(screens[0].width, Some(800));
+        assert_eq!(screens[0].height, Some(600));
+        let background = screens[0].background.as_ref().unwrap();
+        assert_eq!(background.kind, ResourceKind::Colscr);
+        assert_eq!(package.read_resource(&background.token).unwrap(), bmp);
+        assert!(matches!(
+            screens[0].hotspots[0].target.as_ref().unwrap().decode().unwrap(),
+            InternalTarget::SsedAddress {
+                component,
+                block: 100,
+                offset: 0
+            } if component == "HONMON.DIC"
+        ));
+    }
+
+    #[test]
     fn dense_honmon_address_target_resolves_sidecar_html() {
         let dir = tempdir().unwrap();
         let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
@@ -8405,6 +8868,55 @@ mod tests {
         let second = cell + 0x21;
         ((0x21..=0x7e).contains(&first) && (0x21..=0x7e).contains(&second))
             .then(|| vec![first, second])
+    }
+
+    fn screen_menu_image_control(width: u32, height: u32, block: u32, offset: u32) -> Vec<u8> {
+        let mut payload = vec![0u8; 20];
+        payload[0] = 0x1f;
+        payload[1] = 0x4d;
+        payload[10..12].copy_from_slice(&bcd_word(width));
+        payload[12..14].copy_from_slice(&bcd_word(height));
+        payload[14..18].copy_from_slice(&bcd_u32(block));
+        payload[18..20].copy_from_slice(&bcd_word(offset));
+        payload
+    }
+
+    fn screen_menu_hotspot_control(
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        block: u32,
+        offset: u32,
+    ) -> Vec<u8> {
+        let mut payload = vec![0u8; 36];
+        payload[0] = 0x1f;
+        payload[1] = 0x4f;
+        payload[8..10].copy_from_slice(&bcd_word(x));
+        payload[10..12].copy_from_slice(&bcd_word(y));
+        payload[12..14].copy_from_slice(&bcd_word(width));
+        payload[14..16].copy_from_slice(&bcd_word(height));
+        payload[28..32].copy_from_slice(&bcd_u32(block));
+        payload[32..34].copy_from_slice(&bcd_word(offset));
+        payload
+    }
+
+    fn bcd_word(value: u32) -> [u8; 2] {
+        let s = format!("{value:04}");
+        [
+            ((s.as_bytes()[0] - b'0') << 4) | (s.as_bytes()[1] - b'0'),
+            ((s.as_bytes()[2] - b'0') << 4) | (s.as_bytes()[3] - b'0'),
+        ]
+    }
+
+    fn bcd_u32(value: u32) -> [u8; 4] {
+        let s = format!("{value:08}");
+        [
+            ((s.as_bytes()[0] - b'0') << 4) | (s.as_bytes()[1] - b'0'),
+            ((s.as_bytes()[2] - b'0') << 4) | (s.as_bytes()[3] - b'0'),
+            ((s.as_bytes()[4] - b'0') << 4) | (s.as_bytes()[5] - b'0'),
+            ((s.as_bytes()[6] - b'0') << 4) | (s.as_bytes()[7] - b'0'),
+        ]
     }
 
     fn fixture_sseddata_literal_chunks(

@@ -492,6 +492,13 @@ fn scope_navigation_surface_resource_hrefs(book_id: &BookId, surface: &mut Navig
                 cell.label_html = scope_resource_hrefs_in_html(book_id, &cell.label_html);
             }
         }
+        NavigationSurface::ScreenMenu { screens, .. } => {
+            for screen in screens {
+                if let Some(resource) = &mut screen.background {
+                    scope_resource_ref_href(book_id, resource);
+                }
+            }
+        }
         NavigationSurface::InfoPages { pages, .. } => {
             for page in pages {
                 page.label_html = scope_resource_hrefs_in_html(book_id, &page.label_html);

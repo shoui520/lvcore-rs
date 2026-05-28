@@ -20,6 +20,7 @@ pub const SSEDDATA_MAGIC: &[u8; 8] = b"SSEDDATA";
 pub enum SsedComponentRole {
     Honmon,
     Menu,
+    ScreenMenu,
     Right,
     Title,
     Index,
@@ -27,8 +28,10 @@ pub enum SsedComponentRole {
     IdxJump,
     MultiDescriptor,
     Colscr,
+    ColSample,
     PcmData,
     Figure,
+    MonoScr,
     GaijiFull,
     GaijiHalf,
     Resource,
@@ -408,9 +411,19 @@ fn component_role(component_type: u8, filename: &str) -> SsedComponentRole {
     ) {
         return SsedComponentRole::Honmon;
     }
+    if upper == "SCRMENU.DIC" {
+        return SsedComponentRole::ScreenMenu;
+    }
+    if upper == "MONOSCR.DIC" {
+        return SsedComponentRole::MonoScr;
+    }
+    if upper == "COLSMPL.DIC" {
+        return SsedComponentRole::ColSample;
+    }
     match component_type {
         0x00 => SsedComponentRole::Honmon,
         0x01 => SsedComponentRole::Menu,
+        0x10 => SsedComponentRole::ScreenMenu,
         0x02 => SsedComponentRole::Right,
         0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0d => SsedComponentRole::Title,
         0x20 => SsedComponentRole::Toc,
@@ -421,6 +434,7 @@ fn component_role(component_type: u8, filename: &str) -> SsedComponentRole {
         0xd0 => SsedComponentRole::Figure,
         0xd2 => SsedComponentRole::Colscr,
         0xd8 => SsedComponentRole::PcmData,
+        0xe0 => SsedComponentRole::ColSample,
         0xf1 => SsedComponentRole::GaijiFull,
         0xf2 => SsedComponentRole::GaijiHalf,
         0xff => SsedComponentRole::MultiDescriptor,

@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
+use crate::resources::ResourceRef;
 use crate::target::TargetToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NavigationSurfaceKind {
     Menu,
+    ScreenMenu,
     Toc,
     TitleIndexBrowse,
     Panel,
@@ -48,6 +51,13 @@ pub enum NavigationSurface {
     SimpleMenu {
         surface_id: String,
         nodes: Vec<NavigationNode>,
+    },
+    ScreenMenu {
+        surface_id: String,
+        screens: Vec<ScreenMenuScreen>,
+        stats: BTreeMap<String, u32>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diagnostics: Vec<Diagnostic>,
     },
     TitleIndexBrowse {
         surface_id: String,
@@ -92,6 +102,42 @@ pub struct NavigationNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenMenuScreen {
+    pub screen_id: String,
+    pub screen_index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hotspots: Vec<ScreenMenuHotspot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenMenuHotspot {
+    pub hotspot_id: String,
+    pub rect: ScreenMenuRect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<TargetToken>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenMenuRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NavigationItem {
     pub item_id: String,
     pub label_html: String,
@@ -129,6 +175,7 @@ impl NavigationSurface {
     pub fn surface_id(&self) -> &str {
         match self {
             Self::SimpleMenu { surface_id, .. }
+            | Self::ScreenMenu { surface_id, .. }
             | Self::TitleIndexBrowse { surface_id, .. }
             | Self::Panel { surface_id, .. }
             | Self::HierarchicalTree { surface_id, .. }
@@ -145,6 +192,7 @@ impl NavigationSurface {
     pub fn diagnostics(&self) -> &[Diagnostic] {
         match self {
             Self::Deferred { diagnostics, .. } => diagnostics,
+            Self::ScreenMenu { diagnostics, .. } => diagnostics,
             _ => &[],
         }
     }
@@ -157,6 +205,25 @@ impl NavigationSurface {
                 collect_node_targets(surface_id, nodes, &mut targets);
                 targets
             }
+            Self::ScreenMenu {
+                surface_id,
+                screens,
+                ..
+            } => screens
+                .iter()
+                .flat_map(|screen| {
+                    screen.hotspots.iter().filter_map(|hotspot| {
+                        hotspot.target.as_ref().map(|target| NavigationTarget {
+                            surface_id: surface_id.clone(),
+                            source_id: format!("{}:{}", screen.screen_id, hotspot.hotspot_id),
+                            label_html: hotspot.hotspot_id.clone(),
+                            label_text: hotspot.hotspot_id.clone(),
+                            target: target.clone(),
+                            diagnostics: hotspot.diagnostics.clone(),
+                        })
+                    })
+                })
+                .collect(),
             Self::TitleIndexBrowse {
                 surface_id, items, ..
             } => items
@@ -205,6 +272,12 @@ impl NavigationSurface {
             Self::SimpleMenu { nodes, .. } | Self::HierarchicalTree { nodes, .. } => {
                 nodes_have_target(nodes)
             }
+            Self::ScreenMenu { screens, .. } => screens.iter().any(|screen| {
+                screen
+                    .hotspots
+                    .iter()
+                    .any(|hotspot| hotspot.target.is_some())
+            }),
             Self::TitleIndexBrowse { items, .. } => !items.is_empty(),
             Self::Panel { cells, .. } => cells.iter().any(|cell| cell.target.is_some()),
             Self::InfoPages { pages, .. } => !pages.is_empty(),

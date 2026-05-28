@@ -46,6 +46,9 @@ LogoVista internals. The frontend receives:
 - home-surface status values distinguish available, missing, empty,
   unsupported, and deferred surfaces so dead placeholder components do not
   become clickable UI;
+- typed SSED screen-menu surfaces for bitmap-backed navigation such as
+  KOJIEN6 `SCRMENU.DIC`, with COLSCR background resources and hotspot target
+  tokens;
 - stable opaque `TargetToken` values;
 - rendered target views with HTML/text/resources/links/diagnostics;
 - resource tokens for images, audio, PDFs, media BLOBs, gaiji assets, and other
@@ -109,6 +112,9 @@ provider slices:
   rewriting;
 - SSED MENU/TOC decoding reports explicit empty sentinel components as
   diagnostic-only surfaces rather than targetable menus;
+- SSED screen-menu decoding for the KOJIEN6-style `SCRMENU.DIC` component:
+  background images are exposed as COLSCR resource tokens, screen jumps remain
+  navigation targets, and body hotspots resolve to normal SSED address targets;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
 `logovista-tools` remains the research oracle while `lvcore-rs` ports stable
@@ -128,6 +134,8 @@ known structures.
 - SSED internal-page traversal is currently implemented only for simple
   exact/forward title-index paths. Backward, partial, keyword, cross-reference,
   and multi-selector performance still need format-specific indexing work.
+- KOJIEN6-specific MONOSCR/COLSMPL/`_PCM_U`/movie resources are recognized as
+  architecture requirements but are not fully reader-rendered yet.
 - CHM table-of-contents semantics are supported at the reader-core level:
   lvcore reads `.hhc` Name/Local entries and exposes them as nested HANREI
   navigation trees with target tokens and scroll anchors. Higher-level reader
