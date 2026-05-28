@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod gaiji;
 pub mod hourei;
+mod image;
 pub mod library;
 pub mod lved_sqlite;
 pub mod multiview;

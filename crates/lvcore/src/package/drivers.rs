@@ -24,6 +24,7 @@ use crate::gaiji::{
     normalize_gaiji_identity, parse_uni_gaiji_map, resolve_rich_label,
 };
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
+use crate::image::encode_png_rgba;
 use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
 use crate::multiview::{MultiviewMenuItem, MultiviewStore, parse_menu_data};
 use crate::navigation::{
@@ -354,6 +355,9 @@ const SSED_FULLTEXT_BODY_WINDOW_BYTES: usize = 16 * 1024;
 const SSED_FULLTEXT_SCAN_WINDOW_BYTES: usize = 256 * 1024;
 const SSED_FULLTEXT_SCAN_OVERLAP_BYTES: usize = 512;
 const SSED_FULLTEXT_SNIPPET_CHARS: usize = 160;
+const MONOSCR_WIDTH: u32 = 64;
+const MONOSCR_HEIGHT: u32 = 64;
+const MONOSCR_BITMAP_BYTES: usize = (MONOSCR_WIDTH as usize * MONOSCR_HEIGHT as usize) / 8;
 
 #[derive(Debug, Clone)]
 struct SsedFulltextRow {
@@ -1229,6 +1233,11 @@ impl ResourceProvider for StubBookPackage {
             } => {
                 if resource_kind == ResourceKind::Colscr {
                     return self.read_ssed_colscr_image(&component, block, offset);
+                }
+                if resource_kind == ResourceKind::Image
+                    && self.is_ssed_monoscr_component(&component)
+                {
+                    return self.read_ssed_monoscr_png(&component, block, offset);
                 }
                 if resource_kind == ResourceKind::PcmData {
                     if let Some(bytes) = read_pcmu_record(&self.root, block)? {
@@ -5101,6 +5110,58 @@ impl StubBookPackage {
         Ok(wrapped[8..].to_vec())
     }
 
+    fn is_ssed_monoscr_component(&self, component_name: &str) -> bool {
+        self.ssed_component_by_name(component_name)
+            .is_some_and(|component| {
+                component.role == SsedComponentRole::MonoScr
+                    || component.filename.eq_ignore_ascii_case("MONOSCR.DIC")
+            })
+    }
+
+    fn read_ssed_monoscr_png(
+        &self,
+        component_name: &str,
+        block: u32,
+        offset: u32,
+    ) -> Result<Vec<u8>> {
+        let Some(component) = self.ssed_component_by_name(component_name) else {
+            return Err(Error::Driver(format!(
+                "SSED component not declared: {component_name}"
+            )));
+        };
+        if component.role != SsedComponentRole::MonoScr
+            && !component.filename.eq_ignore_ascii_case("MONOSCR.DIC")
+        {
+            return Err(Error::Driver(format!(
+                "{} is not a MONOSCR component",
+                component.filename
+            )));
+        }
+        let Some(relative_offset) = component.relative_offset(block, offset) else {
+            return Err(Error::Driver(format!(
+                "MONOSCR address {component_name}:{block:08}:{offset:04} is outside the component range"
+            )));
+        };
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Err(Error::Driver(format!(
+                "SSED component not found: {}",
+                component.filename
+            )));
+        };
+        let mut reader = SsedDataFile::open(path)?;
+        let bitmap = reader.read_range(relative_offset as usize, MONOSCR_BITMAP_BYTES)?;
+        if bitmap.len() != MONOSCR_BITMAP_BYTES {
+            return Err(Error::Driver(format!(
+                "MONOSCR cell at {component_name}:{block:08}:{offset:04} is truncated"
+            )));
+        }
+        encode_png_rgba(
+            MONOSCR_WIDTH,
+            MONOSCR_HEIGHT,
+            &monoscr_bitmap_to_rgba(&bitmap),
+        )
+    }
+
     fn materialize_readable_ssed_component_path(
         &self,
         component: &SsedComponent,
@@ -6523,6 +6584,7 @@ fn resource_mime_type(kind: ResourceKind, path_hint: Option<&str>) -> Option<&'s
         ResourceKind::Css => Some("text/css; charset=utf-8"),
         ResourceKind::Javascript => Some("text/javascript; charset=utf-8"),
         ResourceKind::Pdf => Some("application/pdf"),
+        ResourceKind::Image => Some("image/png"),
         ResourceKind::Colscr => Some("image/bmp"),
         ResourceKind::PcmData => Some("audio/wav"),
         ResourceKind::SoundData => Some("audio/wav"),
@@ -6547,6 +6609,20 @@ fn parse_colscr_wrapped_payload_size(data: &[u8]) -> Option<usize> {
         return Some(payload_size);
     }
     None
+}
+
+fn monoscr_bitmap_to_rgba(bitmap: &[u8]) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity(MONOSCR_WIDTH as usize * MONOSCR_HEIGHT as usize * 4);
+    for byte in bitmap {
+        for bit in 0..8 {
+            if byte & (0x80 >> bit) != 0 {
+                pixels.extend_from_slice(&[0, 0, 0, 255]);
+            } else {
+                pixels.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+    pixels
 }
 
 fn decode_package_html_text(data: &[u8]) -> String {
@@ -8390,6 +8466,67 @@ mod tests {
             package.read_resource(&token).unwrap(),
             b"ID3\x03\x00\x00sample mp3 bytes"
         );
+    }
+
+    #[test]
+    fn monoscr_component_address_reads_png_bitmap_cell() {
+        let dir = tempdir().unwrap();
+        let mut bitmap = vec![0_u8; MONOSCR_BITMAP_BYTES];
+        bitmap[0] = 0x80;
+        fs::write(
+            dir.path().join("MONOSCR.DIC"),
+            fixture_sseddata_literal_chunks(&[&bitmap], 400, 400),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "Mono".to_owned(),
+            components: vec![SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0xd0,
+                start_block: 400,
+                end_block: 400,
+                data: [0; 4],
+                filename: "MONOSCR.DIC".to_owned(),
+                role: SsedComponentRole::MonoScr,
+            }],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 1,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Mono".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let token = ResourceToken::new(&InternalResource::SsedComponentAddress {
+            component: "MONOSCR.DIC".to_owned(),
+            block: 400,
+            offset: 0,
+            resource_kind: ResourceKind::Image,
+        })
+        .unwrap();
+
+        let resource = package.resolve_resource(&token).unwrap();
+        assert_eq!(resource.kind, ResourceKind::Image);
+        assert_eq!(resource.mime_type.as_deref(), Some("image/png"));
+        assert!(resource.href.is_some());
+        let png = package.read_resource(&token).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     }
 
     #[test]

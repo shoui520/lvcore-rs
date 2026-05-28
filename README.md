@@ -121,6 +121,8 @@ provider slices:
   as typed video resources;
 - SSED loose `Sound/SoundData` stores are exposed as typed sound resources
   using `Sound/WaveFile.map`, including MWALEARN-style RIFF/WAVE records;
+- SSED KOJIEN6-style `MONOSCR.DIC` component-address resources can be decoded
+  as generated PNG images from 64x64 1bpp bitmap cells;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
 `logovista-tools` remains the research oracle while `lvcore-rs` ports stable
@@ -140,7 +142,7 @@ known structures.
 - SSED internal-page traversal is currently implemented only for simple
   exact/forward title-index paths. Backward, partial, keyword, cross-reference,
   and multi-selector performance still need format-specific indexing work.
-- KOJIEN6-specific MONOSCR/COLSMPL resources are recognized as architecture
+- KOJIEN6-specific COLSMPL resources are recognized as architecture
   requirements but are not fully reader-rendered yet.
 - CHM table-of-contents semantics are supported at the reader-core level:
   lvcore reads `.hhc` Name/Local entries and exposes them as nested HANREI
