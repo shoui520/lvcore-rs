@@ -5,9 +5,10 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
-    BookId, BookLibrary, BookMetadata, DriverRegistry, Error, HomeSurface, NavigationStatus,
-    NavigationSurface, RenderMode, RenderOptions, ResourceToken, Result, SearchMode, SearchQuery,
-    SearchScope, SequenceHint, TargetToken, lved_sqlite::is_lved_payload_name,
+    BookId, BookLibrary, BookMetadata, DetectedPackage, DriverRegistry, Error, HomeSurface,
+    NavigationStatus, NavigationSurface, RenderMode, RenderOptions, ResourceToken, Result,
+    SearchMode, SearchQuery, SearchScope, SequenceHint, TargetToken,
+    lved_sqlite::is_lved_payload_name,
 };
 use serde_json::json;
 
@@ -258,7 +259,7 @@ fn main() -> Result<()> {
     match args.command {
         Command::Detect { path } => {
             let registry = DriverRegistry::default();
-            let detected = registry.detect(&path)?;
+            let detected = detect_command_detections(&registry, &path)?;
             println!("{}", serde_json::to_string_pretty(&detected)?);
         }
         Command::Validate {
@@ -806,6 +807,24 @@ fn discover_packages(
     Ok(())
 }
 
+fn detect_command_detections(
+    registry: &DriverRegistry,
+    path: &Path,
+) -> Result<Vec<DetectedPackage>> {
+    let direct = registry.detect(path)?;
+    if !direct.is_empty() {
+        return Ok(direct);
+    }
+
+    let mut package_paths = Vec::new();
+    discover_packages(registry, path, None, &mut package_paths)?;
+    let mut detections = Vec::new();
+    for package_path in package_paths {
+        detections.extend(registry.detect(&package_path)?);
+    }
+    Ok(detections)
+}
+
 fn is_package_file_candidate(path: &Path) -> bool {
     let name = path
         .file_name()
@@ -939,6 +958,23 @@ mod tests {
         .unwrap();
 
         assert!(discovered.is_empty());
+    }
+
+    #[test]
+    fn detect_command_recurses_when_root_is_not_a_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("NestedDictionary");
+        fs::create_dir_all(&package).unwrap();
+        write_lved_cli_fixture(&package);
+
+        let detections = detect_command_detections(&DriverRegistry::default(), dir.path()).unwrap();
+
+        assert_eq!(detections.len(), 1);
+        assert_eq!(
+            detections[0].format_family,
+            lvcore::FormatFamily::LvedSqlite3
+        );
+        assert_eq!(detections[0].root, package);
     }
 
     #[test]
