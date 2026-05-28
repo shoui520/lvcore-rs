@@ -5,9 +5,9 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
-    BookId, BookLibrary, BookMetadata, DriverRegistry, HomeSurface, NavigationStatus,
+    BookId, BookLibrary, BookMetadata, DriverRegistry, Error, HomeSurface, NavigationStatus,
     NavigationSurface, RenderMode, RenderOptions, ResourceToken, Result, SearchMode, SearchQuery,
-    SearchScope, TargetToken, lved_sqlite::is_lved_payload_name,
+    SearchScope, SequenceHint, TargetToken, lved_sqlite::is_lved_payload_name,
 };
 use serde_json::json;
 
@@ -107,6 +107,31 @@ enum Command {
         /// Target token previously returned by search, navigation, or links.
         token: String,
     },
+    /// Resolve a continuous-view window around one target.
+    Window {
+        /// Package root or payload path to inspect.
+        path: PathBuf,
+        /// Target token previously returned by search, navigation, or links.
+        token: String,
+        /// Sequence order to use. Defaults to the package's target-appropriate order.
+        #[arg(long)]
+        sequence: Option<CliSequenceHint>,
+        /// Sequence value for title/menu/panel/search result orders.
+        #[arg(long)]
+        sequence_value: Option<String>,
+        /// Number of previous entries/items to resolve.
+        #[arg(long, default_value_t = 0)]
+        before: usize,
+        /// Number of following entries/items to resolve.
+        #[arg(long, default_value_t = 0)]
+        after: usize,
+        /// Render mode to request for each view in the window.
+        #[arg(long, default_value = "native")]
+        render_mode: CliRenderMode,
+        /// Include backend debug trace in rendered output.
+        #[arg(long)]
+        debug_trace: bool,
+    },
     /// Resolve and read one opaque resource token for one package.
     Resource {
         /// Package root or payload path to inspect.
@@ -131,6 +156,19 @@ enum CliRenderMode {
     GenericHtml,
     BasicText,
     Debug,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSequenceHint {
+    TitleIndexOrder,
+    SearchResults,
+    BodyOrder,
+    MenuOrder,
+    PanelOrder,
+    LvedListOrder,
+    LvedTreeOrder,
+    HoureiLawArticleOrder,
+    MultiviewTreeOrder,
 }
 
 impl From<CliSearchMode> for SearchMode {
@@ -169,6 +207,45 @@ fn cli_render_options(mode: CliRenderMode, debug_trace: bool) -> RenderOptions {
         include_debug_trace: debug_trace,
         ..RenderOptions::default()
     }
+}
+
+fn cli_sequence_hint(
+    hint: Option<CliSequenceHint>,
+    value: Option<String>,
+) -> Result<Option<SequenceHint>> {
+    let Some(hint) = hint else {
+        return Ok(None);
+    };
+    fn required_value(name: &str, value: Option<String>) -> Result<String> {
+        let Some(value) = value
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+        else {
+            return Err(Error::Driver(format!(
+                "--sequence-value is required for {name}"
+            )));
+        };
+        Ok(value)
+    }
+    Ok(Some(match hint {
+        CliSequenceHint::TitleIndexOrder => SequenceHint::TitleIndexOrder {
+            value: required_value("title-index-order", value)?,
+        },
+        CliSequenceHint::SearchResults => SequenceHint::SearchResults {
+            value: required_value("search-results", value)?,
+        },
+        CliSequenceHint::BodyOrder => SequenceHint::BodyOrder,
+        CliSequenceHint::MenuOrder => SequenceHint::MenuOrder {
+            value: required_value("menu-order", value)?,
+        },
+        CliSequenceHint::PanelOrder => SequenceHint::PanelOrder {
+            value: required_value("panel-order", value)?,
+        },
+        CliSequenceHint::LvedListOrder => SequenceHint::LvedListOrder,
+        CliSequenceHint::LvedTreeOrder => SequenceHint::LvedTreeOrder,
+        CliSequenceHint::HoureiLawArticleOrder => SequenceHint::HoureiLawArticleOrder,
+        CliSequenceHint::MultiviewTreeOrder => SequenceHint::MultiviewTreeOrder,
+    }))
 }
 
 fn main() -> Result<()> {
@@ -300,6 +377,28 @@ fn main() -> Result<()> {
                 }))?
             );
         }
+        Command::Window {
+            path,
+            token,
+            sequence,
+            sequence_value,
+            before,
+            after,
+            render_mode,
+            debug_trace,
+        } => {
+            let registry = DriverRegistry::default();
+            let output = window_command_json(
+                &registry,
+                &path,
+                token,
+                cli_sequence_hint(sequence, sequence_value)?,
+                before,
+                after,
+                cli_render_options(render_mode, debug_trace),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
         Command::Resource { path, token } => {
             let registry = DriverRegistry::default();
             let output = resource_command_json(&registry, &path, token)?;
@@ -429,6 +528,36 @@ fn search_command_json(
         "diagnostics": page.diagnostics,
         "rendered_first": rendered_first,
         "target_window": target_window,
+    }))
+}
+
+fn window_command_json(
+    registry: &DriverRegistry,
+    path: &Path,
+    token: String,
+    sequence_hint: Option<SequenceHint>,
+    before: usize,
+    after: usize,
+    render_options: RenderOptions,
+) -> Result<serde_json::Value> {
+    let (library, book_id) = open_single_book_library(registry, path)?;
+    let metadata = metadata_for(&library, &book_id);
+    let target = TargetToken::from_opaque(token);
+    let window = library.resolve_target_window(
+        &book_id,
+        &target,
+        sequence_hint.as_ref(),
+        before,
+        after,
+        &render_options,
+    )?;
+    Ok(json!({
+        "metadata": metadata,
+        "sequence_hint": sequence_hint,
+        "before": before,
+        "after": after,
+        "render_options": render_options,
+        "window": window,
     }))
 }
 
@@ -929,6 +1058,54 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn window_command_resolves_continuous_view_for_target_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        write_lved_cli_fixture(dir.path());
+
+        let search_output = search_command_json(
+            &DriverRegistry::default(),
+            dir.path(),
+            "alp".to_owned(),
+            SearchMode::Forward,
+            10,
+            None,
+            RenderOptions::default(),
+            false,
+            0,
+            0,
+        )
+        .unwrap();
+        let target = search_output["hits"][0]["target"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let output = window_command_json(
+            &DriverRegistry::default(),
+            dir.path(),
+            target,
+            Some(SequenceHint::LvedListOrder),
+            0,
+            1,
+            RenderOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(output["window"]["center"]["title"], "alpha");
+        assert_eq!(output["window"]["after"].as_array().unwrap().len(), 1);
+        assert!(
+            output["window"]["after"][0]["display_html"]
+                .as_str()
+                .unwrap()
+                .contains("next body")
+        );
+        assert_eq!(
+            output["sequence_hint"],
+            serde_json::json!({ "kind": "lved_list_order" })
+        );
+    }
+
     fn has_scoped_resource_href(html: &str) -> bool {
         const PREFIX: &str = "lvcore://resource/";
         let Some(start) = html.find(PREFIX) else {
@@ -973,8 +1150,10 @@ mod tests {
                       filter
                     );
                     insert into content values (100, 1, '<article><object data="AC6E.svg"></object><p>body</p></article>', '');
+                    insert into content values (101, 1, '<article><p>next body</p></article>', '');
                     insert into media values (1, 'AC6E', 4, X'3C7376672F3E');
                     insert into list values (1, 100, 1, '', '<img src="AC6E.svg"><b>alpha</b>', '');
+                    insert into list values (2, 101, 1, '', '<b>beta</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
                     "#,
