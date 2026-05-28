@@ -62,6 +62,7 @@ use crate::ssed_sidecar::{
     SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
     discover_ssed_sidecar_body_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
 };
+use crate::ssed_sound_data::{read_sounddata_record, resolve_sounddata_record};
 use crate::storage::{DirectoryStorage, StorageBackend};
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
@@ -1128,6 +1129,27 @@ impl ResourceProvider for StubBookPackage {
                     diagnostics,
                 })
             }
+            InternalResource::SoundData { sound_id } => {
+                let resolved = resolve_sounddata_record(&self.root, sound_id)?;
+                let mut diagnostics = Vec::new();
+                let href = if resolved.is_some() {
+                    Some(format!("lvcore://resource/{}", token.as_str()))
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!("SoundData record {sound_id:08x} was not found in the package"),
+                    ));
+                    None
+                };
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: ResourceKind::SoundData,
+                    label: Some(format!("SoundData/{sound_id:08x}")),
+                    href,
+                    mime_type: Some("audio/wav".to_owned()),
+                    diagnostics,
+                })
+            }
             InternalResource::ChmFile {
                 chm_path,
                 entry_path,
@@ -1225,6 +1247,14 @@ impl ResourceProvider for StubBookPackage {
                     return Err(Error::Driver(format!("_MOVIE file not found: {movie_id}")));
                 };
                 Ok(fs::read(path)?)
+            }
+            InternalResource::SoundData { sound_id } => {
+                let Some(bytes) = read_sounddata_record(&self.root, sound_id)? else {
+                    return Err(Error::Driver(format!(
+                        "SoundData record not found: {sound_id:08x}"
+                    )));
+                };
+                Ok(bytes)
             }
             InternalResource::ChmFile {
                 chm_path,
@@ -6495,7 +6525,7 @@ fn resource_mime_type(kind: ResourceKind, path_hint: Option<&str>) -> Option<&'s
         ResourceKind::Pdf => Some("application/pdf"),
         ResourceKind::Colscr => Some("image/bmp"),
         ResourceKind::PcmData => Some("audio/wav"),
-        ResourceKind::SoundData => Some("audio/mpeg"),
+        ResourceKind::SoundData => Some("audio/wav"),
         ResourceKind::Video => Some("video/mpeg"),
         _ => None,
     })
@@ -8394,6 +8424,48 @@ mod tests {
         assert!(resource.href.is_some());
         assert!(resource.diagnostics.is_empty());
         assert_eq!(package.read_resource(&token).unwrap(), b"movie bytes");
+    }
+
+    #[test]
+    fn sounddata_resource_resolves_and_reads_wave_record() {
+        let dir = tempdir().unwrap();
+        let sound_root = dir.path().join("Sound");
+        fs::create_dir(&sound_root).unwrap();
+        fs::write(
+            sound_root.join("SoundData"),
+            b"RIFF\x04\x00\x00\x00WAVEignored trailing bytes",
+        )
+        .unwrap();
+        fs::write(
+            sound_root.join("WaveFile.map"),
+            b"0000000000000000:001b 10\n",
+        )
+        .unwrap();
+
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Sample".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores::default(),
+        );
+        let token = ResourceToken::new(&InternalResource::SoundData { sound_id: 10 }).unwrap();
+
+        let resource = package.resolve_resource(&token).unwrap();
+        assert_eq!(resource.kind, ResourceKind::SoundData);
+        assert_eq!(resource.label.as_deref(), Some("SoundData/0000000a"));
+        assert_eq!(resource.mime_type.as_deref(), Some("audio/wav"));
+        assert!(resource.href.is_some());
+        assert!(resource.diagnostics.is_empty());
+        assert_eq!(
+            package.read_resource(&token).unwrap(),
+            b"RIFF\x04\x00\x00\x00WAVE"
+        );
     }
 
     #[test]

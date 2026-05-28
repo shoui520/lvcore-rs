@@ -43,6 +43,9 @@ pub enum InternalResource {
         key: String,
         resource_kind: ResourceKind,
     },
+    SoundData {
+        sound_id: u32,
+    },
     LooseMovie {
         movie_id: String,
     },
@@ -63,6 +66,7 @@ impl InternalResource {
             | Self::SsedComponentAddress { resource_kind, .. }
             | Self::ChmFile { resource_kind, .. } => *resource_kind,
             Self::MediaBlob { resource_kind, .. } => *resource_kind,
+            Self::SoundData { .. } => ResourceKind::SoundData,
             Self::LooseMovie { .. } => ResourceKind::Video,
             Self::Unsupported { .. } => ResourceKind::Other,
         }
@@ -177,5 +181,13 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("05011360"));
+    }
+
+    #[test]
+    fn token_round_trips_sounddata_resource() {
+        let resource = InternalResource::SoundData { sound_id: 32768 };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("32768"));
     }
 }

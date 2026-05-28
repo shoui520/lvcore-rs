@@ -27,6 +27,7 @@ pub mod ssed_menu;
 pub mod ssed_panel;
 pub mod ssed_screen_menu;
 pub mod ssed_sidecar;
+pub mod ssed_sound_data;
 pub mod storage;
 pub mod target;
 
@@ -75,5 +76,6 @@ pub use ssed_screen_menu::{
     SsedScreenMenuPointerTarget, SsedScreenMenuRect, SsedScreenMenuScreen,
 };
 pub use ssed_sidecar::{SsedSidecarBody, SsedSidecarBodyResolver, SsedSidecarLookup};
+pub use ssed_sound_data::{SoundDataIndex, SoundDataMapRecord};
 pub use storage::{CaseFoldedDirectory, DirectoryStorage, StorageBackend};
 pub use target::{InternalTarget, TargetKind, TargetLink, TargetToken};

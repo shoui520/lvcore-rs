@@ -119,6 +119,8 @@ provider slices:
 - SSED loose KOJIEN6-style media: `_PCM_U/WaveFile.map` can back `PCMDATA.DIC`
   address resources with decrypted MP3 bytes, and `_MOVIE` entries are exposed
   as typed video resources;
+- SSED loose `Sound/SoundData` stores are exposed as typed sound resources
+  using `Sound/WaveFile.map`, including MWALEARN-style RIFF/WAVE records;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
 `logovista-tools` remains the research oracle while `lvcore-rs` ports stable
