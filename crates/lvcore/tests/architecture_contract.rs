@@ -289,6 +289,25 @@ fn multiview_law_list_targets_resolve_to_navigation_and_law_bodies() {
             .unwrap()
             .contains("日本国憲法本文")
     );
+
+    let window = package
+        .resolve_target_window(
+            &items[0].target,
+            Some(&lvcore::SequenceHint::MultiviewTreeOrder),
+            1,
+            0,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.center.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(window.before.len(), 1);
+    assert_eq!(window.before[0].kind, ResolvedTargetKind::NavigationSurface);
+    assert!(
+        window
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
 }
 
 #[test]

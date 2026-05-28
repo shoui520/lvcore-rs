@@ -1116,7 +1116,7 @@ impl SequenceProvider for StubBookPackage {
             return Ok(window);
         }
         if self.metadata.format_family == FormatFamily::LvlMultiView
-            && sequence_hint.is_none()
+            && sequence_hint.is_none_or(|hint| matches!(hint, SequenceHint::MultiviewTreeOrder))
             && let Some(window) =
                 self.resolve_multiview_menu_window(target, before, after, options)?
         {
