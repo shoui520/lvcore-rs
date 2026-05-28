@@ -839,7 +839,7 @@ impl RendererProvider for StubBookPackage {
         options: &crate::render::RenderOptions,
     ) -> Result<ResolvedTargetView> {
         let target = token.decode()?;
-        match target {
+        let view = match target {
             InternalTarget::Unsupported { reason } => Ok(ResolvedTargetView::unsupported(
                 token.clone(),
                 "Unsupported target",
@@ -871,53 +871,55 @@ impl RendererProvider for StubBookPackage {
             InternalTarget::Resource { resource, anchor } => {
                 let decoded_resource = resource.decode()?;
                 let resource_ref = self.resolve_resource(&resource)?;
-                if let InternalResource::PackageFile {
-                    path,
-                    resource_kind,
-                } = &decoded_resource
-                    && (*resource_kind == ResourceKind::Html
-                        || path_has_extension(path, &["html", "htm"]))
-                {
-                    return self.render_package_html_resource(
-                        token.clone(),
-                        &resource,
+                Ok(
+                    if let InternalResource::PackageFile {
                         path,
-                        resource_ref,
-                        options,
-                    );
-                }
-                if let InternalResource::ChmFile {
-                    chm_path,
-                    entry_path,
-                    resource_kind,
-                } = &decoded_resource
-                    && (*resource_kind == ResourceKind::Html
-                        || path_has_extension(entry_path, &["html", "htm"]))
-                {
-                    return self.render_chm_html_resource(
-                        token.clone(),
-                        &resource,
+                        resource_kind,
+                    } = &decoded_resource
+                        && (*resource_kind == ResourceKind::Html
+                            || path_has_extension(path, &["html", "htm"]))
+                    {
+                        self.render_package_html_resource(
+                            token.clone(),
+                            &resource,
+                            path,
+                            resource_ref,
+                            options,
+                        )?
+                    } else if let InternalResource::ChmFile {
                         chm_path,
                         entry_path,
-                        resource_ref,
-                        options,
-                    );
-                }
-                let diagnostics = resource_ref.diagnostics.clone();
-                Ok(ResolvedTargetView {
-                    kind: ResolvedTargetKind::MediaResource,
-                    target: token.clone(),
-                    title: resource_ref.label.clone(),
-                    display_html: None,
-                    basic_text: None,
-                    scroll_anchor: anchor,
-                    surface: None,
-                    resources: vec![resource_ref],
-                    links: Vec::new(),
-                    capabilities: Vec::new(),
-                    diagnostics,
-                    debug_trace: None,
-                })
+                        resource_kind,
+                    } = &decoded_resource
+                        && (*resource_kind == ResourceKind::Html
+                            || path_has_extension(entry_path, &["html", "htm"]))
+                    {
+                        self.render_chm_html_resource(
+                            token.clone(),
+                            &resource,
+                            chm_path,
+                            entry_path,
+                            resource_ref,
+                            options,
+                        )?
+                    } else {
+                        let diagnostics = resource_ref.diagnostics.clone();
+                        ResolvedTargetView {
+                            kind: ResolvedTargetKind::MediaResource,
+                            target: token.clone(),
+                            title: resource_ref.label.clone(),
+                            display_html: None,
+                            basic_text: None,
+                            scroll_anchor: anchor,
+                            surface: None,
+                            resources: vec![resource_ref],
+                            links: Vec::new(),
+                            capabilities: Vec::new(),
+                            diagnostics,
+                            debug_trace: None,
+                        }
+                    },
+                )
             }
             InternalTarget::PanelCell { panel_id, .. } => {
                 let surface_id = format!("panels:{panel_id}");
@@ -939,16 +941,18 @@ impl RendererProvider for StubBookPackage {
                     && let Some(view) =
                         self.view_for_multiview_navigation_target(token.clone(), &href)?
                 {
-                    return Ok(view);
+                    Ok(view)
+                } else {
+                    let input = self.renderer_input_for_target(token)?;
+                    self.view_for_renderer_input(input, options)
                 }
-                let input = self.renderer_input_for_target(token)?;
-                self.view_for_renderer_input(input, options)
             }
             _ => {
                 let input = self.renderer_input_for_target(token)?;
                 self.view_for_renderer_input(input, options)
             }
-        }
+        }?;
+        Ok(finalize_resolved_view(view, options))
     }
 }
 
@@ -3380,18 +3384,19 @@ impl StubBookPackage {
                         ));
                         diagnostics
                     },
-                    debug_trace: options.include_debug_trace.then(|| {
-                        json!({
-                            "body": {
-                                "kind": "ssed_stream",
-                                "component": component,
-                                "offset": offset,
-                                "length": length,
-                                "profile_hint": profile_hint,
-                            }
-                        })
-                        .to_string()
-                    }),
+                    debug_trace: (options.include_debug_trace || options.mode == RenderMode::Debug)
+                        .then(|| {
+                            json!({
+                                "body": {
+                                    "kind": "ssed_stream",
+                                    "component": component,
+                                    "offset": offset,
+                                    "length": length,
+                                    "profile_hint": profile_hint,
+                                }
+                            })
+                            .to_string()
+                        }),
                 })
             }
             RendererInput::SemanticFallback { target, text } => {
@@ -6349,6 +6354,56 @@ fn html_basic_text(fragment: &str) -> String {
         .join("\n")
 }
 
+fn finalize_resolved_view(
+    mut view: ResolvedTargetView,
+    options: &RenderOptions,
+) -> ResolvedTargetView {
+    match options.mode {
+        RenderMode::Native => {}
+        RenderMode::BasicText => {
+            if let Some(html) = view.display_html.take() {
+                view.basic_text = Some(html_basic_text(&html));
+                view.resources.clear();
+                view.links.clear();
+                view.capabilities.clear();
+            }
+        }
+        RenderMode::GenericHtml => {
+            if view.display_html.as_deref().is_some_and(|html| {
+                html.contains("lvcore://target/") || html.contains("lvcore://resource/")
+            }) {
+                view.diagnostics.push(Diagnostic::info(
+                    "generic_html_router_required",
+                    "GenericHtml currently preserves lvcore:// links and resources; callers must provide a router or request Native/BasicText output",
+                ));
+            }
+        }
+        RenderMode::Debug => {}
+    }
+
+    if (options.include_debug_trace || options.mode == RenderMode::Debug)
+        && view.debug_trace.is_none()
+    {
+        view.debug_trace = Some(
+            json!({
+                "mode": options.mode,
+                "kind": view.kind,
+                "target": view.target.clone(),
+                "title": view.title.clone(),
+                "has_display_html": view.display_html.is_some(),
+                "has_basic_text": view.basic_text.is_some(),
+                "resource_count": view.resources.len(),
+                "link_count": view.links.len(),
+                "capabilities": view.capabilities.clone(),
+                "diagnostics": view.diagnostics.clone(),
+            })
+            .to_string(),
+        );
+    }
+
+    view
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LvedHtmlRefKind {
     Media,
@@ -7137,6 +7192,73 @@ mod tests {
         assert_eq!(window.after.len(), 2);
         assert_eq!(window.after[0].title.as_deref(), Some("beta"));
         assert_eq!(window.after[1].title.as_deref(), Some("gamma"));
+    }
+
+    #[test]
+    fn render_modes_are_explicit_for_preserved_lved_html() {
+        let dir = tempdir().unwrap();
+        write_lved_search_fixture(dir.path());
+        let package = LvedSqliteDriver.open(dir.path()).unwrap();
+        let page = package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook(package.metadata().book_id.clone()),
+                mode: SearchMode::Forward,
+                query: "alp".to_owned(),
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+        let target = &page.hits[0].target;
+
+        let basic = package
+            .render_target(
+                target,
+                &RenderOptions {
+                    mode: RenderMode::BasicText,
+                    ..RenderOptions::default()
+                },
+            )
+            .unwrap();
+        assert!(basic.display_html.is_none());
+        assert!(basic.basic_text.as_deref().unwrap().contains("Alpha"));
+        assert!(basic.resources.is_empty());
+        assert!(basic.links.is_empty());
+
+        let generic = package
+            .render_target(
+                target,
+                &RenderOptions {
+                    mode: RenderMode::GenericHtml,
+                    ..RenderOptions::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            generic
+                .display_html
+                .as_deref()
+                .unwrap()
+                .contains("lvcore://target/")
+        );
+        assert!(
+            generic
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "generic_html_router_required")
+        );
+
+        let debug = package
+            .render_target(
+                target,
+                &RenderOptions {
+                    mode: RenderMode::Debug,
+                    ..RenderOptions::default()
+                },
+            )
+            .unwrap();
+        let debug_trace = debug.debug_trace.as_deref().unwrap();
+        assert!(debug_trace.contains(r#""mode":"debug""#));
+        assert!(debug_trace.contains(r#""has_display_html":true"#));
     }
 
     #[test]
