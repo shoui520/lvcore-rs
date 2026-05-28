@@ -2,7 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use lvcore::navigation::NavigationNode;
 use lvcore::{
     BookPackage, DriverRegistry, HomeSurface, NavigationStatus, NavigationSurface, RenderOptions,
     Result, SearchMode, SearchQuery, SearchScope, TargetToken,
@@ -406,24 +405,11 @@ fn exercise_reader_paths(
 }
 
 fn first_surface_target(surface: &NavigationSurface) -> Option<(TargetToken, String)> {
-    match surface {
-        NavigationSurface::SimpleMenu { nodes, .. }
-        | NavigationSurface::HierarchicalTree { nodes, .. } => first_node_target(nodes),
-        NavigationSurface::TitleIndexBrowse { items, .. } => items
-            .iter()
-            .next()
-            .map(|item| (item.target.clone(), item.label_text.clone())),
-        NavigationSurface::Panel { cells, .. } => cells.iter().find_map(|cell| {
-            cell.target
-                .clone()
-                .map(|target| (target, cell.label_text.clone()))
-        }),
-        NavigationSurface::InfoPages { pages, .. } => pages
-            .iter()
-            .next()
-            .map(|page| (page.target.clone(), page.label_text.clone())),
-        NavigationSurface::FallbackSearch { .. } | NavigationSurface::Deferred { .. } => None,
-    }
+    surface
+        .actionable_targets()
+        .into_iter()
+        .next()
+        .map(|target| (target.target, target.label_text))
 }
 
 fn navigation_surface_kind_name(surface: &NavigationSurface) -> &'static str {
@@ -436,18 +422,6 @@ fn navigation_surface_kind_name(surface: &NavigationSurface) -> &'static str {
         NavigationSurface::FallbackSearch { .. } => "fallback_search",
         NavigationSurface::Deferred { .. } => "deferred",
     }
-}
-
-fn first_node_target(nodes: &[NavigationNode]) -> Option<(TargetToken, String)> {
-    for node in nodes {
-        if let Some(target) = &node.target {
-            return Some((target.clone(), node.label_text.clone()));
-        }
-        if let Some(target) = first_node_target(&node.children) {
-            return Some(target);
-        }
-    }
-    None
 }
 
 fn search_probe_prefix(title: &str) -> Option<&str> {

@@ -113,6 +113,105 @@ pub struct PanelCell {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NavigationTarget {
+    pub surface_id: String,
+    pub source_id: String,
+    pub label_html: String,
+    pub label_text: String,
+    pub target: TargetToken,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl NavigationSurface {
+    pub fn surface_id(&self) -> &str {
+        match self {
+            Self::SimpleMenu { surface_id, .. }
+            | Self::TitleIndexBrowse { surface_id, .. }
+            | Self::Panel { surface_id, .. }
+            | Self::HierarchicalTree { surface_id, .. }
+            | Self::InfoPages { surface_id, .. }
+            | Self::FallbackSearch { surface_id }
+            | Self::Deferred { surface_id, .. } => surface_id,
+        }
+    }
+
+    pub fn is_deferred(&self) -> bool {
+        matches!(self, Self::Deferred { .. })
+    }
+
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        match self {
+            Self::Deferred { diagnostics, .. } => diagnostics,
+            _ => &[],
+        }
+    }
+
+    pub fn actionable_targets(&self) -> Vec<NavigationTarget> {
+        match self {
+            Self::SimpleMenu { surface_id, nodes }
+            | Self::HierarchicalTree { surface_id, nodes } => {
+                let mut targets = Vec::new();
+                collect_node_targets(surface_id, nodes, &mut targets);
+                targets
+            }
+            Self::TitleIndexBrowse {
+                surface_id, items, ..
+            } => items
+                .iter()
+                .map(|item| NavigationTarget {
+                    surface_id: surface_id.clone(),
+                    source_id: item.item_id.clone(),
+                    label_html: item.label_html.clone(),
+                    label_text: item.label_text.clone(),
+                    target: item.target.clone(),
+                    diagnostics: item.diagnostics.clone(),
+                })
+                .collect(),
+            Self::Panel { surface_id, cells } => cells
+                .iter()
+                .filter_map(|cell| {
+                    cell.target.as_ref().map(|target| NavigationTarget {
+                        surface_id: surface_id.clone(),
+                        source_id: format!("{}:{}:{}", cell.panel_id, cell.row, cell.column),
+                        label_html: cell.label_html.clone(),
+                        label_text: cell.label_text.clone(),
+                        target: target.clone(),
+                        diagnostics: cell.diagnostics.clone(),
+                    })
+                })
+                .collect(),
+            Self::InfoPages {
+                surface_id, pages, ..
+            } => pages
+                .iter()
+                .map(|page| NavigationTarget {
+                    surface_id: surface_id.clone(),
+                    source_id: page.item_id.clone(),
+                    label_html: page.label_html.clone(),
+                    label_text: page.label_text.clone(),
+                    target: page.target.clone(),
+                    diagnostics: page.diagnostics.clone(),
+                })
+                .collect(),
+            Self::FallbackSearch { .. } | Self::Deferred { .. } => Vec::new(),
+        }
+    }
+
+    pub fn has_actionable_targets(&self) -> bool {
+        match self {
+            Self::SimpleMenu { nodes, .. } | Self::HierarchicalTree { nodes, .. } => {
+                nodes_have_target(nodes)
+            }
+            Self::TitleIndexBrowse { items, .. } => !items.is_empty(),
+            Self::Panel { cells, .. } => cells.iter().any(|cell| cell.target.is_some()),
+            Self::InfoPages { pages, .. } => !pages.is_empty(),
+            Self::FallbackSearch { .. } | Self::Deferred { .. } => false,
+        }
+    }
+}
+
 pub trait NavigationProvider: Send + Sync {
     fn home_surfaces(&self) -> Result<Vec<HomeSurface>>;
     fn open_surface(&self, surface_id: &str) -> Result<NavigationSurface>;
@@ -125,5 +224,86 @@ pub trait NavigationProvider: Send + Sync {
         let _ = cursor;
         let _ = limit;
         self.open_surface(surface_id)
+    }
+}
+
+fn collect_node_targets(
+    surface_id: &str,
+    nodes: &[NavigationNode],
+    targets: &mut Vec<NavigationTarget>,
+) {
+    for node in nodes {
+        if let Some(target) = &node.target {
+            targets.push(NavigationTarget {
+                surface_id: surface_id.to_owned(),
+                source_id: node.node_id.clone(),
+                label_html: node.label_html.clone(),
+                label_text: node.label_text.clone(),
+                target: target.clone(),
+                diagnostics: node.diagnostics.clone(),
+            });
+        }
+        collect_node_targets(surface_id, &node.children, targets);
+    }
+}
+
+fn nodes_have_target(nodes: &[NavigationNode]) -> bool {
+    nodes
+        .iter()
+        .any(|node| node.target.is_some() || nodes_have_target(&node.children))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::target::{InternalTarget, TargetToken};
+
+    fn token(label: &str) -> TargetToken {
+        TargetToken::new(&InternalTarget::Unsupported {
+            reason: label.to_owned(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn navigation_surface_actionable_targets_skip_targetless_folders() {
+        let surface = NavigationSurface::HierarchicalTree {
+            surface_id: "menuData".to_owned(),
+            nodes: vec![NavigationNode {
+                node_id: "root".to_owned(),
+                label_html: "Root".to_owned(),
+                label_text: "Root".to_owned(),
+                target: None,
+                diagnostics: Vec::new(),
+                children: vec![NavigationNode {
+                    node_id: "child".to_owned(),
+                    label_html: "Child".to_owned(),
+                    label_text: "Child".to_owned(),
+                    target: Some(token("child")),
+                    diagnostics: Vec::new(),
+                    children: Vec::new(),
+                }],
+            }],
+        };
+
+        let targets = surface.actionable_targets();
+        assert_eq!(surface.surface_id(), "menuData");
+        assert!(surface.has_actionable_targets());
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].source_id, "child");
+        assert_eq!(targets[0].label_text, "Child");
+    }
+
+    #[test]
+    fn deferred_navigation_surface_is_diagnostic_only() {
+        let surface = NavigationSurface::Deferred {
+            surface_id: "menu".to_owned(),
+            diagnostics: vec![Diagnostic::info("navigation_deferred", "not decoded")],
+        };
+
+        assert!(surface.is_deferred());
+        assert!(!surface.has_actionable_targets());
+        assert_eq!(surface.diagnostics()[0].code, "navigation_deferred");
+        assert!(surface.actionable_targets().is_empty());
     }
 }

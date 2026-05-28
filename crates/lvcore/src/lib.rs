@@ -43,6 +43,7 @@ pub use lved_sqlite::{
 };
 pub use navigation::{
     HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
+    NavigationTarget,
 };
 pub use package::{
     BookId, BookMetadata, BookPackage, BookPackageExt, Capability, DetectedPackage, DriverRegistry,
