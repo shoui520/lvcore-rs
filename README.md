@@ -89,10 +89,11 @@ provider slices:
   package key is available;
 - LVLMultiView menu/search/body access for decoded payloads;
 - Hourei law tree/search/body/resource access for decoded law packages;
-- SSED HANREI/info surface discovery for root HTML help, folder-style
-  `HANREI/index.html` plus sibling pages, Windows `HANREI.chm` HTML entries,
-  and Mac OS X `_HELP.localized` bundles, with package-local/CHM HTML resource
-  rendering and relative CSS/image/link rewriting;
+- SSED HANREI/info surface discovery for the three observed help layouts:
+  Windows-style `HANREI.chm` packages, folder-style `HANREI/index.html` plus
+  sibling pages, and Mac OS X `_HELP.localized` bundles. All three use
+  package-local/CHM HTML resource rendering and relative CSS/image/link
+  rewriting;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
 `logovista-tools` remains the research oracle while `lvcore-rs` ports stable
@@ -112,7 +113,7 @@ known structures.
 - SSED internal-page traversal is currently implemented only for simple
   exact/forward title-index paths. Backward, partial, keyword, cross-reference,
   and multi-selector performance still need format-specific indexing work.
-- CHM table-of-contents semantics are still basic: lvcore reads `.hhc`
-  Name/Local entries for labels, order, and anchors, but it does not yet expose
-  the nested help tree as a polished navigation surface. Higher-level reader
+- CHM table-of-contents semantics are supported at the reader-core level:
+  lvcore reads `.hhc` Name/Local entries and exposes them as nested HANREI
+  navigation trees with target tokens and scroll anchors. Higher-level reader
   wrapping/styling remains frontend work.
