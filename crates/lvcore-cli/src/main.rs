@@ -40,6 +40,11 @@ enum Command {
         #[arg(long)]
         jsonl: bool,
     },
+    /// Open one package and print reader home surfaces.
+    Home {
+        /// Package root or payload path to inspect.
+        path: PathBuf,
+    },
     /// Open one package, run native search, and optionally render the first hit.
     Search {
         /// Package root or payload path to inspect.
@@ -293,6 +298,11 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&rows)?);
             }
         }
+        Command::Home { path } => {
+            let registry = DriverRegistry::default();
+            let output = home_command_json(&registry, &path)?;
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
         Command::Search {
             path,
             query,
@@ -423,6 +433,17 @@ fn metadata_for(library: &BookLibrary, book_id: &BookId) -> BookMetadata {
         .expect("book id returned by open_path must exist")
         .metadata()
         .clone()
+}
+
+fn home_command_json(registry: &DriverRegistry, path: &Path) -> Result<serde_json::Value> {
+    let (library, book_id) = open_single_book_library(registry, path)?;
+    let metadata = metadata_for(&library, &book_id);
+    let surfaces = library.home_surfaces(&book_id)?;
+    Ok(json!({
+        "metadata": metadata,
+        "surface_count": surfaces.len(),
+        "surfaces": surfaces,
+    }))
 }
 
 fn validate_package_json(registry: &DriverRegistry, path: &Path, deep: bool) -> serde_json::Value {
@@ -993,6 +1014,25 @@ mod tests {
                 { "advanced": "advanced1" },
                 { "advanced": "advanced2" },
             ])
+        );
+    }
+
+    #[test]
+    fn home_command_reports_metadata_and_surfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        write_lved_cli_fixture(dir.path());
+
+        let output = home_command_json(&DriverRegistry::default(), dir.path()).unwrap();
+
+        assert_eq!(output["metadata"]["format_family"], "lved_sqlite3");
+        assert_eq!(output["surface_count"].as_u64(), Some(4));
+        assert!(
+            output["surfaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|surface| surface["surface_id"] == "lved-list"
+                    && surface["status"] == "available")
         );
     }
 

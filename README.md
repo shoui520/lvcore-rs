@@ -99,9 +99,9 @@ provider slices:
   `search` table columns;
 - LVLMultiView menu/search/body access for decoded payloads;
 - Hourei law tree/search/body/resource access for decoded law packages;
-- developer CLI commands for package validation, search/render, renderer-input
-  inspection, resource-token reads, and arbitrary-target continuous-view
-  windows;
+- developer CLI commands for package validation, home-surface inspection,
+  search/render, renderer-input inspection, resource-token reads, and
+  arbitrary-target continuous-view windows;
 - SSED HANREI/info surface discovery for the three observed help layouts:
   Windows-style `HANREI.chm` packages, folder-style `HANREI/index.html` plus
   sibling pages, and Mac OS X `_HELP.localized` bundles. All three use
