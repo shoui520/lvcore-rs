@@ -104,6 +104,20 @@ pub struct MultiviewBody {
     pub source: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiviewLawList {
+    pub title: String,
+    pub items: Vec<MultiviewLawListItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiviewLawListItem {
+    pub code: String,
+    pub name: String,
+    pub kana: String,
+    pub kana_initial: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MultiviewPayloadRole {
     ContentSearchBody,
@@ -244,6 +258,53 @@ impl MultiviewStore {
             return Ok(Some(body));
         }
         Ok(None)
+    }
+
+    pub fn law_list_for_href(&self, href: &str) -> Result<Option<MultiviewLawList>> {
+        if !href.eq_ignore_ascii_case("50on") {
+            return Ok(None);
+        }
+        let Some(payload) = self.first_payload_by_role(MultiviewPayloadRole::LawMetadata)? else {
+            return Ok(None);
+        };
+        let sqlite_path = self.sqlite_path_for_payload(payload)?;
+        let connection = open_sqlite(&sqlite_path)?;
+        if !sqlite_table_has_columns(
+            &connection,
+            "t_hore",
+            &[
+                "f_hore_code",
+                "f_name",
+                "f_name_kana",
+                "f_kana_ini",
+                "f_kana_order",
+            ],
+        )? {
+            return Ok(None);
+        }
+        let mut statement = connection.prepare(
+            "select f_hore_code, f_name, f_name_kana, f_kana_ini \
+             from t_hore \
+             where coalesce(f_hore_code, '') <> '' and coalesce(f_name, '') <> '' \
+             order by f_kana_order, f_name_kana, f_name, f_hore_code",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let code = sqlite_value_to_string(row.get_ref(0)?)?;
+            Ok(MultiviewLawListItem {
+                code,
+                name: sqlite_value_to_string(row.get_ref(1)?)?,
+                kana: sqlite_value_to_string(row.get_ref(2)?)?,
+                kana_initial: sqlite_value_to_string(row.get_ref(3)?)?,
+            })
+        })?;
+        let items = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        if items.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(MultiviewLawList {
+            title: "五十音順法令一覧".to_owned(),
+            items,
+        }))
     }
 
     fn content_body_for_href(&self, href: &str) -> Result<Option<MultiviewBody>> {
@@ -593,9 +654,6 @@ fn classify_sqlite_payload(path: &Path) -> Result<MultiviewPayloadRole> {
     )? {
         return Ok(MultiviewPayloadRole::SubjectIndex);
     }
-    if sqlite_table_has_columns(&connection, "t_page", &["f_text", "f_text_plane"])? {
-        return Ok(MultiviewPayloadRole::CaseDigestBody);
-    }
     let mut body_like = 0usize;
     for table in &tables {
         if sqlite_table_has_columns(
@@ -608,6 +666,9 @@ fn classify_sqlite_payload(path: &Path) -> Result<MultiviewPayloadRole> {
     }
     if body_like >= tables.len().div_ceil(2).max(1) {
         return Ok(MultiviewPayloadRole::LawBody);
+    }
+    if sqlite_table_has_columns(&connection, "t_page", &["f_text", "f_text_plane"])? {
+        return Ok(MultiviewPayloadRole::CaseDigestBody);
     }
     Ok(MultiviewPayloadRole::Unclassified)
 }

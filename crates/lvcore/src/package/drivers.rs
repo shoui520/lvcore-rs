@@ -868,6 +868,16 @@ impl RendererProvider for StubBookPackage {
                     "menuData",
                     Some("MultiView menu".to_owned()),
                 ),
+            InternalTarget::MultiviewHref { href, anchor } => {
+                if anchor.is_none()
+                    && let Some(view) =
+                        self.view_for_multiview_navigation_target(token.clone(), &href)?
+                {
+                    return Ok(view);
+                }
+                let input = self.renderer_input_for_target(token)?;
+                self.view_for_renderer_input(input, options)
+            }
             _ => {
                 let input = self.renderer_input_for_target(token)?;
                 self.view_for_renderer_input(input, options)
@@ -2053,6 +2063,49 @@ impl StubBookPackage {
         })
     }
 
+    fn multiview_navigation_surface_for_href(
+        &self,
+        href: &str,
+    ) -> Result<Option<(String, NavigationSurface)>> {
+        let Some(store) = &self.multiview_store else {
+            return Ok(None);
+        };
+        let Some(list) = store.law_list_for_href(href)? else {
+            return Ok(None);
+        };
+        let title = list.title;
+        let items = list
+            .items
+            .into_iter()
+            .map(|item| {
+                let target = TargetToken::new(&InternalTarget::MultiviewHref {
+                    href: item.code.clone(),
+                    anchor: None,
+                })?;
+                let label_text = if item.kana.is_empty() {
+                    item.name
+                } else {
+                    format!("{} ({})", item.name, item.kana)
+                };
+                Ok(NavigationItem {
+                    item_id: item.code,
+                    label_html: escape_plain_label_html(&label_text),
+                    label_text,
+                    target,
+                    diagnostics: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some((
+            title,
+            NavigationSurface::TitleIndexBrowse {
+                surface_id: format!("multiview:{href}"),
+                items,
+                next_cursor: None,
+            },
+        )))
+    }
+
     fn open_hourei_law_tree_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
         let Some(store) = &self.hourei_store else {
             return Ok(NavigationSurface::Deferred {
@@ -3084,6 +3137,30 @@ impl StubBookPackage {
             diagnostics,
             debug_trace: None,
         })
+    }
+
+    fn view_for_multiview_navigation_target(
+        &self,
+        target: TargetToken,
+        href: &str,
+    ) -> Result<Option<ResolvedTargetView>> {
+        let Some((title, surface)) = self.multiview_navigation_surface_for_href(href)? else {
+            return Ok(None);
+        };
+        Ok(Some(ResolvedTargetView {
+            kind: ResolvedTargetKind::NavigationSurface,
+            target,
+            title: Some(title),
+            display_html: None,
+            basic_text: None,
+            scroll_anchor: None,
+            surface: Some(surface),
+            resources: Vec::new(),
+            links: Vec::new(),
+            capabilities: Vec::new(),
+            diagnostics: Vec::new(),
+            debug_trace: None,
+        }))
     }
 
     fn view_for_renderer_input(
@@ -4867,7 +4944,7 @@ fn lved_tree_level_to_nodes(
         } else {
             Vec::new()
         };
-        let target = if item.data_id >= 0 {
+        let target = if item.data_id > 0 {
             Some(TargetToken::new(&InternalTarget::LvedRow {
                 table: "content".to_owned(),
                 row_id: item.data_id,

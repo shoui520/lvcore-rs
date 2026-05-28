@@ -231,6 +231,67 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
 }
 
 #[test]
+fn multiview_law_list_targets_resolve_to_navigation_and_law_bodies() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        r#"<list>
+          <item label="模範六法" href="">
+            <item label="五十音順法令一覧" href="50on" />
+            <item label="◎日本国憲法" href="111S21K1" />
+          </item>
+        </list>"#,
+    )
+    .unwrap();
+    write_minimal_multiview_law_fixture(dir.path());
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surface = package.open_surface("menuData").unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+        panic!("menuData should open as a MultiView tree");
+    };
+    let list_target = nodes[0].children[0].target.clone().unwrap();
+    let list_view = package
+        .render_target(&list_target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(list_view.kind, ResolvedTargetKind::NavigationSurface);
+    let NavigationSurface::TitleIndexBrowse { items, .. } = list_view.surface.as_ref().unwrap()
+    else {
+        panic!("50on should resolve to a law title/index browse surface");
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].item_id, "111S21K1");
+    assert_eq!(items[0].label_text, "日本国憲法 (にほんこくけんぽう)");
+
+    let law_view = package
+        .render_target(&items[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(law_view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        law_view
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("日本国憲法本文")
+    );
+
+    let direct_law_view = package
+        .render_target(
+            nodes[0].children[1].target.as_ref().unwrap(),
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(direct_law_view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        direct_law_view
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("日本国憲法本文")
+    );
+}
+
+#[test]
 fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     let dir = tempdir().unwrap();
     write_minimal_hourei_fixture(dir.path());
@@ -2203,6 +2264,23 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
     assert_eq!(window.center.title.as_deref(), Some("Alpha"));
     assert_eq!(window.after.len(), 1);
     assert_eq!(window.after[0].title.as_deref(), Some("Beta"));
+
+    let info_surface = package.open_surface("info").unwrap();
+    let NavigationSurface::InfoPages { pages, .. } = info_surface else {
+        panic!("LVED info should open as info pages");
+    };
+    let null_id_page = pages
+        .iter()
+        .find(|page| page.item_id == "null-id.html")
+        .expect("expected NULL-id info row to use rowid-backed target");
+    let null_id_view = package
+        .render_target(&null_id_page.target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(null_id_view.kind, ResolvedTargetKind::InfoPage);
+    assert_eq!(
+        null_id_view.display_html.as_deref(),
+        Some("<h1>Null id info</h1>")
+    );
 }
 
 #[test]
@@ -2297,6 +2375,7 @@ fn write_minimal_lved_sqlite_fixture(root: &Path) {
                 "
                 create table info (id integer, type integer, name text primary key, body text, media text);
                 insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
+                insert into info values (null, 1, 'null-id.html', '<h1>Null id info</h1>', '');
                 create table content (id integer primary key, type integer, body text, media text);
                 insert into content values (100, 1, '<article><h1>Alpha</h1><p>Tree body</p></article>', '');
                 insert into content values (105, 1, '<article><h1>Beta</h1><p>Tree body</p></article>', '');
@@ -2315,7 +2394,7 @@ fn write_minimal_lved_sqlite_fixture(root: &Path) {
     fs::create_dir(root.join("res")).unwrap();
     fs::write(
         root.join("res/tree.idx"),
-        "\u{feff}-127\t0\tExample Dictionary\r\n-127\t1\tBrowse\r\n100\t2\tAlpha\r\n105\t2\tBeta\r\n",
+        "\u{feff}0\t0\tExample Dictionary\r\n0\t1\tBrowse\r\n100\t2\tAlpha\r\n105\t2\tBeta\r\n",
     )
     .unwrap();
     fs::write(root.join("main.key"), key).unwrap();
@@ -2351,6 +2430,78 @@ fn write_minimal_multiview_content_fixture(path: &Path) {
               (1, 1, 1, '§まえがき§', 1, 0, '<b>まえがき</b>', 'まえがき body');
             insert into t_search values
               (2, 2, 1, '§本文§', 1, 0, '<b>本文</b>', '本文 body');
+            "#,
+        )
+        .unwrap();
+}
+
+fn write_minimal_multiview_law_fixture(root: &Path) {
+    let law = Connection::open(root.join("blvbat")).unwrap();
+    law.execute_batch(
+        r#"
+        create table t_page (
+          f_hore_code text,
+          f_rec_id integer,
+          f_rec_type integer,
+          f_title_no text,
+          f_title_sub text,
+          f_anchor text,
+          f_text text,
+          f_text_plane text,
+          f_text_count integer,
+          f_text_plane_count integer
+        );
+        create table t_111S21K1 (
+          f_hore_code text,
+          f_rec_id integer,
+          f_rec_type integer,
+          f_title_no text,
+          f_title_sub text,
+          f_anchor text,
+          f_text text,
+          f_text_plane text,
+          f_text_count integer,
+          f_text_plane_count integer
+        );
+        insert into t_111S21K1 values
+          ('111S21K1', 10000, 0, '見出し', '', '111S21K1_TITLE',
+           '<div class="header">日本国憲法本文</div>', '日本国憲法本文', 0, 0);
+        insert into t_111S21K1 values
+          ('111S21K1', 20000, 0, '公布文・前文', '', '111S21K1_ZEN',
+           '<div class="zenbun">前文</div>', '前文', 0, 0);
+        "#,
+    )
+    .unwrap();
+
+    let metadata = Connection::open(root.join("nlvbat")).unwrap();
+    metadata
+        .execute_batch(
+            r#"
+            create table t_hore (
+              f_hore_code text,
+              f_hore_id integer,
+              f_pub_era integer,
+              f_pub_year integer,
+              f_pub_no integer,
+              f_pub_date date,
+              f_pub_desc string,
+              f_name string,
+              f_name_sub text,
+              f_name_kana text,
+              f_kana_ini string,
+              f_kana_order integer,
+              f_abbr1 string,
+              f_abbr1_kana text,
+              f_nickname text,
+              f_commonname text,
+              f_commonname_kana text,
+              f_commonname_ex text,
+              f_category_id text
+            );
+            insert into t_hore values
+              ('111S21K1', 1, 0, 0, 0, '', '', '日本国憲法', '', 'にほんこくけんぽう', 'に', 1, '', '', '', '', '', '', '1');
+            insert into t_hore values
+              ('22M1', 2, 0, 0, 0, '', '', '民法', '', 'みんぽう', 'み', 2, '', '', '', '', '', '', '3');
             "#,
         )
         .unwrap();

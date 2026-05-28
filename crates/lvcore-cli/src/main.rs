@@ -2,8 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
+use lvcore::navigation::NavigationNode;
 use lvcore::{
-    DriverRegistry, RenderOptions, Result, SearchMode, SearchQuery, SearchScope, TargetToken,
+    BookPackage, DriverRegistry, HomeSurface, NavigationStatus, NavigationSurface, RenderOptions,
+    Result, SearchMode, SearchQuery, SearchScope, TargetToken,
 };
 use serde_json::json;
 
@@ -29,6 +31,9 @@ enum Command {
         /// Stop after this many discovered packages.
         #[arg(long)]
         max: Option<usize>,
+        /// Also open available surfaces, render their first target, and run a small search.
+        #[arg(long)]
+        deep: bool,
     },
     /// Open one package, run native search, and optionally render the first hit.
     Search {
@@ -113,7 +118,7 @@ fn main() -> Result<()> {
             let detected = registry.detect(&path)?;
             println!("{}", serde_json::to_string_pretty(&detected)?);
         }
-        Command::Validate { paths, max } => {
+        Command::Validate { paths, max, deep } => {
             let registry = DriverRegistry::default();
             let mut package_paths = Vec::new();
             for path in paths {
@@ -130,17 +135,25 @@ fn main() -> Result<()> {
                     Ok(package) => {
                         let metadata = package.metadata();
                         match package.home_surfaces() {
-                            Ok(surfaces) => json!({
-                                "path": path,
-                                "status": "ok",
-                                "book_id": metadata.book_id,
-                                "format_family": metadata.format_family,
-                                "format_label": metadata.format_label,
-                                "title": metadata.title,
-                                "capabilities": metadata.capabilities,
-                                "surface_count": surfaces.len(),
-                                "surfaces": surfaces,
-                            }),
+                            Ok(surfaces) => {
+                                let exercises = if deep {
+                                    Some(exercise_reader_paths(package.as_ref(), &surfaces))
+                                } else {
+                                    None
+                                };
+                                json!({
+                                    "path": path,
+                                    "status": "ok",
+                                    "book_id": metadata.book_id,
+                                    "format_family": metadata.format_family,
+                                    "format_label": metadata.format_label,
+                                    "title": metadata.title,
+                                    "capabilities": metadata.capabilities,
+                                    "surface_count": surfaces.len(),
+                                    "surfaces": surfaces,
+                                    "exercises": exercises,
+                                })
+                            }
                             Err(error) => json!({
                                 "path": path,
                                 "status": "surface_error",
@@ -268,6 +281,183 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn exercise_reader_paths(
+    package: &dyn BookPackage,
+    surfaces: &[HomeSurface],
+) -> Vec<serde_json::Value> {
+    let mut rows = Vec::new();
+    for surface in surfaces {
+        if surface.status != NavigationStatus::Available || surface.surface_id == "search" {
+            continue;
+        }
+        let row = match package.open_surface(&surface.surface_id) {
+            Ok(opened) => {
+                let (target, label) = first_surface_target(&opened)
+                    .map(|(target, label)| (Some(target), label))
+                    .unwrap_or((None, String::new()));
+                match target {
+                    Some(target) => match package.render_target(&target, &RenderOptions::default())
+                    {
+                        Ok(view) => json!({
+                            "kind": "surface_first_target",
+                            "surface_id": surface.surface_id,
+                            "surface_kind": surface.kind,
+                            "opened_kind": navigation_surface_kind_name(&opened),
+                            "status": "ok",
+                            "label": label,
+                            "view_kind": view.kind,
+                            "diagnostic_count": view.diagnostics.len(),
+                            "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+                        }),
+                        Err(error) => json!({
+                            "kind": "surface_first_target",
+                            "surface_id": surface.surface_id,
+                            "surface_kind": surface.kind,
+                            "status": "render_error",
+                            "label": label,
+                            "error": error.to_string(),
+                        }),
+                    },
+                    None => json!({
+                        "kind": "surface_first_target",
+                        "surface_id": surface.surface_id,
+                        "surface_kind": surface.kind,
+                        "status": "no_target",
+                    }),
+                }
+            }
+            Err(error) => json!({
+                "kind": "surface_first_target",
+                "surface_id": surface.surface_id,
+                "surface_kind": surface.kind,
+                "status": "surface_error",
+                "error": error.to_string(),
+            }),
+        };
+        rows.push(row);
+    }
+
+    let query = package
+        .metadata()
+        .title
+        .as_deref()
+        .and_then(search_probe_prefix)
+        .unwrap_or("a")
+        .to_owned();
+    let search_row = match package.search(&SearchQuery {
+        scope: SearchScope::CurrentBook(package.metadata().book_id.clone()),
+        mode: SearchMode::Forward,
+        query: query.clone(),
+        cursor: None,
+        limit: 3,
+    }) {
+        Ok(page) => {
+            let rendered_first = page.hits.first().map(|hit| {
+                package
+                    .render_target(&hit.target, &RenderOptions::default())
+                    .map(|view| {
+                        json!({
+                            "status": "ok",
+                            "view_kind": view.kind,
+                            "diagnostic_count": view.diagnostics.len(),
+                            "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+                        })
+                    })
+                    .unwrap_or_else(|error| {
+                        json!({
+                            "status": "render_error",
+                            "error": error.to_string(),
+                        })
+                    })
+            });
+            json!({
+                "kind": "search_forward",
+                "status": "ok",
+                "query": query,
+                "hit_count": page.hits.len(),
+                "diagnostic_count": page.diagnostics.len(),
+                "rendered_first": rendered_first,
+            })
+        }
+        Err(error) => json!({
+            "kind": "search_forward",
+            "status": "search_error",
+            "query": query,
+            "error": error.to_string(),
+        }),
+    };
+    rows.push(search_row);
+    rows
+}
+
+fn first_surface_target(surface: &NavigationSurface) -> Option<(TargetToken, String)> {
+    match surface {
+        NavigationSurface::SimpleMenu { nodes, .. }
+        | NavigationSurface::HierarchicalTree { nodes, .. } => first_node_target(nodes),
+        NavigationSurface::TitleIndexBrowse { items, .. } => items
+            .iter()
+            .next()
+            .map(|item| (item.target.clone(), item.label_text.clone())),
+        NavigationSurface::Panel { cells, .. } => cells.iter().find_map(|cell| {
+            cell.target
+                .clone()
+                .map(|target| (target, cell.label_text.clone()))
+        }),
+        NavigationSurface::InfoPages { pages, .. } => pages
+            .iter()
+            .next()
+            .map(|page| (page.target.clone(), page.label_text.clone())),
+        NavigationSurface::FallbackSearch { .. } | NavigationSurface::Deferred { .. } => None,
+    }
+}
+
+fn navigation_surface_kind_name(surface: &NavigationSurface) -> &'static str {
+    match surface {
+        NavigationSurface::SimpleMenu { .. } => "simple_menu",
+        NavigationSurface::TitleIndexBrowse { .. } => "title_index_browse",
+        NavigationSurface::Panel { .. } => "panel",
+        NavigationSurface::HierarchicalTree { .. } => "hierarchical_tree",
+        NavigationSurface::InfoPages { .. } => "info_pages",
+        NavigationSurface::FallbackSearch { .. } => "fallback_search",
+        NavigationSurface::Deferred { .. } => "deferred",
+    }
+}
+
+fn first_node_target(nodes: &[NavigationNode]) -> Option<(TargetToken, String)> {
+    for node in nodes {
+        if let Some(target) = &node.target {
+            return Some((target.clone(), node.label_text.clone()));
+        }
+        if let Some(target) = first_node_target(&node.children) {
+            return Some(target);
+        }
+    }
+    None
+}
+
+fn search_probe_prefix(title: &str) -> Option<&str> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut end = 0usize;
+    let mut chars = 0usize;
+    for (index, ch) in trimmed.char_indices() {
+        if ch.is_whitespace() {
+            if chars == 0 {
+                continue;
+            }
+            break;
+        }
+        end = index + ch.len_utf8();
+        chars += 1;
+        if chars >= 2 {
+            break;
+        }
+    }
+    (end > 0).then_some(&trimmed[..end])
 }
 
 fn discover_packages(

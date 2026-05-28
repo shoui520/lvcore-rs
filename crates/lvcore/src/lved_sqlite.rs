@@ -169,8 +169,9 @@ impl LvedSqliteStore {
         {
             return Ok(None);
         }
-        let mut statement = connection.prepare("select body from info where id = ? limit 1")?;
-        let mut rows = statement.query([row_id])?;
+        let mut statement =
+            connection.prepare("select body from info where id = ? or rowid = ? limit 1")?;
+        let mut rows = statement.query((row_id, row_id))?;
         let Some(row) = rows.next()? else {
             return Ok(None);
         };
@@ -204,8 +205,10 @@ impl LvedSqliteStore {
         {
             return Ok(Vec::new());
         }
-        let mut statement =
-            connection.prepare("select id, name, body from info order by id limit ? offset ?")?;
+        let mut statement = connection.prepare(
+            "select coalesce(id, rowid), name, body from info \
+             order by coalesce(id, rowid), rowid limit ? offset ?",
+        )?;
         let rows = statement.query_map((limit as i64, offset as i64), |row| {
             let name = sqlite_value_to_string(row.get_ref(1)?)?;
             let body = sqlite_value_to_string(row.get_ref(2)?)?;
