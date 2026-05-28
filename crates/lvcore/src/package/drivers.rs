@@ -1175,7 +1175,7 @@ impl SequenceProvider for StubBookPackage {
             && sequence_hint.is_none_or(|hint| {
                 matches!(
                     hint,
-                    SequenceHint::TitleIndexOrder(_) | SequenceHint::BodyOrder
+                    SequenceHint::TitleIndexOrder { .. } | SequenceHint::BodyOrder
                 )
             })
             && let Some(window) =
@@ -1184,14 +1184,14 @@ impl SequenceProvider for StubBookPackage {
             return Ok(window);
         }
         if self.metadata.format_family == FormatFamily::Ssed
-            && matches!(sequence_hint, Some(SequenceHint::MenuOrder(_)))
+            && matches!(sequence_hint, Some(SequenceHint::MenuOrder { .. }))
             && let Some(window) =
                 self.resolve_ssed_menu_window(target, sequence_hint, before, after, options)?
         {
             return Ok(window);
         }
         if self.metadata.format_family == FormatFamily::Ssed
-            && matches!(sequence_hint, Some(SequenceHint::PanelOrder(_)))
+            && matches!(sequence_hint, Some(SequenceHint::PanelOrder { .. }))
             && let Some(window) =
                 self.resolve_ssed_panel_window(target, sequence_hint, before, after, options)?
         {
@@ -2756,7 +2756,7 @@ impl StubBookPackage {
         after: usize,
         options: &RenderOptions,
     ) -> Result<Option<TargetWindow>> {
-        let Some(SequenceHint::MenuOrder(surface_id)) = sequence_hint else {
+        let Some(SequenceHint::MenuOrder { value: surface_id }) = sequence_hint else {
             return Ok(None);
         };
         let surface = self.open_surface(surface_id)?;
@@ -2794,7 +2794,7 @@ impl StubBookPackage {
         after: usize,
         options: &RenderOptions,
     ) -> Result<Option<TargetWindow>> {
-        let Some(SequenceHint::PanelOrder(panel_id)) = sequence_hint else {
+        let Some(SequenceHint::PanelOrder { value: panel_id }) = sequence_hint else {
             return Ok(None);
         };
         let surface_id = if panel_id == "panels" || panel_id.starts_with("panels:") {

@@ -1405,7 +1405,9 @@ fn ssed_menu_and_panel_targets_support_continuous_view_windows() {
     let menu_window = package
         .resolve_target_window(
             &target,
-            Some(&lvcore::SequenceHint::MenuOrder("menu".to_owned())),
+            Some(&lvcore::SequenceHint::MenuOrder {
+                value: "menu".to_owned(),
+            }),
             1,
             1,
             &RenderOptions::default(),
@@ -1421,7 +1423,9 @@ fn ssed_menu_and_panel_targets_support_continuous_view_windows() {
     let panel_window = package
         .resolve_target_window(
             &target,
-            Some(&lvcore::SequenceHint::PanelOrder("01010000".to_owned())),
+            Some(&lvcore::SequenceHint::PanelOrder {
+                value: "01010000".to_owned(),
+            }),
             1,
             1,
             &RenderOptions::default(),
@@ -1903,9 +1907,9 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
     let window = package
         .resolve_target_window(
             &hit.target,
-            Some(&lvcore::SequenceHint::TitleIndexOrder(
-                "title-index".to_owned(),
-            )),
+            Some(&lvcore::SequenceHint::TitleIndexOrder {
+                value: "title-index".to_owned(),
+            }),
             0,
             0,
             &RenderOptions::default(),
@@ -2400,9 +2404,9 @@ fn ssed_title_index_sequence_returns_before_and_after_views() {
     let window = package
         .resolve_target_window(
             &target,
-            Some(&lvcore::SequenceHint::TitleIndexOrder(
-                "title-index".to_owned(),
-            )),
+            Some(&lvcore::SequenceHint::TitleIndexOrder {
+                value: "title-index".to_owned(),
+            }),
             1,
             1,
             &RenderOptions::default(),
