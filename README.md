@@ -127,6 +127,11 @@ provider slices:
   as generated PNG images from 64x64 1bpp bitmap cells;
 - SSED older `FIGURE.DIC` variable-size 1bpp figure bitmaps can be decoded as
   generated PNG image resources when renderer controls provide dimensions;
+- SSED HC renderer inputs now perform a bounded stream scan for understood
+  media controls and carry typed resource refs for observed `COLSCR.DIC`,
+  `PCMDATA.DIC`, `MONOSCR.DIC`, and `FIGURE.DIC` targets. This gives the
+  future HC/profile renderer the resource tokens it needs without claiming HC
+  rendering parity yet;
 - SSED KOJIEN6-style `COLSMPL.DIC` records are parsed as typed color-sample
   metadata preserving exact Munsell notation and JIS labels;
 - explicit deferred/unsupported diagnostics instead of fake output.
@@ -139,9 +144,9 @@ known structures.
 ## Important Gaps
 
 - SSED HC renderer parity is not ported yet. Plain SSED body targets currently
-  resolve to explicit HC renderer input rather than claiming rendered HTML;
-  supported dense sidecar targets resolve to preserved HTML or exact sidecar
-  text where available.
+  resolve to explicit HC renderer input plus discovered resource refs rather
+  than claiming rendered HTML; supported dense sidecar targets resolve to
+  preserved HTML or exact sidecar text where available.
 - SSED full-text search is implemented as a bounded, index-anchored HONMON scan;
   it is not a substitute for HC-rendered semantic text and may need more product
   tuning for dense/sidecar-heavy dictionaries.

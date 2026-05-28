@@ -71,6 +71,8 @@ pub enum RendererInput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile_hint: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        resources: Vec<ResourceRef>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         diagnostics: Vec<Diagnostic>,
     },
     PreservedHtml {

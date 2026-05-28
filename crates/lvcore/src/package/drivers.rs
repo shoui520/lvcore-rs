@@ -3789,17 +3789,26 @@ impl StubBookPackage {
                 component,
                 offset,
                 length,
-            } => Ok(RendererInput::HcSsedStream {
-                target,
-                component,
-                offset,
-                length,
-                profile_hint: self.hc_profile_hint()?,
-                diagnostics: vec![Diagnostic::info(
-                    "hc_renderer_input_ready",
-                    "SSED stream was resolved as input for an HC/profile renderer",
-                )],
-            }),
+            } => {
+                let (resources, mut diagnostics) =
+                    self.ssed_stream_renderer_resources(&component, offset, length)?;
+                diagnostics.insert(
+                    0,
+                    Diagnostic::info(
+                        "hc_renderer_input_ready",
+                        "SSED stream was resolved as input for an HC/profile renderer",
+                    ),
+                );
+                Ok(RendererInput::HcSsedStream {
+                    target,
+                    component,
+                    offset,
+                    length,
+                    profile_hint: self.hc_profile_hint()?,
+                    resources,
+                    diagnostics,
+                })
+            }
             VisualBody::SemanticFallback { text } => {
                 Ok(RendererInput::SemanticFallback { target, text })
             }
@@ -3812,6 +3821,177 @@ impl StubBookPackage {
                 diagnostics,
             }),
         }
+    }
+
+    fn ssed_stream_renderer_resources(
+        &self,
+        component_name: &str,
+        offset: u64,
+        length: Option<u64>,
+    ) -> Result<(Vec<ResourceRef>, Vec<Diagnostic>)> {
+        const RESOURCE_SCAN_LIMIT: usize = 256 * 1024;
+
+        let Some(component) = self.ssed_component_by_name(component_name) else {
+            return Ok((
+                Vec::new(),
+                vec![Diagnostic::warning(
+                    "ssed_renderer_resource_scan_skipped",
+                    format!("{component_name} is not declared in the SSED catalog"),
+                )],
+            ));
+        };
+        if let Err(diagnostic) = self.validate_plain_component(component) {
+            return Ok((Vec::new(), vec![diagnostic]));
+        }
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Ok((
+                Vec::new(),
+                vec![Diagnostic::warning(
+                    "ssed_renderer_resource_scan_skipped",
+                    format!("{} was not found in the package", component.filename),
+                )],
+            ));
+        };
+
+        let mut reader = SsedDataFile::open(path)?;
+        let start = usize::try_from(offset)
+            .map_err(|_| Error::Driver("SSED stream offset is too large".to_owned()))?;
+        let available = reader.header().expanded_size().saturating_sub(start);
+        let requested = length
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(RESOURCE_SCAN_LIMIT);
+        let size = available.min(requested).min(RESOURCE_SCAN_LIMIT);
+        let data = reader.read_range(start, size)?;
+        let candidates = self.ssed_renderer_resource_candidates(&data);
+        let mut seen = BTreeSet::new();
+        let mut resources = Vec::new();
+        let mut diagnostics = Vec::new();
+
+        for resource in candidates {
+            let token = ResourceToken::new(&resource)?;
+            if !seen.insert(token.as_str().to_owned()) {
+                continue;
+            }
+            match self.resolve_resource(&token) {
+                Ok(resource_ref) => resources.push(resource_ref),
+                Err(err) => diagnostics.push(Diagnostic::warning(
+                    "ssed_renderer_resource_unresolved",
+                    err.to_string(),
+                )),
+            }
+        }
+        if available > size {
+            diagnostics.push(Diagnostic::info(
+                "ssed_renderer_resource_scan_bounded",
+                format!(
+                    "scanned {size} of {available} available SSED stream bytes for media resources"
+                ),
+            ));
+        }
+        Ok((resources, diagnostics))
+    }
+
+    fn ssed_renderer_resource_candidates(&self, data: &[u8]) -> Vec<InternalResource> {
+        let mut candidates = Vec::new();
+        let mut latest_figure_descriptor: Option<Vec<u8>> = None;
+        let mut pos = 0usize;
+        while pos + 2 <= data.len() {
+            if data[pos] != 0x1f {
+                pos += 1;
+                continue;
+            }
+            let op = data[pos + 1];
+            let arg_len = ssed_control_arg_length(data, pos);
+            let payload = data.get(pos + 2..pos + 2 + arg_len).unwrap_or(&[]);
+            match op {
+                0x3c | 0x4d if payload.len() == 18 => {
+                    if let Some((block, offset)) = parse_colscr_pointer(payload)
+                        && let Some(component) = self.ssed_component_for_role_or_name(
+                            SsedComponentRole::Colscr,
+                            "COLSCR.DIC",
+                        )
+                    {
+                        candidates.push(InternalResource::SsedComponentAddress {
+                            component: component.filename.clone(),
+                            block,
+                            offset,
+                            resource_kind: ResourceKind::Colscr,
+                        });
+                    }
+                }
+                0x44 if payload.len() == 10 => {
+                    latest_figure_descriptor = Some(payload.to_vec());
+                }
+                0x4a if payload.len() >= 16 => {
+                    if let Some((start_block, start_offset, end_block, end_offset)) =
+                        parse_pcmdata_range_pointer(payload)
+                    {
+                        let component = self
+                            .ssed_component_for_role_or_name(
+                                SsedComponentRole::PcmData,
+                                "PCMDATA.DIC",
+                            )
+                            .map(|component| component.filename.clone())
+                            .unwrap_or_else(|| "PCMDATA.DIC".to_owned());
+                        candidates.push(InternalResource::SsedPcmDataRange {
+                            component,
+                            start_block,
+                            start_offset,
+                            end_block,
+                            end_offset,
+                        });
+                    }
+                }
+                0x64 if payload.len() == 6 => {
+                    if let Some((block, offset)) = parse_packed_bcd_pointer(payload) {
+                        if let Some(descriptor) = latest_figure_descriptor.as_deref()
+                            && let Some(dimensions) =
+                                crate::ssed_figure::parse_figure_dimensions(descriptor)
+                            && let Some(component) = self.ssed_component_for_role_or_name(
+                                SsedComponentRole::Figure,
+                                "FIGURE.DIC",
+                            )
+                            && component.contains_block(block)
+                        {
+                            candidates.push(InternalResource::SsedFigure {
+                                component: component.filename.clone(),
+                                block,
+                                offset,
+                                width: dimensions.width,
+                                height: dimensions.height,
+                            });
+                        } else if let Some(component) = self.ssed_component_for_role_or_name(
+                            SsedComponentRole::MonoScr,
+                            "MONOSCR.DIC",
+                        ) && component.contains_block(block)
+                        {
+                            candidates.push(InternalResource::SsedComponentAddress {
+                                component: component.filename.clone(),
+                                block,
+                                offset,
+                                resource_kind: ResourceKind::Image,
+                            });
+                        }
+                    }
+                    latest_figure_descriptor = None;
+                }
+                _ => {}
+            }
+            pos += 2 + arg_len;
+        }
+        candidates
+    }
+
+    fn ssed_component_for_role_or_name(
+        &self,
+        role: SsedComponentRole,
+        name: &str,
+    ) -> Option<&SsedComponent> {
+        let catalog = self.ssed_catalog.as_ref()?;
+        catalog
+            .components_by_role(role)
+            .next()
+            .or_else(|| catalog.component_named(name))
     }
 
     fn view_for_navigation_surface_target(
@@ -3945,6 +4125,7 @@ impl StubBookPackage {
                 offset,
                 length,
                 profile_hint,
+                resources,
                 mut diagnostics,
             } => {
                 let scroll_anchor = scroll_anchor_for_token(&target)?;
@@ -3956,7 +4137,7 @@ impl StubBookPackage {
                     basic_text: None,
                     scroll_anchor,
                     surface: None,
-                    resources: Vec::new(),
+                    resources,
                     links: Vec::new(),
                     capabilities: vec![crate::render::RenderCapability::HcRenderInput],
                     diagnostics: {
@@ -6615,6 +6796,93 @@ fn ssed_fulltext_body_window_len(rows: &[SsedFulltextRow], index: usize) -> usiz
         .unwrap_or(SSED_FULLTEXT_BODY_WINDOW_BYTES)
 }
 
+fn ssed_control_arg_length(data: &[u8], offset: usize) -> usize {
+    if offset + 1 >= data.len() || data[offset] != 0x1f {
+        return 0;
+    }
+    let op = data[offset + 1];
+    match op {
+        0x09 | 0x14 | 0x1a | 0x1c | 0x41 | 0x4c | 0xe0 | 0xe2 | 0xe4 | 0xe6 => 2,
+        0x15 | 0x42 | 0x43 | 0x59 | 0x69 => 0,
+        0x36 => 12,
+        0x37 | 0x44 | 0x48 | 0x49 => 10,
+        0x39 | 0x3c | 0x4d => 18,
+        0x4a => match be16_at(data, offset + 2).map(|word| word & 0x000f) {
+            Some(0) => 14,
+            Some(1 | 2) => 16,
+            Some(_) => 2,
+            None => 16,
+        },
+        0x4b | 0x62 | 0x63 | 0x64 => 6,
+        0x4e => match be16_at(data, offset + 2).map(|word| word & 0x0f00) {
+            Some(0) => 38,
+            Some(0x0100 | 0x0200) => 40,
+            Some(_) => 2,
+            None => 38,
+        },
+        0x4f => {
+            if data.get(offset + 2..offset + 4) == Some(&[0x1f, 0x6f]) {
+                48
+            } else {
+                34
+            }
+        }
+        _ => 0,
+    }
+}
+
+fn parse_colscr_pointer(payload: &[u8]) -> Option<(u32, u32)> {
+    if payload.len() != 18 {
+        return None;
+    }
+    Some((
+        decode_bcd_decimal(&payload[12..16])?,
+        decode_bcd_decimal(&payload[16..18])?,
+    ))
+}
+
+fn parse_pcmdata_range_pointer(payload: &[u8]) -> Option<(u32, u32, u32, u32)> {
+    if payload.len() < 16 {
+        return None;
+    }
+    Some((
+        decode_bcd_decimal(&payload[4..8])?,
+        decode_bcd_decimal(&payload[8..10])?,
+        decode_bcd_decimal(&payload[10..14])?,
+        decode_bcd_decimal(&payload[14..16])?,
+    ))
+}
+
+fn parse_packed_bcd_pointer(payload: &[u8]) -> Option<(u32, u32)> {
+    if payload.len() < 6 {
+        return None;
+    }
+    Some((
+        decode_bcd_decimal(&payload[..4])?,
+        decode_bcd_decimal(&payload[4..6])?,
+    ))
+}
+
+fn decode_bcd_decimal(data: &[u8]) -> Option<u32> {
+    let mut value = 0_u32;
+    for byte in data {
+        let high = byte >> 4;
+        let low = byte & 0x0f;
+        if high > 9 || low > 9 {
+            return None;
+        }
+        value = value.checked_mul(100)?;
+        value = value.checked_add(u32::from(high) * 10 + u32::from(low))?;
+    }
+    Some(value)
+}
+
+fn be16_at(data: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(
+        data.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
 fn collapse_search_whitespace(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut pending_space = false;
@@ -7354,33 +7622,32 @@ fn finalize_resolved_view(
 }
 
 fn update_visual_capabilities(view: &mut ResolvedTargetView) {
-    let Some(html) = view.display_html.as_deref() else {
-        return;
-    };
-    push_render_capability_once(&mut view.capabilities, RenderCapability::Html);
+    if let Some(html) = view.display_html.as_deref() {
+        push_render_capability_once(&mut view.capabilities, RenderCapability::Html);
 
-    let lower = html.to_ascii_lowercase();
-    if lower.contains("<script") || lower.contains(".js") {
-        push_render_capability_once(&mut view.capabilities, RenderCapability::Javascript);
-    }
-    if lower.contains("<style") || lower.contains("stylesheet") || lower.contains(".css") {
-        push_render_capability_once(&mut view.capabilities, RenderCapability::Css);
-    }
-    if lower.contains("mathjax")
-        || lower.contains("tex-mml")
-        || lower.contains("<math")
-        || html.contains(r"\(")
-        || html.contains(r"\[")
-        || html.contains("$$")
-    {
-        push_render_capability_once(&mut view.capabilities, RenderCapability::MathJax);
-    }
-    if lower.contains("writing-mode")
-        || lower.contains("vertical-rl")
-        || lower.contains("tb-rl")
-        || lower.contains("tategaki")
-    {
-        push_render_capability_once(&mut view.capabilities, RenderCapability::VerticalText);
+        let lower = html.to_ascii_lowercase();
+        if lower.contains("<script") || lower.contains(".js") {
+            push_render_capability_once(&mut view.capabilities, RenderCapability::Javascript);
+        }
+        if lower.contains("<style") || lower.contains("stylesheet") || lower.contains(".css") {
+            push_render_capability_once(&mut view.capabilities, RenderCapability::Css);
+        }
+        if lower.contains("mathjax")
+            || lower.contains("tex-mml")
+            || lower.contains("<math")
+            || html.contains(r"\(")
+            || html.contains(r"\[")
+            || html.contains("$$")
+        {
+            push_render_capability_once(&mut view.capabilities, RenderCapability::MathJax);
+        }
+        if lower.contains("writing-mode")
+            || lower.contains("vertical-rl")
+            || lower.contains("tb-rl")
+            || lower.contains("tategaki")
+        {
+            push_render_capability_once(&mut view.capabilities, RenderCapability::VerticalText);
+        }
     }
 
     for resource in &view.resources {
@@ -8924,6 +9191,133 @@ mod tests {
         );
         let png = package.read_resource(&token).unwrap();
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn ssed_hc_renderer_input_carries_stream_resource_refs() {
+        let dir = tempdir().unwrap();
+        let pcm_chunks = pcmdata_wave_chunks_for_test(1, b"\x80\x81\x82");
+        let mut figure_payload = vec![0_u8; 17];
+        figure_payload.extend_from_slice(&[0x80, 0x80, 0x7f, 0x00]);
+        let mut honmon = Vec::new();
+        honmon.extend_from_slice(&[
+            0x1f, 0x4a, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x00, 0x34,
+        ]);
+        honmon.extend_from_slice(&[
+            0x1f, 0x44, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x09,
+        ]);
+        honmon.extend_from_slice(&[0x1f, 0x64, 0x00, 0x00, 0x12, 0x00, 0x00, 0x17]);
+        fs::write(
+            dir.path().join("HONMON.DIC"),
+            fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("PCMDATA.DIC"),
+            fixture_sseddata_literal_chunks(&[&pcm_chunks], 500, 500),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("FIGURE.DIC"),
+            fixture_sseddata_literal_chunks(&[&figure_payload], 1200, 1200),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "Renderer resources".to_owned(),
+            components: vec![
+                SsedComponent {
+                    index: 0,
+                    multi: 0,
+                    component_type: 0x00,
+                    start_block: 100,
+                    end_block: 100,
+                    data: [0; 4],
+                    filename: "HONMON.DIC".to_owned(),
+                    role: SsedComponentRole::Honmon,
+                },
+                SsedComponent {
+                    index: 1,
+                    multi: 0,
+                    component_type: 0xd8,
+                    start_block: 500,
+                    end_block: 500,
+                    data: [0; 4],
+                    filename: "PCMDATA.DIC".to_owned(),
+                    role: SsedComponentRole::PcmData,
+                },
+                SsedComponent {
+                    index: 2,
+                    multi: 0,
+                    component_type: 0xd0,
+                    start_block: 1200,
+                    end_block: 1200,
+                    data: [0; 4],
+                    filename: "FIGURE.DIC".to_owned(),
+                    role: SsedComponentRole::Figure,
+                },
+            ],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 3,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Renderer resources".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let token = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 0,
+        })
+        .unwrap();
+
+        let input = package.renderer_input_for_target(&token).unwrap();
+        let RendererInput::HcSsedStream {
+            resources,
+            diagnostics,
+            ..
+        } = input
+        else {
+            panic!("SSED address should produce HC renderer input");
+        };
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "hc_renderer_input_ready")
+        );
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::PcmData
+                && resource.mime_type.as_deref() == Some("audio/wav")
+        }));
+        assert!(resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Image
+                && resource.label.as_deref() == Some("FIGURE.DIC:00001200:0017:9x2")
+        }));
+
+        let view = package
+            .render_target(&token, &RenderOptions::default())
+            .unwrap();
+        assert_eq!(view.kind, ResolvedTargetKind::Deferred);
+        assert_eq!(view.resources.len(), resources.len());
+        assert!(view.capabilities.contains(&RenderCapability::HcRenderInput));
+        assert!(view.capabilities.contains(&RenderCapability::Images));
+        assert!(view.capabilities.contains(&RenderCapability::Audio));
     }
 
     #[test]
