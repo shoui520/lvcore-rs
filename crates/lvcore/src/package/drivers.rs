@@ -141,6 +141,9 @@ impl PackageDriver for LvedSqliteDriver {
             if let Some(key_file) = &store.key_file {
                 evidence.push(format!("key_file:{}", key_file.match_kind));
             }
+            if store.android_info.is_some() {
+                evidence.push("android_dictinfo".to_owned());
+            }
             let title = match store.title() {
                 Ok(title) => title.or_else(|| inferred_folder_title(package_root)),
                 Err(_) => return Ok(None),
@@ -170,6 +173,9 @@ impl PackageDriver for LvedSqliteDriver {
         ];
         if let Some(key_file) = &store.key_file {
             evidence.push(format!("key_file:{}", key_file.match_kind));
+        }
+        if store.android_info.is_some() {
+            evidence.push("android_dictinfo".to_owned());
         }
         let detection = DetectedPackage {
             root: package_root.clone(),

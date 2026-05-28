@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
     BookId, BookLibrary, BookMetadata, DriverRegistry, HomeSurface, NavigationStatus,
     NavigationSurface, RenderOptions, Result, SearchMode, SearchQuery, SearchScope, TargetToken,
+    lved_sqlite::is_lved_payload_name,
 };
 use serde_json::json;
 
@@ -545,7 +546,7 @@ fn is_package_file_candidate(path: &Path) -> bool {
         .file_name()
         .map(|value| value.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    name == "main.data" || name.ends_with(".dbc") || name.ends_with(".idx")
+    name == "main.data" || name.ends_with(".dbc") || name.ends_with(".idx") || name.ends_with(".db")
 }
 
 fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
@@ -555,7 +556,10 @@ fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
     if !path.is_dir() {
         return Ok(false);
     }
-    if path.join("main.data").is_file() || directory_has_file_suffix(path, ".dbc")? {
+    if path.join("main.data").is_file()
+        || directory_has_file_suffix(path, ".dbc")?
+        || directory_has_lved_payload(path)?
+    {
         return Ok(true);
     }
     if directory_has_file_suffix(path, ".idx")? {
@@ -572,6 +576,20 @@ fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
     Ok(hourei_required
         .iter()
         .all(|relative| path.join(relative).is_file()))
+}
+
+fn directory_has_lved_payload(path: &Path) -> Result<bool> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        if entry_path.is_file() && is_lved_payload_name(&entry_path) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn is_obvious_resource_only_dir(path: &Path) -> bool {

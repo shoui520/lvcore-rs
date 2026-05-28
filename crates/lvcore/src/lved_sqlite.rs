@@ -1,7 +1,10 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use encoding_rs::SHIFT_JIS;
+use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -20,6 +23,18 @@ pub struct LvedSqliteStore {
     pub payload_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_file: Option<LvedKeyFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub android_info: Option<AndroidDictInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AndroidDictInfo {
+    pub dict_id: i64,
+    pub dict_code: String,
+    pub title: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fonts: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,9 +95,11 @@ impl LvedSqliteStore {
             return Ok(None);
         };
         let key_file = discover_lved_key_file(&payload_path)?;
+        let android_info = android_dictinfo_for_payload(&payload_path)?;
         Ok(Some(Self {
             payload_path,
             key_file,
+            android_info,
         }))
     }
 
@@ -91,12 +108,21 @@ impl LvedSqliteStore {
             &self.payload_path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        if let Some(key_file) = &self.key_file {
-            let key = read_lved_key_file(&key_file.path)?;
+        if let Some(key) = self.sqlcipher_key()? {
             apply_sqlcipher_key(&connection, &key)?;
         }
         validate_sqlite_connection(&connection)?;
         Ok(connection)
+    }
+
+    fn sqlcipher_key(&self) -> Result<Option<String>> {
+        if let Some(key_file) = &self.key_file {
+            return Ok(Some(read_lved_key_file(&key_file.path)?));
+        }
+        Ok(self
+            .android_info
+            .as_ref()
+            .map(|info| derive_android_lved_sqlcipher_key(info.dict_id, &info.dict_code)))
     }
 
     pub fn table_names(&self) -> Result<Vec<String>> {
@@ -105,6 +131,13 @@ impl LvedSqliteStore {
     }
 
     pub fn title(&self) -> Result<Option<String>> {
+        if let Some(title) = self
+            .android_info
+            .as_ref()
+            .and_then(|info| nonempty_string(info.title.clone()))
+        {
+            return Ok(Some(title));
+        }
         if let Some(title) = self.tree_index_title()? {
             return Ok(Some(title));
         }
@@ -114,10 +147,18 @@ impl LvedSqliteStore {
 
     pub fn summary(&self) -> Result<LvedSqliteSummary> {
         let connection = self.open_readonly()?;
-        Ok(LvedSqliteSummary {
-            title: self
+        let title = self
+            .android_info
+            .as_ref()
+            .and_then(|info| nonempty_string(info.title.clone()));
+        let title = match title {
+            Some(title) => Some(title),
+            None => self
                 .tree_index_title()?
                 .or_else(|| lved_sqlite_title_from_connection(&connection)),
+        };
+        Ok(LvedSqliteSummary {
+            title,
             list_available: lved_list_available(&connection)?,
             info_available: lved_info_available(&connection)?,
             tree_available: self.tree_index_path().is_some(),
@@ -465,7 +506,17 @@ pub fn lved_payload_path(root: &Path) -> Result<Option<PathBuf>> {
     }
     let mut dbc_files = files_with_suffix(root, ".dbc")?;
     dbc_files.sort();
-    Ok(dbc_files.into_iter().next())
+    if let Some(path) = dbc_files.into_iter().next() {
+        return Ok(Some(path));
+    }
+    let mut db_files = fs::read_dir(root)?
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && is_lved_payload_name(path))
+        .collect::<Vec<_>>();
+    db_files.sort();
+    Ok(db_files.into_iter().next())
 }
 
 pub fn is_lved_payload_name(path: &Path) -> bool {
@@ -473,10 +524,66 @@ pub fn is_lved_payload_name(path: &Path) -> bool {
         .file_name()
         .map(|value| value.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    name == "main.data" || name.ends_with(".dbc")
+    name == "main.data" || name.ends_with(".dbc") || is_android_lved_sqlcipher_payload(path)
+}
+
+pub fn is_android_lved_sqlcipher_payload(path: &Path) -> bool {
+    let Some(extension) = path.extension() else {
+        return false;
+    };
+    if !extension.eq_ignore_ascii_case("db") {
+        return false;
+    }
+    if path
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("thumbs.db"))
+    {
+        return false;
+    }
+    let Some(stem) = path
+        .file_stem()
+        .map(|value| normalize_lved_dict_code(&value.to_string_lossy()))
+    else {
+        return false;
+    };
+    let Some(parent) = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .map(|value| normalize_lved_dict_code(&value.to_string_lossy()))
+    else {
+        return false;
+    };
+    if stem.is_empty() || stem != parent {
+        return false;
+    }
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if metadata.len() == 0 || metadata.len() % 4096 != 0 {
+        return false;
+    }
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut header = [0_u8; 16];
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+    if &header == b"SQLite format 3\0" {
+        return false;
+    }
+    let Some(root) = path.parent() else {
+        return false;
+    };
+    root.join("resource/conf.ini").is_file() || root.join("resource/property.data").is_file()
 }
 
 pub fn infer_lved_dict_code(payload_path: &Path) -> Option<String> {
+    if is_android_lved_sqlcipher_payload(payload_path) {
+        return payload_path
+            .file_stem()
+            .map(|name| normalize_lved_dict_code(&name.to_string_lossy()));
+    }
     if payload_path
         .file_name()
         .is_some_and(|name| name.eq_ignore_ascii_case("main.data"))
@@ -484,11 +591,279 @@ pub fn infer_lved_dict_code(payload_path: &Path) -> Option<String> {
         return payload_path
             .parent()
             .and_then(|parent| parent.file_name())
-            .map(|name| strip_dct_prefix(&name.to_string_lossy()));
+            .map(|name| normalize_lved_dict_code(&name.to_string_lossy()));
     }
     payload_path
         .file_stem()
-        .map(|name| strip_dct_prefix(&name.to_string_lossy()))
+        .map(|name| normalize_lved_dict_code(&name.to_string_lossy()))
+}
+
+pub fn derive_android_lved_sqlcipher_key(dict_id: i64, dict_code: &str) -> String {
+    let code = normalize_lved_dict_code(dict_code);
+    let mut chars = code.chars();
+    let first = chars.next().unwrap_or_default();
+    let last = code.chars().last().unwrap_or(first);
+    let key_code = format!("{first}{last}").to_lowercase();
+    format!("jlasgoiahoiampvsjhosDHfopj{}{}", key_code, dict_id * 19286)
+}
+
+pub fn android_dictinfo_for_payload(path: &Path) -> Result<Option<AndroidDictInfo>> {
+    let Some(dict_code) = infer_lved_dict_code(path) else {
+        return Ok(None);
+    };
+    for info_path in discover_android_dictinfo_files(path) {
+        let rows = parse_android_dictinfo(&info_path)?;
+        if let Some(row) = rows.into_iter().find(|row| row.dict_code == dict_code) {
+            return Ok(Some(row));
+        }
+    }
+    Ok(None)
+}
+
+pub fn parse_android_dictinfo(path: &Path) -> Result<Vec<AndroidDictInfo>> {
+    let xml = fs::read_to_string(path)?;
+    let mut reader = Reader::from_str(&xml);
+    reader.config_mut().trim_text(true);
+
+    let mut rows = Vec::new();
+    let mut current = None::<AndroidDictInfoBuilder>;
+    let mut current_field = None::<AndroidDictInfoField>;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) if event.name().as_ref() == b"dict" => {
+                current = Some(android_dictinfo_builder_from_event(&reader, &event)?);
+                current_field = None;
+            }
+            Ok(Event::Start(event)) if current.is_some() => {
+                current_field = AndroidDictInfoField::from_name(event.name().as_ref());
+            }
+            Ok(Event::Text(text)) => {
+                if let (Some(builder), Some(field)) = (&mut current, current_field) {
+                    let value = text.xml_content().map_err(|error| {
+                        Error::Driver(format!(
+                            "Android dictinfo.xml text decode error at byte {}: {error}",
+                            reader.buffer_position()
+                        ))
+                    })?;
+                    if !value.trim().is_empty() {
+                        builder.push_field(field, value.into_owned());
+                    }
+                }
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                if let (Some(builder), Some(field)) = (&mut current, current_field)
+                    && let Some(value) = decode_xml_reference(reference.as_ref())
+                {
+                    builder.push_field(field, value);
+                }
+            }
+            Ok(Event::End(event)) if event.name().as_ref() == b"dict" => {
+                if let Some(row) = current.take().and_then(AndroidDictInfoBuilder::finish) {
+                    rows.push(row);
+                }
+                current_field = None;
+            }
+            Ok(Event::End(_)) => current_field = None,
+            Ok(Event::Eof) => break,
+            Err(error) => {
+                return Err(Error::Driver(format!(
+                    "Android dictinfo.xml parse error at byte {}: {error}",
+                    reader.buffer_position()
+                )));
+            }
+            _ => {}
+        }
+    }
+    Ok(rows)
+}
+
+#[derive(Debug, Default)]
+struct AndroidDictInfoBuilder {
+    dict_id: Option<i64>,
+    dict_code: Option<String>,
+    title: Option<String>,
+    name: Option<String>,
+    fonts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AndroidDictInfoField {
+    Code,
+    Title,
+    Name,
+    Font,
+}
+
+impl AndroidDictInfoField {
+    fn from_name(name: &[u8]) -> Option<Self> {
+        match name {
+            b"code" => Some(Self::Code),
+            b"title" => Some(Self::Title),
+            b"name" => Some(Self::Name),
+            b"font" | b"multi_font" | b"font_bold" => Some(Self::Font),
+            _ => None,
+        }
+    }
+}
+
+impl AndroidDictInfoBuilder {
+    fn push_field(&mut self, field: AndroidDictInfoField, value: String) {
+        match field {
+            AndroidDictInfoField::Code => append_android_dictinfo_field(&mut self.dict_code, value),
+            AndroidDictInfoField::Title => append_android_dictinfo_field(&mut self.title, value),
+            AndroidDictInfoField::Name => append_android_dictinfo_field(&mut self.name, value),
+            AndroidDictInfoField::Font => self.fonts.push(value),
+        }
+    }
+
+    fn finish(self) -> Option<AndroidDictInfo> {
+        let dict_id = self.dict_id?;
+        let dict_code = normalize_lved_dict_code(&self.dict_code?);
+        if dict_code.is_empty() {
+            return None;
+        }
+        let title = self.title.unwrap_or_default();
+        let name = self.name.unwrap_or_else(|| title.clone());
+        Some(AndroidDictInfo {
+            dict_id,
+            dict_code,
+            title,
+            name,
+            fonts: self.fonts,
+        })
+    }
+}
+
+fn android_dictinfo_builder_from_event(
+    reader: &Reader<&[u8]>,
+    event: &BytesStart<'_>,
+) -> Result<AndroidDictInfoBuilder> {
+    let mut builder = AndroidDictInfoBuilder::default();
+    for attr in event.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"id" => {
+                let value = attr
+                    .decode_and_unescape_value(reader.decoder())
+                    .map_err(|error| Error::Driver(format!("invalid Android dict id: {error}")))?;
+                builder.dict_id = value.trim().parse::<i64>().ok();
+            }
+            b"name" => {
+                let value = attr
+                    .decode_and_unescape_value(reader.decoder())
+                    .map_err(|error| {
+                        Error::Driver(format!("invalid Android dict name: {error}"))
+                    })?;
+                builder.name = Some(value.trim().to_owned());
+            }
+            _ => {}
+        }
+    }
+    Ok(builder)
+}
+
+fn append_android_dictinfo_field(slot: &mut Option<String>, value: String) {
+    match slot {
+        Some(existing) => existing.push_str(&value),
+        None => *slot = Some(value),
+    }
+}
+
+fn decode_xml_reference(value: &[u8]) -> Option<String> {
+    let value = std::str::from_utf8(value).ok()?;
+    let decoded = match value {
+        "amp" => '&',
+        "lt" => '<',
+        "gt" => '>',
+        "quot" => '"',
+        "apos" => '\'',
+        _ if value.starts_with("#x") => {
+            let code = u32::from_str_radix(&value[2..], 16).ok()?;
+            char::from_u32(code)?
+        }
+        _ if value.starts_with('#') => {
+            let code = value[1..].parse::<u32>().ok()?;
+            char::from_u32(code)?
+        }
+        _ => return None,
+    };
+    Some(decoded.to_string())
+}
+
+fn discover_android_dictinfo_files(path: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut seen = Vec::<PathBuf>::new();
+    let mut current = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().unwrap_or(path).to_path_buf()
+    };
+
+    for _ in 0..6 {
+        push_android_dictinfo_candidate(&current.join("dictinfo.xml"), &mut out, &mut seen);
+        for child_name in ["android viewer", "resources", "res", "xml"] {
+            let child = current.join(child_name);
+            if child.is_dir() {
+                collect_dictinfo_recursive(&child, &mut out, &mut seen);
+            }
+        }
+        let child_names = match fs::read_dir(&current) {
+            Ok(entries) => entries
+                .filter_map(std::result::Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().to_lowercase())
+                .collect::<Vec<_>>(),
+            Err(_) => {
+                let Some(parent) = current.parent() else {
+                    break;
+                };
+                current = parent.to_path_buf();
+                continue;
+            }
+        };
+        if out.is_empty()
+            && child_names
+                .iter()
+                .any(|name| matches!(name.as_str(), "sqlite" | "ssed"))
+        {
+            collect_dictinfo_recursive(&current, &mut out, &mut seen);
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent.to_path_buf();
+    }
+
+    out.sort();
+    out
+}
+
+fn collect_dictinfo_recursive(root: &Path, out: &mut Vec<PathBuf>, seen: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_dictinfo_recursive(&path, out, seen);
+        } else if path
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("dictinfo.xml"))
+        {
+            push_android_dictinfo_candidate(&path, out, seen);
+        }
+    }
+}
+
+fn push_android_dictinfo_candidate(path: &Path, out: &mut Vec<PathBuf>, seen: &mut Vec<PathBuf>) {
+    if !path.is_file() {
+        return;
+    }
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if seen.iter().any(|seen_path| seen_path == &resolved) {
+        return;
+    }
+    seen.push(resolved);
+    out.push(path.to_path_buf());
 }
 
 pub fn discover_lved_key_file(payload_path: &Path) -> Result<Option<LvedKeyFile>> {
@@ -1146,8 +1521,13 @@ fn is_safe_sqlite_identifier(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
-fn strip_dct_prefix(value: &str) -> String {
-    value.strip_prefix("_DCT_").unwrap_or(value).to_owned()
+fn normalize_lved_dict_code(value: &str) -> String {
+    value
+        .trim()
+        .strip_prefix("_DCT_")
+        .unwrap_or(value.trim())
+        .trim_start_matches('.')
+        .to_ascii_uppercase()
 }
 
 fn files_with_suffix(root: &Path, suffix: &str) -> Result<Vec<PathBuf>> {
@@ -1186,6 +1566,77 @@ mod tests {
 
         assert_eq!(key.path.file_name().unwrap(), "TEST.key");
         assert_eq!(read_lved_key_file(&key.path).unwrap(), "secret");
+    }
+
+    #[test]
+    fn discovers_android_lved_payload_and_uses_dictinfo_key() {
+        let dir = tempdir().unwrap();
+        let package = dir.path().join("SQLite/.TESTDICT");
+        fs::create_dir_all(package.join("resource")).unwrap();
+        fs::write(package.join("resource/conf.ini"), b"").unwrap();
+        fs::create_dir_all(dir.path().join("android viewer/res/xml")).unwrap();
+        fs::write(
+            dir.path().join("android viewer/res/xml/dictinfo.xml"),
+            r#"
+            <dictinfo>
+              <dict id="750" name="TESTDICT">
+                <code>TESTDICT</code>
+                <title>Android&#x20;&amp;&#x20;Test Dictionary</title>
+                <fonts use="1"><font>ipamp</font></fonts>
+              </dict>
+            </dictinfo>
+            "#,
+        )
+        .unwrap();
+        let payload = package.join("TESTDICT.db");
+        let key = derive_android_lved_sqlcipher_key(750, "TESTDICT");
+        {
+            let connection = Connection::open(&payload).unwrap();
+            apply_sqlcipher_key(&connection, &key).unwrap();
+            connection
+                .execute_batch(
+                    "
+                    create table info (id integer, type integer, name text primary key, body text, media text);
+                    insert into info values (1, 1, 'about.html', '<h1>Wrong fallback title</h1>', '');
+                    create table content (id integer primary key, type integer, body text, media text);
+                    create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                    create virtual table search using fts4(forward, back, part, fts, advanced1, advanced2, filter);
+                    insert into content values (100, 1, '<article>body</article>', '');
+                    insert into list values (1, 100, 1, '', '<b>alpha</b>', '');
+                    insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                      values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
+                    ",
+                )
+                .unwrap();
+        }
+
+        assert!(is_lved_payload_name(&payload));
+        let store = LvedSqliteStore::discover(&package).unwrap().unwrap();
+        assert!(store.key_file.is_none());
+        assert_eq!(
+            store.android_info.as_ref().map(|info| info.dict_id),
+            Some(750)
+        );
+        assert_eq!(
+            store.title().unwrap().as_deref(),
+            Some("Android & Test Dictionary")
+        );
+        assert_eq!(
+            store.search("alp", &SearchMode::Forward, 10).unwrap()[0].title_text,
+            "alpha"
+        );
+    }
+
+    #[test]
+    fn android_lved_payload_detection_rejects_plaintext_helper_db() {
+        let dir = tempdir().unwrap();
+        let package = dir.path().join(".HELPER");
+        fs::create_dir_all(package.join("resource")).unwrap();
+        fs::write(package.join("resource/conf.ini"), b"").unwrap();
+        let payload = package.join("HELPER.db");
+        Connection::open(&payload).unwrap();
+
+        assert!(!is_lved_payload_name(&payload));
     }
 
     #[test]
