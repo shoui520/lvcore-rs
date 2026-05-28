@@ -3875,7 +3875,8 @@ impl StubBookPackage {
         let mut seen_resource_tokens = BTreeSet::new();
         let mut seen_target_tokens = BTreeSet::new();
         let mut cursor = 0usize;
-        while let Some((relative_start, ref_kind)) = next_lved_ref(&html[cursor..]) {
+        let lower = html.to_ascii_lowercase();
+        while let Some((relative_start, ref_kind)) = next_lved_ref(&lower[cursor..]) {
             let start = cursor + relative_start;
             output.push_str(&html[cursor..start]);
             let end = html[start..]
@@ -4052,7 +4053,8 @@ impl StubBookPackage {
     ) -> Result<String> {
         let mut output = String::with_capacity(html.len());
         let mut cursor = 0usize;
-        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+        let lower = html.to_ascii_lowercase();
+        while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
             output.push_str(&html[cursor..attr.value_start]);
             let raw_value = &html[attr.value_start..attr.value_end];
             if matches!(attr.name, HtmlAttrName::Src | HtmlAttrName::Data)
@@ -4117,8 +4119,9 @@ impl StubBookPackage {
         let mut seen_resource_tokens = BTreeSet::new();
         let mut seen_target_tokens = BTreeSet::new();
         let mut cursor = 0usize;
+        let lower = html.to_ascii_lowercase();
 
-        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+        while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
             output.push_str(&html[cursor..attr.value_start]);
             let raw_value = &html[attr.value_start..attr.value_end];
             if attr.name == HtmlAttrName::Href {
@@ -4161,8 +4164,9 @@ impl StubBookPackage {
         let mut seen_resource_tokens = BTreeSet::new();
         let mut seen_target_tokens = BTreeSet::new();
         let mut cursor = 0usize;
+        let lower = html.to_ascii_lowercase();
 
-        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+        while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
             output.push_str(&html[cursor..attr.value_start]);
             let raw_value = &html[attr.value_start..attr.value_end];
             if attr.name == HtmlAttrName::Href {
@@ -4210,8 +4214,9 @@ impl StubBookPackage {
         let mut seen_resource_tokens = BTreeSet::new();
         let mut seen_target_tokens = BTreeSet::new();
         let mut cursor = 0usize;
+        let lower = html.to_ascii_lowercase();
 
-        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+        while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
             output.push_str(&html[cursor..attr.value_start]);
             let raw_value = &html[attr.value_start..attr.value_end];
             if let Some(reference) = package_relative_html_reference(&base_dir, raw_value) {
@@ -4279,8 +4284,9 @@ impl StubBookPackage {
         let mut seen_resource_tokens = BTreeSet::new();
         let mut seen_target_tokens = BTreeSet::new();
         let mut cursor = 0usize;
+        let lower = html.to_ascii_lowercase();
 
-        while let Some(attr) = next_html_href_or_src_attr(html, cursor) {
+        while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
             output.push_str(&html[cursor..attr.value_start]);
             let raw_value = &html[attr.value_start..attr.value_end];
             if let Some(reference) = package_relative_html_reference(&base_dir, raw_value) {
@@ -5805,8 +5811,7 @@ struct HtmlAttrRange {
     value_end: usize,
 }
 
-fn next_html_href_or_src_attr(html: &str, cursor: usize) -> Option<HtmlAttrRange> {
-    let lower = html.to_ascii_lowercase();
+fn next_html_href_or_src_attr(html: &str, lower: &str, cursor: usize) -> Option<HtmlAttrRange> {
     let patterns = [
         ("href=\"", HtmlAttrName::Href),
         ("href='", HtmlAttrName::Href),
@@ -6379,10 +6384,19 @@ fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
         ("lved.group.", LvedHtmlRefKind::ViewerHook),
         ("lved.browser.", LvedHtmlRefKind::ViewerHook),
     ];
-    patterns
-        .into_iter()
-        .filter_map(|(pattern, kind)| value.find(pattern).map(|index| (index, kind)))
-        .min_by_key(|found| found.0)
+    let mut cursor = 0usize;
+    while let Some(relative_index) = value[cursor..].find("lved") {
+        let index = cursor + relative_index;
+        let rest = &value[index..];
+        if let Some((_, kind)) = patterns
+            .iter()
+            .find(|(pattern, _)| rest.starts_with(pattern))
+        {
+            return Some((index, *kind));
+        }
+        cursor = index.saturating_add("lved".len());
+    }
+    None
 }
 
 fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {

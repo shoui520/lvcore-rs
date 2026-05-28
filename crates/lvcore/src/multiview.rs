@@ -308,11 +308,11 @@ impl MultiviewStore {
     }
 
     fn content_body_for_href(&self, href: &str) -> Result<Option<MultiviewBody>> {
-        let Some(payload) = self.first_payload_by_role(MultiviewPayloadRole::ContentSearchBody)?
-        else {
+        let Ok(content_id) = href.parse::<i64>() else {
             return Ok(None);
         };
-        let Ok(content_id) = href.parse::<i64>() else {
+        let Some(payload) = self.first_payload_by_role(MultiviewPayloadRole::ContentSearchBody)?
+        else {
             return Ok(None);
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
@@ -440,7 +440,11 @@ impl MultiviewStore {
         &self,
         role: MultiviewPayloadRole,
     ) -> Result<Option<&MultiviewPayloadSource>> {
+        let payload_count = self.payloads.len();
         for payload in &self.payloads {
+            if !payload_may_have_role(&payload.name, payload_count, role) {
+                continue;
+            }
             if self.role_for_payload(payload)? == role {
                 return Ok(Some(payload));
             }
@@ -456,6 +460,13 @@ impl MultiviewStore {
             .get(&payload.path)
             .copied()
         {
+            return Ok(role);
+        }
+        if let Some(role) = hinted_payload_role(&payload.name, self.payloads.len()) {
+            self.roles
+                .lock()
+                .map_err(|_| Error::Driver("multiview role cache was poisoned".to_owned()))?
+                .insert(payload.path.clone(), role);
             return Ok(role);
         }
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
@@ -516,6 +527,48 @@ impl MultiviewStore {
             .insert(path.to_path_buf(), output.clone());
         Ok(output)
     }
+}
+
+fn payload_may_have_role(name: &str, payload_count: usize, role: MultiviewPayloadRole) -> bool {
+    let lower = name.to_ascii_lowercase();
+    match role {
+        MultiviewPayloadRole::ContentSearchBody => payload_count == 1 || lower == "blvdat",
+        MultiviewPayloadRole::LawBody => {
+            lower.starts_with("blv")
+                || lower.starts_with("hlv")
+                || hinted_payload_role(name, payload_count).is_none()
+        }
+        MultiviewPayloadRole::HtmlIndex => {
+            lower.starts_with("ilv") || hinted_payload_role(name, payload_count).is_none()
+        }
+        MultiviewPayloadRole::LawMetadata => {
+            lower.starts_with("nlv") || hinted_payload_role(name, payload_count).is_none()
+        }
+        MultiviewPayloadRole::SubjectIndex => {
+            lower.starts_with("jlv") || hinted_payload_role(name, payload_count).is_none()
+        }
+        MultiviewPayloadRole::CaseDigestBody | MultiviewPayloadRole::Unclassified => true,
+    }
+}
+
+fn hinted_payload_role(name: &str, payload_count: usize) -> Option<MultiviewPayloadRole> {
+    let lower = name.to_ascii_lowercase();
+    if payload_count == 1 && lower == "blvdat" {
+        return Some(MultiviewPayloadRole::ContentSearchBody);
+    }
+    if lower == "blvbat" {
+        return Some(MultiviewPayloadRole::LawBody);
+    }
+    if lower.starts_with("ilv") {
+        return Some(MultiviewPayloadRole::HtmlIndex);
+    }
+    if lower.starts_with("jlv") {
+        return Some(MultiviewPayloadRole::SubjectIndex);
+    }
+    if lower.starts_with("nlv") {
+        return Some(MultiviewPayloadRole::LawMetadata);
+    }
+    None
 }
 
 #[derive(Debug)]
@@ -868,5 +921,31 @@ mod tests {
         assert!(
             error.to_string().contains("XML parse error") || error.to_string().contains("unclosed")
         );
+    }
+
+    #[test]
+    fn multiview_payload_role_hints_skip_impossible_payloads() {
+        assert_eq!(
+            hinted_payload_role("blvdat", 1),
+            Some(MultiviewPayloadRole::ContentSearchBody)
+        );
+        assert_eq!(
+            hinted_payload_role("blvbat", 5),
+            Some(MultiviewPayloadRole::LawBody)
+        );
+        assert_eq!(
+            hinted_payload_role("ilvbat", 5),
+            Some(MultiviewPayloadRole::HtmlIndex)
+        );
+        assert!(!payload_may_have_role(
+            "blvbat",
+            5,
+            MultiviewPayloadRole::ContentSearchBody
+        ));
+        assert!(payload_may_have_role(
+            "blvdat",
+            1,
+            MultiviewPayloadRole::ContentSearchBody
+        ));
     }
 }
