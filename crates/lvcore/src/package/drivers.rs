@@ -992,6 +992,7 @@ impl ResourceProvider for StubBookPackage {
                     kind: resource_kind,
                     label,
                     href,
+                    mime_type: resource_mime_type(resource_kind, Some(&path)).map(str::to_owned),
                     diagnostics,
                 })
             }
@@ -1015,23 +1016,28 @@ impl ResourceProvider for StubBookPackage {
                 let label = Path::new(&entry_path)
                     .file_name()
                     .map(|value| value.to_string_lossy().to_string())
-                    .or(Some(entry_path));
+                    .or_else(|| Some(entry_path.clone()));
                 Ok(ResourceRef {
                     token: token.clone(),
                     kind: resource_kind,
                     label,
                     href,
+                    mime_type: resource_mime_type(resource_kind, Some(&entry_path))
+                        .map(str::to_owned),
                     diagnostics,
                 })
             }
-            InternalResource::MediaBlob { resource_kind, .. } => Ok(ResourceRef {
+            InternalResource::MediaBlob {
+                key, resource_kind, ..
+            } => Ok(ResourceRef {
                 token: token.clone(),
                 kind: resource_kind,
-                label: media_blob_label(token)?,
+                label: Some(key.clone()),
                 href: self
                     .lved_store
                     .is_some()
                     .then(|| format!("lvcore://resource/{}", token.as_str())),
+                mime_type: resource_mime_type(resource_kind, Some(&key)).map(str::to_owned),
                 diagnostics: if self.lved_store.is_some() {
                     Vec::new()
                 } else {
@@ -1046,6 +1052,7 @@ impl ResourceProvider for StubBookPackage {
                 kind: ResourceKind::Other,
                 label: None,
                 href: None,
+                mime_type: None,
                 diagnostics: vec![Diagnostic::warning("resource_unsupported", reason)],
             }),
         }
@@ -5948,6 +5955,59 @@ fn resource_kind_from_path(path: &str) -> ResourceKind {
     }
 }
 
+fn resource_mime_type(kind: ResourceKind, path_hint: Option<&str>) -> Option<&'static str> {
+    let lower = path_hint.map(str::to_ascii_lowercase).unwrap_or_default();
+    let from_path = if lower.ends_with(".svg") {
+        Some("image/svg+xml")
+    } else if lower.ends_with(".png") {
+        Some("image/png")
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        Some("image/jpeg")
+    } else if lower.ends_with(".gif") {
+        Some("image/gif")
+    } else if lower.ends_with(".bmp") {
+        Some("image/bmp")
+    } else if lower.ends_with(".webp") {
+        Some("image/webp")
+    } else if lower.ends_with(".mp3") {
+        Some("audio/mpeg")
+    } else if lower.ends_with(".wav") {
+        Some("audio/wav")
+    } else if lower.ends_with(".ogg") {
+        Some("audio/ogg")
+    } else if lower.ends_with(".m4a") {
+        Some("audio/mp4")
+    } else if lower.ends_with(".css") {
+        Some("text/css; charset=utf-8")
+    } else if lower.ends_with(".js") {
+        Some("text/javascript; charset=utf-8")
+    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
+        Some("text/html; charset=utf-8")
+    } else if lower.ends_with(".pdf") {
+        Some("application/pdf")
+    } else if lower.ends_with(".ttf") {
+        Some("font/ttf")
+    } else if lower.ends_with(".otf") {
+        Some("font/otf")
+    } else if lower.ends_with(".woff") {
+        Some("font/woff")
+    } else if lower.ends_with(".woff2") {
+        Some("font/woff2")
+    } else {
+        None
+    };
+    from_path.or(match kind {
+        ResourceKind::Html => Some("text/html; charset=utf-8"),
+        ResourceKind::Css => Some("text/css; charset=utf-8"),
+        ResourceKind::Javascript => Some("text/javascript; charset=utf-8"),
+        ResourceKind::Pdf => Some("application/pdf"),
+        ResourceKind::Colscr => Some("image/bmp"),
+        ResourceKind::PcmData => Some("audio/wav"),
+        ResourceKind::SoundData => Some("audio/mpeg"),
+        _ => None,
+    })
+}
+
 fn decode_package_html_text(data: &[u8]) -> String {
     match std::str::from_utf8(data) {
         Ok(value) => value.to_owned(),
@@ -6611,13 +6671,6 @@ fn is_lved_ref_terminator(ch: char) -> bool {
     ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>' | ')' | ']')
 }
 
-fn media_blob_label(token: &ResourceToken) -> Result<Option<String>> {
-    match token.decode()? {
-        InternalResource::MediaBlob { key, .. } => Ok(Some(key)),
-        _ => Ok(None),
-    }
-}
-
 fn root_fingerprint(root: &Path) -> String {
     let mut names = BTreeSet::new();
     if let Ok(entries) = fs::read_dir(root) {
@@ -7228,6 +7281,7 @@ mod tests {
             .iter()
             .find(|resource| resource.kind == ResourceKind::Audio)
             .unwrap();
+        assert_eq!(audio.mime_type.as_deref(), Some("audio/mpeg"));
         assert_eq!(
             package.read_resource(&audio.token).unwrap(),
             b"ID3\x03".to_vec()
@@ -7237,6 +7291,7 @@ mod tests {
             .iter()
             .find(|resource| resource.kind == ResourceKind::Image)
             .unwrap();
+        assert_eq!(image.mime_type.as_deref(), Some("image/svg+xml"));
         assert_eq!(
             package.read_resource(&image.token).unwrap(),
             b"<svg/>".to_vec()
@@ -7351,6 +7406,7 @@ mod tests {
                     kind: ResourceKind::Audio,
                     label: None,
                     href: None,
+                    mime_type: Some("audio/mpeg".to_owned()),
                     diagnostics: Vec::new(),
                 }],
                 links: Vec::new(),
