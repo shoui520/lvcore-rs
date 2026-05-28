@@ -4268,6 +4268,8 @@ impl StubBookPackage {
             self.push_ssed_hanrei_page(candidate, &mut pages, &mut seen)?;
         }
 
+        self.push_ssed_hanrei_folder_pages("HANREI", &mut pages, &mut seen, 0)?;
+
         for path in self.storage.list_dir(Path::new(""))? {
             if !path.is_dir() {
                 continue;
@@ -4312,6 +4314,33 @@ impl StubBookPackage {
         }
 
         Ok(pages)
+    }
+
+    fn push_ssed_hanrei_folder_pages(
+        &self,
+        relative_dir: &str,
+        pages: &mut Vec<SsedHanreiPage>,
+        seen: &mut BTreeSet<String>,
+        depth: usize,
+    ) -> Result<()> {
+        if depth > 8 || !self.storage.exists(Path::new(relative_dir))? {
+            return Ok(());
+        }
+        for child in self.storage.list_dir(Path::new(relative_dir))? {
+            let Some(file_name) = child.file_name().map(|value| value.to_string_lossy()) else {
+                continue;
+            };
+            if file_name.starts_with("._") {
+                continue;
+            }
+            let candidate = format!("{relative_dir}/{file_name}");
+            if child.is_dir() {
+                self.push_ssed_hanrei_folder_pages(&candidate, pages, seen, depth + 1)?;
+            } else if child.is_file() && path_has_extension(&file_name, &["html", "htm"]) {
+                self.push_ssed_hanrei_page(&candidate, pages, seen)?;
+            }
+        }
+        Ok(())
     }
 
     fn push_ssed_hanrei_page(

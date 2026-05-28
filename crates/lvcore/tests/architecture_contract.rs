@@ -694,6 +694,23 @@ fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
     )
     .unwrap();
     fs::write(dir.path().join("HANREI.chm"), b"chm").unwrap();
+    fs::create_dir_all(dir.path().join("HANREI/sub")).unwrap();
+    fs::write(
+        dir.path().join("HANREI/index.html"),
+        b"<html><body><a href=\"about.html#overview\">Folder index</a></body></html>",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HANREI/about.html"),
+        b"<html><body><h1 id=\"overview\">Folder about</h1><img src=\"pic.png\"></body></html>",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HANREI/sub/detail.html"),
+        b"<html><body>Folder detail</body></html>",
+    )
+    .unwrap();
+    fs::write(dir.path().join("HANREI/pic.png"), b"png").unwrap();
     fs::create_dir_all(dir.path().join("BOOK_HELP.localized/contents/image")).unwrap();
     fs::write(
         dir.path().join("BOOK_HELP.localized/menu.html"),
@@ -759,6 +776,31 @@ fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
                 .iter()
                 .any(|diagnostic| diagnostic.code == "ssed_hanrei_chm_deferred")
     }));
+    assert!(pages.iter().any(|page| page.item_id == "HANREI/about.html"));
+    assert!(
+        pages
+            .iter()
+            .any(|page| page.item_id == "HANREI/sub/detail.html")
+    );
+    let folder_index = pages
+        .iter()
+        .find(|page| page.item_id == "HANREI/index.html")
+        .unwrap();
+    let folder_index_view = package
+        .render_target(&folder_index.target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(folder_index_view.kind, ResolvedTargetKind::HanreiPage);
+    assert_eq!(
+        folder_index_view.links[0].token.decode().unwrap(),
+        InternalTarget::Resource {
+            resource: ResourceToken::new(&InternalResource::PackageFile {
+                path: "HANREI/about.html".to_owned(),
+                resource_kind: ResourceKind::Html,
+            })
+            .unwrap(),
+            anchor: Some("overview".to_owned()),
+        }
+    );
     let mac_hanrei = pages
         .iter()
         .find(|page| page.item_id == "BOOK_HELP.localized/contents/hanrei.html")
