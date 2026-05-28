@@ -68,3 +68,16 @@ impl SearchPage {
 pub trait SearchProvider: Send + Sync {
     fn search(&self, query: &SearchQuery) -> Result<SearchPage>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advanced_search_mode_has_stable_public_json_shape() {
+        let mode = SearchMode::Advanced("advanced1".to_owned());
+        let json = serde_json::to_value(&mode).unwrap();
+        assert_eq!(json, serde_json::json!({ "advanced": "advanced1" }));
+        assert_eq!(serde_json::from_value::<SearchMode>(json).unwrap(), mode);
+    }
+}
