@@ -133,9 +133,10 @@ provider slices:
   future HC/profile renderer the resource tokens it needs without claiming HC
   rendering parity yet;
 - SSED plain HONMON renderer inputs infer conservative stream lengths from
-  generic `1f09 0001` entry markers and native index body boundaries for
-  marker-variant entries, keeping renderer/resource scans scoped to the focused
-  entry where the boundary is known;
+  generic `1f09 0001` entry markers, their observed `1f02`-prefixed form, and
+  native index body boundaries for marker-variant entries, keeping
+  renderer/resource scans scoped to the focused entry where the boundary is
+  known;
 - SSED KOJIEN6-style `COLSMPL.DIC` records are parsed as typed color-sample
   metadata preserving exact Munsell notation and JIS labels;
 - explicit deferred/unsupported diagnostics instead of fake output.

@@ -4385,12 +4385,47 @@ impl StubBookPackage {
         {
             return self.visual_body_for_ssed_dense_anchor(&anchor_id, None);
         }
-        let length = self.infer_ssed_stream_length(component, component_offset);
+        let stream_offset = self.ssed_stream_start_offset(component, component_offset);
+        let length = self.infer_ssed_stream_length(component, stream_offset);
         Ok(VisualBody::SsedStream {
             component: component.filename.clone(),
-            offset: component_offset,
+            offset: stream_offset,
             length,
         })
+    }
+
+    fn ssed_stream_start_offset(&self, component: &SsedComponent, component_offset: u64) -> u64 {
+        if component.role != SsedComponentRole::Honmon || component_offset < 2 {
+            return component_offset;
+        }
+        let Some(prefix_offset) = component_offset.checked_sub(2) else {
+            return component_offset;
+        };
+        let Some(path) = self
+            .resolve_readable_ssed_component_path(component)
+            .ok()
+            .flatten()
+        else {
+            return component_offset;
+        };
+        let Ok(mut reader) = SsedDataFile::open(path) else {
+            return component_offset;
+        };
+        let Ok(prefix_offset_usize) = usize::try_from(prefix_offset) else {
+            return component_offset;
+        };
+        let Ok(data) = reader.read_range(prefix_offset_usize, SSED_ENTRY_MARKER.len() + 2) else {
+            return component_offset;
+        };
+        if data.starts_with(&[0x1f, 0x02])
+            && data
+                .get(2..2 + SSED_ENTRY_MARKER.len())
+                .is_some_and(|marker| marker == SSED_ENTRY_MARKER)
+        {
+            prefix_offset
+        } else {
+            component_offset
+        }
     }
 
     fn infer_ssed_stream_length(
@@ -4410,12 +4445,15 @@ impl StubBookPackage {
         if start >= reader.header().expanded_size() {
             return None;
         }
-        if ssed_reader_starts_generic_entry_marker(&mut reader, start).ok()? {
-            return ssed_find_next_entry_marker_offset(&mut reader, start.saturating_add(1))
-                .ok()
-                .flatten()
-                .map(|next| next.saturating_sub(start) as u64)
-                .or_else(|| Some((reader.header().expanded_size() - start) as u64));
+        if let Some(marker_len) = ssed_reader_generic_entry_marker_len(&mut reader, start).ok()? {
+            return ssed_find_next_entry_marker_offset(
+                &mut reader,
+                start.saturating_add(marker_len),
+            )
+            .ok()
+            .flatten()
+            .map(|next| next.saturating_sub(start) as u64)
+            .or_else(|| Some((reader.header().expanded_size() - start) as u64));
         }
         if let Some(next_offset) =
             self.infer_next_ssed_index_body_offset(component, component_offset)
@@ -6853,16 +6891,22 @@ fn find_ssed_dense_anchor_record_end(data: &[u8]) -> Option<usize> {
         })
 }
 
-fn ssed_reader_starts_generic_entry_marker(
+fn ssed_reader_generic_entry_marker_len(
     reader: &mut SsedDataFile,
     offset: usize,
-) -> Result<bool> {
+) -> Result<Option<usize>> {
     let data = reader.read_range(offset, SSED_ENTRY_MARKER.len() + 2)?;
-    Ok(data.starts_with(&SSED_ENTRY_MARKER)
-        || data.starts_with(&[0x1f, 0x02])
-            && data
-                .get(2..2 + SSED_ENTRY_MARKER.len())
-                .is_some_and(|marker| marker == SSED_ENTRY_MARKER))
+    if data.starts_with(&[0x1f, 0x02])
+        && data
+            .get(2..2 + SSED_ENTRY_MARKER.len())
+            .is_some_and(|marker| marker == SSED_ENTRY_MARKER)
+    {
+        return Ok(Some(SSED_ENTRY_MARKER.len() + 2));
+    }
+    if data.starts_with(&SSED_ENTRY_MARKER) {
+        return Ok(Some(SSED_ENTRY_MARKER.len()));
+    }
+    Ok(None)
 }
 
 fn ssed_find_next_entry_marker_offset(
@@ -9672,6 +9716,71 @@ mod tests {
         let RendererInput::HcSsedStream { length, .. } = input else {
             panic!("SSED address should produce HC renderer input");
         };
+        assert_eq!(length, Some(second_entry_offset as u64));
+    }
+
+    #[test]
+    fn ssed_hc_renderer_input_preserves_prefixed_entry_marker_start() {
+        let dir = tempdir().unwrap();
+        let mut honmon = Vec::new();
+        honmon.extend_from_slice(&[0x1f, 0x02]);
+        honmon.extend_from_slice(&SSED_ENTRY_MARKER);
+        honmon.extend_from_slice(b"first");
+        let second_entry_offset = honmon.len();
+        honmon.extend_from_slice(&SSED_ENTRY_MARKER);
+        honmon.extend_from_slice(b"second");
+        fs::write(
+            dir.path().join("HONMON.DIC"),
+            fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "Prefixed marker".to_owned(),
+            components: vec![SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            }],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 1,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Prefixed marker".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let token = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 2,
+        })
+        .unwrap();
+
+        let input = package.renderer_input_for_target(&token).unwrap();
+        let RendererInput::HcSsedStream { offset, length, .. } = input else {
+            panic!("SSED address should produce HC renderer input");
+        };
+        assert_eq!(offset, 0);
         assert_eq!(length, Some(second_entry_offset as u64));
     }
 
