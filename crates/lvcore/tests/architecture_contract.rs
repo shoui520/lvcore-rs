@@ -3,11 +3,11 @@ use std::io::Write;
 use std::path::Path;
 
 use lvcore::{
-    BodySourceKind, BookLibrary, Capability, DriverRegistry, FormatFamily, GaijiPolicy,
-    GaijiSourcePreference, InternalResource, InternalTarget, NavigationStatus, NavigationSurface,
-    NavigationSurfaceKind, RenderMode, RenderOptions, RendererInput, ResolvedTargetKind,
-    ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode, SearchQuery,
-    SearchScope, StorageBackend, TargetKind, TargetToken, VisualBody,
+    ANDROID_LVEDINFO_MAGIC, BodySourceKind, BookLibrary, Capability, DriverRegistry, FormatFamily,
+    GaijiPolicy, GaijiSourcePreference, InternalResource, InternalTarget, NavigationStatus,
+    NavigationSurface, NavigationSurfaceKind, RenderMode, RenderOptions, RendererInput,
+    ResolvedTargetKind, ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode,
+    SearchQuery, SearchScope, StorageBackend, TargetKind, TargetToken, VisualBody,
 };
 use rusqlite::Connection;
 use tempfile::tempdir;
@@ -1589,6 +1589,40 @@ fn ssed_honmon_targets_accept_mac_extensionless_payload_alias() {
         panic!("extensionless Mac HONMON should still produce HC SSED renderer input");
     };
     assert_eq!(component, "HONMON.DIN");
+    assert_eq!(offset, 2);
+}
+
+#[test]
+fn ssed_android_lvedinfo_honmon_diw_uses_shared_ssed_driver() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("ANDROID.IDX"),
+        ssedinfo_fixture_with_magic_and_honmon(ANDROID_LVEDINFO_MAGIC, "HONMON.DIW"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIW"),
+        sseddata_literal_fixture(b"0123456789"),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert_eq!(package.metadata().format_family, FormatFamily::Ssed);
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIW".to_owned(),
+        block: 1,
+        offset: 2,
+    })
+    .unwrap();
+
+    let input = package.renderer_input_for_target(&target).unwrap();
+    let RendererInput::HcSsedStream {
+        component, offset, ..
+    } = input
+    else {
+        panic!("Android HONMON.DIW should produce HC SSED renderer input");
+    };
+    assert_eq!(component, "HONMON.DIW");
     assert_eq!(offset, 2);
 }
 
@@ -3187,7 +3221,11 @@ fn write_minimal_hourei_fixture(root: &Path) {
 }
 
 fn ssedinfo_fixture_with_honmon(honmon_filename: &str) -> Vec<u8> {
-    ssedinfo_fixture_with_honmon_index_type_and_blocks(honmon_filename, 0x91, 2)
+    ssedinfo_fixture_with_magic_and_honmon(SSEDINFO_MAGIC, honmon_filename)
+}
+
+fn ssedinfo_fixture_with_magic_and_honmon(magic: &[u8; 8], honmon_filename: &str) -> Vec<u8> {
+    ssedinfo_fixture_with_magic_honmon_index_type_and_blocks(magic, honmon_filename, 0x91, 2)
 }
 
 fn ssedinfo_fixture_with_honmon_index_type_and_blocks(
@@ -3195,9 +3233,23 @@ fn ssedinfo_fixture_with_honmon_index_type_and_blocks(
     index_type: u8,
     index_blocks: u32,
 ) -> Vec<u8> {
+    ssedinfo_fixture_with_magic_honmon_index_type_and_blocks(
+        SSEDINFO_MAGIC,
+        honmon_filename,
+        index_type,
+        index_blocks,
+    )
+}
+
+fn ssedinfo_fixture_with_magic_honmon_index_type_and_blocks(
+    magic: &[u8; 8],
+    honmon_filename: &str,
+    index_type: u8,
+    index_blocks: u32,
+) -> Vec<u8> {
     let record_start = 0x80;
     let mut data = vec![0u8; record_start + 5 * 0x30];
-    data[..8].copy_from_slice(SSEDINFO_MAGIC);
+    data[..8].copy_from_slice(magic);
     let title = b"Fixture Book";
     data[0x0c] = title.len() as u8;
     data[0x0d..0x0d + title.len()].copy_from_slice(title);

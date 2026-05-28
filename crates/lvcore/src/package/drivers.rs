@@ -13,6 +13,7 @@ use zip::result::ZipError;
 use crate::body::{BodyProvider, BodySourceKind, VisualBody};
 use crate::chm::{list_chm_entries, read_chm_entry};
 use crate::crypto::{
+    decrypt_android_diw_file_to_path, decrypt_android_diw_prefix,
     decrypt_logofont_cipher_file_to_path, decrypt_logofont_cipher_prefix,
     decrypt_macos_logofont_cipher_file_to_path, decrypt_macos_logofont_cipher_prefix,
 };
@@ -4627,7 +4628,12 @@ impl StubBookPackage {
         if prefix.len() < 16 {
             return Ok(None);
         }
-        let attempts: [(&str, PrefixDecryptFn, FileDecryptFn); 2] = [
+        let attempts: [(&str, PrefixDecryptFn, FileDecryptFn); 3] = [
+            (
+                "android_honmon_diw",
+                decrypt_android_diw_prefix,
+                decrypt_android_diw_file_to_path,
+            ),
             (
                 "macos_logofont_cipher",
                 decrypt_macos_logofont_cipher_prefix,
@@ -6521,10 +6527,13 @@ fn ssed_component_filename_aliases(component: &SsedComponent) -> Vec<String> {
         return Vec::new();
     }
     let upper = component.filename.to_ascii_uppercase();
-    if !matches!(upper.as_str(), "HONMON" | "HONMON.DIC" | "HONMON.DIN") {
+    if !matches!(
+        upper.as_str(),
+        "HONMON" | "HONMON.DIC" | "HONMON.DIN" | "HONMON.DIW"
+    ) {
         return Vec::new();
     }
-    ["HONMON", "HONMON.DIC", "HONMON.DIN"]
+    ["HONMON", "HONMON.DIC", "HONMON.DIN", "HONMON.DIW"]
         .into_iter()
         .filter(|alias| !alias.eq_ignore_ascii_case(&component.filename))
         .map(str::to_owned)

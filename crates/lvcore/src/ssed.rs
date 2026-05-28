@@ -12,6 +12,7 @@ pub const BLOCK_SIZE: u32 = 2048;
 pub const CHUNK_SIZE: usize = 0x8000;
 pub const WINDOW_SIZE: usize = 0x0ff0;
 pub const SSEDINFO_MAGIC: &[u8; 8] = b"SSEDINFO";
+pub const ANDROID_LVEDINFO_MAGIC: &[u8; 8] = b"LVEDINFO";
 pub const SSEDDATA_MAGIC: &[u8; 8] = b"SSEDDATA";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,7 +255,9 @@ impl SsedCatalog {
     }
 
     pub fn parse_bytes(data: &[u8]) -> Result<Self> {
-        if data.len() < SSEDINFO_MAGIC.len() || &data[..8] != SSEDINFO_MAGIC {
+        if data.len() < SSEDINFO_MAGIC.len()
+            || (&data[..8] != SSEDINFO_MAGIC && &data[..8] != ANDROID_LVEDINFO_MAGIC)
+        {
             return Err(Error::Driver("not SSEDINFO".to_owned()));
         }
         let title_len = data.get(0x0c).copied().unwrap_or(0) as usize;
@@ -399,7 +402,10 @@ fn decode_component_filename(rec: &[u8]) -> (String, bool) {
 
 fn component_role(component_type: u8, filename: &str) -> SsedComponentRole {
     let upper = filename.to_ascii_uppercase();
-    if matches!(upper.as_str(), "HONMON.DIC" | "HONMON.DIN" | "HONMON") {
+    if matches!(
+        upper.as_str(),
+        "HONMON.DIC" | "HONMON.DIN" | "HONMON.DIW" | "HONMON"
+    ) {
         return SsedComponentRole::Honmon;
     }
     match component_type {

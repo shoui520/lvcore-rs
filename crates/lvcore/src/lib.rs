@@ -57,8 +57,8 @@ pub use resources::{InternalResource, ResourceKind, ResourceProvider, ResourceRe
 pub use search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery, SearchScope};
 pub use sequence::{SequenceHint, SequenceProvider, TargetWindow};
 pub use ssed::{
-    SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
-    SsedDataHeader, SsedDataReader, SsedInfoLayout,
+    ANDROID_LVEDINFO_MAGIC, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent,
+    SsedComponentRole, SsedDataFile, SsedDataHeader, SsedDataReader, SsedInfoLayout,
 };
 pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
 pub use ssed_menu::{
