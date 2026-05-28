@@ -31,8 +31,8 @@ use crate::navigation::{
     NavigationSurface, NavigationSurfaceKind, PanelCell,
 };
 use crate::render::{
-    RenderMode, RenderOptions, RendererInput, RendererInputProvider, RendererProvider,
-    ResolvedTargetKind, ResolvedTargetView,
+    RenderCapability, RenderMode, RenderOptions, RendererInput, RendererInputProvider,
+    RendererProvider, ResolvedTargetKind, ResolvedTargetView,
 };
 use crate::resources::{
     InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
@@ -6358,6 +6358,8 @@ fn finalize_resolved_view(
     mut view: ResolvedTargetView,
     options: &RenderOptions,
 ) -> ResolvedTargetView {
+    update_visual_capabilities(&mut view);
+
     match options.mode {
         RenderMode::Native => {}
         RenderMode::BasicText => {
@@ -6402,6 +6404,64 @@ fn finalize_resolved_view(
     }
 
     view
+}
+
+fn update_visual_capabilities(view: &mut ResolvedTargetView) {
+    let Some(html) = view.display_html.as_deref() else {
+        return;
+    };
+    push_render_capability_once(&mut view.capabilities, RenderCapability::Html);
+
+    let lower = html.to_ascii_lowercase();
+    if lower.contains("<script") || lower.contains(".js") {
+        push_render_capability_once(&mut view.capabilities, RenderCapability::Javascript);
+    }
+    if lower.contains("<style") || lower.contains("stylesheet") || lower.contains(".css") {
+        push_render_capability_once(&mut view.capabilities, RenderCapability::Css);
+    }
+    if lower.contains("mathjax")
+        || lower.contains("tex-mml")
+        || lower.contains("<math")
+        || html.contains(r"\(")
+        || html.contains(r"\[")
+        || html.contains("$$")
+    {
+        push_render_capability_once(&mut view.capabilities, RenderCapability::MathJax);
+    }
+    if lower.contains("writing-mode")
+        || lower.contains("vertical-rl")
+        || lower.contains("tb-rl")
+        || lower.contains("tategaki")
+    {
+        push_render_capability_once(&mut view.capabilities, RenderCapability::VerticalText);
+    }
+
+    for resource in &view.resources {
+        match resource.kind {
+            ResourceKind::Image | ResourceKind::Template | ResourceKind::Colscr => {
+                push_render_capability_once(&mut view.capabilities, RenderCapability::Images);
+            }
+            ResourceKind::Audio | ResourceKind::PcmData | ResourceKind::SoundData => {
+                push_render_capability_once(&mut view.capabilities, RenderCapability::Audio);
+            }
+            ResourceKind::Css => {
+                push_render_capability_once(&mut view.capabilities, RenderCapability::Css);
+            }
+            ResourceKind::Javascript => {
+                push_render_capability_once(&mut view.capabilities, RenderCapability::Javascript);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn push_render_capability_once(
+    capabilities: &mut Vec<RenderCapability>,
+    capability: RenderCapability,
+) {
+    if !capabilities.contains(&capability) {
+        capabilities.push(capability);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7150,6 +7210,9 @@ mod tests {
         assert_eq!(help_view.kind, ResolvedTargetKind::InfoPage);
         assert_eq!(help_view.display_html.as_deref(), Some("<h1>Help</h1>"));
         assert_eq!(view.resources.len(), 2);
+        assert!(view.capabilities.contains(&RenderCapability::Html));
+        assert!(view.capabilities.contains(&RenderCapability::Images));
+        assert!(view.capabilities.contains(&RenderCapability::Audio));
         assert!(
             view.resources
                 .iter()
@@ -7259,6 +7322,49 @@ mod tests {
         let debug_trace = debug.debug_trace.as_deref().unwrap();
         assert!(debug_trace.contains(r#""mode":"debug""#));
         assert!(debug_trace.contains(r#""has_display_html":true"#));
+    }
+
+    #[test]
+    fn visual_capabilities_are_derived_from_html_and_resources() {
+        let target = TargetToken::new(&InternalTarget::Unsupported {
+            reason: "synthetic".to_owned(),
+        })
+        .unwrap();
+        let resource = ResourceToken::new(&InternalResource::PackageFile {
+            path: "sound.mp3".to_owned(),
+            resource_kind: ResourceKind::Audio,
+        })
+        .unwrap();
+        let view = finalize_resolved_view(
+            ResolvedTargetView {
+                kind: ResolvedTargetKind::EntryBody,
+                target,
+                title: None,
+                display_html: Some(
+                    r#"<p>\(x+1\)</p><link rel="stylesheet" href="style.css">"#.to_owned(),
+                ),
+                basic_text: None,
+                scroll_anchor: None,
+                surface: None,
+                resources: vec![ResourceRef {
+                    token: resource,
+                    kind: ResourceKind::Audio,
+                    label: None,
+                    href: None,
+                    diagnostics: Vec::new(),
+                }],
+                links: Vec::new(),
+                capabilities: Vec::new(),
+                diagnostics: Vec::new(),
+                debug_trace: None,
+            },
+            &RenderOptions::default(),
+        );
+
+        assert!(view.capabilities.contains(&RenderCapability::Html));
+        assert!(view.capabilities.contains(&RenderCapability::Css));
+        assert!(view.capabilities.contains(&RenderCapability::MathJax));
+        assert!(view.capabilities.contains(&RenderCapability::Audio));
     }
 
     #[test]
