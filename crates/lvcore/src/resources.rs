@@ -45,6 +45,13 @@ pub enum InternalResource {
         end_block: u32,
         end_offset: u32,
     },
+    SsedFigure {
+        component: String,
+        block: u32,
+        offset: u32,
+        width: u32,
+        height: u32,
+    },
     MediaBlob {
         store: String,
         key: String,
@@ -73,6 +80,7 @@ impl InternalResource {
             | Self::SsedComponentAddress { resource_kind, .. }
             | Self::ChmFile { resource_kind, .. } => *resource_kind,
             Self::SsedPcmDataRange { .. } => ResourceKind::PcmData,
+            Self::SsedFigure { .. } => ResourceKind::Image,
             Self::MediaBlob { resource_kind, .. } => *resource_kind,
             Self::SoundData { .. } => ResourceKind::SoundData,
             Self::LooseMovie { .. } => ResourceKind::Video,
@@ -211,5 +219,19 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("PCMDATA"));
+    }
+
+    #[test]
+    fn token_round_trips_ssed_figure_resource() {
+        let resource = InternalResource::SsedFigure {
+            component: "FIGURE.DIC".to_owned(),
+            block: 1200,
+            offset: 17,
+            width: 9,
+            height: 2,
+        };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("FIGURE"));
     }
 }

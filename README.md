@@ -125,6 +125,8 @@ provider slices:
   using `Sound/WaveFile.map`, including MWALEARN-style RIFF/WAVE records;
 - SSED KOJIEN6-style `MONOSCR.DIC` component-address resources can be decoded
   as generated PNG images from 64x64 1bpp bitmap cells;
+- SSED older `FIGURE.DIC` variable-size 1bpp figure bitmaps can be decoded as
+  generated PNG image resources when renderer controls provide dimensions;
 - SSED KOJIEN6-style `COLSMPL.DIC` records are parsed as typed color-sample
   metadata preserving exact Munsell notation and JIS labels;
 - explicit deferred/unsupported diagnostics instead of fake output.

@@ -45,6 +45,7 @@ use crate::ssed::{
     BLOCK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
     SsedDataHeader,
 };
+use crate::ssed_figure::{FigureDimensions, figure_bitmap_to_png};
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_jis_pair,
     decode_title_text, is_leaf_page, is_simple_leaf_index_type, is_supported_index_type,
@@ -1115,6 +1116,40 @@ impl ResourceProvider for StubBookPackage {
                     diagnostics,
                 })
             }
+            InternalResource::SsedFigure {
+                component,
+                block,
+                offset,
+                width,
+                height,
+            } => {
+                let resolved = self
+                    .ssed_component_by_name(&component)
+                    .and_then(|component| self.resolve_readable_ssed_component_path(component).ok())
+                    .flatten();
+                let mut diagnostics = Vec::new();
+                let href = if resolved.is_some() && FigureDimensions::new(width, height).is_ok() {
+                    Some(format!("lvcore://resource/{}", token.as_str()))
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!(
+                            "{component} figure resource was not found or has invalid dimensions"
+                        ),
+                    ));
+                    None
+                };
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: ResourceKind::Image,
+                    label: Some(format!(
+                        "{component}:{block:08}:{offset:04}:{width}x{height}"
+                    )),
+                    href,
+                    mime_type: Some("image/png".to_owned()),
+                    diagnostics,
+                })
+            }
             InternalResource::SsedPcmDataRange {
                 component,
                 start_block,
@@ -1316,6 +1351,13 @@ impl ResourceProvider for StubBookPackage {
                     "SSED component-address resources are not readable for {resource_kind:?}"
                 )))
             }
+            InternalResource::SsedFigure {
+                component,
+                block,
+                offset,
+                width,
+                height,
+            } => self.read_ssed_figure_resource(&component, block, offset, width, height),
             InternalResource::SsedPcmDataRange {
                 component,
                 start_block,
@@ -5245,6 +5287,52 @@ impl StubBookPackage {
         )
     }
 
+    fn read_ssed_figure_resource(
+        &self,
+        component_name: &str,
+        block: u32,
+        offset: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>> {
+        let Some(component) = self.ssed_component_by_name(component_name) else {
+            return Err(Error::Driver(format!(
+                "SSED component not declared: {component_name}"
+            )));
+        };
+        if component.role != SsedComponentRole::Figure
+            && !component.filename.eq_ignore_ascii_case("FIGURE.DIC")
+        {
+            return Err(Error::Driver(format!(
+                "{} is not a FIGURE component",
+                component.filename
+            )));
+        }
+        let dimensions = FigureDimensions::new(width, height)?;
+        let Some(relative_offset) = component.relative_offset(block, offset) else {
+            return Err(Error::Driver(format!(
+                "FIGURE address {component_name}:{block:08}:{offset:04} is outside the component range"
+            )));
+        };
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Err(Error::Driver(format!(
+                "SSED component not found: {}",
+                component.filename
+            )));
+        };
+        let size = dimensions.bitmap_bytes()?;
+        let mut reader = SsedDataFile::open(path)?;
+        let relative_offset = usize::try_from(relative_offset)
+            .map_err(|_| Error::Driver("FIGURE offset is too large".to_owned()))?;
+        let bitmap = reader.read_range(relative_offset, size)?;
+        if bitmap.len() != size {
+            return Err(Error::Driver(format!(
+                "FIGURE bitmap at {component_name}:{block:08}:{offset:04} is truncated"
+            )));
+        }
+        figure_bitmap_to_png(&bitmap, dimensions)
+    }
+
     fn read_ssed_pcmdata_range(
         &self,
         component_name: &str,
@@ -8769,6 +8857,71 @@ mod tests {
         assert_eq!(resource.kind, ResourceKind::Image);
         assert_eq!(resource.mime_type.as_deref(), Some("image/png"));
         assert!(resource.href.is_some());
+        let png = package.read_resource(&token).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn figure_resource_reads_variable_bitmap_png() {
+        let dir = tempdir().unwrap();
+        let mut payload = vec![0_u8; 17];
+        payload.extend_from_slice(&[0x80, 0x80, 0x7f, 0x00]);
+        fs::write(
+            dir.path().join("FIGURE.DIC"),
+            fixture_sseddata_literal_chunks(&[&payload], 1200, 1200),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "Figure".to_owned(),
+            components: vec![SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0xd0,
+                start_block: 1200,
+                end_block: 1200,
+                data: [0; 4],
+                filename: "FIGURE.DIC".to_owned(),
+                role: SsedComponentRole::Figure,
+            }],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 1,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("Figure".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let token = ResourceToken::new(&InternalResource::SsedFigure {
+            component: "FIGURE.DIC".to_owned(),
+            block: 1200,
+            offset: 17,
+            width: 9,
+            height: 2,
+        })
+        .unwrap();
+
+        let resource = package.resolve_resource(&token).unwrap();
+        assert_eq!(resource.kind, ResourceKind::Image);
+        assert_eq!(resource.mime_type.as_deref(), Some("image/png"));
+        assert_eq!(
+            resource.label.as_deref(),
+            Some("FIGURE.DIC:00001200:0017:9x2")
+        );
         let png = package.read_resource(&token).unwrap();
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     }

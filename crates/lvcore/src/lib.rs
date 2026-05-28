@@ -23,6 +23,7 @@ pub mod search;
 pub mod sequence;
 pub mod ssed;
 pub mod ssed_color_sample;
+pub mod ssed_figure;
 pub mod ssed_index;
 pub mod ssed_loose_media;
 pub mod ssed_menu;
