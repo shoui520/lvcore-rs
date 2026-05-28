@@ -767,7 +767,7 @@ fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
     assert!(
         pages
             .iter()
-            .any(|page| page.item_id == "hanrei.html" && page.label_text == "hanrei.html")
+            .any(|page| page.item_id == "hanrei.html" && page.label_text == "Root")
     );
     assert!(pages.iter().any(|page| {
         page.item_id == "HANREI.chm"
@@ -776,7 +776,11 @@ fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
                 .iter()
                 .any(|diagnostic| diagnostic.code == "ssed_hanrei_chm_deferred")
     }));
-    assert!(pages.iter().any(|page| page.item_id == "HANREI/about.html"));
+    assert!(
+        pages
+            .iter()
+            .any(|page| page.item_id == "HANREI/about.html" && page.label_text == "Folder about")
+    );
     assert!(
         pages
             .iter()
@@ -853,6 +857,28 @@ fn ssed_hanrei_capability_detects_mac_help_bundle_without_root_html() {
     };
     assert_eq!(pages.len(), 1);
     assert_eq!(pages[0].item_id, "BOOK_HELP.localized/contents/hanrei.html");
+}
+
+#[test]
+fn ssed_empty_hanrei_folder_is_not_a_capability() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir_all(dir.path().join("HANREI/image")).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        !package
+            .metadata()
+            .capabilities
+            .contains(&Capability::Hanrei)
+    );
+    assert!(
+        !package
+            .home_surfaces()
+            .unwrap()
+            .iter()
+            .any(|surface| surface.kind == NavigationSurfaceKind::Hanrei)
+    );
 }
 
 #[test]

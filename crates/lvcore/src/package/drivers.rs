@@ -4581,7 +4581,7 @@ impl StubBookPackage {
         let resource_kind = resource_kind_from_path(&normalized);
         pages.push(SsedHanreiPage {
             item_id: normalized.clone(),
-            label: ssed_hanrei_page_label(&normalized),
+            label: self.ssed_hanrei_package_page_label(&normalized),
             resource: InternalResource::PackageFile {
                 path: normalized,
                 resource_kind,
@@ -4590,6 +4590,18 @@ impl StubBookPackage {
             diagnostics: Vec::new(),
         });
         Ok(())
+    }
+
+    fn ssed_hanrei_package_page_label(&self, normalized: &str) -> String {
+        if path_has_extension(normalized, &["html", "htm"])
+            && let Ok(data) = self.storage.read(Path::new(normalized))
+        {
+            let html = decode_package_html_text(&data);
+            if let Some(label) = html_document_label(&html) {
+                return label;
+            }
+        }
+        ssed_hanrei_page_label(normalized)
     }
 
     fn push_ssed_hanrei_chm_pages(
@@ -5507,6 +5519,67 @@ fn decode_package_html_text(data: &[u8]) -> String {
     }
 }
 
+fn html_document_label(html: &str) -> Option<String> {
+    ["title", "h1", "h2", "h3"]
+        .into_iter()
+        .find_map(|tag| html_tag_text(html, tag))
+        .and_then(|label| {
+            let label = collapse_label_whitespace(&strip_html_tags_for_label(&label));
+            (!label.is_empty()).then_some(label)
+        })
+}
+
+fn html_tag_text(html: &str, tag: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let open_pattern = format!("<{tag}");
+    let close_pattern = format!("</{tag}>");
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find(&open_pattern) {
+        let open_start = cursor + relative_start;
+        let tag_end_byte = lower
+            .as_bytes()
+            .get(open_start + open_pattern.len())
+            .copied()
+            .unwrap_or(b'>');
+        if !matches!(tag_end_byte, b'>' | b'/' | b' ' | b'\t' | b'\r' | b'\n') {
+            cursor = open_start + open_pattern.len();
+            continue;
+        }
+        let content_start = lower[open_start..]
+            .find('>')
+            .map(|offset| open_start + offset + 1)?;
+        let content_end = lower[content_start..]
+            .find(&close_pattern)
+            .map(|offset| content_start + offset)?;
+        return Some(html[content_start..content_end].to_owned());
+    }
+    None
+}
+
+fn strip_html_tags_for_label(value: &str) -> String {
+    let mut output = String::new();
+    let mut in_tag = false;
+    for ch in value.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => output.push(ch),
+            _ => {}
+        }
+    }
+    html_unescape_label(&output)
+}
+
+fn html_unescape_label(value: &str) -> String {
+    html_unescape_minimal(value)
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+}
+
+fn collapse_label_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn resolved_kind_for_package_html_path(path: &str) -> ResolvedTargetKind {
     let lower = path.to_ascii_lowercase();
     if lower.contains("hanrei")
@@ -6146,7 +6219,6 @@ fn has_ssed_hanrei_casefolded(storage: &DirectoryStorage) -> bool {
         storage,
         &[
             "HANREI.chm",
-            "HANREI",
             "hanrei.html",
             "HANREI.html",
             "HANREI/index.html",
@@ -6155,6 +6227,9 @@ fn has_ssed_hanrei_casefolded(storage: &DirectoryStorage) -> bool {
             "HANREI/hanrei.htm",
         ],
     ) {
+        return true;
+    }
+    if has_html_file_under_casefolded(storage, "HANREI", 0) {
         return true;
     }
     let Ok(entries) = storage.list_dir(Path::new("")) else {
@@ -6183,6 +6258,32 @@ fn has_ssed_hanrei_casefolded(storage: &DirectoryStorage) -> bool {
         ]
         .into_iter()
         .any(|candidate| storage.exists(Path::new(&candidate)).unwrap_or(false))
+    })
+}
+
+fn has_html_file_under_casefolded(
+    storage: &DirectoryStorage,
+    relative_dir: &str,
+    depth: usize,
+) -> bool {
+    if depth > 8 || !storage.exists(Path::new(relative_dir)).unwrap_or(false) {
+        return false;
+    }
+    let Ok(children) = storage.list_dir(Path::new(relative_dir)) else {
+        return false;
+    };
+    children.into_iter().any(|child| {
+        let Some(file_name) = child.file_name().map(|value| value.to_string_lossy()) else {
+            return false;
+        };
+        if file_name.starts_with("._") {
+            return false;
+        }
+        let candidate = format!("{relative_dir}/{file_name}");
+        if child.is_dir() {
+            return has_html_file_under_casefolded(storage, &candidate, depth + 1);
+        }
+        child.is_file() && path_has_extension(&file_name, &["html", "htm"])
     })
 }
 
@@ -6247,6 +6348,24 @@ mod tests {
     use crate::lved_sqlite::apply_sqlcipher_key;
 
     use super::*;
+
+    #[test]
+    fn extracts_reader_labels_from_hanrei_html() {
+        assert_eq!(
+            html_document_label(
+                r#"<html><head><title>広辞苑 第七版 凡例</title></head><body></body></html>"#
+            )
+            .as_deref(),
+            Some("広辞苑 第七版 凡例")
+        );
+        assert_eq!(
+            html_document_label(
+                r#"<html><body><h1><span>有斐閣&nbsp;法律学小辞典</span> 凡例</h1></body></html>"#
+            )
+            .as_deref(),
+            Some("有斐閣 法律学小辞典 凡例")
+        );
+    }
 
     #[test]
     fn parses_chm_hhc_toc_labels_and_anchors() {
