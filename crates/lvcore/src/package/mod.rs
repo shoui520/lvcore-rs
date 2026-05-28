@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::search::SearchMode;
+
 use crate::body::BodyProvider;
 use crate::error::{Error, Result};
 use crate::gaiji::GaijiProvider;
@@ -70,6 +72,8 @@ pub struct BookMetadata {
     pub title: Option<String>,
     pub root_fingerprint: String,
     pub capabilities: Vec<Capability>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search_modes: Vec<SearchMode>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

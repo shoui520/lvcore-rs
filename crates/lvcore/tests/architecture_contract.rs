@@ -982,6 +982,15 @@ fn ssed_home_surfaces_are_capability_based() {
         !metadata.capabilities.contains(&Capability::FullTextSearch),
         "SSED fulltext must not be advertised until a real provider exists"
     );
+    assert_eq!(
+        metadata.search_modes,
+        vec![
+            SearchMode::Exact,
+            SearchMode::Forward,
+            SearchMode::Backward,
+            SearchMode::Partial,
+        ]
+    );
 
     let surfaces = package.home_surfaces().unwrap();
     assert!(surfaces.iter().any(|surface| {
@@ -1780,6 +1789,15 @@ fn ssed_simple_index_search_returns_title_backed_hits() {
     )
     .unwrap();
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert_eq!(
+        package.metadata().search_modes,
+        vec![
+            SearchMode::Exact,
+            SearchMode::Forward,
+            SearchMode::Backward,
+            SearchMode::Partial,
+        ]
+    );
 
     let page = package
         .search(&SearchQuery {
@@ -2592,6 +2610,18 @@ fn lved_advanced_search_mode_uses_named_search_column() {
             .unwrap();
     }
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert_eq!(
+        package.metadata().search_modes,
+        vec![
+            SearchMode::Exact,
+            SearchMode::Forward,
+            SearchMode::Backward,
+            SearchMode::Partial,
+            SearchMode::FullText,
+            SearchMode::Advanced("advanced1".to_owned()),
+            SearchMode::Advanced("advanced2".to_owned()),
+        ]
+    );
 
     let page = package
         .search(&SearchQuery {

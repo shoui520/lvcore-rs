@@ -110,6 +110,7 @@ impl PackageDriver for SsedDriver {
         let catalog = ssed_catalog_for_root(&detection.root)?;
         let package_root = detection.root.clone();
         let capabilities = ssed_capabilities(&catalog, &package_root);
+        let search_modes = ssed_search_modes(&catalog, &package_root);
         Ok(Box::new(StubBookPackage::new(
             &package_root,
             detection,
@@ -117,6 +118,7 @@ impl PackageDriver for SsedDriver {
             StubPackageStores {
                 ssed_catalog: Some(catalog),
                 gaiji_unicode_map: load_package_uni_gaiji_maps(&package_root),
+                search_modes,
                 ..Default::default()
             },
         )))
@@ -164,6 +166,7 @@ impl PackageDriver for LvedSqliteDriver {
         let store = LvedSqliteStore::discover(root)?
             .ok_or_else(|| Error::Driver("not an LVED_SQLITE3 package".to_owned()))?;
         let summary = store.summary()?;
+        let search_modes = store.search_modes()?;
         let mut evidence = vec![
             store
                 .payload_path
@@ -190,10 +193,11 @@ impl PackageDriver for LvedSqliteDriver {
         Ok(Box::new(StubBookPackage::new(
             &package_root,
             detection,
-            lved_capabilities(),
+            lved_capabilities(&search_modes),
             StubPackageStores {
                 lved_store: Some(store),
                 lved_summary: Some(summary),
+                search_modes,
                 ..Default::default()
             },
         )))
@@ -250,6 +254,7 @@ impl PackageDriver for LvlMultiViewDriver {
             multiview_capabilities(),
             StubPackageStores {
                 multiview_store: store,
+                search_modes: standard_search_modes(),
                 ..Default::default()
             },
         )))
@@ -295,6 +300,7 @@ impl PackageDriver for HoureiDriver {
             hourei_capabilities(),
             StubPackageStores {
                 hourei_store: store,
+                search_modes: standard_search_modes(),
                 ..Default::default()
             },
         )))
@@ -323,6 +329,7 @@ pub struct StubPackageStores {
     pub lved_summary: Option<LvedSqliteSummary>,
     pub multiview_store: Option<MultiviewStore>,
     pub hourei_store: Option<HoureiStore>,
+    pub search_modes: Vec<SearchMode>,
     pub gaiji_unicode_map: BTreeMap<String, String>,
 }
 
@@ -473,6 +480,11 @@ impl StubBookPackage {
             title: detected.title,
             root_fingerprint,
             capabilities,
+            search_modes: if stores.search_modes.is_empty() {
+                default_search_modes_for_family(detected.format_family)
+            } else {
+                stores.search_modes.clone()
+            },
         };
         let routing_aliases = routing_aliases_for_package(detected.format_family, &stores);
         Self {
@@ -6998,10 +7010,8 @@ fn has_component_payload_casefolded(storage: &DirectoryStorage, component: &Ssed
             .any(|alias| storage.exists(Path::new(alias)).unwrap_or(false))
 }
 
-fn lved_capabilities() -> Vec<Capability> {
-    vec![
-        Capability::NativeSearch,
-        Capability::FullTextSearch,
+fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> {
+    let mut capabilities = vec![
         Capability::TitleIndexBrowse,
         Capability::Hanrei,
         Capability::Resources,
@@ -7009,7 +7019,14 @@ fn lved_capabilities() -> Vec<Capability> {
         Capability::PreservedHtml,
         Capability::ContinuousView,
         Capability::DeferredRendering,
-    ]
+    ];
+    if !search_modes.is_empty() {
+        capabilities.push(Capability::NativeSearch);
+    }
+    if search_modes.contains(&SearchMode::FullText) {
+        capabilities.push(Capability::FullTextSearch);
+    }
+    capabilities
 }
 
 fn multiview_capabilities() -> Vec<Capability> {
@@ -7038,6 +7055,43 @@ fn hourei_capabilities() -> Vec<Capability> {
         Capability::LawNavigation,
         Capability::DeferredRendering,
     ]
+}
+
+fn standard_search_modes() -> Vec<SearchMode> {
+    vec![
+        SearchMode::Exact,
+        SearchMode::Forward,
+        SearchMode::Backward,
+        SearchMode::Partial,
+        SearchMode::FullText,
+    ]
+}
+
+fn default_search_modes_for_family(format_family: FormatFamily) -> Vec<SearchMode> {
+    match format_family {
+        FormatFamily::LvlMultiView | FormatFamily::Hourei => standard_search_modes(),
+        _ => Vec::new(),
+    }
+}
+
+fn ssed_search_modes(catalog: &SsedCatalog, root: &Path) -> Vec<SearchMode> {
+    if !catalog.has_role(SsedComponentRole::Index) {
+        return Vec::new();
+    }
+    let mut modes = vec![
+        SearchMode::Exact,
+        SearchMode::Forward,
+        SearchMode::Backward,
+        SearchMode::Partial,
+    ];
+    let storage = DirectoryStorage::new(root.to_path_buf());
+    if catalog
+        .honmon()
+        .is_some_and(|component| has_component_payload_casefolded(&storage, component))
+    {
+        modes.push(SearchMode::FullText);
+    }
+    modes
 }
 
 #[cfg(test)]

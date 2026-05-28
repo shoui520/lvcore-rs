@@ -40,6 +40,8 @@ Frontend code should treat `lvcore` as the only component that understands
 LogoVista internals. The frontend receives:
 
 - book metadata and format labels for library UI badges;
+- explicitly available search modes, including LVED advanced search columns when
+  present;
 - home/navigation/search surfaces;
 - stable opaque `TargetToken` values;
 - rendered target views with HTML/text/resources/links/diagnostics;
@@ -87,6 +89,9 @@ provider slices:
   generic id/body schemas;
 - SQLCipher-backed LVED_SQLITE3 list/search/content/info/media access where the
   package key is available;
+- frontend-visible search-mode metadata, with SSED modes derived from available
+  title indexes/HONMON payloads and LVED advanced modes derived from actual
+  `search` table columns;
 - LVLMultiView menu/search/body access for decoded payloads;
 - Hourei law tree/search/body/resource access for decoded law packages;
 - SSED HANREI/info surface discovery for the three observed help layouts:

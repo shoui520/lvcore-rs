@@ -165,6 +165,11 @@ impl LvedSqliteStore {
         })
     }
 
+    pub fn search_modes(&self) -> Result<Vec<SearchMode>> {
+        let connection = self.open_readonly()?;
+        lved_available_search_modes(&connection)
+    }
+
     pub fn search(
         &self,
         query: &str,
@@ -1098,6 +1103,40 @@ fn lved_search_where(
     }
 }
 
+fn lved_available_search_modes(connection: &Connection) -> Result<Vec<SearchMode>> {
+    if !sqlite_table_exists(connection, "search") || !sqlite_table_exists(connection, "list") {
+        return Ok(Vec::new());
+    }
+    let search_columns = sqlite_columns(connection, "search")?;
+    let list_columns = sqlite_columns(connection, "list")?;
+    if !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
+        return Ok(Vec::new());
+    }
+    let mut modes = Vec::new();
+    if has_column(&search_columns, "filter") || has_column(&search_columns, "forward") {
+        modes.push(SearchMode::Exact);
+    }
+    if has_column(&search_columns, "forward") {
+        modes.push(SearchMode::Forward);
+    }
+    if has_column(&search_columns, "back") {
+        modes.push(SearchMode::Backward);
+    }
+    if has_column(&search_columns, "part") {
+        modes.push(SearchMode::Partial);
+    }
+    if has_column(&search_columns, "fts") {
+        modes.push(SearchMode::FullText);
+    }
+    modes.extend(
+        search_columns
+            .into_iter()
+            .filter(|column| column.starts_with("advanced"))
+            .map(SearchMode::Advanced),
+    );
+    Ok(modes)
+}
+
 fn fts_match(
     column: &str,
     normalized: &str,
@@ -1714,6 +1753,18 @@ mod tests {
         }
         fs::write(dir.path().join("main.key"), key).unwrap();
         let store = LvedSqliteStore::discover(dir.path()).unwrap().unwrap();
+        assert_eq!(
+            store.search_modes().unwrap(),
+            vec![
+                SearchMode::Exact,
+                SearchMode::Forward,
+                SearchMode::Backward,
+                SearchMode::Partial,
+                SearchMode::FullText,
+                SearchMode::Advanced("advanced1".to_owned()),
+                SearchMode::Advanced("advanced2".to_owned()),
+            ]
+        );
 
         let hits = store.search("alp", &SearchMode::Forward, 10).unwrap();
 
