@@ -764,10 +764,6 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::Ssed {
             let (code, message) = match surface_id {
-                "hanrei" => (
-                    "ssed_hanrei_deferred",
-                    "SSED HANREI content wrapping/parsing is not implemented yet",
-                ),
                 "panels" => (
                     "ssed_panels_deferred",
                     "SSED Panels.xml/Panel parsing is not implemented yet",
@@ -4344,28 +4340,17 @@ fn push_surface_if_exists(
         .iter()
         .any(|candidate| storage.exists(Path::new(candidate)).unwrap_or(false))
     {
-        let (status, diagnostics) = match kind {
-            NavigationSurfaceKind::Hanrei => (
-                NavigationStatus::Deferred,
-                vec![Diagnostic::info(
-                    "ssed_hanrei_deferred",
-                    "SSED HANREI content exists, but HANREI wrapping/parsing is not implemented yet",
-                )],
-            ),
-            NavigationSurfaceKind::Panel => (NavigationStatus::Available, Vec::new()),
-            _ => (NavigationStatus::Available, Vec::new()),
-        };
         surfaces.push(HomeSurface {
             surface_id: surface_id.to_owned(),
             kind,
-            status,
+            status: NavigationStatus::Available,
             title_html: title.to_owned(),
             title_text: title.to_owned(),
             target: Some(TargetToken::new(&InternalTarget::MenuItem {
                 surface_id: surface_id.to_owned(),
                 item_id: "root".to_owned(),
             })?),
-            diagnostics,
+            diagnostics: Vec::new(),
         });
     }
     Ok(())
@@ -5493,7 +5478,7 @@ fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
     if catalog.has_role(SsedComponentRole::Toc) {
         capabilities.push(Capability::Toc);
     }
-    if has_any_casefolded(&storage, &["HANREI.chm", "HANREI", "hanrei.html"]) {
+    if has_ssed_hanrei_casefolded(&storage) {
         capabilities.push(Capability::Hanrei);
     }
     if has_any_casefolded(&storage, &["Panels.xml", "Panel"]) {
@@ -5511,6 +5496,51 @@ fn has_any_casefolded(storage: &DirectoryStorage, candidates: &[&str]) -> bool {
     candidates
         .iter()
         .any(|candidate| storage.exists(Path::new(candidate)).unwrap_or(false))
+}
+
+fn has_ssed_hanrei_casefolded(storage: &DirectoryStorage) -> bool {
+    if has_any_casefolded(
+        storage,
+        &[
+            "HANREI.chm",
+            "HANREI",
+            "hanrei.html",
+            "HANREI.html",
+            "HANREI/index.html",
+            "HANREI/index.htm",
+            "HANREI/hanrei.html",
+            "HANREI/hanrei.htm",
+        ],
+    ) {
+        return true;
+    }
+    let Ok(entries) = storage.list_dir(Path::new("")) else {
+        return false;
+    };
+    entries.into_iter().any(|path| {
+        if !path.is_dir() {
+            return false;
+        }
+        let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
+            return false;
+        };
+        if name.starts_with("._") || !name.to_ascii_lowercase().ends_with("_help.localized") {
+            return false;
+        }
+        let root = name.replace('\\', "/");
+        [
+            format!("{root}/index.html"),
+            format!("{root}/index.htm"),
+            format!("{root}/menu.html"),
+            format!("{root}/top.html"),
+            format!("{root}/contents/hanrei.html"),
+            format!("{root}/contents/hanrei.htm"),
+            format!("{root}/contents/copyright.html"),
+            format!("{root}/contents/copyright.htm"),
+        ]
+        .into_iter()
+        .any(|candidate| storage.exists(Path::new(&candidate)).unwrap_or(false))
+    })
 }
 
 fn has_component_payload_casefolded(storage: &DirectoryStorage, component: &SsedComponent) -> bool {

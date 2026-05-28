@@ -783,6 +783,37 @@ fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
 }
 
 #[test]
+fn ssed_hanrei_capability_detects_mac_help_bundle_without_root_html() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir_all(dir.path().join("BOOK_HELP.localized/contents")).unwrap();
+    fs::write(
+        dir.path().join("BOOK_HELP.localized/contents/hanrei.html"),
+        b"<html><body>Mac help only</body></html>",
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::Hanrei)
+    );
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.kind == NavigationSurfaceKind::Hanrei
+            && surface.status == NavigationStatus::Available
+    }));
+    let surface = package.open_surface("hanrei").unwrap();
+    let NavigationSurface::InfoPages { pages, .. } = surface else {
+        panic!("Mac-only SSED HANREI should open as info pages");
+    };
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].item_id, "BOOK_HELP.localized/contents/hanrei.html");
+}
+
+#[test]
 fn package_html_resource_targets_decode_cp932_and_rewrite_html_links() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
