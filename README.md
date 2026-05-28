@@ -75,6 +75,11 @@ provider slices:
 - native indexed search/browse for the observed SSED leaf row families:
   simple, keyless pointer-table, body-only, tagged/grouped, keyword,
   cross-reference, and multi-selector rows;
+- SSED simple-index internal-page traversal for exact/forward searches, so large
+  title indexes can seek near the requested key instead of always scanning from
+  the first leaf page;
+- SSED title-label decoding for raw JIS X 0208 title bytes that can otherwise
+  look like printable ASCII, while preserving real Latin title labels;
 - initial SSED full-text search over HONMON body windows behind native index
   targets, with diagnostics and explicit HC rendering separation;
 - dense HONMON anchor dereference for supported SQLite sidecars, including
@@ -100,7 +105,7 @@ known structures.
 - SSED full-text search is implemented as a bounded, index-anchored HONMON scan;
   it is not a substitute for HC-rendered semantic text and may need more product
   tuning for dense/sidecar-heavy dictionaries.
-- SSED index internal tree pages are currently bypassed with linear leaf-page
-  scans. This is correct enough for target resolution, but not the final
-  performance model for very large books.
+- SSED internal-page traversal is currently implemented only for simple
+  exact/forward title-index paths. Backward, partial, keyword, cross-reference,
+  and multi-selector performance still need format-specific indexing work.
 - CHM/HANREI wrapping is still reader-surface work, not finished rendering.
