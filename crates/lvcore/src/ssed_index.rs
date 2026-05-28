@@ -722,6 +722,9 @@ pub fn decode_index_key(data: &[u8]) -> String {
 
 pub fn decode_title_text(data: &[u8]) -> String {
     let filtered = title_payload_bytes(data);
+    if looks_like_jis_x0208_title_bytes(&filtered) {
+        return decode_title_payload_text(data);
+    }
     if looks_like_plain_ascii_title(&filtered) {
         return String::from_utf8_lossy(&filtered).trim().to_owned();
     }
@@ -828,6 +831,45 @@ fn looks_like_plain_ascii_title(data: &[u8]) -> bool {
         .filter(|byte| matches!(**byte, b'!' | b'#' | b'$' | b'%'))
         .count();
     alnum_or_space * 2 >= data.len() && jis_like_punctuation * 3 <= data.len()
+}
+
+fn looks_like_jis_x0208_title_bytes(data: &[u8]) -> bool {
+    if data.len() < 4 || !data.len().is_multiple_of(2) {
+        return false;
+    }
+    if !data.iter().all(|byte| (0x21..=0x7e).contains(byte)) {
+        return false;
+    }
+    if data.iter().all(|byte| {
+        byte.is_ascii_alphanumeric()
+            || matches!(
+                *byte,
+                b' ' | b'-' | b'\'' | b'.' | b',' | b'/' | b'+' | b'&' | b':'
+            )
+    }) {
+        return false;
+    }
+
+    let mut japanese = 0usize;
+    for pair in data.chunks_exact(2) {
+        let Some(decoded) = decode_jis_pair(pair[0], pair[1]) else {
+            return false;
+        };
+        japanese += usize::from(is_japanese_title_char(decoded));
+    }
+    japanese * 2 >= data.len() / 2
+}
+
+fn is_japanese_title_char(value: char) -> bool {
+    matches!(
+        value,
+        '\u{3000}'..='\u{30ff}'
+            | '\u{3400}'..='\u{9fff}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{ff00}'..='\u{ffef}'
+            | '\u{25cb}'..='\u{25ef}'
+            | '\u{2010}'..='\u{2015}'
+    )
 }
 
 pub(crate) fn decode_jis_pair(first: u8, second: u8) -> Option<char> {
@@ -953,7 +995,17 @@ mod tests {
     fn keeps_plain_ascii_title_text() {
         assert_eq!(decode_title_text(b"alpha\x1f\x0a"), "alpha");
         assert_eq!(decode_title_text(b"gamma\x1f\x0a"), "gamma");
+        assert_eq!(decode_title_text(b"LOAN\x1f\x0a"), "LOAN");
         assert_eq!(decode_title_text(b"\ngamma\x1f\x0a"), "");
+    }
+
+    #[test]
+    fn decodes_raw_jis_title_bytes_that_look_ascii() {
+        assert_eq!(decode_title_text(b"BG?G\x1f\x0a"), "打診");
+        assert_eq!(
+            decode_title_text(b"\"~0-K!$bKtK!$J$j\x1f\x0a"),
+            "◯悪法も又法なり"
+        );
     }
 
     #[test]
