@@ -84,9 +84,21 @@ pub struct LvedListItem {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LvedTreeIndexItem {
+    pub source: String,
+    pub raw_target: String,
     pub data_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
     pub level: u32,
     pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvedTreeIndex {
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub items: Vec<LvedTreeIndexItem>,
 }
 
 impl LvedSqliteStore {
@@ -138,11 +150,8 @@ impl LvedSqliteStore {
         {
             return Ok(Some(title));
         }
-        if let Some(title) = self.tree_index_title()? {
-            return Ok(Some(title));
-        }
         let connection = self.open_readonly()?;
-        Ok(lved_sqlite_title_from_connection(&connection))
+        Ok(lved_sqlite_title_from_connection(&connection).or(self.tree_index_title()?))
     }
 
     pub fn summary(&self) -> Result<LvedSqliteSummary> {
@@ -153,15 +162,13 @@ impl LvedSqliteStore {
             .and_then(|info| nonempty_string(info.title.clone()));
         let title = match title {
             Some(title) => Some(title),
-            None => self
-                .tree_index_title()?
-                .or_else(|| lved_sqlite_title_from_connection(&connection)),
+            None => lved_sqlite_title_from_connection(&connection).or(self.tree_index_title()?),
         };
         Ok(LvedSqliteSummary {
             title,
             list_available: lved_list_available(&connection)?,
             info_available: lved_info_available(&connection)?,
-            tree_available: self.tree_index_path().is_some(),
+            tree_available: !self.tree_index_paths()?.is_empty(),
         })
     }
 
@@ -316,28 +323,87 @@ impl LvedSqliteStore {
     }
 
     pub fn tree_index_items(&self) -> Result<Vec<LvedTreeIndexItem>> {
-        let Some(path) = self.tree_index_path() else {
+        Ok(self
+            .tree_indexes()?
+            .into_iter()
+            .flat_map(|tree| tree.items)
+            .collect())
+    }
+
+    pub fn tree_indexes(&self) -> Result<Vec<LvedTreeIndex>> {
+        let root = self.payload_path.parent().ok_or_else(|| {
+            Error::Driver("LVED_SQLITE3 payload has no parent directory".to_owned())
+        })?;
+        self.tree_index_paths()?
+            .into_iter()
+            .map(|path| {
+                let source = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let items = parse_lved_tree_index(&fs::read(&path)?, &source)?;
+                let title = items
+                    .iter()
+                    .find_map(|row| (row.level == 0).then_some(row.label.clone()))
+                    .filter(|label| usable_lved_tree_title(label));
+                Ok(LvedTreeIndex {
+                    source,
+                    title,
+                    items,
+                })
+            })
+            .collect()
+    }
+
+    pub fn tree_index_paths(&self) -> Result<Vec<PathBuf>> {
+        let Some(root) = self.payload_path.parent() else {
             return Ok(Vec::new());
         };
-        parse_lved_tree_index(&fs::read(path)?)
+        let mut paths = Vec::new();
+        push_lved_tree_index_path(&mut paths, root.join("res/tree.idx"));
+        push_lved_tree_index_path(&mut paths, root.join("tree.idx"));
+        for entry in fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()? {
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
+            {
+                push_lved_tree_index_path(&mut paths, path);
+            }
+        }
+        let res_dir = root.join("res");
+        if res_dir.is_dir() {
+            for entry in fs::read_dir(&res_dir)?.collect::<std::io::Result<Vec<_>>>()? {
+                let path = entry.path();
+                if path.is_file()
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
+                {
+                    push_lved_tree_index_path(&mut paths, path);
+                }
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        let mut retained_trees = Vec::new();
+        for path in paths {
+            let data = fs::read(&path)?;
+            if is_lved_text_tree_index(&data) {
+                retained_trees.push(path);
+            }
+        }
+        Ok(retained_trees)
     }
 
     pub fn tree_index_path(&self) -> Option<PathBuf> {
-        let root = self.payload_path.parent()?;
-        let candidates = [root.join("res/tree.idx"), root.join("tree.idx")];
-        candidates.into_iter().find(|path| path.is_file())
+        self.tree_index_paths().ok()?.into_iter().next()
     }
 
     pub fn tree_index_title(&self) -> Result<Option<String>> {
-        let Some(path) = self.tree_index_path() else {
-            return Ok(None);
-        };
-        let rows = parse_lved_tree_index(&fs::read(path)?)?;
-        Ok(rows.into_iter().find_map(|row| {
-            (row.level == 0)
-                .then_some(row.label)
-                .filter(|label| usable_lved_tree_title(label))
-        }))
+        Ok(self.tree_indexes()?.into_iter().find_map(|tree| tree.title))
     }
 
     pub fn media_blob(&self, store: &str, key: &str) -> Result<Option<Vec<u8>>> {
@@ -452,7 +518,7 @@ fn lved_info_available(connection: &Connection) -> Result<bool> {
         .map_err(Error::from)
 }
 
-fn parse_lved_tree_index(bytes: &[u8]) -> Result<Vec<LvedTreeIndexItem>> {
+fn parse_lved_tree_index(bytes: &[u8], source: &str) -> Result<Vec<LvedTreeIndexItem>> {
     let text = decode_sqlite_text(bytes);
     let mut items = Vec::new();
     for line in text.lines() {
@@ -461,7 +527,10 @@ fn parse_lved_tree_index(bytes: &[u8]) -> Result<Vec<LvedTreeIndexItem>> {
             continue;
         }
         let mut columns = line.splitn(3, '\t');
-        let Some(data_id) = columns.next().and_then(|value| value.parse::<i64>().ok()) else {
+        let Some(raw_target) = columns.next() else {
+            continue;
+        };
+        let Some((data_id, query)) = parse_lved_tree_target(raw_target) else {
             continue;
         };
         let Some(level) = columns.next().and_then(|value| value.parse::<u32>().ok()) else {
@@ -471,12 +540,73 @@ fn parse_lved_tree_index(bytes: &[u8]) -> Result<Vec<LvedTreeIndexItem>> {
             continue;
         };
         items.push(LvedTreeIndexItem {
+            source: source.to_owned(),
+            raw_target: raw_target.trim().to_owned(),
             data_id,
+            query,
             level,
             label: label.to_owned(),
         });
     }
     Ok(items)
+}
+
+fn parse_lved_tree_target(value: &str) -> Option<(i64, Option<String>)> {
+    let stripped = value.trim();
+    let (target, query) = match stripped.split_once('?') {
+        Some((target, query)) => (target, Some(query.to_owned())),
+        None => (stripped, None),
+    };
+    if target.is_empty()
+        || !target
+            .bytes()
+            .all(|byte| byte == b'-' || byte.is_ascii_digit())
+    {
+        return None;
+    }
+    target.parse::<i64>().ok().map(|value| (value, query))
+}
+
+fn is_lved_text_tree_index(bytes: &[u8]) -> bool {
+    let Some((_, text)) = decode_retained_text(bytes) else {
+        return false;
+    };
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r').trim_start_matches('\u{feff}');
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.split('\t');
+        let Some(first) = parts.next().map(str::trim) else {
+            return false;
+        };
+        let Some(second) = parts.next().map(str::trim) else {
+            return false;
+        };
+        if is_eight_digit_hex(first) && is_eight_digit_hex(second) {
+            return false;
+        }
+        return parse_lved_tree_target(first).is_some() && second.parse::<u32>().is_ok();
+    }
+    false
+}
+
+fn decode_retained_text(bytes: &[u8]) -> Option<(&'static str, String)> {
+    if let Ok(value) = std::str::from_utf8(bytes) {
+        return Some(("utf-8", value.trim_start_matches('\u{feff}').to_owned()));
+    }
+    let (decoded, _, had_errors) = SHIFT_JIS.decode(bytes);
+    (!had_errors).then(|| ("cp932", decoded.into_owned()))
+}
+
+fn is_eight_digit_hex(value: &str) -> bool {
+    value.len() == 8 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn push_lved_tree_index_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if path.is_file() && !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
 }
 
 fn usable_lved_tree_title(label: &str) -> bool {
@@ -1447,6 +1577,18 @@ fn normalize_title_candidate(value: &str) -> Option<String> {
             value = head.trim().to_owned();
         }
     }
+    if let Some(stripped) = value.strip_prefix("書籍版") {
+        value = stripped
+            .trim_matches(|ch: char| ch.is_whitespace() || "　:：-－【】『』《》".contains(ch))
+            .to_owned();
+    }
+    if value.ends_with('序')
+        && ["辞典", "事典", "辞書", "字典"]
+            .iter()
+            .any(|marker| value.contains(marker))
+    {
+        value.pop();
+    }
     value = value
         .trim_matches(|ch: char| ch.is_whitespace() || "　:：-－【】『』《》".contains(ch))
         .to_owned();
@@ -1814,6 +1956,10 @@ mod tests {
         assert_eq!(
             normalize_title_candidate("『広辞苑 第七版』　　&copy;2018年").as_deref(),
             Some("広辞苑 第七版")
+        );
+        assert_eq!(
+            normalize_title_candidate("書籍版『岩波 日本史辞典』序").as_deref(),
+            Some("岩波 日本史辞典")
         );
     }
 

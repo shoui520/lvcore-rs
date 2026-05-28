@@ -2730,7 +2730,7 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
     assert_eq!(
         package.metadata().title.as_deref(),
-        Some("Example Dictionary")
+        Some("Example Dictionary 第2版")
     );
     let surfaces = package.home_surfaces().unwrap();
     assert!(surfaces.iter().any(|surface| {
@@ -2817,6 +2817,50 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
         null_id_view.display_html.as_deref(),
         Some("<h1>Null id info</h1>")
     );
+}
+
+#[test]
+fn lved_retained_product_idx_opens_as_navigation_tree() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    fs::remove_file(dir.path().join("res/tree.idx")).unwrap();
+    fs::write(
+        dir.path().join("res/ibio5_2.idx"),
+        "\u{feff}-127\t0\tBiology Table\r\n102?key=visible\t1\tGamma\r\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("000002C5.idx"),
+        b"00000000\t0000ffff\t\tRank A\r\n",
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert_eq!(
+        package.metadata().title.as_deref(),
+        Some("Example Dictionary 第2版")
+    );
+    assert!(package.home_surfaces().unwrap().iter().any(|surface| {
+        surface.kind == NavigationSurfaceKind::LvedTree
+            && surface.status == NavigationStatus::Available
+    }));
+    let surface = package.open_surface("lved-tree").unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+        panic!("LVED retained product .idx should open as a hierarchical tree");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "Biology Table");
+    let gamma = &nodes[0].children[0];
+    assert_eq!(gamma.label_text, "Gamma");
+    assert_eq!(
+        gamma.target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::LvedRow {
+            table: "content".to_owned(),
+            row_id: 102,
+            anchor: None,
+        }
+    );
+    assert!(nodes.iter().all(|node| node.label_text != "Rank A"));
 }
 
 #[test]

@@ -40,7 +40,7 @@ pub use hourei::{HoureiLawEntry, HoureiLawWindow, HoureiSearchHit, HoureiStore};
 pub use library::{BookLibrary, RoutedTargetView, RoutedTargetWindow};
 pub use lved_sqlite::{
     AndroidDictInfo, LvedInfoPage, LvedKeyFile, LvedListItem, LvedListWindow, LvedSearchHit,
-    LvedSqliteStore, LvedSqliteSummary, LvedTreeIndexItem,
+    LvedSqliteStore, LvedSqliteSummary, LvedTreeIndex, LvedTreeIndexItem,
 };
 pub use navigation::{
     HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,

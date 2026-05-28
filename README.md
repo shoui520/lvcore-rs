@@ -96,7 +96,8 @@ provider slices:
   `t_contents`, `HONBUN`, extensionless main wordlist tables, and conservative
   generic id/body schemas;
 - SQLCipher-backed LVED_SQLITE3 list/search/content/info/media access where the
-  package key is available;
+  package key is available, plus retained text-tree navigation from `tree.idx`
+  and product-specific `res/*.idx` files;
 - frontend-visible search-mode metadata, with SSED modes derived from available
   title indexes/HONMON payloads and LVED advanced modes derived from actual
   `search` table columns;
