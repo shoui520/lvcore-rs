@@ -11337,6 +11337,46 @@ mod tests {
     }
 
     #[test]
+    fn sharded_t_contents_sidecar_tables_are_all_considered() {
+        let dir = tempdir().unwrap();
+        let catalog = write_ssed_dense_sidecar_fixture(
+            dir.path(),
+            DenseSidecarFixture::ShardedTContentsBodyRows,
+        );
+        let package = ReaderBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("Dense".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            PackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let target = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 32,
+        })
+        .unwrap();
+
+        let body = package.visual_body_for_target(&target).unwrap();
+
+        assert_eq!(
+            body,
+            VisualBody::PreservedHtml {
+                html: "<div>beta sharded html</div>".to_owned(),
+                source: BodySourceKind::RendererDatabase,
+            }
+        );
+    }
+
+    #[test]
     fn dense_sidecar_decodes_utf8_and_cp932_blob_text() {
         let dir = tempdir().unwrap();
         let catalog =
@@ -11531,6 +11571,7 @@ mod tests {
         BodyRows,
         AndroidRowidTimesFiveBodyRows,
         TitleOnlyThenBodyRows,
+        ShardedTContentsBodyRows,
         BlobBodyRows,
         MissingBetaRow,
     }
@@ -11606,6 +11647,9 @@ mod tests {
                     )
                     .unwrap();
                 write_dense_body_db(root.join("body.db"), true, true, false);
+            }
+            DenseSidecarFixture::ShardedTContentsBodyRows => {
+                write_sharded_t_contents_body_db(root.join("body.db"));
             }
             DenseSidecarFixture::BlobBodyRows => {
                 write_dense_body_db(root.join("body.db"), true, true, true);
@@ -11775,6 +11819,19 @@ mod tests {
                     .unwrap();
             }
         }
+    }
+
+    fn write_sharded_t_contents_body_db(path: PathBuf) {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .execute_batch(
+                "
+                create table t_contents_1 (f_DataId text primary key, f_Title text, f_Html text);
+                create table t_contents_2 (f_DataId text primary key, f_Title text, f_Html text);
+                insert into t_contents_2 values ('00000002', 'beta', '<div>beta sharded html</div>');
+                ",
+            )
+            .unwrap();
     }
 
     fn write_android_body_db(path: PathBuf, table: &str) {

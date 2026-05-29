@@ -117,15 +117,59 @@ pub fn lookup_ssed_dense_sidecar_body_with_resolvers(
     anchor_id: &str,
     resolver_hint: Option<&str>,
 ) -> Result<SsedSidecarLookup> {
-    let Some(resolver) = choose_resolver(resolvers, resolver_hint).cloned() else {
+    let candidates = candidate_resolvers(resolvers, resolver_hint);
+    if candidates.is_empty() {
         return Ok(SsedSidecarLookup::NoResolver {
             diagnostics: vec![Diagnostic::warning(
                 "ssed_dense_sidecar_not_found",
                 "dense HONMON anchor was found, but no renderable SQLite sidecar body table was identified",
             )],
         });
-    };
-    lookup_resolver_body(&resolver, anchor_id)
+    }
+
+    let mut first_missing: Option<SsedSidecarLookup> = None;
+    for resolver in &candidates {
+        match lookup_resolver_body(resolver, anchor_id)? {
+            resolved @ SsedSidecarLookup::Resolved(_) => return Ok(resolved),
+            missing @ SsedSidecarLookup::MissingRow { .. } => {
+                if first_missing.is_none() {
+                    first_missing = Some(missing);
+                }
+            }
+            no_resolver @ SsedSidecarLookup::NoResolver { .. } => {
+                if first_missing.is_none() {
+                    first_missing = Some(no_resolver);
+                }
+            }
+        }
+    }
+
+    if let Some(SsedSidecarLookup::MissingRow {
+        resolver,
+        query_values,
+        mut diagnostics,
+    }) = first_missing
+    {
+        diagnostics.push(
+            Diagnostic::info(
+                "ssed_dense_sidecar_resolver_exhausted",
+                "dense HONMON anchor was not found in any candidate sidecar body table",
+            )
+            .with_context("resolver_count", candidates.len().to_string()),
+        );
+        return Ok(SsedSidecarLookup::MissingRow {
+            resolver,
+            query_values,
+            diagnostics,
+        });
+    }
+
+    Ok(SsedSidecarLookup::NoResolver {
+        diagnostics: vec![Diagnostic::warning(
+            "ssed_dense_sidecar_not_found",
+            "dense HONMON anchor was found, but no renderable SQLite sidecar body table was identified",
+        )],
+    })
 }
 
 pub fn discover_ssed_sidecar_body_resolvers(
@@ -153,23 +197,27 @@ pub fn discover_ssed_sidecar_body_resolvers(
     Ok(resolvers)
 }
 
-fn choose_resolver<'a>(
+fn candidate_resolvers<'a>(
     resolvers: &'a [SsedSidecarBodyResolver],
     resolver_hint: Option<&str>,
-) -> Option<&'a SsedSidecarBodyResolver> {
+) -> Vec<&'a SsedSidecarBodyResolver> {
     if let Some(hint) = resolver_hint {
         let hint = hint.casefold();
-        if let Some(resolver) = resolvers.iter().find(|resolver| {
-            resolver
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().casefold() == hint)
-                .unwrap_or(false)
-        }) {
-            return Some(resolver);
+        let matches = resolvers
+            .iter()
+            .filter(|resolver| {
+                resolver
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().casefold() == hint)
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        if !matches.is_empty() {
+            return matches;
         }
     }
-    resolvers.first()
+    resolvers.iter().collect()
 }
 
 fn lookup_resolver_body(
@@ -335,11 +383,12 @@ fn resolver_for_table(
 }
 
 fn sidecar_kind_for_table(table: &str) -> SsedSidecarKind {
-    if table.eq_ignore_ascii_case("t_contents") {
+    let table = table.casefold();
+    if table == "t_contents" || table.starts_with("t_contents_") {
         SsedSidecarKind::TContents
-    } else if table.eq_ignore_ascii_case("HONBUN") {
+    } else if table == "honbun" {
         SsedSidecarKind::Honbun
-    } else if table.eq_ignore_ascii_case("main") {
+    } else if table == "main" {
         SsedSidecarKind::MainWordlist
     } else {
         SsedSidecarKind::GenericBody
