@@ -987,6 +987,16 @@ fn ssed_home_surfaces_are_capability_based() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
     fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 10, 2, 13, 0)),
+    )
+    .unwrap();
+    fs::write(
         dir.path().join("MENU.DIC"),
         sseddata_literal_fixture(&menu_stream_fixture(10, 2)),
     )
@@ -1106,6 +1116,33 @@ fn ssed_home_surfaces_are_capability_based() {
             offset: 2,
         } if component == "HONMON.DIC"
     ));
+}
+
+#[test]
+fn ssed_missing_declared_indexes_do_not_advertise_search_or_title_browse() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        !package
+            .metadata()
+            .capabilities
+            .contains(&Capability::NativeSearch),
+        "declared index components without payload files must not become native search"
+    );
+    assert!(
+        !package
+            .metadata()
+            .capabilities
+            .contains(&Capability::TitleIndexBrowse),
+        "declared index components without payload files must not become title browse"
+    );
+    assert!(package.metadata().search_modes.is_empty());
+    assert!(!package.home_surfaces().unwrap().iter().any(|surface| {
+        surface.kind == NavigationSurfaceKind::TitleIndexBrowse
+            && surface.status == NavigationStatus::Available
+    }));
 }
 
 #[test]

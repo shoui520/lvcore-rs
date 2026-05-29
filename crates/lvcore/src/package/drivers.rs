@@ -879,10 +879,11 @@ impl NavigationProvider for ReaderBookPackage {
                     "Panels",
                     &["Panels.xml", "Panel"],
                 )?;
-                if self.ssed_catalog.as_ref().is_some_and(|catalog| {
-                    catalog.has_role(SsedComponentRole::Title)
-                        || catalog.has_role(SsedComponentRole::Index)
-                }) {
+                if self
+                    .ssed_catalog
+                    .as_ref()
+                    .is_some_and(|catalog| ssed_has_index_payload(catalog, &self.storage))
+                {
                     surfaces.push(HomeSurface {
                         surface_id: "title-index".to_owned(),
                         kind: NavigationSurfaceKind::TitleIndexBrowse,
@@ -9076,17 +9077,18 @@ fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
         Capability::DeferredRendering,
     ];
     let storage = DirectoryStorage::new(root.to_path_buf());
-    if catalog.has_role(SsedComponentRole::Index) {
+    let has_index_payload = ssed_has_index_payload(catalog, &storage);
+    if has_index_payload {
         capabilities.push(Capability::NativeSearch);
     }
-    if catalog.has_role(SsedComponentRole::Index)
+    if has_index_payload
         && catalog
             .honmon()
             .is_some_and(|component| has_component_payload_casefolded(&storage, component))
     {
         capabilities.push(Capability::FullTextSearch);
     }
-    if catalog.has_role(SsedComponentRole::Title) || catalog.has_role(SsedComponentRole::Index) {
+    if has_index_payload {
         capabilities.push(Capability::TitleIndexBrowse);
     }
     if ssed_navigation_component_has_non_empty_surface(
@@ -9292,6 +9294,14 @@ fn has_component_payload_casefolded(storage: &DirectoryStorage, component: &Ssed
             .any(|alias| storage.exists(Path::new(alias)).unwrap_or(false))
 }
 
+fn ssed_has_index_payload(catalog: &SsedCatalog, storage: &DirectoryStorage) -> bool {
+    catalog
+        .components_by_role(SsedComponentRole::Index)
+        .any(|component| {
+            component.has_positive_range() && has_component_payload_casefolded(storage, component)
+        })
+}
+
 fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> {
     let mut capabilities = vec![
         Capability::TitleIndexBrowse,
@@ -9357,7 +9367,8 @@ fn default_search_modes_for_family(format_family: FormatFamily) -> Vec<SearchMod
 }
 
 fn ssed_search_modes(catalog: &SsedCatalog, root: &Path) -> Vec<SearchMode> {
-    if !catalog.has_role(SsedComponentRole::Index) {
+    let storage = DirectoryStorage::new(root.to_path_buf());
+    if !ssed_has_index_payload(catalog, &storage) {
         return Vec::new();
     }
     let mut modes = vec![
@@ -9366,7 +9377,6 @@ fn ssed_search_modes(catalog: &SsedCatalog, root: &Path) -> Vec<SearchMode> {
         SearchMode::Backward,
         SearchMode::Partial,
     ];
-    let storage = DirectoryStorage::new(root.to_path_buf());
     if catalog
         .honmon()
         .is_some_and(|component| has_component_payload_casefolded(&storage, component))
