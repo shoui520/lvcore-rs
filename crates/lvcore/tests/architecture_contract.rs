@@ -1154,6 +1154,71 @@ fn ssed_panels_can_read_package_adjacent_panel_sidecar_directory() {
 }
 
 #[test]
+fn ssed_missing_declared_menu_does_not_hide_panel_home_surface() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("IWKOKU7N");
+    let sibling_panel_root = root.path().join("IWKOKU7N_Panel");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(&sibling_panel_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("Panels.xml"),
+        r#"<panels>
+  <panel index="01000000" paneltype="menu" count_x="1">
+    <title>五十音</title>
+    <data><cell ref="01010000">あ</cell></data>
+  </panel>
+  <panel index="01010000" paneltype="contents">
+    <title>あ</title>
+    <data type="bin" filename="Panel\All-A.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    fs::write(
+        sibling_panel_root.join("All-A.bin"),
+        panel_bin_fixture(10, 2),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    assert!(
+        !package.metadata().capabilities.contains(&Capability::Menu),
+        "a catalog-declared MENU.DIC without a payload must not become a reader capability"
+    );
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::Panels)
+    );
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(
+        !surfaces
+            .iter()
+            .any(|surface| surface.kind == NavigationSurfaceKind::Menu),
+        "missing MENU.DIC should not be exposed as an actionable home surface"
+    );
+    assert!(surfaces.iter().any(|surface| {
+        surface.kind == NavigationSurfaceKind::Panel
+            && surface.status == NavigationStatus::Available
+    }));
+    let child_panel = package.open_surface("panels:01010000").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
+        panic!("Panels remain the native navigation surface when MENU.DIC is absent");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn empty_ssed_menu_is_not_exposed_as_targetable_home_surface() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

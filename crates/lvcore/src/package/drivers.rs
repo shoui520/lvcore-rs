@@ -568,6 +568,83 @@ impl ReaderBookPackage {
             ssed_sounddata_index: OnceLock::new(),
         }
     }
+
+    fn ssed_navigation_home_surface(
+        &self,
+        surface_id: &str,
+        kind: NavigationSurfaceKind,
+        title: &str,
+        role: SsedComponentRole,
+        fallback_name: &str,
+    ) -> Result<Option<HomeSurface>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(None);
+        };
+        let Some(component) = catalog
+            .components_by_role(role)
+            .find(|component| component.has_positive_range())
+            .or_else(|| catalog.component_named(fallback_name))
+        else {
+            return Ok(None);
+        };
+
+        match self.resolve_readable_ssed_component_path(component) {
+            Ok(Some(_)) => {}
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                return Ok(Some(HomeSurface {
+                    surface_id: surface_id.to_owned(),
+                    kind,
+                    status: NavigationStatus::Deferred,
+                    title_html: title.to_owned(),
+                    title_text: title.to_owned(),
+                    target: None,
+                    diagnostics: vec![
+                        Diagnostic::warning(
+                            "ssed_navigation_component_decode_failed",
+                            format!(
+                                "{} is present but not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                }));
+            }
+        }
+
+        let empty_diagnostic =
+            self.ssed_navigation_empty_sentinel_diagnostic(role, fallback_name)?;
+        let is_empty = empty_diagnostic.is_some();
+        let target = if is_empty {
+            None
+        } else {
+            Some(match role {
+                SsedComponentRole::Toc => TargetToken::new(&InternalTarget::TocItem {
+                    surface_id: surface_id.to_owned(),
+                    item_id: "root".to_owned(),
+                })?,
+                _ => TargetToken::new(&InternalTarget::MenuItem {
+                    surface_id: surface_id.to_owned(),
+                    item_id: "root".to_owned(),
+                })?,
+            })
+        };
+
+        Ok(Some(HomeSurface {
+            surface_id: surface_id.to_owned(),
+            kind,
+            status: if is_empty {
+                NavigationStatus::Empty
+            } else {
+                NavigationStatus::Available
+            },
+            title_html: title.to_owned(),
+            title_text: title.to_owned(),
+            target,
+            diagnostics: empty_diagnostic.into_iter().collect(),
+        }))
+    }
 }
 
 impl BookPackage for ReaderBookPackage {
@@ -632,68 +709,23 @@ impl NavigationProvider for ReaderBookPackage {
         let mut surfaces = Vec::new();
         match self.metadata.format_family {
             FormatFamily::Ssed => {
-                if self
-                    .ssed_catalog
-                    .as_ref()
-                    .is_some_and(|catalog| catalog.has_role(SsedComponentRole::Menu))
-                    || self.storage.exists(Path::new("MENU.DIC"))?
-                {
-                    let empty_diagnostic = self.ssed_navigation_empty_sentinel_diagnostic(
-                        SsedComponentRole::Menu,
-                        "MENU.DIC",
-                    )?;
-                    let is_empty = empty_diagnostic.is_some();
-                    surfaces.push(HomeSurface {
-                        surface_id: "menu".to_owned(),
-                        kind: NavigationSurfaceKind::Menu,
-                        status: if is_empty {
-                            NavigationStatus::Empty
-                        } else {
-                            NavigationStatus::Available
-                        },
-                        title_html: "MENU".to_owned(),
-                        title_text: "MENU".to_owned(),
-                        target: if is_empty {
-                            None
-                        } else {
-                            Some(TargetToken::new(&InternalTarget::MenuItem {
-                                surface_id: "menu".to_owned(),
-                                item_id: "root".to_owned(),
-                            })?)
-                        },
-                        diagnostics: empty_diagnostic.into_iter().collect(),
-                    });
+                if let Some(surface) = self.ssed_navigation_home_surface(
+                    "menu",
+                    NavigationSurfaceKind::Menu,
+                    "MENU",
+                    SsedComponentRole::Menu,
+                    "MENU.DIC",
+                )? {
+                    surfaces.push(surface);
                 }
-                if self
-                    .ssed_catalog
-                    .as_ref()
-                    .is_some_and(|catalog| catalog.has_role(SsedComponentRole::Toc))
-                {
-                    let empty_diagnostic = self.ssed_navigation_empty_sentinel_diagnostic(
-                        SsedComponentRole::Toc,
-                        "TOC.DIC",
-                    )?;
-                    let is_empty = empty_diagnostic.is_some();
-                    surfaces.push(HomeSurface {
-                        surface_id: "toc".to_owned(),
-                        kind: NavigationSurfaceKind::Toc,
-                        status: if is_empty {
-                            NavigationStatus::Empty
-                        } else {
-                            NavigationStatus::Available
-                        },
-                        title_html: "TOC".to_owned(),
-                        title_text: "TOC".to_owned(),
-                        target: if is_empty {
-                            None
-                        } else {
-                            Some(TargetToken::new(&InternalTarget::TocItem {
-                                surface_id: "toc".to_owned(),
-                                item_id: "root".to_owned(),
-                            })?)
-                        },
-                        diagnostics: empty_diagnostic.into_iter().collect(),
-                    });
+                if let Some(surface) = self.ssed_navigation_home_surface(
+                    "toc",
+                    NavigationSurfaceKind::Toc,
+                    "TOC",
+                    SsedComponentRole::Toc,
+                    "TOC.DIC",
+                )? {
+                    surfaces.push(surface);
                 }
                 if self
                     .ssed_catalog
@@ -9114,7 +9146,7 @@ fn ssed_navigation_component_has_non_empty_surface(
         return !(parsed.records.is_empty() && parsed.empty_sentinel);
     }
 
-    true
+    false
 }
 
 fn has_any_casefolded(storage: &DirectoryStorage, candidates: &[&str]) -> bool {
