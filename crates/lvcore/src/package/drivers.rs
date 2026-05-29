@@ -91,7 +91,7 @@ use crate::ssed_sidecar::{
     SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
     discover_ssed_sidecar_body_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
 };
-use crate::ssed_sound_data::{read_sounddata_record, resolve_sounddata_record};
+use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
 use crate::storage::{DirectoryStorage, StorageBackend};
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
@@ -380,6 +380,7 @@ pub struct ReaderBookPackage {
     ssed_sidecar_body_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
+    ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -564,6 +565,7 @@ impl ReaderBookPackage {
             gaiji_unicode_map: stores.gaiji_unicode_map,
             ssed_sidecar_body_resolvers: OnceLock::new(),
             ssed_pdfspread_database: OnceLock::new(),
+            ssed_sounddata_index: OnceLock::new(),
         }
     }
 }
@@ -1462,7 +1464,9 @@ impl ResourceProvider for ReaderBookPackage {
                 })
             }
             InternalResource::SoundData { sound_id } => {
-                let resolved = resolve_sounddata_record(&self.root, sound_id)?;
+                let resolved = self
+                    .ssed_sounddata_index()?
+                    .and_then(|index| index.record(sound_id));
                 let mut diagnostics = Vec::new();
                 let href = if resolved.is_some() {
                     Some(format!("lvcore://resource/{}", token.as_str()))
@@ -1630,7 +1634,10 @@ impl ResourceProvider for ReaderBookPackage {
                 Ok(lookup.pdf)
             }
             InternalResource::SoundData { sound_id } => {
-                let Some(bytes) = read_sounddata_record(&self.root, sound_id)? else {
+                let Some(index) = self.ssed_sounddata_index()? else {
+                    return Err(Error::Driver("SoundData index not found".to_owned()));
+                };
+                let Some(bytes) = index.read_record(sound_id)? else {
                     return Err(Error::Driver(format!(
                         "SoundData record not found: {sound_id:08x}"
                     )));
@@ -4587,6 +4594,16 @@ impl ReaderBookPackage {
             .get_or_init(|| find_pdfspread_database(&self.root).map_err(|error| error.to_string()));
         match database {
             Ok(path) => Ok(path.as_ref()),
+            Err(error) => Err(Error::Driver(error.clone())),
+        }
+    }
+
+    fn ssed_sounddata_index(&self) -> Result<Option<&SoundDataIndex>> {
+        let index = self
+            .ssed_sounddata_index
+            .get_or_init(|| load_sounddata_index(&self.root).map_err(|error| error.to_string()));
+        match index {
+            Ok(index) => Ok(index.as_ref()),
             Err(error) => Err(Error::Driver(error.clone())),
         }
     }

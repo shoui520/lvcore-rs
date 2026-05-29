@@ -26,6 +26,27 @@ impl SoundDataIndex {
     pub fn record(&self, sound_id: u32) -> Option<&SoundDataMapRecord> {
         self.records.get(&sound_id)
     }
+
+    pub fn read_record(&self, sound_id: u32) -> Result<Option<Vec<u8>>> {
+        let Some(record) = self.record(sound_id) else {
+            return Ok(None);
+        };
+        let file_len = self.sounddata_path.metadata()?.len();
+        let Some(end_offset) = record.offset.checked_add(record.length) else {
+            return Ok(None);
+        };
+        if end_offset > file_len {
+            return Ok(None);
+        }
+        let Ok(length) = usize::try_from(record.length) else {
+            return Ok(None);
+        };
+        let mut file = fs::File::open(&self.sounddata_path)?;
+        file.seek(SeekFrom::Start(record.offset))?;
+        let mut raw = vec![0_u8; length];
+        file.read_exact(&mut raw)?;
+        Ok(Some(portable_sounddata_audio_bytes(raw)))
+    }
 }
 
 pub fn load_sounddata_index(package_root: &Path) -> Result<Option<SoundDataIndex>> {
@@ -72,24 +93,7 @@ pub fn read_sounddata_record(package_root: &Path, sound_id: u32) -> Result<Optio
     let Some(index) = load_sounddata_index(package_root)? else {
         return Ok(None);
     };
-    let Some(record) = index.record(sound_id) else {
-        return Ok(None);
-    };
-    let file_len = index.sounddata_path.metadata()?.len();
-    let Some(end_offset) = record.offset.checked_add(record.length) else {
-        return Ok(None);
-    };
-    if end_offset > file_len {
-        return Ok(None);
-    }
-    let Ok(length) = usize::try_from(record.length) else {
-        return Ok(None);
-    };
-    let mut file = fs::File::open(&index.sounddata_path)?;
-    file.seek(SeekFrom::Start(record.offset))?;
-    let mut raw = vec![0_u8; length];
-    file.read_exact(&mut raw)?;
-    Ok(Some(portable_sounddata_audio_bytes(raw)))
+    index.read_record(sound_id)
 }
 
 fn parse_wavefile_map(text: &str) -> Vec<SoundDataMapRecord> {
