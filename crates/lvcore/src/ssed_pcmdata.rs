@@ -41,11 +41,14 @@ struct SharedWaveStream {
 
 impl SharedWaveStream {
     fn contains(self, relative_offset: usize, size: usize) -> bool {
+        let Some(data_end) = self.data_offset.checked_add(self.data_size) else {
+            return false;
+        };
         relative_offset >= self.data_offset
             && size > 0
             && relative_offset
                 .checked_add(size)
-                .is_some_and(|end| end <= self.data_offset + self.data_size)
+                .is_some_and(|end| end <= data_end)
     }
 }
 
@@ -430,5 +433,24 @@ mod tests {
         assert!(bytes.starts_with(b"RIFF"));
         assert!(bytes.ends_with(b"cd"));
         assert_eq!(result.media_kind, PcmDataMediaKind::Wave);
+    }
+
+    #[test]
+    fn shared_wave_range_rejects_overflowing_data_extent() {
+        let stream = SharedWaveStream {
+            fmt_offset: 0,
+            data_offset: usize::MAX - 1,
+            data_size: 8,
+            format: WaveFormat {
+                format_tag: 1,
+                channels: 1,
+                sample_rate: 8000,
+                byte_rate: 8000,
+                block_align: 1,
+                bits_per_sample: 8,
+            },
+        };
+
+        assert!(!stream.contains(usize::MAX - 1, 1));
     }
 }

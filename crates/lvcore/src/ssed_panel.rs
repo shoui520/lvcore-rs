@@ -187,8 +187,11 @@ pub fn parse_panel_bin(data: &[u8]) -> Result<SsedPanelBin> {
         ),
     ];
     for (format, has_record_id, actual_count) in variants {
-        let stride = (if has_record_id { 12 } else { 8 }) + text_width as usize;
-        if data.len() == 8 + actual_count as usize * stride {
+        let Some((_, expected_len)) = panel_bin_layout_len(actual_count, text_width, has_record_id)
+        else {
+            continue;
+        };
+        if data.len() == expected_len {
             return Ok(parse_panel_records(
                 data,
                 declared_record_count,
@@ -203,11 +206,15 @@ pub fn parse_panel_bin(data: &[u8]) -> Result<SsedPanelBin> {
         ("address_label_declared_count_mismatch", false),
         ("id_address_label_declared_count_mismatch", true),
     ] {
-        let stride = (if has_record_id { 12 } else { 8 }) + text_width as usize;
+        let Some((stride, _)) = panel_bin_layout_len(0, text_width, has_record_id) else {
+            continue;
+        };
         let payload_len = data.len().saturating_sub(8);
         if stride > 0 && payload_len.is_multiple_of(stride) {
             let actual_count = (payload_len / stride) as u32;
-            if actual_count <= declared_record_count {
+            if actual_count <= declared_record_count
+                && (actual_count > 0 || declared_record_count == 0)
+            {
                 return Ok(parse_panel_records(
                     data,
                     declared_record_count,
@@ -223,6 +230,17 @@ pub fn parse_panel_bin(data: &[u8]) -> Result<SsedPanelBin> {
         "Panel BIN size mismatch: count={declared_record_count} text_width={text_width} actual={}",
         data.len()
     )))
+}
+
+fn panel_bin_layout_len(
+    record_count: u32,
+    text_width: u32,
+    has_record_id: bool,
+) -> Option<(usize, usize)> {
+    let fixed = if has_record_id { 12usize } else { 8usize };
+    let stride = fixed.checked_add(text_width as usize)?;
+    let payload_len = (record_count as usize).checked_mul(stride)?;
+    Some((stride, 8usize.checked_add(payload_len)?))
 }
 
 fn parse_panel_records(
@@ -452,5 +470,17 @@ mod tests {
         assert_eq!(parsed.records[0].block, 3);
         assert_eq!(parsed.records[0].offset, 0x20);
         assert_eq!(parsed.records[0].text, "あ");
+    }
+
+    #[test]
+    fn panel_bin_rejects_overflowing_layout_header() {
+        let data = u32::MAX
+            .to_le_bytes()
+            .into_iter()
+            .chain(u32::MAX.to_le_bytes())
+            .collect::<Vec<_>>();
+
+        let error = parse_panel_bin(&data).unwrap_err();
+        assert!(error.to_string().contains("Panel BIN size mismatch"));
     }
 }
