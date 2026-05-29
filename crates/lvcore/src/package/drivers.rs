@@ -400,6 +400,10 @@ const SSED_ENTRY_MARKER: [u8; 4] = [0x1f, 0x09, 0x00, 0x01];
 const MONOSCR_WIDTH: u32 = 64;
 const MONOSCR_HEIGHT: u32 = 64;
 const MONOSCR_BITMAP_BYTES: usize = (MONOSCR_WIDTH as usize * MONOSCR_HEIGHT as usize) / 8;
+const MIN_ZIPPED_SSED_COMPONENT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ZIPPED_SSED_COMPONENT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const ZIPPED_SSED_COMPONENT_OVERHEAD_BYTES: u64 = 16 * 1024 * 1024;
+const ZIPPED_SSED_COMPONENT_EXPANSION_FACTOR: u64 = 4;
 
 #[derive(Debug, Clone)]
 struct SsedFulltextRow {
@@ -6538,6 +6542,8 @@ impl ReaderBookPackage {
                     Err(err) => return Err(zip_error(err)),
                 },
             };
+            let size_limit =
+                zipped_ssed_component_size_limit(component, &member_name, member.size())?;
             let cache_path = self.ssed_component_cache_path(
                 component,
                 zip_path,
@@ -6557,19 +6563,26 @@ impl ReaderBookPackage {
             let tmp_path = cache_path.with_extension("tmp");
             {
                 let mut outfile = File::create(&tmp_path)?;
-                if let Err(error) = std::io::copy(&mut member, &mut outfile) {
-                    if password.is_none()
-                        && matches!(
-                            error.kind(),
-                            std::io::ErrorKind::Unsupported
-                                | std::io::ErrorKind::PermissionDenied
-                                | std::io::ErrorKind::InvalidData
-                        )
-                    {
-                        let _ = fs::remove_file(&tmp_path);
-                        continue;
+                if let Err(error) =
+                    copy_zip_member_with_size_limit(&mut member, &mut outfile, size_limit)
+                {
+                    let _ = fs::remove_file(&tmp_path);
+                    match error {
+                        Error::Io(error) => {
+                            if password.is_none()
+                                && matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::Unsupported
+                                        | std::io::ErrorKind::PermissionDenied
+                                        | std::io::ErrorKind::InvalidData
+                                )
+                            {
+                                continue;
+                            }
+                            return Err(Error::Io(error));
+                        }
+                        error => return Err(error),
                     }
-                    return Err(Error::Io(error));
                 }
                 outfile.flush()?;
             }
@@ -9383,6 +9396,44 @@ fn zip_error(error: ZipError) -> Error {
     Error::Driver(format!("ZIP decode error: {error}"))
 }
 
+fn zipped_ssed_component_size_limit(
+    component: &SsedComponent,
+    member_name: &str,
+    declared_member_size: u64,
+) -> Result<u64> {
+    let declared_component_bytes =
+        u64::from(component.block_count()).saturating_mul(u64::from(BLOCK_SIZE));
+    let component_limit = declared_component_bytes
+        .saturating_mul(ZIPPED_SSED_COMPONENT_EXPANSION_FACTOR)
+        .saturating_add(ZIPPED_SSED_COMPONENT_OVERHEAD_BYTES)
+        .clamp(
+            MIN_ZIPPED_SSED_COMPONENT_BYTES,
+            MAX_ZIPPED_SSED_COMPONENT_BYTES,
+        );
+    if declared_member_size > component_limit {
+        return Err(Error::Driver(format!(
+            "ZIP member {member_name} expands to {declared_member_size} bytes, exceeding the {component_limit} byte limit for {}",
+            component.filename
+        )));
+    }
+    Ok(component_limit)
+}
+
+fn copy_zip_member_with_size_limit<R: Read>(
+    member: &mut R,
+    outfile: &mut File,
+    size_limit: u64,
+) -> Result<()> {
+    let mut limited = member.take(size_limit.saturating_add(1));
+    let copied = std::io::copy(&mut limited, outfile)?;
+    if copied > size_limit {
+        return Err(Error::Driver(format!(
+            "ZIP member exceeded {size_limit} byte extraction limit"
+        )));
+    }
+    Ok(())
+}
+
 fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
     let mut capabilities = vec![
         Capability::Resources,
@@ -9694,6 +9745,7 @@ fn ssed_search_modes(catalog: &SsedCatalog, root: &Path) -> Vec<SearchMode> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Cursor;
 
     use aes::Aes128;
     use aes::cipher::{BlockEncrypt, KeyInit};
@@ -9705,6 +9757,40 @@ mod tests {
     use crate::target::TargetKind;
 
     use super::*;
+
+    #[test]
+    fn zipped_ssed_component_size_limit_rejects_declared_zip_bombs() {
+        let component = SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0,
+            start_block: 1,
+            end_block: 1,
+            data: [0; 4],
+            filename: "HONMON.DIN".to_owned(),
+            role: SsedComponentRole::Honmon,
+        };
+
+        let limit = zipped_ssed_component_size_limit(&component, "HONMON.DIN", 1024).unwrap();
+        assert_eq!(limit, MIN_ZIPPED_SSED_COMPONENT_BYTES);
+        let error =
+            zipped_ssed_component_size_limit(&component, "HONMON.DIN", limit + 1).unwrap_err();
+        assert!(error.to_string().contains("exceeding"));
+    }
+
+    #[test]
+    fn zipped_ssed_component_copy_stops_when_member_lies_about_size() {
+        let mut member = Cursor::new(vec![0x41; 17]);
+        let dir = tempdir().unwrap();
+        let mut out = File::create(dir.path().join("member.bin")).unwrap();
+
+        let error = copy_zip_member_with_size_limit(&mut member, &mut out, 16).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("exceeded 16 byte extraction limit")
+        );
+    }
 
     #[test]
     fn extracts_reader_labels_from_hanrei_html() {
