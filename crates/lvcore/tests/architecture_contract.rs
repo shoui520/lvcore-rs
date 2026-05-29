@@ -1146,6 +1146,43 @@ fn ssed_missing_declared_indexes_do_not_advertise_search_or_title_browse() {
 }
 
 #[test]
+fn ssed_empty_placeholder_indexes_do_not_advertise_search_or_title_browse() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"placeholder"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&vec![0; 2048]),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        !package
+            .metadata()
+            .capabilities
+            .contains(&Capability::NativeSearch),
+        "placeholder index payloads without decodable target rows must not become native search"
+    );
+    assert!(
+        !package
+            .metadata()
+            .capabilities
+            .contains(&Capability::TitleIndexBrowse),
+        "placeholder index payloads without decodable target rows must not become title browse"
+    );
+    assert!(package.metadata().search_modes.is_empty());
+    assert!(!package.home_surfaces().unwrap().iter().any(|surface| {
+        surface.kind == NavigationSurfaceKind::TitleIndexBrowse
+            && surface.status == NavigationStatus::Available
+    }));
+}
+
+#[test]
 fn ssed_android_wrapped_index_title_and_menu_payloads_are_supported() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
