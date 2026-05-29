@@ -75,9 +75,19 @@ pub fn read_sounddata_record(package_root: &Path, sound_id: u32) -> Result<Optio
     let Some(record) = index.record(sound_id) else {
         return Ok(None);
     };
+    let file_len = index.sounddata_path.metadata()?.len();
+    let Some(end_offset) = record.offset.checked_add(record.length) else {
+        return Ok(None);
+    };
+    if end_offset > file_len {
+        return Ok(None);
+    }
+    let Ok(length) = usize::try_from(record.length) else {
+        return Ok(None);
+    };
     let mut file = fs::File::open(&index.sounddata_path)?;
     file.seek(SeekFrom::Start(record.offset))?;
-    let mut raw = vec![0_u8; record.length as usize];
+    let mut raw = vec![0_u8; length];
     file.read_exact(&mut raw)?;
     Ok(Some(portable_sounddata_audio_bytes(raw)))
 }
@@ -130,8 +140,10 @@ fn parse_wavefile_map(text: &str) -> Vec<SoundDataMapRecord> {
 
 fn portable_sounddata_audio_bytes(mut raw: Vec<u8>) -> Vec<u8> {
     if raw.len() >= 12 && &raw[..4] == b"RIFF" && &raw[8..12] == b"WAVE" {
-        let content_size = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]) as usize + 8;
-        if content_size <= raw.len() {
+        let content_size = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]) as usize;
+        if let Some(content_size) = content_size.checked_add(8)
+            && content_size <= raw.len()
+        {
             raw.truncate(content_size);
         }
     }
@@ -187,5 +199,22 @@ mod tests {
         let bytes = read_sounddata_record(dir.path(), 1).unwrap().unwrap();
 
         assert_eq!(bytes, b"RIFF\x04\x00\x00\x00WAVE");
+    }
+
+    #[test]
+    fn sounddata_read_rejects_map_ranges_outside_sounddata_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let sound_dir = dir.path().join("Sound");
+        fs::create_dir(&sound_dir).unwrap();
+        fs::write(sound_dir.join("SoundData"), b"tiny").unwrap();
+        fs::write(
+            sound_dir.join("WaveFile.map"),
+            b"0000000000000001:ffffffffffffffff 1\n",
+        )
+        .unwrap();
+
+        let bytes = read_sounddata_record(dir.path(), 1).unwrap();
+
+        assert!(bytes.is_none());
     }
 }
