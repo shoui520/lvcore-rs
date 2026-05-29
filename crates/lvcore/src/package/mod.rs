@@ -1,6 +1,7 @@
 mod chm_toc;
 mod drivers;
 mod html;
+mod ssed_index_probe;
 mod ssed_zip;
 
 use std::fs;
