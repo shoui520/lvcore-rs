@@ -152,6 +152,10 @@ pub trait PackageDriver: Send + Sync {
     fn family(&self) -> FormatFamily;
     fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>>;
     fn open(&self, root: &Path) -> Result<Box<dyn BookPackage>>;
+
+    fn open_detected(&self, detected: DetectedPackage) -> Result<Box<dyn BookPackage>> {
+        self.open(&detected.root)
+    }
 }
 
 pub struct DriverRegistry {
@@ -216,7 +220,7 @@ impl DriverRegistry {
             .ok_or(Error::UnrecognizedPackage)?;
         for driver in &self.drivers {
             if driver.family() == detected.format_family {
-                return driver.open(&detected.root);
+                return driver.open_detected(detected);
             }
         }
         Err(Error::UnsupportedFamily(

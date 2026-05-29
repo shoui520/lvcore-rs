@@ -113,6 +113,21 @@ impl PackageDriver for SsedDriver {
             .ok_or_else(|| Error::Driver("not an SSED package".to_owned()))?;
         let detection = detected.detected;
         let catalog = detected.catalog;
+        self.open_with_catalog(detection, catalog)
+    }
+
+    fn open_detected(&self, detected: DetectedPackage) -> Result<Box<dyn BookPackage>> {
+        let catalog = ssed_catalog_for_root(&detected.root)?;
+        self.open_with_catalog(detected, catalog)
+    }
+}
+
+impl SsedDriver {
+    fn open_with_catalog(
+        &self,
+        detection: DetectedPackage,
+        catalog: SsedCatalog,
+    ) -> Result<Box<dyn BookPackage>> {
         let package_root = detection.root.clone();
         let capabilities = ssed_capabilities(&catalog, &package_root);
         let search_modes = ssed_search_modes(&catalog, &package_root);
@@ -170,8 +185,6 @@ impl PackageDriver for LvedSqliteDriver {
         let package_root = package_root_for_detection(root).to_path_buf();
         let store = LvedSqliteStore::discover(root)?
             .ok_or_else(|| Error::Driver("not an LVED_SQLITE3 package".to_owned()))?;
-        let summary = store.summary()?;
-        let search_modes = store.search_modes()?;
         let mut evidence = vec![
             store
                 .payload_path
@@ -185,16 +198,38 @@ impl PackageDriver for LvedSqliteDriver {
         if store.android_info.is_some() {
             evidence.push("android_dictinfo".to_owned());
         }
-        let detection = DetectedPackage {
-            root: package_root.clone(),
-            format_family: FormatFamily::LvedSqlite3,
-            confidence: 98,
-            title: summary
-                .title
-                .clone()
-                .or_else(|| inferred_folder_title(&package_root)),
-            evidence,
-        };
+        self.open_with_store(
+            DetectedPackage {
+                root: package_root.clone(),
+                format_family: FormatFamily::LvedSqlite3,
+                confidence: 98,
+                title: None,
+                evidence,
+            },
+            store,
+        )
+    }
+
+    fn open_detected(&self, detected: DetectedPackage) -> Result<Box<dyn BookPackage>> {
+        let store = LvedSqliteStore::discover(&detected.root)?
+            .ok_or_else(|| Error::Driver("not an LVED_SQLITE3 package".to_owned()))?;
+        self.open_with_store(detected, store)
+    }
+}
+
+impl LvedSqliteDriver {
+    fn open_with_store(
+        &self,
+        mut detection: DetectedPackage,
+        store: LvedSqliteStore,
+    ) -> Result<Box<dyn BookPackage>> {
+        let package_root = detection.root.clone();
+        let summary = store.summary()?;
+        let search_modes = store.search_modes()?;
+        detection.title = summary
+            .title
+            .clone()
+            .or_else(|| inferred_folder_title(&package_root));
         Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
@@ -251,6 +286,10 @@ impl PackageDriver for LvlMultiViewDriver {
         let detection = self
             .detect(root)?
             .ok_or_else(|| Error::Driver("not an LVLMultiView package".to_owned()))?;
+        self.open_detected(detection)
+    }
+
+    fn open_detected(&self, detection: DetectedPackage) -> Result<Box<dyn BookPackage>> {
         let package_root = detection.root.clone();
         let store = MultiviewStore::discover(&package_root)?;
         Ok(Box::new(ReaderBookPackage::new(
@@ -297,6 +336,10 @@ impl PackageDriver for HoureiDriver {
         let detection = self
             .detect(root)?
             .ok_or_else(|| Error::Driver("not a Hourei package".to_owned()))?;
+        self.open_detected(detection)
+    }
+
+    fn open_detected(&self, detection: DetectedPackage) -> Result<Box<dyn BookPackage>> {
         let package_root = detection.root.clone();
         let store = HoureiStore::discover(&package_root)?;
         Ok(Box::new(ReaderBookPackage::new(
