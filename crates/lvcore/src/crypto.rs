@@ -12,6 +12,7 @@ use crate::error::{Error, Result};
 
 const LOGOFONT_CIPHER_PASSPHRASE: &[u8] = b"LogoFontCipher";
 const BLOCK_SIZE: usize = 16;
+const STREAM_DECRYPT_BUFFER_SIZE: usize = 64 * 1024 * BLOCK_SIZE;
 const ANDROID_DIW_PREFIX: &[u8] = b"LV_";
 const ANDROID_DIW_PASSWORD: &str = "resworbncidnatsivogol--emulator";
 const ANDROID_DIW_IV: [u8; BLOCK_SIZE] = [
@@ -105,7 +106,7 @@ fn decrypt_logofont_cipher_file_to_path_with_variant(
         .map_err(|_| Error::Driver("invalid LogoFontCipher AES key".to_owned()))?;
 
     let mut previous_cipher = iv;
-    let mut encrypted = vec![0_u8; 1024 * BLOCK_SIZE];
+    let mut encrypted = vec![0_u8; STREAM_DECRYPT_BUFFER_SIZE];
     let mut pending_plain: Option<[u8; BLOCK_SIZE]> = None;
 
     loop {
@@ -119,13 +120,7 @@ fn decrypt_logofont_cipher_file_to_path_with_variant(
             ));
         }
         let plaintext = decrypt_cbc_chunk(&cipher, &encrypted[..read], &mut previous_cipher);
-        for chunk in plaintext.chunks_exact(BLOCK_SIZE) {
-            let mut plain = [0_u8; BLOCK_SIZE];
-            plain.copy_from_slice(chunk);
-            if let Some(previous_plain) = pending_plain.replace(plain) {
-                outfile.write_all(&previous_plain)?;
-            }
-        }
+        write_decrypted_chunk_except_final_block(&mut outfile, &mut pending_plain, &plaintext)?;
     }
 
     let Some(last_plain) = pending_plain else {
@@ -133,6 +128,32 @@ fn decrypt_logofont_cipher_file_to_path_with_variant(
     };
     let unpadded = pkcs7_unpad_or_raw(&last_plain);
     outfile.write_all(unpadded)?;
+    Ok(())
+}
+
+fn write_decrypted_chunk_except_final_block(
+    outfile: &mut File,
+    pending_plain: &mut Option<[u8; BLOCK_SIZE]>,
+    plaintext: &[u8],
+) -> Result<()> {
+    if plaintext.is_empty() {
+        return Ok(());
+    }
+    if !plaintext.len().is_multiple_of(BLOCK_SIZE) {
+        return Err(Error::Driver(
+            "decrypted payload length is not an AES block multiple".to_owned(),
+        ));
+    }
+    if let Some(previous_plain) = pending_plain.take() {
+        outfile.write_all(&previous_plain)?;
+    }
+    let final_block_start = plaintext.len() - BLOCK_SIZE;
+    if final_block_start > 0 {
+        outfile.write_all(&plaintext[..final_block_start])?;
+    }
+    let mut final_block = [0_u8; BLOCK_SIZE];
+    final_block.copy_from_slice(&plaintext[final_block_start..]);
+    *pending_plain = Some(final_block);
     Ok(())
 }
 
@@ -179,7 +200,7 @@ fn decrypt_android_diw_file_raw(input: &Path, output: &Path) -> Result<()> {
         .map_err(|_| Error::Driver("invalid Android HONMON.DIW AES key".to_owned()))?;
 
     let mut previous_cipher = ANDROID_DIW_IV;
-    let mut encrypted = vec![0_u8; 1024 * BLOCK_SIZE];
+    let mut encrypted = vec![0_u8; STREAM_DECRYPT_BUFFER_SIZE];
     let mut pending_plain: Option<[u8; BLOCK_SIZE]> = None;
 
     loop {
@@ -193,13 +214,7 @@ fn decrypt_android_diw_file_raw(input: &Path, output: &Path) -> Result<()> {
             ));
         }
         let plaintext = decrypt_cbc_chunk(&cipher, &encrypted[..read], &mut previous_cipher);
-        for chunk in plaintext.chunks_exact(BLOCK_SIZE) {
-            let mut plain = [0_u8; BLOCK_SIZE];
-            plain.copy_from_slice(chunk);
-            if let Some(previous_plain) = pending_plain.replace(plain) {
-                outfile.write_all(&previous_plain)?;
-            }
-        }
+        write_decrypted_chunk_except_final_block(&mut outfile, &mut pending_plain, &plaintext)?;
     }
 
     let Some(last_plain) = pending_plain else {
