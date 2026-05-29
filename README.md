@@ -135,6 +135,9 @@ provider slices:
   `PCMDATA.DIC`, `MONOSCR.DIC`, and `FIGURE.DIC` targets. This gives the
   future HC/profile renderer the resource tokens it needs without claiming HC
   rendering parity yet;
+- SSED Mac HC03E9-style PDFSpread sidecars are exposed as PDF resource refs
+  from fullwidth HONMON page anchors, with the original PDF bytes available
+  through the normal resource API;
 - SSED plain HONMON renderer inputs infer conservative stream lengths from
   generic `1f09 0001` entry markers, their observed `1f02`-prefixed form, and
   native index body boundaries for marker-variant entries, keeping

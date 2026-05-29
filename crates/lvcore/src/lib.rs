@@ -29,6 +29,7 @@ pub mod ssed_loose_media;
 pub mod ssed_menu;
 pub mod ssed_panel;
 pub mod ssed_pcmdata;
+pub mod ssed_pdfspread;
 pub mod ssed_screen_menu;
 pub mod ssed_sidecar;
 pub mod ssed_sound_data;
@@ -75,6 +76,10 @@ pub use ssed_menu::{
 };
 pub use ssed_panel::{
     SsedPanelBin, SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, SsedPanelXml,
+};
+pub use ssed_pdfspread::{
+    PdfSpreadLookup, PdfSpreadSide, find_pdfspread_database, lookup_pdfspread,
+    normalize_pdfspread_page_id, pdfspread_lookup_side, pdfspread_page_number,
 };
 pub use ssed_screen_menu::{
     SsedScreenMenuDirectTarget, SsedScreenMenuHotspot, SsedScreenMenuParse, SsedScreenMenuPointer,

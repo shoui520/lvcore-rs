@@ -63,6 +63,9 @@ pub enum InternalResource {
     LooseMovie {
         movie_id: String,
     },
+    SsedPdfSpread {
+        page_id: String,
+    },
     ChmFile {
         chm_path: String,
         entry_path: String,
@@ -84,6 +87,7 @@ impl InternalResource {
             Self::MediaBlob { resource_kind, .. } => *resource_kind,
             Self::SoundData { .. } => ResourceKind::SoundData,
             Self::LooseMovie { .. } => ResourceKind::Video,
+            Self::SsedPdfSpread { .. } => ResourceKind::Pdf,
             Self::Unsupported { .. } => ResourceKind::Other,
         }
     }
@@ -205,6 +209,16 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("32768"));
+    }
+
+    #[test]
+    fn token_round_trips_ssed_pdfspread_resource() {
+        let resource = InternalResource::SsedPdfSpread {
+            page_id: "００００００１７".to_owned(),
+        };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("00000017"));
     }
 
     #[test]

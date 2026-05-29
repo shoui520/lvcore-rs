@@ -60,6 +60,9 @@ use crate::ssed_panel::{
 use crate::ssed_pcmdata::{
     PcmDataParseResult, pcmdata_audio_summary, pcmdata_portable_audio_bytes,
 };
+use crate::ssed_pdfspread::{
+    find_pdfspread_database, lookup_pdfspread, normalize_pdfspread_page_id,
+};
 use crate::ssed_screen_menu::{
     SsedScreenMenuHotspot, SsedScreenMenuParse, parse_screen_menu_stream,
 };
@@ -332,6 +335,7 @@ pub struct StubBookPackage {
     gaiji_unicode_map: BTreeMap<String, String>,
     ssed_sidecar_body_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
+    ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -515,6 +519,7 @@ impl StubBookPackage {
             hourei_store: stores.hourei_store,
             gaiji_unicode_map: stores.gaiji_unicode_map,
             ssed_sidecar_body_resolvers: OnceLock::new(),
+            ssed_pdfspread_database: OnceLock::new(),
         }
     }
 }
@@ -1234,6 +1239,27 @@ impl ResourceProvider for StubBookPackage {
                     diagnostics,
                 })
             }
+            InternalResource::SsedPdfSpread { page_id } => {
+                let lookup = self.lookup_pdfspread_page(&page_id)?;
+                let mut diagnostics = Vec::new();
+                let href = if lookup.is_some() {
+                    Some(format!("lvcore://resource/{}", token.as_str()))
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!("PDFSpread page {page_id} was not found in the package"),
+                    ));
+                    None
+                };
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: ResourceKind::Pdf,
+                    label: Some(format!("PDFSpread/{page_id}")),
+                    href,
+                    mime_type: Some("application/pdf".to_owned()),
+                    diagnostics,
+                })
+            }
             InternalResource::SoundData { sound_id } => {
                 let resolved = resolve_sounddata_record(&self.root, sound_id)?;
                 let mut diagnostics = Vec::new();
@@ -1382,6 +1408,14 @@ impl ResourceProvider for StubBookPackage {
                     return Err(Error::Driver(format!("_MOVIE file not found: {movie_id}")));
                 };
                 Ok(fs::read(path)?)
+            }
+            InternalResource::SsedPdfSpread { page_id } => {
+                let Some(lookup) = self.lookup_pdfspread_page(&page_id)? else {
+                    return Err(Error::Driver(format!(
+                        "PDFSpread page not found: {page_id}"
+                    )));
+                };
+                Ok(lookup.pdf)
             }
             InternalResource::SoundData { sound_id } => {
                 let Some(bytes) = read_sounddata_record(&self.root, sound_id)? else {
@@ -3862,7 +3896,10 @@ impl StubBookPackage {
         let requested = explicit_length.unwrap_or(RESOURCE_SCAN_LIMIT);
         let size = available.min(requested).min(RESOURCE_SCAN_LIMIT);
         let data = reader.read_range(start, size)?;
-        let candidates = self.ssed_renderer_resource_candidates(&data);
+        let mut candidates = self.ssed_renderer_resource_candidates(&data);
+        if let Some(pdfspread) = self.ssed_pdfspread_resource_candidate(&data)? {
+            candidates.push(pdfspread);
+        }
         let mut seen = BTreeSet::new();
         let mut resources = Vec::new();
         let mut diagnostics = Vec::new();
@@ -3980,6 +4017,37 @@ impl StubBookPackage {
             pos += 2 + arg_len;
         }
         candidates
+    }
+
+    fn ssed_pdfspread_resource_candidate(&self, data: &[u8]) -> Result<Option<InternalResource>> {
+        if self.ssed_pdfspread_database()?.is_none() {
+            return Ok(None);
+        }
+        let text = hc03e9_pdfspread_anchor_text(data);
+        let Some(page_id) = normalize_pdfspread_page_id(&text) else {
+            return Ok(None);
+        };
+        Ok(Some(InternalResource::SsedPdfSpread { page_id }))
+    }
+
+    fn lookup_pdfspread_page(
+        &self,
+        page_id: &str,
+    ) -> Result<Option<crate::ssed_pdfspread::PdfSpreadLookup>> {
+        let Some(path) = self.ssed_pdfspread_database()? else {
+            return Ok(None);
+        };
+        lookup_pdfspread(path, page_id)
+    }
+
+    fn ssed_pdfspread_database(&self) -> Result<Option<&PathBuf>> {
+        let database = self
+            .ssed_pdfspread_database
+            .get_or_init(|| find_pdfspread_database(&self.root).map_err(|error| error.to_string()));
+        match database {
+            Ok(path) => Ok(path.as_ref()),
+            Err(error) => Err(Error::Driver(error.clone())),
+        }
     }
 
     fn ssed_component_for_role_or_name(
@@ -4378,6 +4446,7 @@ impl StubBookPackage {
             });
         }
         if component.role == SsedComponentRole::Honmon
+            && self.ssed_pdfspread_database()?.is_none()
             && let Some(anchor_id) = self.ssed_dense_anchor_at_component_offset(
                 component,
                 usize::try_from(component_offset).unwrap_or(usize::MAX),
@@ -7025,6 +7094,34 @@ fn ssed_control_arg_length(data: &[u8], offset: usize) -> usize {
     }
 }
 
+fn hc03e9_pdfspread_anchor_text(data: &[u8]) -> String {
+    let mut text = String::new();
+    let mut offset = 0usize;
+    while offset < data.len() {
+        let byte = data[offset];
+        if byte == 0x1f {
+            offset += 2 + ssed_control_arg_length(data, offset);
+            continue;
+        }
+        if offset + 1 < data.len()
+            && (0x21..=0x7e).contains(&byte)
+            && (0x21..=0x7e).contains(&data[offset + 1])
+        {
+            if let Some(ch) = decode_jis_pair(byte, data[offset + 1]) {
+                text.push(ch);
+            }
+            offset += 2;
+            continue;
+        }
+        if offset + 1 < data.len() && byte >= 0xa1 {
+            offset += 2;
+            continue;
+        }
+        offset += 1;
+    }
+    text
+}
+
 fn parse_colscr_pointer(payload: &[u8]) -> Option<(u32, u32)> {
     if payload.len() != 18 {
         return None;
@@ -9512,6 +9609,88 @@ mod tests {
         assert!(view.capabilities.contains(&RenderCapability::HcRenderInput));
         assert!(view.capabilities.contains(&RenderCapability::Images));
         assert!(view.capabilities.contains(&RenderCapability::Audio));
+    }
+
+    #[test]
+    fn ssed_hc03e9_pdfspread_resource_is_exposed_from_page_anchor() {
+        let dir = tempdir().unwrap();
+        let page_anchor = [
+            0x23, 0x30, 0x23, 0x30, 0x23, 0x30, 0x23, 0x30, 0x23, 0x30, 0x23, 0x30, 0x23, 0x31,
+            0x23, 0x37,
+        ];
+        fs::write(
+            dir.path().join("HONMON.DIC"),
+            fixture_sseddata_literal_chunks(&[&page_anchor], 100, 100),
+        )
+        .unwrap();
+        let connection = Connection::open(dir.path().join("HKRKIKHY2.db")).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                create table PDFSpread (IDRight text primary key, IDLeft text, PDF blob);
+                insert into PDFSpread values ('００００００１７', '００００００１６', X'255044462d706466737072656164');
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+        fs::write(dir.path().join("._HKRKIKHY2.db"), b"metadata").unwrap();
+        let catalog = SsedCatalog {
+            title: "PDFSpread".to_owned(),
+            components: vec![SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            }],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 1,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("PDFSpread".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let target = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 0,
+        })
+        .unwrap();
+
+        let input = package.renderer_input_for_target(&target).unwrap();
+        let RendererInput::HcSsedStream { resources, .. } = input else {
+            panic!("SSED address should produce HC renderer input");
+        };
+        let pdf = resources
+            .iter()
+            .find(|resource| resource.kind == ResourceKind::Pdf)
+            .expect("PDFSpread resource should be exposed");
+
+        assert_eq!(pdf.label.as_deref(), Some("PDFSpread/００００００１７"));
+        assert_eq!(pdf.mime_type.as_deref(), Some("application/pdf"));
+        assert_eq!(
+            package.read_resource(&pdf.token).unwrap(),
+            b"%PDF-pdfspread"
+        );
     }
 
     #[test]
