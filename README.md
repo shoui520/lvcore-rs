@@ -142,6 +142,10 @@ provider slices:
   as generated PNG images from 64x64 1bpp bitmap cells;
 - SSED older `FIGURE.DIC` variable-size 1bpp figure bitmaps can be decoded as
   generated PNG image resources when renderer controls provide dimensions;
+- SSED GA16/GAI16 bitmap gaiji fallback resources are exposed as per-glyph PNG
+  image resources when the code maps into the observed direct JIS grid range,
+  preserving the frontend-controlled gaiji priority policy without handing the
+  whole GA16 file to the UI;
 - SSED HC renderer inputs now perform a bounded stream scan for understood
   media controls and carry typed resource refs for observed `COLSCR.DIC`,
   `PCMDATA.DIC`, `MONOSCR.DIC`, and `FIGURE.DIC` targets. This gives the
