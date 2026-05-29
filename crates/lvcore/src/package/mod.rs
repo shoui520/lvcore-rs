@@ -54,6 +54,7 @@ pub enum Capability {
     TitleIndexBrowse,
     Menu,
     ScreenMenu,
+    EncyclopediaIndex,
     Toc,
     Panels,
     Hanrei,

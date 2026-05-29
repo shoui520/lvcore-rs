@@ -119,6 +119,8 @@ provider slices:
 - SSED screen-menu decoding for the KOJIEN6-style `SCRMENU.DIC` component:
   background images are exposed as COLSCR resource tokens, screen jumps remain
   navigation targets, and body hotspots resolve to normal SSED address targets;
+- SSED KOJIEN6-style `encyclop.idx` LVEDBRSR multimedia indexes are exposed as
+  hierarchical navigation surfaces with normal SSED address targets;
 - SSED loose KOJIEN6-style media: `_PCM_U/WaveFile.map` can back `PCMDATA.DIC`
   address resources with decrypted MP3 bytes, and `_MOVIE` entries are exposed
   as typed video resources;

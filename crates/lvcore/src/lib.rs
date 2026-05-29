@@ -23,6 +23,7 @@ pub mod search;
 pub mod sequence;
 pub mod ssed;
 pub mod ssed_color_sample;
+pub mod ssed_encyclopedia;
 pub mod ssed_figure;
 pub mod ssed_index;
 pub mod ssed_loose_media;
@@ -69,6 +70,10 @@ pub use ssed::{
     SsedComponentRole, SsedDataFile, SsedDataHeader, SsedDataReader, SsedInfoLayout,
 };
 pub use ssed_color_sample::{ColorSampleRecord, ColorSampleTable};
+pub use ssed_encyclopedia::{
+    ENCYCLOPEDIA_HEADER, SsedEncyclopediaIndex, SsedEncyclopediaRow, SsedEncyclopediaSection,
+    parse_encyclopedia_index, parse_encyclopedia_index_bytes,
+};
 pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
 pub use ssed_loose_media::{PcmuIndex, PcmuMapRecord};
 pub use ssed_menu::{

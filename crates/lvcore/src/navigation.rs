@@ -11,6 +11,7 @@ use crate::target::TargetToken;
 pub enum NavigationSurfaceKind {
     Menu,
     ScreenMenu,
+    EncyclopediaIndex,
     Toc,
     TitleIndexBrowse,
     Panel,

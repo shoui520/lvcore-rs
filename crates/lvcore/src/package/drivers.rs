@@ -45,6 +45,7 @@ use crate::ssed::{
     BLOCK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
     SsedDataHeader,
 };
+use crate::ssed_encyclopedia::{SsedEncyclopediaRow, parse_encyclopedia_index};
 use crate::ssed_figure::{FigureDimensions, figure_bitmap_to_png};
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_jis_pair,
@@ -671,6 +672,23 @@ impl NavigationProvider for StubBookPackage {
                         )],
                     });
                 }
+                if self.storage.exists(Path::new("encyclop.idx"))? {
+                    surfaces.push(HomeSurface {
+                        surface_id: "encyclopedia".to_owned(),
+                        kind: NavigationSurfaceKind::EncyclopediaIndex,
+                        status: NavigationStatus::Available,
+                        title_html: "Multimedia Index".to_owned(),
+                        title_text: "Multimedia Index".to_owned(),
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: "encyclopedia".to_owned(),
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_encyclopedia_index",
+                            "encyclop.idx exposes an LVEDBRSR tab-indented multimedia navigation index",
+                        )],
+                    });
+                }
                 let hanrei_pages = self.discover_ssed_hanrei_pages()?;
                 if !hanrei_pages.is_empty() {
                     let diagnostics = hanrei_pages
@@ -866,6 +884,9 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "screen-menu" {
             return self.open_ssed_screen_menu_surface(surface_id);
+        }
+        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "encyclopedia" {
+            return self.open_ssed_encyclopedia_surface(surface_id);
         }
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "hanrei" {
             return self.open_ssed_hanrei_surface(surface_id, cursor, limit);
@@ -2417,6 +2438,45 @@ impl StubBookPackage {
             }
         }
         Ok((None, None))
+    }
+
+    fn open_ssed_encyclopedia_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        let Some(path) = self.storage.resolve_casefolded(Path::new("encyclop.idx"))? else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_encyclopedia_index_missing",
+                    "encyclop.idx is not present in this SSED package",
+                )],
+            });
+        };
+        let parsed = match parse_encyclopedia_index(&path) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![Diagnostic::warning(
+                        "ssed_encyclopedia_index_parse_failed",
+                        format!("failed to parse encyclop.idx: {error}"),
+                    )],
+                });
+            }
+        };
+        let mut diagnostics = Vec::new();
+        let nodes = ssed_encyclopedia_rows_to_nodes(self, &parsed.rows, &mut diagnostics)?;
+        if nodes.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_encyclopedia_index_empty",
+                    "encyclop.idx did not expose navigation rows",
+                )],
+            });
+        }
+        Ok(NavigationSurface::HierarchicalTree {
+            surface_id: surface_id.to_owned(),
+            nodes,
+        })
     }
 
     fn open_ssed_panel_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
@@ -6587,6 +6647,83 @@ fn ssed_menu_records_to_nodes(
     Ok(roots)
 }
 
+fn ssed_encyclopedia_rows_to_nodes(
+    package: &StubBookPackage,
+    rows: &[SsedEncyclopediaRow],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Vec<NavigationNode>> {
+    let mut roots = Vec::new();
+    let mut path = Vec::<usize>::new();
+
+    for (index, row) in rows.iter().enumerate() {
+        let rich_label = package.ssed_rich_label(&row.label);
+        let node = NavigationNode {
+            node_id: format!("encyclopedia:{}:{index}", row.index),
+            label_html: rich_label.html,
+            label_text: rich_label.text,
+            target: ssed_encyclopedia_row_target(package, row, diagnostics)?,
+            diagnostics: rich_label.diagnostics,
+            children: Vec::new(),
+        };
+        let depth = row.depth as usize;
+        while path.len() > depth {
+            path.pop();
+        }
+        if path.is_empty() {
+            roots.push(node);
+            path.push(roots.len() - 1);
+        } else if let Some(parent) = navigation_node_mut_at_path(&mut roots, &path) {
+            parent.children.push(node);
+            path.push(parent.children.len() - 1);
+        } else {
+            diagnostics.push(Diagnostic::warning(
+                "ssed_encyclopedia_tree_depth_invalid",
+                format!("could not attach encyclop.idx row {index} at depth {depth}"),
+            ));
+            roots.push(node);
+            path.clear();
+            path.push(roots.len() - 1);
+        }
+    }
+
+    Ok(roots)
+}
+
+fn ssed_encyclopedia_row_target(
+    package: &StubBookPackage,
+    row: &SsedEncyclopediaRow,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<TargetToken>> {
+    if !row.has_target() {
+        return Ok(None);
+    }
+    let Some(catalog) = &package.ssed_catalog else {
+        diagnostics.push(Diagnostic::warning(
+            "ssed_encyclopedia_catalog_missing",
+            format!(
+                "encyclop.idx row {} points to {:08x}:{:04x}, but no SSED catalog is available",
+                row.index, row.block, row.offset
+            ),
+        ));
+        return Ok(None);
+    };
+    let Some(component) = catalog.component_for_address(row.block) else {
+        diagnostics.push(Diagnostic::warning(
+            "ssed_encyclopedia_target_unresolved",
+            format!(
+                "encyclop.idx row {} points outside declared components: {:08x}:{:04x}",
+                row.index, row.block, row.offset
+            ),
+        ));
+        return Ok(None);
+    };
+    Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
+        component: component.filename.clone(),
+        block: row.block,
+        offset: row.offset,
+    })?))
+}
+
 fn navigation_node_mut_at_path<'a>(
     nodes: &'a mut [NavigationNode],
     path: &[usize],
@@ -8415,6 +8552,9 @@ fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
     {
         capabilities.push(Capability::ScreenMenu);
     }
+    if has_any_casefolded(&storage, &["encyclop.idx"]) {
+        capabilities.push(Capability::EncyclopediaIndex);
+    }
     if has_ssed_hanrei_casefolded(&storage) {
         capabilities.push(Capability::Hanrei);
     }
@@ -9298,6 +9438,88 @@ mod tests {
                 component,
                 block: 100,
                 offset: 0
+            } if component == "HONMON.DIC"
+        ));
+    }
+
+    #[test]
+    fn ssed_encyclopedia_index_opens_as_navigation_tree() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("encyclop.idx"),
+            cp932(
+                "#LVEDBRSR encyclopedia#Ver.1.0 2008.01.07\t\t\n\
+                 #図・写真\t\t\n\
+                 00000000\t00000000\t図・写真\t\t\n\
+                 00000000\t00000000\t\t動物\t\n\
+                 000059f9\t000006dc\t\t\t哺乳類\n",
+            ),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "KOJIEN6".to_owned(),
+            components: vec![SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 0x5900,
+                end_block: 0x5a00,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            }],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 1,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("KOJIEN6".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            package
+                .metadata()
+                .capabilities
+                .contains(&Capability::EncyclopediaIndex)
+        );
+        assert!(package.home_surfaces().unwrap().iter().any(|surface| {
+            surface.kind == NavigationSurfaceKind::EncyclopediaIndex
+                && surface.status == NavigationStatus::Available
+        }));
+        let surface = package.open_surface("encyclopedia").unwrap();
+        let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+            panic!("expected encyclopedia navigation tree");
+        };
+        assert_eq!(nodes[0].label_text, "図・写真");
+        assert_eq!(nodes[0].children[0].label_text, "動物");
+        let target = nodes[0].children[0].children[0]
+            .target
+            .as_ref()
+            .unwrap()
+            .decode()
+            .unwrap();
+        assert!(matches!(
+            target,
+            InternalTarget::SsedAddress {
+                component,
+                block: 0x59f9,
+                offset: 0x06dc
             } if component == "HONMON.DIC"
         ));
     }
