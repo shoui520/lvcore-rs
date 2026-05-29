@@ -1211,21 +1211,11 @@ fn search_lved_sqlite_connection(
         return Ok(Vec::new());
     };
 
-    let anchor_column = optional_column_expr(&list_columns, "anchor", "''");
-    let title_column = optional_column_expr(&list_columns, "title", "''");
-    let subtitle_column = if has_column(&list_columns, "titlesub") {
-        "l.titlesub"
-    } else if has_column(&list_columns, "subtext") {
-        "l.subtext"
-    } else if has_column(&list_columns, "titleplain") {
-        "l.titleplain"
-    } else {
-        "''"
-    };
-    let type_column = optional_column_expr(&list_columns, "type", "null");
+    let projection = lved_list_projection(&list_columns);
     let sql = format!(
-        "select l.id, l.refid, {anchor_column}, {title_column}, {subtitle_column}, {type_column} \
-         from search s join list l on l.id = s.rowid where {where_clause} order by l.id limit ? offset ?"
+        "select l.id, l.refid, {}, {}, {}, {} \
+         from search s join list l on l.id = s.rowid where {where_clause} order by l.id limit ? offset ?",
+        projection.anchor, projection.title, projection.subtitle, projection.kind
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(
@@ -1267,21 +1257,11 @@ fn lved_list_hits_by_id_clause_offset(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let anchor_column = optional_column_expr(list_columns, "anchor", "''");
-    let title_column = optional_column_expr(list_columns, "title", "''");
-    let subtitle_column = if has_column(list_columns, "titlesub") {
-        "l.titlesub"
-    } else if has_column(list_columns, "subtext") {
-        "l.subtext"
-    } else if has_column(list_columns, "titleplain") {
-        "l.titleplain"
-    } else {
-        "''"
-    };
-    let type_column = optional_column_expr(list_columns, "type", "null");
+    let projection = lved_list_projection(list_columns);
     let sql = format!(
-        "select l.id, l.refid, {anchor_column}, {title_column}, {subtitle_column}, {type_column} \
-         from list l where {where_clause} order by {order_clause} limit ? offset ?"
+        "select l.id, l.refid, {}, {}, {}, {} \
+         from list l where {where_clause} order by {order_clause} limit ? offset ?",
+        projection.anchor, projection.title, projection.subtitle, projection.kind
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map((id, limit as i64, offset as i64), lved_search_hit_from_row)?;
@@ -1451,6 +1431,32 @@ fn fts_term(term: &str, prefix: bool) -> String {
 
 fn should_split_chars(query: &str) -> bool {
     !query.chars().any(|ch| ch.is_ascii_alphanumeric())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LvedListProjection<'a> {
+    anchor: &'a str,
+    title: &'a str,
+    subtitle: &'a str,
+    kind: &'a str,
+}
+
+fn lved_list_projection(columns: &[String]) -> LvedListProjection<'_> {
+    let subtitle = if has_column(columns, "titlesub") {
+        "l.titlesub"
+    } else if has_column(columns, "subtext") {
+        "l.subtext"
+    } else if has_column(columns, "titleplain") {
+        "l.titleplain"
+    } else {
+        "''"
+    };
+    LvedListProjection {
+        anchor: optional_column_expr(columns, "anchor", "''"),
+        title: optional_column_expr(columns, "title", "''"),
+        subtitle,
+        kind: optional_column_expr(columns, "type", "null"),
+    }
 }
 
 fn optional_column_expr<'a>(columns: &'a [String], column: &'a str, fallback: &'a str) -> &'a str {
@@ -2123,6 +2129,38 @@ mod tests {
         assert!(
             title_score(&index_title, "index.html") > title_score(&bibliography, "shuyou.html")
         );
+    }
+
+    #[test]
+    fn lved_list_projection_prefers_observed_subtitle_columns() {
+        let columns = vec![
+            "id".to_owned(),
+            "refid".to_owned(),
+            "title".to_owned(),
+            "subtext".to_owned(),
+            "titleplain".to_owned(),
+            "type".to_owned(),
+        ];
+        assert_eq!(
+            lved_list_projection(&columns),
+            LvedListProjection {
+                anchor: "''",
+                title: "l.title",
+                subtitle: "l.subtext",
+                kind: "l.type",
+            }
+        );
+
+        let columns = vec![
+            "id".to_owned(),
+            "refid".to_owned(),
+            "titlesub".to_owned(),
+            "subtext".to_owned(),
+        ];
+        assert_eq!(lved_list_projection(&columns).subtitle, "l.titlesub");
+
+        let columns = vec!["id".to_owned(), "refid".to_owned(), "titleplain".to_owned()];
+        assert_eq!(lved_list_projection(&columns).subtitle, "l.titleplain");
     }
 
     #[test]
