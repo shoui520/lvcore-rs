@@ -1539,14 +1539,12 @@ fn lved_sqlite_title_from_connection(connection: &Connection) -> Option<String> 
             where body is not null and body != ''
             order by
               case
-                when body like '%book_title%' then 0
-                when body like '%凡例書籍名%' then 0
-                when body like '%著作権表示%' then 0
-                when lower(name) like '%copyright%' then 0
-                when lower(name) like '%about%' then 0
-                when lower(name) like '%hanrei%' then 1
-                when lower(name) like '%license%' then 3
-                when lower(name) = 'index.html' then 4
+                when lower(name) = 'index.html' then 0
+                when lower(name) like '%index%' then 1
+                when lower(name) like '%about%' then 2
+                when lower(name) like '%hanrei%' then 3
+                when lower(name) like '%copyright%' then 4
+                when lower(name) like '%license%' then 5
                 else 6
               end,
               rowid
@@ -1567,22 +1565,40 @@ fn lved_sqlite_title_from_connection(connection: &Connection) -> Option<String> 
         let Ok((name, body)) = row else {
             continue;
         };
-        let body_text = html_text_lines(&body);
-        let mut row_candidates = Vec::new();
-        for line in body_text.into_iter().take(24) {
-            if let Some(candidate) = normalize_title_candidate(&line) {
-                row_candidates.push(candidate);
+        let lower_name = name.to_lowercase();
+        let Some(candidate) = (if lower_name.contains("copyright") || lower_name.contains("license")
+        {
+            lved_copyright_title_candidate(&body)
+        } else {
+            lved_html_title_candidate(&body)
+        }) else {
+            continue;
+        };
+        let mut score = title_score(&candidate);
+        if score >= 100 {
+            if lower_name == "index.html" {
+                score += 15;
+            } else if lower_name.contains("index") {
+                score += 10;
+            } else if lower_name.contains("menu") {
+                score += 8;
+            } else if lower_name.contains("about") {
+                score += 5;
+            } else if lower_name.contains("hanrei") {
+                score += 3;
+            } else if lower_name.contains("copyright") {
+                score += 5;
+            } else if lower_name.contains("license") {
+                score += 2;
             }
         }
-        for candidate in row_candidates {
-            let score = title_score(&candidate, &name);
-            if score >= 100 {
-                candidates.push((score, index, candidate));
-            }
-        }
+        candidates.push((score, index, candidate));
     }
     candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    candidates.into_iter().next().map(|(_, _, title)| title)
+    candidates
+        .into_iter()
+        .next()
+        .and_then(|(score, _, title)| (score > 0).then_some(title))
 }
 
 fn sqlite_table_exists(connection: &Connection, table: &str) -> bool {
@@ -1708,6 +1724,160 @@ fn html_to_text(fragment: &str) -> String {
     html_text_lines(fragment).join(" ")
 }
 
+fn lved_copyright_title_candidate(fragment: &str) -> Option<String> {
+    if let Some(explicit) = lved_explicit_book_title_candidate(fragment) {
+        return Some(explicit);
+    }
+    let mut candidates = Vec::new();
+    for line in html_text_lines(fragment).into_iter().take(24) {
+        let text = quoted_title_text(&line).unwrap_or(line);
+        if let Some(candidate) = normalize_title_candidate(&text) {
+            candidates.push(candidate);
+        }
+    }
+    best_scored_title_candidate(candidates)
+}
+
+fn lved_html_title_candidate(fragment: &str) -> Option<String> {
+    if let Some(explicit) = lved_explicit_book_title_candidate(fragment) {
+        return Some(explicit);
+    }
+    for tag in ["title", "h1", "h2", "h3"] {
+        if let Some(body) = first_html_element_body(fragment, tag, |_| true) {
+            for line in html_text_lines(body) {
+                if let Some(candidate) = normalize_title_candidate(&line) {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    if let Some(body) = first_html_element_body(fragment, "div", |tag| {
+        let tag = tag.to_lowercase();
+        tag.contains("font-weight") && tag.contains("bold")
+    }) {
+        for line in html_text_lines(body) {
+            if let Some(candidate) = normalize_title_candidate(&line) {
+                return Some(candidate);
+            }
+        }
+    }
+    html_text_lines(fragment)
+        .into_iter()
+        .find_map(|line| normalize_title_candidate(&line))
+}
+
+fn lved_explicit_book_title_candidate(fragment: &str) -> Option<String> {
+    let mut candidates = Vec::new();
+    for tag in ["div", "span"] {
+        let mut cursor = 0;
+        let open = format!("<{tag}");
+        let close = format!("</{tag}>");
+        while let Some(open_start) = find_ascii_case_insensitive_from(fragment, &open, cursor) {
+            let Some(header_end) = fragment[open_start..]
+                .find('>')
+                .map(|offset| open_start + offset)
+            else {
+                break;
+            };
+            let body_start = header_end + 1;
+            let header = &fragment[open_start..=header_end];
+            let lower_header = header.to_lowercase();
+            if lower_header.contains("class")
+                && (lower_header.contains("book_title")
+                    || lower_header.contains("book-title")
+                    || lower_header.contains("booktitle")
+                    || lower_header.contains("書籍名")
+                    || lower_header.contains("辞書名")
+                    || lower_header.contains("辞典名"))
+                && let Some(close_start) =
+                    find_ascii_case_insensitive_from(fragment, &close, body_start)
+            {
+                for line in html_text_lines(&fragment[body_start..close_start]) {
+                    if let Some(candidate) = normalize_title_candidate(&line) {
+                        candidates.push(candidate);
+                    }
+                }
+            }
+            cursor = body_start;
+        }
+    }
+    best_scored_title_candidate(candidates)
+}
+
+fn best_scored_title_candidate(candidates: Vec<String>) -> Option<String> {
+    candidates
+        .into_iter()
+        .map(|candidate| (title_score(&candidate), candidate))
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .and_then(|(score, candidate)| (score > 0).then_some(candidate))
+}
+
+fn quoted_title_text(value: &str) -> Option<String> {
+    for (open, close) in [('『', '』'), ('《', '》')] {
+        let Some(start) = value.find(open) else {
+            continue;
+        };
+        let content_start = start + open.len_utf8();
+        let Some(end) = value[content_start..]
+            .find(close)
+            .map(|offset| offset + content_start)
+        else {
+            continue;
+        };
+        let candidate = value[content_start..end].trim();
+        if (2..=80).contains(&candidate.chars().count()) {
+            return Some(candidate.to_owned());
+        }
+    }
+    None
+}
+
+fn first_html_element_body<'a, P>(fragment: &'a str, tag: &str, predicate: P) -> Option<&'a str>
+where
+    P: Fn(&str) -> bool,
+{
+    next_html_element_body(fragment, tag, 0, predicate).map(|(_, body, _)| body)
+}
+
+fn next_html_element_body<'a, P>(
+    fragment: &'a str,
+    tag: &str,
+    start: usize,
+    predicate: P,
+) -> Option<(&'a str, &'a str, usize)>
+where
+    P: Fn(&str) -> bool,
+{
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut cursor = start.min(fragment.len());
+    while let Some(open_start) = find_ascii_case_insensitive_from(fragment, &open, cursor) {
+        let header_end = fragment[open_start..].find('>')? + open_start;
+        let body_start = header_end + 1;
+        let close_start = find_ascii_case_insensitive_from(fragment, &close, body_start)?;
+        let next_cursor = close_start + close.len();
+        let header = &fragment[open_start..=header_end];
+        if predicate(header) {
+            return Some((header, &fragment[body_start..close_start], next_cursor));
+        }
+        cursor = next_cursor;
+    }
+    None
+}
+
+fn find_ascii_case_insensitive_from(haystack: &str, needle: &str, start: usize) -> Option<usize> {
+    if needle.is_empty() || start >= haystack.len() {
+        return None;
+    }
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    haystack_bytes
+        .get(start..)?
+        .windows(needle_bytes.len())
+        .position(|window| window.eq_ignore_ascii_case(needle_bytes))
+        .map(|offset| start + offset)
+}
+
 fn normalize_title_candidate(value: &str) -> Option<String> {
     let mut value = value
         .split("について")
@@ -1776,7 +1946,7 @@ fn normalize_title_candidate(value: &str) -> Option<String> {
     Some(value)
 }
 
-fn title_score(value: &str, source_name: &str) -> i32 {
+fn title_score(value: &str) -> i32 {
     let mut score = 0;
     for keyword in [
         "辞典",
@@ -1786,15 +1956,35 @@ fn title_score(value: &str, source_name: &str) -> i32 {
         "大辞典",
         "広辞苑",
         "大辞林",
+        "字通",
         "シソーラス",
         "リーダーズ",
         "ロワイヤル",
+        "大百科",
         "百科",
+        "現代用語",
+        "国語",
         "英和",
         "和英",
+        "仏和",
+        "和仏",
+        "独和",
+        "和独",
+        "中日",
+        "日中",
         "法律",
         "医学",
         "数学",
+        "理化学",
+        "仏教",
+        "世界人名",
+        "世界史",
+        "日本史",
+        "古語",
+        "漢語",
+        "類語",
+        "用語",
+        "文例集",
         "Dictionary",
         "Thesaurus",
         "Encyclopedia",
@@ -1804,19 +1994,14 @@ fn title_score(value: &str, source_name: &str) -> i32 {
             break;
         }
     }
-    if value.contains('版') {
-        score += 20;
+    if value.contains('第') && value.contains('版') {
+        score += 30;
     }
-    let source_name = source_name.to_lowercase();
-    let source_basename = source_name.rsplit('/').next().unwrap_or(&source_name);
-    if source_name.contains("about") || matches!(source_basename, "index.html" | "index.htm") {
-        score += 40;
+    if value.starts_with("NEW ") {
+        score += 10;
     }
-    if source_name.contains("copyright") {
-        score += 70;
-    }
-    if source_name.contains("license") {
-        score += 20;
+    if value.contains("この辞書") {
+        score -= 200;
     }
     for weak in [
         "凡例",
@@ -1825,16 +2010,25 @@ fn title_score(value: &str, source_name: &str) -> i32 {
         "インデックス",
         "目次",
         "使い方",
+        "はしがき",
+        "編集",
         "著作権",
         "記号",
         "略語",
+        "掲載語",
     ] {
         if value.contains(weak) {
             score -= 90;
         }
     }
+    if matches!(value, "Index" | "LVED") {
+        score -= 200;
+    }
     if value.ends_with("小辞典") && !value.contains('第') {
         score -= 80;
+    }
+    if value.chars().count() > 50 {
+        score -= 20;
     }
     score
 }
@@ -2108,7 +2302,7 @@ mod tests {
     #[test]
     fn title_probe_rejects_common_false_positive_shapes() {
         assert!(normalize_title_candidate("外国語は片仮名で表記した．").is_none());
-        assert!(title_score("和英小辞典", "index.html") < 100);
+        assert!(title_score("和英小辞典") < 100);
         assert_eq!(
             normalize_title_candidate("『広辞苑 第七版』　　&copy;2018年").as_deref(),
             Some("広辞苑 第七版")
@@ -2121,13 +2315,26 @@ mod tests {
 
     #[test]
     fn title_probe_prefers_index_title_over_later_bibliography_lines() {
-        let index_title = normalize_title_candidate("研究社　類義語使い分け辞典 凡例").unwrap();
-        let bibliography =
-            normalize_title_candidate("『基礎日本語辞典』　森田良行、角川書店、1991、第 3 版")
-                .unwrap();
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text);
+                insert into info values (
+                  1, 1, 'index.html',
+                  '<div><b>研究社　類義語使い分け辞典 凡例</b></div>'
+                );
+                insert into info values (
+                  2, 1, 'copyright.html',
+                  '<p>『基礎日本語辞典』　森田良行、角川書店、1991、第 3 版</p>'
+                );
+                ",
+            )
+            .unwrap();
 
-        assert!(
-            title_score(&index_title, "index.html") > title_score(&bibliography, "shuyou.html")
+        assert_eq!(
+            lved_sqlite_title_from_connection(&connection).as_deref(),
+            Some("研究社　類義語使い分け辞典")
         );
     }
 
@@ -2199,6 +2406,35 @@ mod tests {
         assert_eq!(
             lved_sqlite_title_from_connection(&connection).as_deref(),
             Some("エースクラウン英和辞典 第4版")
+        );
+    }
+
+    #[test]
+    fn title_probe_prefers_lved_index_book_title_over_info_section_heading() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text);
+                insert into info values (
+                  1, 1, 'index.html',
+                  '<div><b>現代用語の基礎知識 2022 凡例</b><br>目次</div>'
+                );
+                insert into info values (
+                  2, 1, 'special.html',
+                  '<p class=\"mainTitle\">『現代用語の基礎知識』の特色</p><p class=\"midashi_1\">(2)「読める事典」――『現代用語の基礎知識』に特徴的な用語配列</p>'
+                );
+                insert into info values (
+                  3, 1, 'copyright.html',
+                  '<p class=\"mainTitle\">現代用語の基礎知識 2022について</p><p>現代用語の基礎知識　2022年版<br>電子版</p>'
+                );
+                ",
+            )
+            .unwrap();
+
+        assert_eq!(
+            lved_sqlite_title_from_connection(&connection).as_deref(),
+            Some("現代用語の基礎知識 2022")
         );
     }
 
