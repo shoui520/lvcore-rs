@@ -22,6 +22,7 @@ pub mod resources;
 pub mod search;
 pub mod sequence;
 pub mod ssed;
+pub mod ssed_aux_index;
 pub mod ssed_color_sample;
 pub mod ssed_encyclopedia;
 pub mod ssed_figure;
@@ -68,6 +69,10 @@ pub use sequence::{SequenceHint, SequenceProvider, TargetWindow};
 pub use ssed::{
     ANDROID_LVEDINFO_MAGIC, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent,
     SsedComponentRole, SsedDataFile, SsedDataHeader, SsedDataReader, SsedInfoLayout,
+};
+pub use ssed_aux_index::{
+    SsedAuxIndexRow, SsedAuxIndexSpec, parse_aux_index_specs_from_exinfo,
+    parse_aux_index_text_bytes,
 };
 pub use ssed_color_sample::{ColorSampleRecord, ColorSampleTable};
 pub use ssed_encyclopedia::{

@@ -12,6 +12,7 @@ pub enum NavigationSurfaceKind {
     Menu,
     ScreenMenu,
     EncyclopediaIndex,
+    AuxiliaryIndex,
     Toc,
     TitleIndexBrowse,
     Panel,

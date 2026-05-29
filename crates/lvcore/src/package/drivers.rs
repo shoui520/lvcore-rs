@@ -45,6 +45,10 @@ use crate::ssed::{
     BLOCK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
     SsedDataHeader,
 };
+use crate::ssed_aux_index::{
+    SsedAuxIndexRow, SsedAuxIndexSpec, parse_aux_index_specs_from_exinfo,
+    parse_aux_index_text_bytes,
+};
 use crate::ssed_encyclopedia::{SsedEncyclopediaRow, parse_encyclopedia_index};
 use crate::ssed_figure::{FigureDimensions, figure_bitmap_to_png};
 use crate::ssed_index::{
@@ -689,6 +693,36 @@ impl NavigationProvider for StubBookPackage {
                         )],
                     });
                 }
+                for spec in self.ssed_aux_index_specs()? {
+                    let relative = Path::new(&spec.info);
+                    if !path_has_extension(&spec.info, &["idx"]) {
+                        continue;
+                    }
+                    if !self.storage.exists(relative)? {
+                        continue;
+                    }
+                    let title = if spec.name.is_empty() {
+                        spec.info.clone()
+                    } else {
+                        spec.name.clone()
+                    };
+                    let surface_id = format!("aux-index:{}", spec.index);
+                    surfaces.push(HomeSurface {
+                        surface_id: surface_id.clone(),
+                        kind: NavigationSurfaceKind::AuxiliaryIndex,
+                        status: NavigationStatus::Available,
+                        title_html: escape_plain_label_html(&title),
+                        title_text: title,
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id,
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_auxiliary_index",
+                            "EXINFO.INI declares a tab-indented auxiliary navigation index",
+                        )],
+                    });
+                }
                 let hanrei_pages = self.discover_ssed_hanrei_pages()?;
                 if !hanrei_pages.is_empty() {
                     let diagnostics = hanrei_pages
@@ -887,6 +921,10 @@ impl NavigationProvider for StubBookPackage {
         }
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "encyclopedia" {
             return self.open_ssed_encyclopedia_surface(surface_id);
+        }
+        if self.metadata.format_family == FormatFamily::Ssed && surface_id.starts_with("aux-index:")
+        {
+            return self.open_ssed_aux_index_surface(surface_id);
         }
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "hanrei" {
             return self.open_ssed_hanrei_surface(surface_id, cursor, limit);
@@ -2470,6 +2508,77 @@ impl StubBookPackage {
                 diagnostics: vec![Diagnostic::info(
                     "ssed_encyclopedia_index_empty",
                     "encyclop.idx did not expose navigation rows",
+                )],
+            });
+        }
+        Ok(NavigationSurface::HierarchicalTree {
+            surface_id: surface_id.to_owned(),
+            nodes,
+        })
+    }
+
+    fn open_ssed_aux_index_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        let Some(raw_index) = surface_id.strip_prefix("aux-index:") else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "ssed_auxiliary_index_invalid_surface",
+                    "auxiliary index surface id is malformed",
+                )],
+            });
+        };
+        let Ok(index) = raw_index.parse::<usize>() else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "ssed_auxiliary_index_invalid_surface",
+                    "auxiliary index surface id does not contain a numeric EXINFO index",
+                )],
+            });
+        };
+        let Some(spec) = self
+            .ssed_aux_index_specs()?
+            .into_iter()
+            .find(|spec| spec.index == index)
+        else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_auxiliary_index_missing",
+                    "EXINFO.INI did not declare the requested auxiliary index",
+                )],
+            });
+        };
+        if !path_has_extension(&spec.info, &["idx"]) {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_auxiliary_index_unsupported_target",
+                    format!(
+                        "EXINFO auxiliary target {} is not a text IDX tree",
+                        spec.info
+                    ),
+                )],
+            });
+        }
+        let Some(path) = self.storage.resolve_casefolded(Path::new(&spec.info))? else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_auxiliary_index_file_missing",
+                    format!("EXINFO auxiliary index {} was not found", spec.info),
+                )],
+            });
+        };
+        let rows = parse_aux_index_text_bytes(&fs::read(path)?)?;
+        let mut diagnostics = Vec::new();
+        let nodes = ssed_aux_index_rows_to_nodes(self, &rows, &mut diagnostics)?;
+        if nodes.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_auxiliary_index_empty",
+                    format!("EXINFO auxiliary index {} did not expose rows", spec.info),
                 )],
             });
         }
@@ -6101,6 +6210,15 @@ impl StubBookPackage {
         Ok(None)
     }
 
+    fn ssed_aux_index_specs(&self) -> Result<Vec<SsedAuxIndexSpec>> {
+        let relative = Path::new("EXINFO.INI");
+        if !self.storage.exists(relative)? {
+            return Ok(Vec::new());
+        }
+        let bytes = self.storage.read(relative)?;
+        Ok(parse_aux_index_specs_from_exinfo(&bytes))
+    }
+
     fn discover_ssed_hanrei_pages(&self) -> Result<Vec<SsedHanreiPage>> {
         let mut pages = Vec::new();
         let mut seen = BTreeSet::new();
@@ -6713,6 +6831,93 @@ fn ssed_encyclopedia_row_target(
             format!(
                 "encyclop.idx row {} points outside declared components: {:08x}:{:04x}",
                 row.index, row.block, row.offset
+            ),
+        ));
+        return Ok(None);
+    };
+    Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
+        component: component.filename.clone(),
+        block: row.block,
+        offset: row.offset,
+    })?))
+}
+
+fn ssed_aux_index_rows_to_nodes(
+    package: &StubBookPackage,
+    rows: &[SsedAuxIndexRow],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Vec<NavigationNode>> {
+    let mut roots = Vec::new();
+    let mut path = Vec::<usize>::new();
+
+    for (index, row) in rows.iter().enumerate() {
+        let rich_label = package.ssed_rich_label(&row.label);
+        let node = NavigationNode {
+            node_id: format!("aux-index:{}:{index}", row.line_number),
+            label_html: rich_label.html,
+            label_text: rich_label.text,
+            target: ssed_aux_index_row_target(package, row, diagnostics)?,
+            diagnostics: rich_label.diagnostics,
+            children: Vec::new(),
+        };
+        let depth = row.depth.max(1) as usize;
+        while path.len() >= depth {
+            path.pop();
+        }
+        if path.is_empty() {
+            roots.push(node);
+            path.push(roots.len() - 1);
+        } else if let Some(parent) = navigation_node_mut_at_path(&mut roots, &path) {
+            parent.children.push(node);
+            path.push(parent.children.len() - 1);
+        } else {
+            diagnostics.push(Diagnostic::warning(
+                "ssed_auxiliary_index_tree_depth_invalid",
+                format!("could not attach auxiliary index row {index} at depth {depth}"),
+            ));
+            roots.push(node);
+            path.clear();
+            path.push(roots.len() - 1);
+        }
+    }
+
+    Ok(roots)
+}
+
+fn ssed_aux_index_row_target(
+    package: &StubBookPackage,
+    row: &SsedAuxIndexRow,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<TargetToken>> {
+    if !row.has_target() {
+        return Ok(None);
+    }
+    if let Some(selector) = row.virtual_selector() {
+        diagnostics.push(Diagnostic::info(
+            "ssed_auxiliary_index_virtual_selector_deferred",
+            format!(
+                "auxiliary index row {} points to virtual selector {selector}",
+                row.line_number
+            ),
+        ));
+        return Ok(None);
+    }
+    let Some(catalog) = &package.ssed_catalog else {
+        diagnostics.push(Diagnostic::warning(
+            "ssed_auxiliary_index_catalog_missing",
+            format!(
+                "auxiliary index row {} points to {:08x}:{:04x}, but no SSED catalog is available",
+                row.line_number, row.block, row.offset
+            ),
+        ));
+        return Ok(None);
+    };
+    let Some(component) = catalog.component_for_address(row.block) else {
+        diagnostics.push(Diagnostic::warning(
+            "ssed_auxiliary_index_target_unresolved",
+            format!(
+                "auxiliary index row {} points outside declared components: {:08x}:{:04x}",
+                row.line_number, row.block, row.offset
             ),
         ));
         return Ok(None);
@@ -8555,6 +8760,15 @@ fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
     if has_any_casefolded(&storage, &["encyclop.idx"]) {
         capabilities.push(Capability::EncyclopediaIndex);
     }
+    if storage.exists(Path::new("EXINFO.INI")).unwrap_or(false)
+        && let Ok(exinfo) = storage.read(Path::new("EXINFO.INI"))
+        && parse_aux_index_specs_from_exinfo(&exinfo)
+            .iter()
+            .filter(|spec| path_has_extension(&spec.info, &["idx"]))
+            .any(|spec| storage.exists(Path::new(&spec.info)).unwrap_or(false))
+    {
+        capabilities.push(Capability::AuxiliaryIndex);
+    }
     if has_ssed_hanrei_casefolded(&storage) {
         capabilities.push(Capability::Hanrei);
     }
@@ -9520,6 +9734,93 @@ mod tests {
                 component,
                 block: 0x59f9,
                 offset: 0x06dc
+            } if component == "HONMON.DIC"
+        ));
+    }
+
+    #[test]
+    fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("EXINFO.INI"),
+            cp932("[GENERAL]\nIDXCOUNT=1\nIDXNAME0=分野\nIDXINFO0=0000015E.IDX\n"),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("0000015E.IDX"),
+            cp932(
+                "00000000\t00000000\t大辞林 第四版\n\
+                 00005221\t00000722\t\t季語\n\
+                 00005221\t000007C2\t\t\t春\n",
+            ),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "DAIJIRIN".to_owned(),
+            components: vec![SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 0x5221,
+                end_block: 0x5230,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            }],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 1,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("DAIJIRIN".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            package
+                .metadata()
+                .capabilities
+                .contains(&Capability::AuxiliaryIndex)
+        );
+        let home = package.home_surfaces().unwrap();
+        assert!(home.iter().any(|surface| {
+            surface.surface_id == "aux-index:0"
+                && surface.kind == NavigationSurfaceKind::AuxiliaryIndex
+                && surface.title_text == "分野"
+        }));
+        let surface = package.open_surface("aux-index:0").unwrap();
+        let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+            panic!("expected auxiliary navigation tree");
+        };
+        assert_eq!(nodes[0].label_text, "大辞林 第四版");
+        assert_eq!(nodes[0].children[0].label_text, "季語");
+        let target = nodes[0].children[0].children[0]
+            .target
+            .as_ref()
+            .unwrap()
+            .decode()
+            .unwrap();
+        assert!(matches!(
+            target,
+            InternalTarget::SsedAddress {
+                component,
+                block: 0x5221,
+                offset: 0x07c2
             } if component == "HONMON.DIC"
         ));
     }
