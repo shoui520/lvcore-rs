@@ -1384,6 +1384,99 @@ fn multiblock_ssed_menu_without_rows_is_not_advertised_available() {
 }
 
 #[test]
+fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_multi_selector(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("MULTI1.DIC"),
+        sseddata_literal_fixture(&multi_descriptor_fixture()),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("MUL1_1_1.DIC"),
+        sseddata_literal_fixture(&selector_menu_fixture(&["CAT", "DOG"])),
+    )
+    .unwrap();
+    let mut titles = b"alpha title\x1f\x0a".to_vec();
+    titles.resize(32, 0);
+    titles.extend_from_slice(b"beta title\x1f\x0a");
+    fs::write(
+        dir.path().join("MUL1_1_2.DIC"),
+        sseddata_literal_fixture(&titles),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("MUL1_1_3.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("CAT", 1, 8, 22, 0),
+            ("DOG", 1, 12, 22, 32),
+        ])),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    assert!(!package.metadata().capabilities.contains(&Capability::Menu));
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::MultiSelector)
+    );
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(
+        !surfaces
+            .iter()
+            .any(|surface| surface.kind == NavigationSurfaceKind::Menu)
+    );
+    let multi_home = surfaces
+        .iter()
+        .find(|surface| surface.kind == NavigationSurfaceKind::MultiSelector)
+        .expect("MULTI descriptor should be a first-class selector surface");
+    assert_eq!(multi_home.status, NavigationStatus::Available);
+
+    let root = package.open_surface("multi:MULTI1.DIC").unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = root else {
+        panic!("MULTI root should open as selector tree");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "CLASS");
+    assert_eq!(nodes[0].children.len(), 2);
+    assert_eq!(nodes[0].children[0].label_text, "CAT");
+    let target = nodes[0].children[0]
+        .target
+        .as_ref()
+        .expect("selector child should open a filtered title/index browse");
+    let InternalTarget::TitleIndexItem { surface_id, .. } = target.decode().unwrap() else {
+        panic!("selector child should target a title-index surface");
+    };
+
+    let filtered = package.open_surface_page(&surface_id, None, 10).unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = filtered else {
+        panic!("selector child should resolve to title/index items");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "alpha title");
+    assert_eq!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 8,
+        }
+    );
+}
+
+#[test]
 fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -3776,6 +3869,79 @@ fn ssedinfo_fixture_with_magic_honmon_index_type_and_blocks(
         18,
         "GA16HALF",
     );
+    data
+}
+
+fn ssedinfo_fixture_with_multi_selector() -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 5 * 0x30];
+    data[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Fixture Multi Book";
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 5;
+    write_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        1,
+        1,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x30..record_start + 0x60],
+        0xff,
+        20,
+        20,
+        "MULTI1.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x60..record_start + 0x90],
+        0x01,
+        21,
+        21,
+        "MUL1_1_1.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x90..record_start + 0xc0],
+        0x05,
+        22,
+        22,
+        "MUL1_1_2.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0xc0..record_start + 0xf0],
+        0x91,
+        23,
+        23,
+        "MUL1_1_3.DIC",
+    );
+    data
+}
+
+fn multi_descriptor_fixture() -> Vec<u8> {
+    let mut data = vec![0u8; 0x10];
+    data[0..2].copy_from_slice(&1u16.to_be_bytes());
+    data.resize(0x30, 0);
+    data[0x10] = 3;
+    data[0x12..0x17].copy_from_slice(b"CLASS");
+    for (component_type, start_block) in [(0x01u8, 21u32), (0x05, 22), (0x91, 23)] {
+        data.push(component_type);
+        data.push(0);
+        data.extend_from_slice(&start_block.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&[0; 6]);
+    }
+    data
+}
+
+fn selector_menu_fixture(labels: &[&str]) -> Vec<u8> {
+    let mut data = Vec::new();
+    for label in labels {
+        data.extend_from_slice(&[0x1f, 0x04]);
+        data.extend_from_slice(&jis_fullwidth_ascii_key(label));
+        data.extend_from_slice(&[0x1f, 0x05]);
+        data.extend_from_slice(&[0x1f, 0x0a]);
+    }
     data
 }
 

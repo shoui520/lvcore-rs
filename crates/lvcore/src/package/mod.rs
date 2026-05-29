@@ -59,6 +59,7 @@ pub enum Capability {
     ScreenMenu,
     EncyclopediaIndex,
     AuxiliaryIndex,
+    MultiSelector,
     Toc,
     Panels,
     Hanrei,

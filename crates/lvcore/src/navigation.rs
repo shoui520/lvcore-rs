@@ -15,6 +15,7 @@ pub enum NavigationSurfaceKind {
     AuxiliaryIndex,
     Toc,
     TitleIndexBrowse,
+    MultiSelector,
     Panel,
     Hanrei,
     Info,
