@@ -1028,7 +1028,7 @@ fn ssed_home_surfaces_are_capability_based() {
     assert!(metadata.capabilities.contains(&Capability::Panels));
     assert!(
         !metadata.capabilities.contains(&Capability::FullTextSearch),
-        "SSED fulltext must not be advertised until a real provider exists"
+        "SSED fulltext must not be advertised without a supported HONMON payload"
     );
     assert_eq!(
         metadata.search_modes,

@@ -9398,10 +9398,9 @@ fn ssed_search_modes(catalog: &SsedCatalog, root: &Path) -> Vec<SearchMode> {
         SearchMode::Backward,
         SearchMode::Partial,
     ];
-    if catalog
-        .honmon()
-        .is_some_and(|component| has_component_payload_casefolded(&storage, component))
-    {
+    if catalog.honmon().is_some_and(|component| {
+        has_supported_sseddata_component_payload_casefolded(&storage, component)
+    }) {
         modes.push(SearchMode::FullText);
     }
     modes
@@ -11413,6 +11412,8 @@ mod tests {
     fn ssed_fulltext_searches_honmon_body_windows() {
         let dir = tempdir().unwrap();
         let catalog = write_ssed_fulltext_fixture(dir.path());
+        let search_modes = ssed_search_modes(&catalog, dir.path());
+        assert!(search_modes.contains(&SearchMode::FullText));
         let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
@@ -11425,6 +11426,7 @@ mod tests {
             ssed_capabilities(&catalog, dir.path()),
             PackageStores {
                 ssed_catalog: Some(catalog),
+                search_modes,
                 ..Default::default()
             },
         );
@@ -11433,6 +11435,12 @@ mod tests {
                 .metadata()
                 .capabilities
                 .contains(&Capability::FullTextSearch)
+        );
+        assert!(
+            package
+                .metadata()
+                .search_modes
+                .contains(&SearchMode::FullText)
         );
 
         let page = package
@@ -11474,6 +11482,7 @@ mod tests {
     fn ssed_fulltext_matches_fullwidth_ascii_body_text() {
         let dir = tempdir().unwrap();
         let catalog = write_ssed_fulltext_fixture(dir.path());
+        let search_modes = ssed_search_modes(&catalog, dir.path());
         let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
@@ -11486,6 +11495,7 @@ mod tests {
             ssed_capabilities(&catalog, dir.path()),
             PackageStores {
                 ssed_catalog: Some(catalog),
+                search_modes,
                 ..Default::default()
             },
         );
@@ -11503,6 +11513,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(page.hits.len(), 1);
+    }
+
+    #[test]
+    fn ssed_fulltext_metadata_requires_supported_honmon_payload() {
+        let dir = tempdir().unwrap();
+        let catalog = write_ssed_fulltext_fixture(dir.path());
+        fs::write(dir.path().join("HONMON.DIC"), b"not an SSED payload").unwrap();
+
+        let capabilities = ssed_capabilities(&catalog, dir.path());
+        let search_modes = ssed_search_modes(&catalog, dir.path());
+
+        assert!(!capabilities.contains(&Capability::FullTextSearch));
+        assert!(!search_modes.contains(&SearchMode::FullText));
+        assert!(search_modes.contains(&SearchMode::Exact));
     }
 
     #[test]
