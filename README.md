@@ -94,7 +94,8 @@ provider slices:
 - SSED title-label decoding for raw JIS X 0208 title bytes that can otherwise
   look like printable ASCII, while preserving real Latin title labels;
 - initial SSED full-text search over HONMON body windows behind native index
-  targets, with diagnostics and explicit HC rendering separation;
+  targets, plus dense HONMON sidecar body text/HTML where renderable sidecar
+  tables are understood, with diagnostics and explicit HC rendering separation;
 - dense HONMON anchor dereference for supported SQLite sidecars, including
   `t_contents`, `HONBUN`, extensionless main wordlist tables, and conservative
   generic id/body schemas. Android SSED app body databases that store HTML in a
@@ -175,9 +176,10 @@ known structures.
   than claiming rendered HTML; known entry boundaries are used when available,
   while supported dense sidecar targets resolve to preserved HTML or exact
   sidecar text.
-- SSED full-text search is implemented as a bounded, index-anchored HONMON scan;
-  it is not a substitute for HC-rendered semantic text and may need more product
-  tuning for dense/sidecar-heavy dictionaries.
+- SSED full-text search is implemented as sidecar-body search for understood
+  dense HONMON databases plus a bounded, index-anchored HONMON scan for stream
+  bodies; it is not a substitute for HC-rendered semantic text and may need more
+  product tuning.
 - SSED internal-page traversal is currently implemented only for simple
   exact/forward title-index paths. Backward, partial, keyword, cross-reference,
   and multi-selector performance still need format-specific indexing work.

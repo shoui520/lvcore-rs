@@ -120,6 +120,7 @@ use crate::ssed_screen_menu::{
 use crate::ssed_sidecar::{
     SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
     discover_ssed_sidecar_body_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
+    search_ssed_dense_sidecar_bodies_with_resolvers,
 };
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
 use crate::storage::{DirectoryStorage, StorageBackend};
@@ -2159,7 +2160,62 @@ impl ReaderBookPackage {
         let offset = decode_offset_cursor(query.cursor.as_deref());
         let page_limit = query.limit.saturating_add(1);
         let mut hits = Vec::new();
+        let sidecar_page = search_ssed_dense_sidecar_bodies_with_resolvers(
+            self.ssed_sidecar_body_resolvers()?,
+            &query.query,
+            offset,
+            page_limit,
+        )?;
+        if !sidecar_page.hits.is_empty() || sidecar_page.matched_count > 0 {
+            diagnostics.push(Diagnostic::info(
+                "ssed_fulltext_sidecar_scan",
+                "SSED full-text search included renderable dense HONMON sidecar bodies",
+            ));
+        }
+        for hit in sidecar_page.hits {
+            let title = if hit.body.title.trim().is_empty() {
+                hit.body.text.chars().take(80).collect::<String>()
+            } else {
+                hit.body.title.clone()
+            };
+            let label = self.ssed_rich_label(&title);
+            let resolver_hint = hit
+                .body
+                .resolver
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string());
+            let mut hit_diagnostics = label.diagnostics;
+            hit_diagnostics.extend(hit.body.diagnostics);
+            hits.push(SearchHit {
+                book_id: self.metadata.book_id.clone(),
+                target: TargetToken::new(&InternalTarget::SsedDenseAnchor {
+                    anchor: hit.anchor_id,
+                    resolver_hint,
+                })?,
+                title_html: label.html,
+                title_text: label.text,
+                snippet_html: ssed_fulltext_snippet_html(&hit.body.text, &query.query),
+                diagnostics: hit_diagnostics,
+            });
+            if hits.len() >= page_limit {
+                break;
+            }
+        }
+        if hits.len() >= page_limit && !sidecar_page.exhausted {
+            hits.truncate(query.limit);
+            return Ok(SearchPage {
+                hits,
+                next_cursor: Some((offset + query.limit).to_string()),
+                diagnostics,
+            });
+        }
         let mut matched_count = 0usize;
+        let body_offset = if sidecar_page.exhausted {
+            offset.saturating_sub(sidecar_page.matched_count)
+        } else {
+            offset
+        };
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(SearchPage {
                 hits,
@@ -2297,7 +2353,7 @@ impl ReaderBookPackage {
                         if !normalize_search_match_text(&body_text).contains(&needle) {
                             continue;
                         }
-                        if matched_count < offset {
+                        if matched_count < body_offset {
                             matched_count = matched_count.saturating_add(1);
                             continue;
                         }
@@ -11175,6 +11231,61 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn dense_honmon_fulltext_searches_sidecar_body() {
+        let dir = tempdir().unwrap();
+        let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
+        let search_modes = ssed_search_modes(&catalog, dir.path());
+        assert!(search_modes.contains(&SearchMode::FullText));
+        let package = ReaderBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("Dense".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            PackageStores {
+                ssed_catalog: Some(catalog),
+                search_modes,
+                ..Default::default()
+            },
+        );
+
+        let page = package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
+                mode: SearchMode::FullText,
+                query: "beta sidecar body".to_owned(),
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(page.hits.len(), 1);
+        assert_eq!(page.hits[0].title_text, "beta");
+        assert!(matches!(
+            page.hits[0].target.decode().unwrap(),
+            InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "2"
+        ));
+        assert!(
+            page.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "ssed_fulltext_sidecar_scan")
+        );
+        let view = package
+            .render_target(&page.hits[0].target, &RenderOptions::default())
+            .unwrap();
+        assert_eq!(
+            view.display_html.as_deref(),
+            Some("<div>beta sidecar html</div>")
+        );
     }
 
     #[test]

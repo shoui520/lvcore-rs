@@ -55,6 +55,19 @@ pub struct SsedSidecarBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsedSidecarSearchHit {
+    pub anchor_id: String,
+    pub body: SsedSidecarBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsedSidecarSearchPage {
+    pub hits: Vec<SsedSidecarSearchHit>,
+    pub matched_count: usize,
+    pub exhausted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SsedSidecarLookup {
     Resolved(SsedSidecarBody),
     MissingRow {
@@ -172,6 +185,58 @@ pub fn lookup_ssed_dense_sidecar_body_with_resolvers(
     })
 }
 
+pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
+    resolvers: &[SsedSidecarBodyResolver],
+    query: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<SsedSidecarSearchPage> {
+    let needle = normalize_sidecar_search_text(query);
+    if needle.is_empty() || limit == 0 {
+        return Ok(SsedSidecarSearchPage {
+            hits: Vec::new(),
+            matched_count: 0,
+            exhausted: true,
+        });
+    }
+
+    let mut hits = Vec::new();
+    let mut matched = 0usize;
+    for resolver in resolvers {
+        let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
+        let mut statement = connection.prepare(&search_sql_for_resolver(resolver))?;
+        let rows = statement.query_map([], |row| {
+            let anchor_id = anchor_id_from_search_row(resolver, row)?;
+            let body = sidecar_body_from_row(resolver, row)?;
+            Ok(SsedSidecarSearchHit { anchor_id, body })
+        })?;
+        for row in rows {
+            let hit = row?;
+            if !sidecar_search_hit_matches(&hit, &needle) {
+                continue;
+            }
+            if matched < offset {
+                matched = matched.saturating_add(1);
+                continue;
+            }
+            hits.push(hit);
+            matched = matched.saturating_add(1);
+            if hits.len() >= limit {
+                return Ok(SsedSidecarSearchPage {
+                    hits,
+                    matched_count: matched,
+                    exhausted: false,
+                });
+            }
+        }
+    }
+    Ok(SsedSidecarSearchPage {
+        hits,
+        matched_count: matched,
+        exhausted: true,
+    })
+}
+
 pub fn discover_ssed_sidecar_body_resolvers(
     root: &Path,
     dict_id_hint: Option<&str>,
@@ -197,6 +262,36 @@ pub fn discover_ssed_sidecar_body_resolvers(
     Ok(resolvers)
 }
 
+fn search_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> String {
+    let mut select_columns = vec![resolver.id_column.clone()];
+    let mut select_expressions = match resolver.id_rule {
+        SsedSidecarIdRule::DirectColumn => vec![quote_sql_identifier(&resolver.id_column)],
+        SsedSidecarIdRule::RowIdTimesFive => vec![format!(
+            "rowid as {}",
+            quote_sql_identifier(&resolver.id_column)
+        )],
+    };
+    for column in [
+        resolver.title_column.as_ref(),
+        resolver.html_column.as_ref(),
+        resolver.plain_column.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !select_columns.iter().any(|existing| existing == column) {
+            select_columns.push(column.clone());
+            select_expressions.push(quote_sql_identifier(column));
+        }
+    }
+    let select_sql = select_expressions.join(", ");
+    let order_sql = resolver.id_rule.sql_where_identifier(&resolver.id_column);
+    format!(
+        "select {select_sql} from {} order by {order_sql}",
+        quote_sql_identifier(&resolver.table)
+    )
+}
+
 fn candidate_resolvers<'a>(
     resolvers: &'a [SsedSidecarBodyResolver],
     resolver_hint: Option<&str>,
@@ -218,6 +313,36 @@ fn candidate_resolvers<'a>(
         }
     }
     resolvers.iter().collect()
+}
+
+fn anchor_id_from_search_row(
+    resolver: &SsedSidecarBodyResolver,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<String> {
+    match resolver.id_rule {
+        SsedSidecarIdRule::DirectColumn => {
+            sqlite_value_to_string(row.get_ref(resolver.id_column.as_str())?)
+        }
+        SsedSidecarIdRule::RowIdTimesFive => {
+            let rowid = match row.get_ref(resolver.id_column.as_str())? {
+                ValueRef::Integer(value) => value,
+                value => sqlite_value_to_string(value)?.parse::<i64>().unwrap_or(0),
+            };
+            Ok(rowid.saturating_mul(5).to_string())
+        }
+    }
+}
+
+fn sidecar_search_hit_matches(hit: &SsedSidecarSearchHit, needle: &str) -> bool {
+    let mut haystack = String::new();
+    haystack.push_str(&hit.body.title);
+    haystack.push('\n');
+    haystack.push_str(&hit.body.text);
+    if let Some(html) = &hit.body.html {
+        haystack.push('\n');
+        haystack.push_str(&strip_html_tags(html));
+    }
+    normalize_sidecar_search_text(&haystack).contains(needle)
 }
 
 fn lookup_resolver_body(
@@ -719,6 +844,23 @@ fn collapse_whitespace(value: &str) -> String {
         out.push(ch);
     }
     out.trim().to_owned()
+}
+
+fn normalize_sidecar_search_text(value: &str) -> String {
+    narrow_fullwidth_ascii_text(&collapse_whitespace(value)).to_lowercase()
+}
+
+fn narrow_fullwidth_ascii_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '\u{3000}' => ' ',
+            ch if ('\u{ff01}'..='\u{ff5e}').contains(&ch) => {
+                char::from_u32((ch as u32) - 0xfee0).unwrap_or(ch)
+            }
+            ch => ch,
+        })
+        .collect()
 }
 
 fn is_metadata_noise_path(path: &Path) -> bool {
