@@ -24,11 +24,10 @@ impl SsedAuxIndexRow {
     }
 
     pub fn virtual_selector(&self) -> Option<String> {
-        if self.offset != 0xffff || self.block & 0x0fff_ffff != 0 {
+        if self.offset != 0xffff || self.block == 0 {
             return None;
         }
-        let selector = self.block >> 28;
-        (selector != 0).then(|| format!("{selector:x}"))
+        Some(format!("{:08X}", self.block))
     }
 }
 
@@ -193,7 +192,8 @@ mod tests {
         let (data, _, _) = SHIFT_JIS.encode(
             "00000000\t00000000\t大辞林 第四版\n\
              00005221\t00000722\t\t季語\n\
-             10000000\t0000FFFF\t\t西和ABC順\n",
+             10000000\t0000FFFF\t\t西和ABC順\n\
+             01000000\t0000FFFF\t\t五十音\n",
         );
 
         let rows = parse_aux_index_text_bytes(&data).unwrap();
@@ -202,6 +202,7 @@ mod tests {
         assert_eq!(rows[0].depth, 1);
         assert_eq!(rows[1].block, 0x5221);
         assert_eq!(rows[1].offset, 0x0722);
-        assert_eq!(rows[2].virtual_selector().as_deref(), Some("1"));
+        assert_eq!(rows[2].virtual_selector().as_deref(), Some("10000000"));
+        assert_eq!(rows[3].virtual_selector().as_deref(), Some("01000000"));
     }
 }
