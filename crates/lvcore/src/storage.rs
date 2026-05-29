@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
 use crate::error::Result;
@@ -38,11 +39,20 @@ impl StorageBackend for DirectoryStorage {
                 relative.display()
             )));
         };
+        if !path_stays_inside_root(self.root(), &path)? {
+            return Err(Error::Driver(format!(
+                "storage path is outside the package: {}",
+                relative.display()
+            )));
+        }
         Ok(fs::read(path)?)
     }
 
     fn exists(&self, relative: &Path) -> Result<bool> {
-        Ok(self.resolve_casefolded(relative)?.is_some())
+        let Some(path) = self.resolve_casefolded(relative)? else {
+            return Ok(false);
+        };
+        path_stays_inside_root(self.root(), &path)
     }
 
     fn resolve_casefolded(&self, relative: &Path) -> Result<Option<PathBuf>> {
@@ -56,15 +66,20 @@ impl StorageBackend for DirectoryStorage {
         if !base.is_dir() {
             return Ok(Vec::new());
         }
+        if !path_stays_inside_root(self.root(), &base)? {
+            return Ok(Vec::new());
+        }
         let mut rows = Vec::new();
         for entry in fs::read_dir(base)? {
             rows.push(entry?.path());
         }
-        rows.sort_by(|a, b| {
-            a.file_name()
-                .map(|v| v.to_string_lossy().casefold())
-                .cmp(&b.file_name().map(|v| v.to_string_lossy().casefold()))
-                .then_with(|| a.cmp(b))
+        rows.sort_by_cached_key(|path| {
+            (
+                path.file_name()
+                    .map(|v| v.to_string_lossy().casefold())
+                    .unwrap_or_default(),
+                path.clone(),
+            )
         });
         Ok(rows)
     }
@@ -73,11 +88,15 @@ impl StorageBackend for DirectoryStorage {
 #[derive(Debug, Clone)]
 pub struct CaseFoldedDirectory {
     root: PathBuf,
+    directory_cache: Arc<Mutex<BTreeMap<PathBuf, BTreeMap<String, PathBuf>>>>,
 }
 
 impl CaseFoldedDirectory {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            directory_cache: Arc::new(Mutex::new(BTreeMap::new())),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -97,7 +116,7 @@ impl CaseFoldedDirectory {
             if wanted == ".." {
                 return Ok(None);
             }
-            let children = directory_children_by_casefold(&current)?;
+            let children = self.children_by_casefold(&current)?;
             let Some(next) = children.get(&wanted) else {
                 return Ok(None);
             };
@@ -107,8 +126,30 @@ impl CaseFoldedDirectory {
     }
 
     pub fn find_child_named(&self, directory: &Path, name: &str) -> Result<Option<PathBuf>> {
-        let children = directory_children_by_casefold(directory)?;
+        let children = self.children_by_casefold(directory)?;
         Ok(children.get(&name.casefold()).cloned())
+    }
+
+    fn children_by_casefold(&self, directory: &Path) -> Result<BTreeMap<String, PathBuf>> {
+        {
+            let cache = self
+                .directory_cache
+                .lock()
+                .map_err(|_| Error::Driver("casefold directory cache is poisoned".to_owned()))?;
+            if let Some(children) = cache.get(directory) {
+                return Ok(children.clone());
+            }
+        }
+
+        let children = directory_children_by_casefold(directory)?;
+        let mut cache = self
+            .directory_cache
+            .lock()
+            .map_err(|_| Error::Driver("casefold directory cache is poisoned".to_owned()))?;
+        Ok(cache
+            .entry(directory.to_path_buf())
+            .or_insert(children)
+            .clone())
     }
 }
 
@@ -127,6 +168,12 @@ fn directory_children_by_casefold(directory: &Path) -> Result<BTreeMap<String, P
             .or_insert(path);
     }
     Ok(children)
+}
+
+fn path_stays_inside_root(root: &Path, path: &Path) -> Result<bool> {
+    let root = fs::canonicalize(root)?;
+    let path = fs::canonicalize(path)?;
+    Ok(path.starts_with(root))
 }
 
 trait Casefold {
@@ -187,5 +234,24 @@ mod tests {
 
         assert!(storage.list_dir(Path::new("missing")).unwrap().is_empty());
         assert!(storage.list_dir(Path::new("..")).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escape_is_not_readable() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let outside = dir
+            .path()
+            .with_file_name("outside-lvcore-storage-symlink.txt");
+        fs::write(&outside, b"outside").unwrap();
+        symlink(&outside, dir.path().join("outside-link")).unwrap();
+        let storage = DirectoryStorage::new(dir.path());
+
+        assert!(!storage.exists(Path::new("outside-link")).unwrap());
+        assert!(storage.read(Path::new("outside-link")).is_err());
+
+        fs::remove_file(outside).unwrap();
     }
 }
