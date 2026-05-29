@@ -713,6 +713,14 @@ fn parse_multi_leaf_page(
 }
 
 pub fn decode_index_key(data: &[u8]) -> String {
+    let filtered = data.split(|byte| *byte == 0).next().unwrap_or_default();
+    if looks_like_plain_ascii_title(filtered) && !looks_like_jis_x0208_title_bytes(filtered) {
+        return String::from_utf8_lossy(filtered).trim().to_owned();
+    }
+    decode_index_key_payload(data)
+}
+
+fn decode_index_key_payload(data: &[u8]) -> String {
     let mut out = String::new();
     let mut index = 0usize;
     while index < data.len() {
@@ -1024,6 +1032,12 @@ mod tests {
             decode_title_text(b"\"~0-K!$bKtK!$J$j\x1f\x0a"),
             "◯悪法も又法なり"
         );
+    }
+
+    #[test]
+    fn decodes_index_keys_that_are_plain_ascii_or_jis_like_ascii() {
+        assert_eq!(decode_index_key(b"DOG"), "DOG");
+        assert_eq!(decode_index_key(b"BG?G"), "打診");
     }
 
     #[test]

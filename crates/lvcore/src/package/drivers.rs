@@ -1933,6 +1933,7 @@ impl ReaderBookPackage {
             SsedIndexSearchCollector::new(self, &query.mode, &needle, offset, page_limit);
         let mut optimized_scan_components = 0usize;
         let mut scan_needs_linear_fallback = false;
+        let ascii_key_needs_linear_safety_net = ssed_ascii_key_needs_linear_safety_net(&needle);
         if matches!(query.mode, SearchMode::Exact | SearchMode::Forward) {
             let scan_result =
                 self.scan_ssed_simple_leaf_index_rows_near_key(&query.mode, &needle, |row| {
@@ -1942,7 +1943,11 @@ impl ReaderBookPackage {
             scan_needs_linear_fallback = scan_result.needs_linear_fallback;
             collector.extend_diagnostics(scan_result.diagnostics);
         }
-        if !collector.has_hits() && (optimized_scan_components == 0 || scan_needs_linear_fallback) {
+        if !collector.has_hits()
+            && (optimized_scan_components == 0
+                || scan_needs_linear_fallback
+                || ascii_key_needs_linear_safety_net)
+        {
             let scan_diagnostics =
                 self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?;
             collector.extend_diagnostics(scan_diagnostics);
@@ -3403,119 +3408,122 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let mut scanned_components = 0usize;
         let mut needs_linear_fallback = false;
-        let needle_key = encode_ssed_index_search_key(needle);
-        if needle_key.is_empty() && !needle.is_empty() {
+        let needle_keys = ssed_index_search_key_candidates(needle);
+        if needle_keys.is_empty() && !needle.is_empty() {
             return Ok(SsedNearKeyScanResult {
                 scanned_components: 0,
                 needs_linear_fallback: true,
                 diagnostics,
             });
         }
-        'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
-            if !is_simple_leaf_index_type(component.component_type) {
-                continue;
-            }
-            if matches!(mode, SearchMode::Exact | SearchMode::Forward)
-                && component.filename.to_ascii_uppercase().starts_with('B')
-            {
-                continue;
-            }
-            let path = match self.resolve_readable_ssed_component_path(component) {
-                Ok(Some(path)) => path,
-                Ok(None) => continue,
-                Err(error) => {
-                    diagnostics.push(
-                        Diagnostic::warning(
-                            "ssed_index_component_decode_failed",
-                            format!(
-                                "{} is not readable as SSEDDATA: {error}",
-                                component.filename
-                            ),
-                        )
-                        .with_context("component", &component.filename),
-                    );
+        'candidates: for needle_key in needle_keys {
+            for component in catalog.components_by_role(SsedComponentRole::Index) {
+                if !is_simple_leaf_index_type(component.component_type) {
                     continue;
                 }
-            };
-            let mut reader = SsedDataFile::open(&path)?;
-            let page_count = component.block_count() as usize;
-            let start_page = match self.ssed_simple_index_candidate_leaf_page(
-                component,
-                &mut reader,
-                &needle_key,
-            )? {
-                Some(page_index) => page_index,
-                None => continue,
-            };
-            scanned_components = scanned_components.saturating_add(1);
-            let mut last_key = None::<Vec<u8>>;
-            'pages: for page_index in start_page..page_count {
-                let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
-                if page.len() < 4 {
-                    break;
-                }
-                let word = u16::from_be_bytes([page[0], page[1]]);
-                if !is_leaf_page(word) {
+                if matches!(mode, SearchMode::Exact | SearchMode::Forward)
+                    && component.filename.to_ascii_uppercase().starts_with('B')
+                {
                     continue;
                 }
-                let logical_block = component.start_block + page_index as u32;
-                let (rows, unknown) = parse_simple_leaf_page(
-                    &component.filename,
-                    &page,
-                    page_index as u32,
-                    logical_block,
-                );
-                if rows.windows(2).any(|pair| {
-                    ssed_index_row_order_key(&pair[1]) < ssed_index_row_order_key(&pair[0])
-                }) {
-                    needs_linear_fallback = true;
-                }
-                if unknown > 0 {
-                    diagnostics.push(
-                        Diagnostic::warning(
-                            "ssed_index_unknown_leaf_bytes",
-                            format!(
-                                "{} had {unknown} unknown simple leaf row(s)",
-                                component.filename
-                            ),
-                        )
-                        .with_context("component", &component.filename),
+                let path = match self.resolve_readable_ssed_component_path(component) {
+                    Ok(Some(path)) => path,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        diagnostics.push(
+                            Diagnostic::warning(
+                                "ssed_index_component_decode_failed",
+                                format!(
+                                    "{} is not readable as SSEDDATA: {error}",
+                                    component.filename
+                                ),
+                            )
+                            .with_context("component", &component.filename),
+                        );
+                        continue;
+                    }
+                };
+                let mut reader = SsedDataFile::open(&path)?;
+                let page_count = component.block_count() as usize;
+                let start_page = match self.ssed_simple_index_candidate_leaf_page(
+                    component,
+                    &mut reader,
+                    &needle_key,
+                )? {
+                    Some(page_index) => page_index,
+                    None => continue,
+                };
+                scanned_components = scanned_components.saturating_add(1);
+                let mut last_key = None::<Vec<u8>>;
+                'pages: for page_index in start_page..page_count {
+                    let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
+                    if page.len() < 4 {
+                        break;
+                    }
+                    let word = u16::from_be_bytes([page[0], page[1]]);
+                    if !is_leaf_page(word) {
+                        continue;
+                    }
+                    let logical_block = component.start_block + page_index as u32;
+                    let (rows, unknown) = parse_simple_leaf_page(
+                        &component.filename,
+                        &page,
+                        page_index as u32,
+                        logical_block,
                     );
-                }
-                for row in rows {
-                    let key = normalize_search_match_text(&row.key);
-                    let key_bytes = ssed_index_row_order_key(&row);
-                    let key_has_needle_prefix =
-                        !needle_key.is_empty() && key_bytes.starts_with(&needle_key);
-                    if last_key
-                        .as_ref()
-                        .is_some_and(|last_key| key_bytes.as_slice() < last_key.as_slice())
-                    {
+                    if rows.windows(2).any(|pair| {
+                        ssed_index_row_order_key(&pair[1]) < ssed_index_row_order_key(&pair[0])
+                    }) {
                         needs_linear_fallback = true;
                     }
-                    last_key = Some(key_bytes.clone());
-                    let row_matches = match mode {
-                        SearchMode::Exact => key == needle,
-                        SearchMode::Forward => key.starts_with(needle),
-                        _ => false,
-                    };
-                    let passed_match_region = match mode {
-                        SearchMode::Exact => {
-                            !needs_linear_fallback && key_bytes.as_slice() > needle_key.as_slice()
+                    if unknown > 0 {
+                        diagnostics.push(
+                            Diagnostic::warning(
+                                "ssed_index_unknown_leaf_bytes",
+                                format!(
+                                    "{} had {unknown} unknown simple leaf row(s)",
+                                    component.filename
+                                ),
+                            )
+                            .with_context("component", &component.filename),
+                        );
+                    }
+                    for row in rows {
+                        let key = normalize_search_match_text(&row.key);
+                        let key_bytes = ssed_index_row_order_key(&row);
+                        let key_has_needle_prefix =
+                            !needle_key.is_empty() && key_bytes.starts_with(&needle_key);
+                        if last_key
+                            .as_ref()
+                            .is_some_and(|last_key| key_bytes.as_slice() < last_key.as_slice())
+                        {
+                            needs_linear_fallback = true;
                         }
-                        SearchMode::Forward => {
-                            !needs_linear_fallback
-                                && !key_has_needle_prefix
-                                && key_bytes.as_slice() > needle_key.as_slice()
+                        last_key = Some(key_bytes.clone());
+                        let row_matches = match mode {
+                            SearchMode::Exact => key == needle,
+                            SearchMode::Forward => key.starts_with(needle),
+                            _ => false,
+                        };
+                        let passed_match_region = match mode {
+                            SearchMode::Exact => {
+                                !needs_linear_fallback
+                                    && key_bytes.as_slice() > needle_key.as_slice()
+                            }
+                            SearchMode::Forward => {
+                                !needs_linear_fallback
+                                    && !key_has_needle_prefix
+                                    && key_bytes.as_slice() > needle_key.as_slice()
+                            }
+                            _ => false,
+                        };
+                        if row_matches {
+                            if !on_row(row)? {
+                                break 'candidates;
+                            }
+                        } else if passed_match_region {
+                            break 'pages;
                         }
-                        _ => false,
-                    };
-                    if row_matches {
-                        if !on_row(row)? {
-                            break 'components;
-                        }
-                    } else if passed_match_region {
-                        break 'pages;
                     }
                 }
             }
@@ -7857,6 +7865,27 @@ fn ssed_fulltext_snippet_html(body_text: &str, query: &str) -> Option<String> {
 
 fn normalize_search_match_text(value: &str) -> String {
     narrow_fullwidth_ascii_text(value).to_lowercase()
+}
+
+fn ssed_ascii_key_needs_linear_safety_net(needle: &str) -> bool {
+    needle.is_ascii() && needle.bytes().any(|byte| byte.is_ascii_alphabetic())
+}
+
+fn ssed_index_search_key_candidates(needle: &str) -> Vec<Vec<u8>> {
+    let mut candidates = Vec::new();
+    push_unique_search_key(&mut candidates, encode_ssed_index_search_key(needle));
+    if needle.is_ascii() {
+        push_unique_search_key(&mut candidates, needle.as_bytes().to_vec());
+        push_unique_search_key(&mut candidates, needle.to_ascii_uppercase().into_bytes());
+        push_unique_search_key(&mut candidates, needle.to_ascii_lowercase().into_bytes());
+    }
+    candidates
+}
+
+fn push_unique_search_key(candidates: &mut Vec<Vec<u8>>, key: Vec<u8>) {
+    if !key.is_empty() && !candidates.iter().any(|candidate| candidate == &key) {
+        candidates.push(key);
+    }
 }
 
 fn ssed_index_row_order_key(row: &SsedIndexRow) -> Vec<u8> {

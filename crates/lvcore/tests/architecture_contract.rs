@@ -2290,6 +2290,41 @@ fn ssed_exact_search_uses_internal_page_tree_for_simple_indexes() {
 }
 
 #[test]
+fn ssed_simple_index_search_handles_raw_ascii_key_order() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"2020\x1f\x0aDOG\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_raw_ascii_fixture_rows(&[
+            ("2020", 1, 2, 13, 0),
+            ("DOG", 1, 4, 13, 6),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "dog".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "DOG");
+}
+
+#[test]
 fn ssed_simple_index_search_uses_cursor_pagination() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -3616,6 +3651,26 @@ fn simple_index_fixture_rows(rows: &[(&str, u32, u16, u32, u16)]) -> Vec<u8> {
         page[pos] = key.len() as u8;
         pos += 1;
         page[pos..pos + key.len()].copy_from_slice(&key);
+        pos += key.len();
+        page[pos..pos + 4].copy_from_slice(&body_block.to_be_bytes());
+        page[pos + 4..pos + 6].copy_from_slice(&body_offset.to_be_bytes());
+        page[pos + 6..pos + 10].copy_from_slice(&title_block.to_be_bytes());
+        page[pos + 10..pos + 12].copy_from_slice(&title_offset.to_be_bytes());
+        pos += 12;
+    }
+    page
+}
+
+fn simple_index_raw_ascii_fixture_rows(rows: &[(&str, u32, u16, u32, u16)]) -> Vec<u8> {
+    let mut page = vec![0u8; 2048];
+    page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    page[2..4].copy_from_slice(&(rows.len() as u16).to_be_bytes());
+    let mut pos = 4usize;
+    for (key, body_block, body_offset, title_block, title_offset) in rows {
+        let key = key.as_bytes();
+        page[pos] = key.len() as u8;
+        pos += 1;
+        page[pos..pos + key.len()].copy_from_slice(key);
         pos += key.len();
         page[pos..pos + 4].copy_from_slice(&body_block.to_be_bytes());
         page[pos + 4..pos + 6].copy_from_slice(&body_offset.to_be_bytes());
