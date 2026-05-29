@@ -3523,16 +3523,20 @@ impl StubBookPackage {
             return Ok(None);
         };
         let surface = self.open_surface(surface_id)?;
-        let NavigationSurface::SimpleMenu { nodes, .. } = surface else {
-            return Ok(Some(TargetWindow {
-                center: self.render_target(target, options)?,
-                before: Vec::new(),
-                after: Vec::new(),
-                diagnostics: vec![Diagnostic::info(
-                    "sequence_surface_not_ordered",
-                    format!("{surface_id} is not a simple SSED MENU/TOC surface"),
-                )],
-            }));
+        let nodes = match surface {
+            NavigationSurface::SimpleMenu { nodes, .. }
+            | NavigationSurface::HierarchicalTree { nodes, .. } => nodes,
+            _ => {
+                return Ok(Some(TargetWindow {
+                    center: self.render_target(target, options)?,
+                    before: Vec::new(),
+                    after: Vec::new(),
+                    diagnostics: vec![Diagnostic::info(
+                        "sequence_surface_not_ordered",
+                        format!("{surface_id} is not an ordered SSED navigation surface"),
+                    )],
+                }));
+            }
         };
         let mut ordered = Vec::new();
         collect_navigation_node_ordered_targets(&nodes, &mut ordered);
@@ -9823,6 +9827,24 @@ mod tests {
                 offset: 0x07c2
             } if component == "HONMON.DIC"
         ));
+        let center = nodes[0].children[0].children[0]
+            .target
+            .as_ref()
+            .unwrap()
+            .clone();
+        let window = package
+            .resolve_target_window(
+                &center,
+                Some(&SequenceHint::MenuOrder {
+                    value: "aux-index:0".to_owned(),
+                }),
+                1,
+                0,
+                &RenderOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(window.before.len(), 1);
+        assert_eq!(window.before[0].title.as_deref(), Some("季語"));
     }
 
     #[test]
