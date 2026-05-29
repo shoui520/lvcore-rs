@@ -30,6 +30,8 @@ pub struct LvedSqliteStore {
     connection: Arc<Mutex<Option<Connection>>>,
     #[serde(skip, default = "default_lved_tree_index_cache")]
     tree_indexes_cache: Arc<Mutex<Option<Vec<LvedTreeIndex>>>>,
+    #[serde(skip, default = "default_lved_title_cache")]
+    title_cache: Arc<Mutex<Option<Option<String>>>>,
 }
 
 fn default_lved_connection_cache() -> Arc<Mutex<Option<Connection>>> {
@@ -37,6 +39,10 @@ fn default_lved_connection_cache() -> Arc<Mutex<Option<Connection>>> {
 }
 
 fn default_lved_tree_index_cache() -> Arc<Mutex<Option<Vec<LvedTreeIndex>>>> {
+    Arc::new(Mutex::new(None))
+}
+
+fn default_lved_title_cache() -> Arc<Mutex<Option<Option<String>>>> {
     Arc::new(Mutex::new(None))
 }
 
@@ -147,6 +153,7 @@ impl LvedSqliteStore {
             android_info,
             connection: default_lved_connection_cache(),
             tree_indexes_cache: default_lved_tree_index_cache(),
+            title_cache: default_lved_title_cache(),
         }))
     }
 
@@ -198,21 +205,12 @@ impl LvedSqliteStore {
         {
             return Ok(Some(title));
         }
-        self.with_connection(|connection| {
-            Ok(lved_sqlite_title_from_connection(connection).or(self.tree_index_title()?))
-        })
+        self.with_connection(|connection| self.cached_title(connection))
     }
 
     pub fn summary(&self) -> Result<LvedSqliteSummary> {
         self.with_connection(|connection| {
-            let title = self
-                .android_info
-                .as_ref()
-                .and_then(|info| nonempty_string(info.title.clone()));
-            let title = match title {
-                Some(title) => Some(title),
-                None => lved_sqlite_title_from_connection(connection).or(self.tree_index_title()?),
-            };
+            let title = self.cached_title(connection)?;
             Ok(LvedSqliteSummary {
                 title,
                 list_available: lved_list_available(connection)?,
@@ -220,6 +218,32 @@ impl LvedSqliteStore {
                 tree_available: !self.tree_indexes()?.is_empty(),
             })
         })
+    }
+
+    fn cached_title(&self, connection: &Connection) -> Result<Option<String>> {
+        if let Some(title) = self
+            .android_info
+            .as_ref()
+            .and_then(|info| nonempty_string(info.title.clone()))
+        {
+            return Ok(Some(title));
+        }
+        {
+            let cache = self
+                .title_cache
+                .lock()
+                .map_err(|_| Error::Driver("LVED_SQLITE3 title cache is poisoned".to_owned()))?;
+            if let Some(title) = cache.as_ref() {
+                return Ok(title.clone());
+            }
+        }
+
+        let title = lved_sqlite_title_from_connection(connection).or(self.tree_index_title()?);
+        let mut cache = self
+            .title_cache
+            .lock()
+            .map_err(|_| Error::Driver("LVED_SQLITE3 title cache is poisoned".to_owned()))?;
+        Ok(cache.get_or_insert(title).clone())
     }
 
     pub fn search_modes(&self) -> Result<Vec<SearchMode>> {
@@ -1629,10 +1653,7 @@ fn html_text_lines(fragment: &str) -> Vec<String> {
             _ => text.push(ch),
         }
     }
-    text.replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
+    decode_basic_html_entities(&text)
         .lines()
         .map(|line| {
             line.trim_matches(|ch: char| ch.is_whitespace() || "　・●◆".contains(ch))
@@ -1640,6 +1661,41 @@ fn html_text_lines(fragment: &str) -> Vec<String> {
         })
         .filter(|line| !line.is_empty())
         .collect()
+}
+
+fn decode_basic_html_entities(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while cursor < value.len() {
+        let rest = &value[cursor..];
+        let Some((entity, replacement)) = match_basic_html_entity(rest) else {
+            let Some(ch) = rest.chars().next() else {
+                break;
+            };
+            decoded.push(ch);
+            cursor += ch.len_utf8();
+            continue;
+        };
+        decoded.push_str(replacement);
+        cursor += entity.len();
+    }
+    decoded
+}
+
+fn match_basic_html_entity(value: &str) -> Option<(&'static str, &'static str)> {
+    if value.starts_with("&nbsp;") {
+        Some(("&nbsp;", " "))
+    } else if value.starts_with("&lt;") {
+        Some(("&lt;", "<"))
+    } else if value.starts_with("&gt;") {
+        Some(("&gt;", ">"))
+    } else if value.starts_with("&amp;") {
+        Some(("&amp;", "&"))
+    } else if value.starts_with("&quot;") {
+        Some(("&quot;", "\""))
+    } else {
+        None
+    }
 }
 
 fn html_to_text(fragment: &str) -> String {
@@ -2115,6 +2171,10 @@ mod tests {
                 r#"<html><head><style>.title { color: red; }</style></head><body><div class="title">新明解国語辞典　第八版</div></body></html>"#
             ),
             vec!["新明解国語辞典　第八版".to_owned()]
+        );
+        assert_eq!(
+            html_text_lines("<div>A&nbsp;&amp;&lt;B&gt;&quot;C&quot;</div>"),
+            vec!["A &<B>\"C\"".to_owned()]
         );
         assert!(
             normalize_title_candidate("浅井　昌弘　慶應義塾大学医学部　精神神経科　教授").is_none()
