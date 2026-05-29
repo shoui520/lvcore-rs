@@ -126,6 +126,11 @@ provider slices:
 - SSED `EXINFO.INI` auxiliary text `*.IDX` declarations and unreferenced
   numeric auxiliary `00000xxx.idx` trees are exposed as hierarchical navigation
   surfaces when rows resolve to SSED component addresses;
+- SSED Britannica loose media directories are exposed as reader navigation:
+  `whatday/*.body`/`*.top` CP932 HTML fragments become info pages with
+  `lved.addrXXXXXXXX:YYYY` links rewritten to normal target tokens, and
+  `top/top_*.dat` five-line media indexes become hierarchical navigation
+  surfaces with thumbnail resources and SSED body-address targets;
 - SSED loose KOJIEN6-style media: `_PCM_U/WaveFile.map` can back `PCMDATA.DIC`
   address resources with decrypted MP3 bytes, and `_MOVIE` entries are exposed
   as typed video resources;

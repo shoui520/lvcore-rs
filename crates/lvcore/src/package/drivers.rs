@@ -56,7 +56,12 @@ use crate::ssed_index::{
     decode_title_text, is_leaf_page, is_simple_leaf_index_type, is_supported_index_type,
     parse_internal_page, parse_simple_leaf_page, parse_supported_leaf_page,
 };
-use crate::ssed_loose_media::{find_movie_file, read_pcmu_record, resolve_pcmu_record};
+use crate::ssed_loose_media::{
+    discover_britannica_top_dat_files, discover_britannica_whatday_paths, find_movie_file,
+    has_britannica_top_dat_files, has_britannica_whatday_files, parse_lved_address,
+    read_pcmu_record, render_britannica_html_fragment, resolve_loose_media_file,
+    resolve_pcmu_record,
+};
 use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
 use crate::ssed_panel::{
     SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, parse_panel_bin,
@@ -693,6 +698,40 @@ impl NavigationProvider for StubBookPackage {
                         )],
                     });
                 }
+                if has_britannica_whatday_files(&self.root)? {
+                    surfaces.push(HomeSurface {
+                        surface_id: "britannica-whatday".to_owned(),
+                        kind: NavigationSurfaceKind::Info,
+                        status: NavigationStatus::Available,
+                        title_html: "Britannica What Happened Today".to_owned(),
+                        title_text: "Britannica What Happened Today".to_owned(),
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: "britannica-whatday".to_owned(),
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_britannica_whatday",
+                            "Britannica loose whatday HTML fragments are available as info pages",
+                        )],
+                    });
+                }
+                if has_britannica_top_dat_files(&self.root)? {
+                    surfaces.push(HomeSurface {
+                        surface_id: "britannica-top".to_owned(),
+                        kind: NavigationSurfaceKind::AuxiliaryIndex,
+                        status: NavigationStatus::Available,
+                        title_html: "Britannica Top Media Index".to_owned(),
+                        title_text: "Britannica Top Media Index".to_owned(),
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: "britannica-top".to_owned(),
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_britannica_top",
+                            "Britannica loose top_*.dat media indexes are available",
+                        )],
+                    });
+                }
                 let aux_specs = self.ssed_aux_index_specs()?;
                 let mut declared_aux_paths = BTreeSet::new();
                 for spec in &aux_specs {
@@ -944,6 +983,12 @@ impl NavigationProvider for StubBookPackage {
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "encyclopedia" {
             return self.open_ssed_encyclopedia_surface(surface_id);
         }
+        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "britannica-whatday" {
+            return self.open_britannica_whatday_surface(surface_id, cursor, limit);
+        }
+        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "britannica-top" {
+            return self.open_britannica_top_surface(surface_id);
+        }
         if self.metadata.format_family == FormatFamily::Ssed
             && (surface_id.starts_with("aux-index:") || surface_id.starts_with("numeric-aux:"))
         {
@@ -1046,6 +1091,21 @@ impl RendererProvider for StubBookPackage {
                             || path_has_extension(path, &["html", "htm"]))
                     {
                         self.render_package_html_resource(
+                            token.clone(),
+                            &resource,
+                            path,
+                            resource_ref,
+                            options,
+                        )?
+                    } else if let InternalResource::SsedLooseFile {
+                        path,
+                        resource_kind,
+                        ..
+                    } = &decoded_resource
+                        && (*resource_kind == ResourceKind::Html
+                            || path_has_extension(path, &["html", "htm", "body", "top"]))
+                    {
+                        self.render_ssed_loose_html_resource(
                             token.clone(),
                             &resource,
                             path,
@@ -1157,6 +1217,31 @@ impl ResourceProvider for StubBookPackage {
                     token: token.clone(),
                     kind: resource_kind,
                     label,
+                    href,
+                    mime_type: resource_mime_type(resource_kind, Some(&path)).map(str::to_owned),
+                    diagnostics,
+                })
+            }
+            InternalResource::SsedLooseFile {
+                root_name,
+                path,
+                resource_kind,
+            } => {
+                let resolved = resolve_loose_media_file(&self.root, &root_name, &path)?;
+                let mut diagnostics = Vec::new();
+                let href = if resolved.is_some() {
+                    Some(format!("lvcore://resource/{}", token.as_str()))
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!("{root_name}/{path} was not found next to the SSED package"),
+                    ));
+                    None
+                };
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: resource_kind,
+                    label: Some(path.clone()),
                     href,
                     mime_type: resource_mime_type(resource_kind, Some(&path)).map(str::to_owned),
                     diagnostics,
@@ -1431,6 +1516,17 @@ impl ResourceProvider for StubBookPackage {
                 let relative = Path::new(&path);
                 let Some(resolved) = self.storage.resolve_casefolded(relative)? else {
                     return Err(Error::Driver(format!("resource not found: {path}")));
+                };
+                Ok(fs::read(resolved)?)
+            }
+            InternalResource::SsedLooseFile {
+                root_name, path, ..
+            } => {
+                let Some(resolved) = resolve_loose_media_file(&self.root, &root_name, &path)?
+                else {
+                    return Err(Error::Driver(format!(
+                        "loose SSED resource not found: {root_name}/{path}"
+                    )));
                 };
                 Ok(fs::read(resolved)?)
             }
@@ -2540,6 +2636,161 @@ impl StubBookPackage {
         })
     }
 
+    fn open_britannica_whatday_surface(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
+        if limit == 0 {
+            return Ok(NavigationSurface::InfoPages {
+                surface_id: surface_id.to_owned(),
+                pages: Vec::new(),
+                next_cursor: None,
+            });
+        }
+        let offset = decode_offset_cursor(cursor);
+        let files = discover_britannica_whatday_paths(&self.root)?;
+        if files.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_britannica_whatday_missing",
+                    "Britannica loose whatday files were not found",
+                )],
+            });
+        }
+        let next_cursor = (files.len() > offset + limit).then(|| (offset + limit).to_string());
+        let pages = files
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|file| {
+                let resource = ResourceToken::new(&InternalResource::SsedLooseFile {
+                    root_name: file.root_name.clone(),
+                    path: file.relative_path.clone(),
+                    resource_kind: ResourceKind::Html,
+                })?;
+                let label = format!(
+                    "{}月{}日 {}",
+                    file.month,
+                    file.day,
+                    file.fragment_kind.as_str()
+                );
+                Ok(NavigationItem {
+                    item_id: format!(
+                        "{}:{}",
+                        file.root_name,
+                        file.relative_path.replace('\\', "/")
+                    ),
+                    label_html: escape_plain_label_html(&label),
+                    label_text: label,
+                    target: TargetToken::new(&InternalTarget::Resource {
+                        resource,
+                        anchor: None,
+                    })?,
+                    diagnostics: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(NavigationSurface::InfoPages {
+            surface_id: surface_id.to_owned(),
+            pages,
+            next_cursor,
+        })
+    }
+
+    fn open_britannica_top_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+        let dat_files = discover_britannica_top_dat_files(&self.root)?;
+        if dat_files.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_britannica_top_missing",
+                    "Britannica loose top_*.dat files were not found",
+                )],
+            });
+        }
+        let mut diagnostics = Vec::new();
+        let mut nodes = Vec::new();
+        for dat in dat_files {
+            let mut children = Vec::new();
+            for record in dat.records {
+                let label = self.ssed_rich_label(&record.title);
+                let label_html = if let Some(image) = &record.image_resource {
+                    let resource = InternalResource::SsedLooseFile {
+                        root_name: image.root_name.clone(),
+                        path: image.relative_path.clone(),
+                        resource_kind: ResourceKind::Image,
+                    };
+                    let token = ResourceToken::new(&resource)?;
+                    format!(
+                        r#"<img class="lv-britannica-top-thumb" src="lvcore://resource/{}" alt=""> {}"#,
+                        token.as_str(),
+                        label.html
+                    )
+                } else {
+                    label.html
+                };
+                let target = self.ssed_target_for_loose_address(
+                    record.address.block,
+                    record.address.offset,
+                    &mut diagnostics,
+                )?;
+                let mut node_diagnostics = label.diagnostics;
+                if record.image_resource.is_none() && !record.image_name.is_empty() {
+                    node_diagnostics.push(Diagnostic::info(
+                        "ssed_britannica_top_image_missing",
+                        format!(
+                            "top_*.dat image {} was not found next to the media index",
+                            record.image_name
+                        ),
+                    ));
+                }
+                children.push(NavigationNode {
+                    node_id: format!("{}:{}", dat.relative_path, record.index),
+                    label_html,
+                    label_text: label.text,
+                    target,
+                    diagnostics: node_diagnostics,
+                    children: Vec::new(),
+                });
+            }
+            let category = dat.category.clone();
+            nodes.push(NavigationNode {
+                node_id: dat.relative_path,
+                label_html: escape_plain_label_html(&category),
+                label_text: category,
+                target: None,
+                diagnostics: Vec::new(),
+                children,
+            });
+        }
+        if nodes.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics,
+            });
+        }
+        if !diagnostics.is_empty() {
+            nodes.insert(
+                0,
+                NavigationNode {
+                    node_id: "diagnostics".to_owned(),
+                    label_html: "Diagnostics".to_owned(),
+                    label_text: "Diagnostics".to_owned(),
+                    target: None,
+                    diagnostics,
+                    children: Vec::new(),
+                },
+            );
+        }
+        Ok(NavigationSurface::HierarchicalTree {
+            surface_id: surface_id.to_owned(),
+            nodes,
+        })
+    }
+
     fn open_ssed_aux_index_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
         let spec = match self.ssed_aux_index_spec_for_surface(surface_id) {
             Ok(spec) => spec,
@@ -3444,6 +3695,49 @@ impl StubBookPackage {
             component: component.filename.clone(),
             block: pointer.block,
             offset: pointer.offset,
+        })?))
+    }
+
+    fn ssed_target_for_loose_address(
+        &self,
+        block: u32,
+        offset: u32,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<Option<TargetToken>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            diagnostics.push(Diagnostic::error(
+                "ssed_catalog_missing",
+                "loose SSED address links require a parsed SSEDINFO catalog",
+            ));
+            return Ok(None);
+        };
+        let Some(component) = catalog.component_for_address(block) else {
+            diagnostics.push(Diagnostic::warning(
+                "ssed_loose_address_unresolved",
+                format!(
+                    "loose SSED address {:08x}:{:04x} is outside declared components",
+                    block, offset
+                ),
+            ));
+            return Ok(None);
+        };
+        if component.relative_offset(block, offset).is_none() {
+            diagnostics.push(
+                Diagnostic::warning(
+                    "ssed_loose_address_invalid",
+                    format!(
+                        "{} does not contain loose address {:08x}:{:04x}",
+                        component.filename, block, offset
+                    ),
+                )
+                .with_context("component", &component.filename),
+            );
+            return Ok(None);
+        }
+        Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
+            component: component.filename.clone(),
+            block,
+            offset,
         })?))
     }
 
@@ -4536,6 +4830,60 @@ impl StubBookPackage {
         })
     }
 
+    fn render_ssed_loose_html_resource(
+        &self,
+        target: TargetToken,
+        resource: &ResourceToken,
+        path: &str,
+        resource_ref: ResourceRef,
+        options: &RenderOptions,
+    ) -> Result<ResolvedTargetView> {
+        let scroll_anchor = scroll_anchor_for_token(&target)?;
+        let data = self.read_resource(resource)?;
+        let raw_html = decode_package_html_text(&data);
+        let html = if path_has_extension(path, &["body", "top"]) {
+            render_britannica_html_fragment(&raw_html)
+        } else {
+            raw_html
+        };
+        let title = resource_ref.label.clone();
+        if options.mode == RenderMode::BasicText {
+            return Ok(ResolvedTargetView {
+                kind: ResolvedTargetKind::InfoPage,
+                target,
+                title,
+                display_html: None,
+                basic_text: Some(html_basic_text(&html)),
+                scroll_anchor,
+                surface: None,
+                resources: Vec::new(),
+                links: Vec::new(),
+                capabilities: Vec::new(),
+                diagnostics: resource_ref.diagnostics,
+                debug_trace: None,
+            });
+        }
+
+        let mut normalized = self.normalize_britannica_loose_html_refs(&html)?;
+        let resources = normalized.resources;
+        let mut diagnostics = resource_ref.diagnostics;
+        diagnostics.append(&mut normalized.diagnostics);
+        Ok(ResolvedTargetView {
+            kind: ResolvedTargetKind::InfoPage,
+            target,
+            title,
+            display_html: Some(normalized.html),
+            basic_text: None,
+            scroll_anchor,
+            surface: None,
+            resources,
+            links: normalized.links,
+            capabilities: vec![crate::render::RenderCapability::Html],
+            diagnostics,
+            debug_trace: None,
+        })
+    }
+
     fn render_chm_html_resource(
         &self,
         target: TargetToken,
@@ -5356,6 +5704,116 @@ impl StubBookPackage {
             cursor = attr.value_end;
         }
 
+        output.push_str(&html[cursor..]);
+        Ok(NormalizedHtmlRefs {
+            html: output,
+            resources,
+            links,
+            diagnostics,
+        })
+    }
+
+    fn normalize_britannica_loose_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
+        let inline = self.expand_britannica_inline_address_markers(html)?;
+        let mut output = String::with_capacity(inline.html.len());
+        let mut links = inline.links;
+        let resources = Vec::new();
+        let mut diagnostics = inline.diagnostics;
+        let mut seen_target_tokens = BTreeSet::new();
+        for link in &links {
+            seen_target_tokens.insert(link.token.as_str().to_owned());
+        }
+        let mut cursor = 0usize;
+        let lower = inline.html.to_ascii_lowercase();
+
+        while let Some(attr) = next_html_href_or_src_attr(&inline.html, &lower, cursor) {
+            output.push_str(&inline.html[cursor..attr.value_start]);
+            let raw_value = &inline.html[attr.value_start..attr.value_end];
+            if attr.name == HtmlAttrName::Href
+                && let Some(address) = parse_lved_address(raw_value)
+                && let Some(target) = self.ssed_target_for_loose_address(
+                    address.block,
+                    address.offset,
+                    &mut diagnostics,
+                )?
+            {
+                let decoded = target.decode()?;
+                if seen_target_tokens.insert(target.as_str().to_owned()) {
+                    links.push(TargetLink::new(raw_value, &decoded)?);
+                }
+                output.push_str(&format!("lvcore://target/{}", target.as_str()));
+            } else {
+                output.push_str(raw_value);
+            }
+            cursor = attr.value_end;
+        }
+        output.push_str(&inline.html[cursor..]);
+
+        Ok(NormalizedHtmlRefs {
+            html: output,
+            resources,
+            links,
+            diagnostics,
+        })
+    }
+
+    fn expand_britannica_inline_address_markers(&self, html: &str) -> Result<NormalizedHtmlRefs> {
+        let mut output = String::with_capacity(html.len());
+        let mut links = Vec::new();
+        let resources = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut cursor = 0usize;
+        let mut seen_target_tokens = BTreeSet::new();
+
+        while let Some((marker_start, marker_kind)) = next_britannica_inline_marker(html, cursor) {
+            output.push_str(&html[cursor..marker_start]);
+            let spec_start = marker_start + marker_kind.start.len();
+            let Some(spec) = html.get(spec_start..spec_start + 13) else {
+                output.push_str(&html[marker_start..]);
+                cursor = html.len();
+                break;
+            };
+            let Some((block_hex, offset_hex)) = spec.split_once(':') else {
+                output.push_str(&html[marker_start..marker_start + marker_kind.start.len()]);
+                cursor = marker_start + marker_kind.start.len();
+                continue;
+            };
+            if block_hex.len() != 8
+                || offset_hex.len() != 4
+                || !block_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || !offset_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                output.push_str(&html[marker_start..marker_start + marker_kind.start.len()]);
+                cursor = marker_start + marker_kind.start.len();
+                continue;
+            }
+            let label_start = spec_start + 13;
+            let Some(end_relative) = html[label_start..].find(marker_kind.end) else {
+                output.push_str(&html[marker_start..]);
+                cursor = html.len();
+                break;
+            };
+            let label_end = label_start + end_relative;
+            let label = &html[label_start..label_end];
+            let block = u32::from_str_radix(block_hex, 16).unwrap_or_default();
+            let offset = u32::from_str_radix(offset_hex, 16).unwrap_or_default();
+            if let Some(target) =
+                self.ssed_target_for_loose_address(block, offset, &mut diagnostics)?
+            {
+                let decoded = target.decode()?;
+                if seen_target_tokens.insert(target.as_str().to_owned()) {
+                    links.push(TargetLink::new(label, &decoded)?);
+                }
+                output.push_str(&format!(
+                    r#"<a class="link" href="lvcore://target/{}">{}</a>"#,
+                    target.as_str(),
+                    escape_plain_label_html(label)
+                ));
+            } else {
+                output.push_str(&escape_plain_label_html(label));
+            }
+            cursor = label_end + marker_kind.end.len();
+        }
         output.push_str(&html[cursor..]);
         Ok(NormalizedHtmlRefs {
             html: output,
@@ -7774,6 +8232,36 @@ fn next_html_href_or_src_attr(html: &str, lower: &str, cursor: usize) -> Option<
         value_start,
         value_end,
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BritannicaInlineMarker {
+    start: &'static str,
+    end: &'static str,
+}
+
+fn next_britannica_inline_marker(
+    html: &str,
+    cursor: usize,
+) -> Option<(usize, BritannicaInlineMarker)> {
+    const MARKERS: [BritannicaInlineMarker; 2] = [
+        BritannicaInlineMarker {
+            start: "##S",
+            end: "E##",
+        },
+        BritannicaInlineMarker {
+            start: "＃＃Ｓ",
+            end: "Ｅ＃＃",
+        },
+    ];
+    MARKERS
+        .into_iter()
+        .filter_map(|marker| {
+            html[cursor..]
+                .find(marker.start)
+                .map(|offset| (cursor + offset, marker))
+        })
+        .min_by_key(|(offset, _)| *offset)
 }
 
 fn html_unescape_minimal(value: &str) -> String {

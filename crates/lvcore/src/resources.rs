@@ -32,6 +32,11 @@ pub enum InternalResource {
         path: String,
         resource_kind: ResourceKind,
     },
+    SsedLooseFile {
+        root_name: String,
+        path: String,
+        resource_kind: ResourceKind,
+    },
     SsedComponentAddress {
         component: String,
         block: u32,
@@ -80,6 +85,7 @@ impl InternalResource {
     pub fn resource_kind(&self) -> ResourceKind {
         match self {
             Self::PackageFile { resource_kind, .. }
+            | Self::SsedLooseFile { resource_kind, .. }
             | Self::SsedComponentAddress { resource_kind, .. }
             | Self::ChmFile { resource_kind, .. } => *resource_kind,
             Self::SsedPcmDataRange { .. } => ResourceKind::PcmData,
@@ -179,6 +185,18 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("Templates"));
+    }
+
+    #[test]
+    fn token_round_trips_ssed_loose_file_resource() {
+        let resource = InternalResource::SsedLooseFile {
+            root_name: "_DCT_BRI2016_Media".to_owned(),
+            path: "whatday/12-5.body".to_owned(),
+            resource_kind: ResourceKind::Html,
+        };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("BRI2016"));
     }
 
     #[test]

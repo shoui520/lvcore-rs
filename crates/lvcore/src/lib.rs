@@ -80,7 +80,11 @@ pub use ssed_encyclopedia::{
     parse_encyclopedia_index, parse_encyclopedia_index_bytes,
 };
 pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
-pub use ssed_loose_media::{PcmuIndex, PcmuMapRecord};
+pub use ssed_loose_media::{
+    BritannicaLooseResourcePath, BritannicaMediaRoot, BritannicaTopDat, BritannicaTopRecord,
+    BritannicaWhatdayFile, BritannicaWhatdayKind, BritannicaWhatdayPath, LooseAddress, PcmuIndex,
+    PcmuMapRecord,
+};
 pub use ssed_menu::{
     SsedMenuDestination, SsedMenuDestinationEncoding, SsedMenuLink, SsedMenuParse, SsedMenuRecord,
 };
