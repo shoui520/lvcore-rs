@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 pub const BLOCK_SIZE: u32 = 2048;
 pub const CHUNK_SIZE: usize = 0x8000;
 pub const WINDOW_SIZE: usize = 0x0ff0;
+pub const MAX_IN_MEMORY_SSEDDATA_EXPANDED_SIZE: usize = 512 * 1024 * 1024;
 pub const SSEDINFO_MAGIC: &[u8; 8] = b"SSEDINFO";
 pub const ANDROID_LVEDINFO_MAGIC: &[u8; 8] = b"LVEDINFO";
 pub const SSEDDATA_MAGIC: &[u8; 8] = b"SSEDDATA";
@@ -119,10 +120,12 @@ impl SsedDataHeader {
     }
 
     pub fn expanded_size(&self) -> usize {
-        self.end_block
-            .saturating_sub(self.start_block)
-            .saturating_add(1) as usize
-            * BLOCK_SIZE as usize
+        let blocks = u64::from(
+            self.end_block
+                .saturating_sub(self.start_block)
+                .saturating_add(1),
+        );
+        usize::try_from(blocks.saturating_mul(u64::from(BLOCK_SIZE))).unwrap_or(usize::MAX)
     }
 }
 
@@ -502,7 +505,13 @@ pub fn expand_sseddata_bytes(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn expand_sseddata_bytes_with_header(data: &[u8], header: &SsedDataHeader) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(header.expanded_size());
+    let expanded_size = header.expanded_size();
+    if expanded_size > MAX_IN_MEMORY_SSEDDATA_EXPANDED_SIZE {
+        return Err(Error::Driver(
+            "SSEDDATA expanded size is too large for in-memory decoding".to_owned(),
+        ));
+    }
+    let mut out = Vec::with_capacity(expanded_size);
     for &chunk_offset in &header.chunk_offsets {
         let chunk_offset = chunk_offset as usize;
         if chunk_offset >= data.len() {
@@ -512,8 +521,8 @@ fn expand_sseddata_bytes_with_header(data: &[u8], header: &SsedDataHeader) -> Re
         }
         out.extend(expand_sseddata_chunk(data, chunk_offset)?);
     }
-    if out.len() > header.expanded_size() {
-        out.truncate(header.expanded_size());
+    if out.len() > expanded_size {
+        out.truncate(expanded_size);
     }
     Ok(out)
 }
@@ -621,6 +630,15 @@ mod tests {
         assert_eq!(reader.header().start_block, 1);
         assert_eq!(reader.expanded(), b"abc");
         assert_eq!(reader.read(1, 2), b"bc");
+    }
+
+    #[test]
+    fn in_memory_reader_rejects_huge_declared_expanded_size() {
+        let data = fixture_sseddata_literal_chunks(&[b"a"], 1, u32::MAX);
+
+        let error = SsedDataReader::parse_bytes(&data).unwrap_err();
+
+        assert!(error.to_string().contains("too large for in-memory"));
     }
 
     #[test]
