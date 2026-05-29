@@ -4843,6 +4843,9 @@ impl StubBookPackage {
         };
         let mut reader = SsedDataFile::open(&path)?;
         let mut data = reader.read_range(offset, 256)?;
+        if let Some(anchor_id) = parse_observed_ssed_dense_anchor_id(&data) {
+            return Ok(Some(anchor_id));
+        }
         if let Some(end) = find_ssed_dense_anchor_record_end(&data) {
             data.truncate(end);
         }
@@ -7399,6 +7402,58 @@ fn shift_jis_pair_to_jis_key_pair(lead: u8, trail: u8) -> Option<(u8, u8)> {
 fn looks_like_raw_anchor_label(value: &str) -> bool {
     let value = value.trim();
     value.len() >= 4 && value.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn parse_observed_ssed_dense_anchor_id(data: &[u8]) -> Option<String> {
+    for marker_start in [0usize, 2] {
+        if data.get(marker_start..marker_start + SSED_ENTRY_MARKER.len())
+            != Some(SSED_ENTRY_MARKER.as_slice())
+        {
+            continue;
+        }
+        if data.get(marker_start + 4..marker_start + 6) != Some([0x1f, 0x41].as_slice()) {
+            continue;
+        }
+
+        let styled_digits_start = marker_start + 10;
+        let styled_digits_end = marker_start + 26;
+        if data.get(marker_start + 8..marker_start + 10) == Some([0x1f, 0x04].as_slice())
+            && data.get(styled_digits_end..styled_digits_end + 2) == Some([0x1f, 0x05].as_slice())
+            && let Some(anchor) =
+                parse_jis_digit_anchor_pairs(data.get(styled_digits_start..styled_digits_end)?)
+        {
+            return Some(anchor);
+        }
+
+        let plain_digits_start = marker_start + 6;
+        let plain_digits_end = data
+            .get(plain_digits_start..)?
+            .windows(2)
+            .position(|window| window == [0x1f, 0x61] || window == [0x1f, 0x0a])
+            .map(|relative| plain_digits_start + relative)
+            .unwrap_or_else(|| data.len().min(plain_digits_start + 32));
+        if let Some(anchor) =
+            parse_jis_digit_anchor_pairs(data.get(plain_digits_start..plain_digits_end)?)
+        {
+            return Some(anchor);
+        }
+    }
+    None
+}
+
+fn parse_jis_digit_anchor_pairs(data: &[u8]) -> Option<String> {
+    if !data.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut digits = String::new();
+    for pair in data.chunks_exact(2) {
+        match pair {
+            [0x21, 0x21] => {}
+            [0x23, trail] if (0x30..=0x39).contains(trail) => digits.push(char::from(*trail)),
+            _ => return None,
+        }
+    }
+    (!digits.is_empty()).then_some(digits)
 }
 
 fn find_ssed_dense_anchor_record_end(data: &[u8]) -> Option<usize> {
@@ -11188,8 +11243,23 @@ mod tests {
         assert_eq!(encode_ssed_index_search_key("３０"), body_jis("30"));
     }
 
+    #[test]
+    fn parses_observed_styled_dense_anchor_records() {
+        let mut record = Vec::new();
+        record.extend_from_slice(&SSED_ENTRY_MARKER);
+        record.extend_from_slice(&[0x1f, 0x41, 0x01, 0x60, 0x1f, 0x04]);
+        record.extend_from_slice(&body_jis("00000005"));
+        record.extend_from_slice(&[0x1f, 0x05, 0x1f, 0x61, 0x1f, 0x0a]);
+
+        assert_eq!(
+            parse_observed_ssed_dense_anchor_id(&record),
+            Some("00000005".to_owned())
+        );
+    }
+
     enum DenseSidecarFixture {
         BodyRows,
+        AndroidRowidTimesFiveBodyRows,
         TitleOnlyThenBodyRows,
         BlobBodyRows,
         MissingBetaRow,
@@ -11197,8 +11267,12 @@ mod tests {
 
     fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -> SsedCatalog {
         let mut body = Vec::new();
-        body.extend_from_slice(&dense_anchor_record("00000001"));
-        body.extend_from_slice(&dense_anchor_record("00000002"));
+        let (alpha_anchor, beta_anchor) = match fixture {
+            DenseSidecarFixture::AndroidRowidTimesFiveBodyRows => ("00000005", "00000010"),
+            _ => ("00000001", "00000002"),
+        };
+        body.extend_from_slice(&dense_anchor_record(alpha_anchor));
+        body.extend_from_slice(&dense_anchor_record(beta_anchor));
         fs::write(
             root.join("HONMON.DIC"),
             fixture_sseddata_literal_chunks(&[&body], 100, 100),
@@ -11247,6 +11321,9 @@ mod tests {
         match fixture {
             DenseSidecarFixture::BodyRows => {
                 write_dense_body_db(root.join("body.db"), true, true, false);
+            }
+            DenseSidecarFixture::AndroidRowidTimesFiveBodyRows => {
+                write_android_body_db(root.join("DENSE.db"), "DENSE");
             }
             DenseSidecarFixture::TitleOnlyThenBodyRows => {
                 let connection = Connection::open(root.join("a-title-only.db")).unwrap();
@@ -11310,6 +11387,46 @@ mod tests {
                 trailing_bytes: 0,
             },
         }
+    }
+
+    #[test]
+    fn android_ssed_body_database_uses_rowid_times_five_anchor_rule() {
+        let dir = tempdir().unwrap();
+        let catalog = write_ssed_dense_sidecar_fixture(
+            dir.path(),
+            DenseSidecarFixture::AndroidRowidTimesFiveBodyRows,
+        );
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("DENSE".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let target = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 32,
+        })
+        .unwrap();
+
+        let body = package.visual_body_for_target(&target).unwrap();
+
+        assert_eq!(
+            body,
+            VisualBody::PreservedHtml {
+                html: "<div>android beta html</div>".to_owned(),
+                source: BodySourceKind::SidecarHtml,
+            }
+        );
     }
 
     fn dense_anchor_record(anchor: &str) -> Vec<u8> {
@@ -11388,6 +11505,32 @@ mod tests {
                     .unwrap();
             }
         }
+    }
+
+    fn write_android_body_db(path: PathBuf, table: &str) {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .execute_batch(&format!(
+                "create table {} (Html text);",
+                quote_fixture_sql_identifier(table)
+            ))
+            .unwrap();
+        connection
+            .execute(
+                &format!(
+                    "insert into {} (Html) values (?), (?)",
+                    quote_fixture_sql_identifier(table)
+                ),
+                (
+                    "<div>android alpha html</div>",
+                    "<div>android beta html</div>",
+                ),
+            )
+            .unwrap();
+    }
+
+    fn quote_fixture_sql_identifier(name: &str) -> String {
+        format!("\"{}\"", name.replace('"', "\"\""))
     }
 
     fn write_ssed_fulltext_fixture(root: &Path) -> SsedCatalog {

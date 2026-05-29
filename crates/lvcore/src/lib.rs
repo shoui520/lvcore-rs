@@ -95,7 +95,9 @@ pub use ssed_screen_menu::{
     SsedScreenMenuDirectTarget, SsedScreenMenuHotspot, SsedScreenMenuParse, SsedScreenMenuPointer,
     SsedScreenMenuPointerTarget, SsedScreenMenuRect, SsedScreenMenuScreen,
 };
-pub use ssed_sidecar::{SsedSidecarBody, SsedSidecarBodyResolver, SsedSidecarLookup};
+pub use ssed_sidecar::{
+    SsedSidecarBody, SsedSidecarBodyResolver, SsedSidecarIdRule, SsedSidecarKind, SsedSidecarLookup,
+};
 pub use ssed_sound_data::{SoundDataIndex, SoundDataMapRecord};
 pub use storage::{CaseFoldedDirectory, DirectoryStorage, StorageBackend};
 pub use target::{InternalTarget, TargetKind, TargetLink, TargetToken};

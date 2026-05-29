@@ -24,6 +24,7 @@ pub struct SsedSidecarBodyResolver {
     pub kind: SsedSidecarKind,
     pub table: String,
     pub id_column: String,
+    pub id_rule: SsedSidecarIdRule,
     pub title_column: Option<String>,
     pub html_column: Option<String>,
     pub plain_column: Option<String>,
@@ -34,7 +35,14 @@ pub enum SsedSidecarKind {
     TContents,
     Honbun,
     MainWordlist,
+    AndroidBodyDb,
     GenericBody,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SsedSidecarIdRule {
+    DirectColumn,
+    RowIdTimesFive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +73,7 @@ impl SsedSidecarBodyResolver {
             SsedSidecarKind::TContents => "t_contents",
             SsedSidecarKind::Honbun => "honbun",
             SsedSidecarKind::MainWordlist => "main_wordlist",
+            SsedSidecarKind::AndroidBodyDb => "android_body_db",
             SsedSidecarKind::GenericBody => "sqlite_body",
         }
     }
@@ -73,6 +82,22 @@ impl SsedSidecarBodyResolver {
         match self.storage {
             SsedSidecarStorage::Plain => "plain",
             SsedSidecarStorage::LogoFontCipher => "logofont_cipher",
+        }
+    }
+}
+
+impl SsedSidecarIdRule {
+    fn label(self) -> &'static str {
+        match self {
+            Self::DirectColumn => "direct_column",
+            Self::RowIdTimesFive => "rowid_times_five",
+        }
+    }
+
+    fn sql_where_identifier(self, id_column: &str) -> String {
+        match self {
+            Self::DirectColumn => quote_sql_identifier(id_column),
+            Self::RowIdTimesFive => "rowid".to_owned(),
         }
     }
 }
@@ -116,7 +141,8 @@ pub fn discover_ssed_sidecar_body_resolvers(
         let tables = sqlite_table_names(&connection)?;
         for table in tables {
             let columns = sqlite_columns(&connection, &table)?;
-            let Some(resolver) = resolver_for_table(candidate.clone(), storage, &table, &columns)
+            let Some(resolver) =
+                resolver_for_table(candidate.clone(), storage, &table, &columns, dict_id_hint)
             else {
                 continue;
             };
@@ -152,6 +178,13 @@ fn lookup_resolver_body(
 ) -> Result<SsedSidecarLookup> {
     let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
     let mut select_columns = vec![resolver.id_column.clone()];
+    let mut select_expressions = match resolver.id_rule {
+        SsedSidecarIdRule::DirectColumn => vec![quote_sql_identifier(&resolver.id_column)],
+        SsedSidecarIdRule::RowIdTimesFive => vec![format!(
+            "rowid as {}",
+            quote_sql_identifier(&resolver.id_column)
+        )],
+    };
     for column in [
         resolver.title_column.as_ref(),
         resolver.html_column.as_ref(),
@@ -162,19 +195,16 @@ fn lookup_resolver_body(
     {
         if !select_columns.iter().any(|existing| existing == column) {
             select_columns.push(column.clone());
+            select_expressions.push(quote_sql_identifier(column));
         }
     }
-    let select_sql = select_columns
-        .iter()
-        .map(|column| quote_sql_identifier(column))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let select_sql = select_expressions.join(", ");
     let sql = format!(
         "select {select_sql} from {} where {} = ? limit 1",
         quote_sql_identifier(&resolver.table),
-        quote_sql_identifier(&resolver.id_column),
+        resolver.id_rule.sql_where_identifier(&resolver.id_column),
     );
-    let query_values = anchor_query_values(anchor_id);
+    let query_values = anchor_query_values_for_resolver(resolver, anchor_id);
     for value in &query_values {
         let row = match value {
             AnchorQueryValue::Text(value) => connection
@@ -256,6 +286,7 @@ fn sidecar_body_from_row(
             .with_context("sidecar", display_name(&resolver.path))
             .with_context("sidecar_kind", resolver.source_kind_label())
             .with_context("storage", resolver.storage_label())
+            .with_context("id_rule", resolver.id_rule.label())
             .with_context("table", &resolver.table)
             .with_context("id_column", &resolver.id_column),
         ],
@@ -267,19 +298,36 @@ fn resolver_for_table(
     storage: SsedSidecarStorage,
     table: &str,
     columns: &[String],
+    dict_id_hint: Option<&str>,
 ) -> Option<SsedSidecarBodyResolver> {
-    let id_column = find_column(columns, ID_COLUMN_ALIASES)?;
     let html_column = find_column(columns, HTML_COLUMN_ALIASES);
     let plain_column = find_column(columns, PLAIN_COLUMN_ALIASES);
     if html_column.is_none() && plain_column.is_none() {
         return None;
     }
+    let direct_id_column = find_column(columns, ID_COLUMN_ALIASES);
+    let (kind, id_column, id_rule) = if let Some(id_column) = direct_id_column {
+        (
+            sidecar_kind_for_table(table),
+            id_column,
+            SsedSidecarIdRule::DirectColumn,
+        )
+    } else if is_android_rowid_body_table(&path, table, columns, dict_id_hint) {
+        (
+            SsedSidecarKind::AndroidBodyDb,
+            "__lvcore_rowid".to_owned(),
+            SsedSidecarIdRule::RowIdTimesFive,
+        )
+    } else {
+        return None;
+    };
     Some(SsedSidecarBodyResolver {
         path,
         storage,
-        kind: sidecar_kind_for_table(table),
+        kind,
         table: table.to_owned(),
         id_column,
+        id_rule,
         title_column: find_column(columns, TITLE_COLUMN_ALIASES),
         html_column,
         plain_column,
@@ -316,6 +364,7 @@ fn resolver_priority(resolver: &SsedSidecarBodyResolver) -> (u8, u8, String, Str
         SsedSidecarKind::TContents => 0,
         SsedSidecarKind::Honbun => 1,
         SsedSidecarKind::MainWordlist => 2,
+        SsedSidecarKind::AndroidBodyDb => 2,
         SsedSidecarKind::GenericBody => 3,
     };
     (
@@ -324,6 +373,23 @@ fn resolver_priority(resolver: &SsedSidecarBodyResolver) -> (u8, u8, String, Str
         resolver.table.casefold(),
         file,
     )
+}
+
+fn is_android_rowid_body_table(
+    path: &Path,
+    table: &str,
+    columns: &[String],
+    dict_id_hint: Option<&str>,
+) -> bool {
+    if find_column(columns, HTML_COLUMN_ALIASES).is_none() {
+        return false;
+    }
+    if dict_id_hint.is_some_and(|dict_id| table.eq_ignore_ascii_case(dict_id)) {
+        return true;
+    }
+    path.file_stem()
+        .map(|stem| table.eq_ignore_ascii_case(&stem.to_string_lossy()))
+        .unwrap_or(false)
 }
 
 fn sidecar_file_candidates(root: &Path, dict_id_hint: Option<&str>) -> Result<Vec<PathBuf>> {
@@ -521,6 +587,26 @@ fn anchor_query_values(anchor_id: &str) -> Vec<AnchorQueryValue> {
     }
     values.dedup();
     values
+}
+
+fn anchor_query_values_for_resolver(
+    resolver: &SsedSidecarBodyResolver,
+    anchor_id: &str,
+) -> Vec<AnchorQueryValue> {
+    match resolver.id_rule {
+        SsedSidecarIdRule::DirectColumn => anchor_query_values(anchor_id),
+        SsedSidecarIdRule::RowIdTimesFive => {
+            let stripped = anchor_id.trim_start_matches('0');
+            let stripped = if stripped.is_empty() { "0" } else { stripped };
+            let Ok(value) = stripped.parse::<i64>() else {
+                return Vec::new();
+            };
+            if value <= 0 || value % 5 != 0 {
+                return Vec::new();
+            }
+            vec![AnchorQueryValue::Integer(value / 5)]
+        }
+    }
 }
 
 fn strip_html_tags(value: &str) -> String {

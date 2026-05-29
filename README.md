@@ -97,7 +97,9 @@ provider slices:
   targets, with diagnostics and explicit HC rendering separation;
 - dense HONMON anchor dereference for supported SQLite sidecars, including
   `t_contents`, `HONBUN`, extensionless main wordlist tables, and conservative
-  generic id/body schemas;
+  generic id/body schemas. Android SSED app body databases that store HTML in a
+  dict-code table without an ID column are resolved through the observed
+  `raw_honmon_id = rowid * 5` rule;
 - SQLCipher-backed LVED_SQLITE3 list/search/content/info/media access where the
   package key is available, plus retained text-tree navigation from `tree.idx`
   and product-specific `res/*.idx` files;
