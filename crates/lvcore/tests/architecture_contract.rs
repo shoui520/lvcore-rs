@@ -1354,6 +1354,36 @@ fn empty_ssed_menu_is_not_exposed_as_targetable_home_surface() {
 }
 
 #[test]
+fn multiblock_ssed_menu_without_rows_is_not_advertised_available() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        sseddata_literal_fixture(&vec![0; 4096]),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        !package.metadata().capabilities.contains(&Capability::Menu),
+        "multi-block MENU.DIC size alone must not advertise a menu capability"
+    );
+    let surfaces = package.home_surfaces().unwrap();
+    let menu_surface = surfaces
+        .iter()
+        .find(|surface| surface.kind == NavigationSurfaceKind::Menu)
+        .expect("declared readable MENU.DIC should still be visible as a diagnosed surface");
+    assert_eq!(menu_surface.status, NavigationStatus::Empty);
+    assert!(menu_surface.target.is_none());
+    assert!(
+        menu_surface
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_navigation_empty")
+    );
+}
+
+#[test]
 fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

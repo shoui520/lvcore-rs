@@ -106,6 +106,8 @@ pub struct LvedSqliteDriver;
 pub struct LvlMultiViewDriver;
 pub struct HoureiDriver;
 
+const SSED_NAVIGATION_DETECTION_MAX_BYTES: usize = 1024 * 1024;
+
 struct DetectedSsedPackage {
     detected: DetectedPackage,
     catalog: SsedCatalog,
@@ -614,8 +616,7 @@ impl ReaderBookPackage {
             }
         }
 
-        let empty_diagnostic =
-            self.ssed_navigation_empty_sentinel_diagnostic(role, fallback_name)?;
+        let empty_diagnostic = self.ssed_navigation_empty_diagnostic(role, fallback_name)?;
         let is_empty = empty_diagnostic.is_some();
         let target = if is_empty {
             None
@@ -2442,7 +2443,7 @@ impl ReaderBookPackage {
         })
     }
 
-    fn ssed_navigation_empty_sentinel_diagnostic(
+    fn ssed_navigation_empty_diagnostic(
         &self,
         role: SsedComponentRole,
         fallback_name: &str,
@@ -2461,17 +2462,13 @@ impl ReaderBookPackage {
             Ok(Some(path)) => path,
             Ok(None) | Err(_) => return Ok(None),
         };
-        let mut reader = match SsedDataFile::open(&path) {
-            Ok(reader) => reader,
-            Err(_) => return Ok(None),
+        let data = match read_ssed_navigation_detection_bytes(&path) {
+            Ok(Some(data)) => data,
+            Ok(None) | Err(_) => return Ok(None),
         };
-        if reader.header().expanded_size() > BLOCK_SIZE as usize {
-            return Ok(None);
-        }
-        let data = reader.read_range(0, reader.header().expanded_size())?;
         let parsed = parse_menu_stream(&data);
-        if parsed.records.is_empty() && parsed.empty_sentinel {
-            return Ok(Some(
+        if parsed.records.is_empty() {
+            let diagnostic = if parsed.empty_sentinel {
                 Diagnostic::info(
                     "ssed_navigation_empty_sentinel",
                     format!(
@@ -2479,8 +2476,15 @@ impl ReaderBookPackage {
                         component.filename
                     ),
                 )
-                .with_context("component", &component.filename),
-            ));
+                .with_context("component", &component.filename)
+            } else {
+                Diagnostic::info(
+                    "ssed_navigation_empty",
+                    format!("{} did not decode any navigation rows", component.filename),
+                )
+                .with_context("component", &component.filename)
+            };
+            return Ok(Some(diagnostic));
         }
         Ok(None)
     }
@@ -9187,34 +9191,39 @@ fn ssed_navigation_component_has_non_empty_surface(
     }
 
     for path in candidates {
-        let data = if let Ok(mut reader) = SsedDataFile::open(&path) {
-            if reader.header().expanded_size() > BLOCK_SIZE as usize {
-                return true;
-            }
-            match reader.read_range(0, reader.header().expanded_size()) {
-                Ok(data) => data,
-                Err(_) => continue,
-            }
-        } else if file_starts_with_android_wrapped_sseddata(&path).unwrap_or(false) {
-            let Ok(raw) = fs::read(&path) else {
-                continue;
-            };
-            let normalized = normalize_android_wrapped_sseddata_bytes(&raw);
-            let Ok(reader) = SsedDataReader::parse_bytes(&normalized) else {
-                continue;
-            };
-            if reader.header().expanded_size() > BLOCK_SIZE as usize {
-                return true;
-            }
-            reader.read(0, reader.header().expanded_size()).to_vec()
-        } else {
+        let Ok(Some(data)) = read_ssed_navigation_detection_bytes(&path) else {
             continue;
         };
         let parsed = parse_menu_stream(&data);
-        return !(parsed.records.is_empty() && parsed.empty_sentinel);
+        if !parsed.records.is_empty() {
+            return true;
+        }
     }
 
     false
+}
+
+fn read_ssed_navigation_detection_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
+    if let Ok(mut reader) = SsedDataFile::open(path) {
+        let read_len = reader
+            .header()
+            .expanded_size()
+            .min(SSED_NAVIGATION_DETECTION_MAX_BYTES);
+        return Ok(Some(reader.read_range(0, read_len)?));
+    }
+
+    if file_starts_with_android_wrapped_sseddata(path).unwrap_or(false) {
+        let raw = fs::read(path)?;
+        let normalized = normalize_android_wrapped_sseddata_bytes(&raw);
+        let reader = SsedDataReader::parse_bytes(&normalized)?;
+        let read_len = reader
+            .header()
+            .expanded_size()
+            .min(SSED_NAVIGATION_DETECTION_MAX_BYTES);
+        return Ok(Some(reader.read(0, read_len).to_vec()));
+    }
+
+    Ok(None)
 }
 
 fn has_any_casefolded(storage: &DirectoryStorage, candidates: &[&str]) -> bool {
