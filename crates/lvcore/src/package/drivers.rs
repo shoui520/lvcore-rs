@@ -116,11 +116,11 @@ impl PackageDriver for SsedDriver {
         let package_root = detection.root.clone();
         let capabilities = ssed_capabilities(&catalog, &package_root);
         let search_modes = ssed_search_modes(&catalog, &package_root);
-        Ok(Box::new(StubBookPackage::new(
+        Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
             capabilities,
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 gaiji_unicode_map: load_package_uni_gaiji_maps(&package_root),
                 search_modes,
@@ -195,11 +195,11 @@ impl PackageDriver for LvedSqliteDriver {
                 .or_else(|| inferred_folder_title(&package_root)),
             evidence,
         };
-        Ok(Box::new(StubBookPackage::new(
+        Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
             lved_capabilities(&search_modes),
-            StubPackageStores {
+            PackageStores {
                 lved_store: Some(store),
                 lved_summary: Some(summary),
                 search_modes,
@@ -253,11 +253,11 @@ impl PackageDriver for LvlMultiViewDriver {
             .ok_or_else(|| Error::Driver("not an LVLMultiView package".to_owned()))?;
         let package_root = detection.root.clone();
         let store = MultiviewStore::discover(&package_root)?;
-        Ok(Box::new(StubBookPackage::new(
+        Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
             multiview_capabilities(),
-            StubPackageStores {
+            PackageStores {
                 multiview_store: store,
                 search_modes: standard_search_modes(),
                 ..Default::default()
@@ -299,11 +299,11 @@ impl PackageDriver for HoureiDriver {
             .ok_or_else(|| Error::Driver("not a Hourei package".to_owned()))?;
         let package_root = detection.root.clone();
         let store = HoureiStore::discover(&package_root)?;
-        Ok(Box::new(StubBookPackage::new(
+        Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
             hourei_capabilities(),
-            StubPackageStores {
+            PackageStores {
                 hourei_store: store,
                 search_modes: standard_search_modes(),
                 ..Default::default()
@@ -312,7 +312,7 @@ impl PackageDriver for HoureiDriver {
     }
 }
 
-pub struct StubBookPackage {
+pub struct ReaderBookPackage {
     root: PathBuf,
     storage: DirectoryStorage,
     metadata: BookMetadata,
@@ -329,7 +329,7 @@ pub struct StubBookPackage {
 }
 
 #[derive(Debug, Default)]
-pub struct StubPackageStores {
+pub struct PackageStores {
     pub ssed_catalog: Option<SsedCatalog>,
     pub lved_store: Option<LvedSqliteStore>,
     pub lved_summary: Option<LvedSqliteSummary>,
@@ -372,7 +372,7 @@ struct SsedNearKeyScanResult {
 }
 
 struct SsedIndexSearchCollector<'a> {
-    package: &'a StubBookPackage,
+    package: &'a ReaderBookPackage,
     mode: &'a SearchMode,
     needle: &'a str,
     offset: usize,
@@ -385,7 +385,7 @@ struct SsedIndexSearchCollector<'a> {
 
 impl<'a> SsedIndexSearchCollector<'a> {
     fn new(
-        package: &'a StubBookPackage,
+        package: &'a ReaderBookPackage,
         mode: &'a SearchMode,
         needle: &'a str,
         offset: usize,
@@ -463,12 +463,12 @@ impl<'a> SsedIndexSearchCollector<'a> {
     }
 }
 
-impl StubBookPackage {
+impl ReaderBookPackage {
     pub fn new(
         root: &Path,
         detected: DetectedPackage,
         capabilities: Vec<Capability>,
-        stores: StubPackageStores,
+        stores: PackageStores,
     ) -> Self {
         let format_label = detected.format_family.ui_label().to_owned();
         let root_fingerprint = root_fingerprint(root);
@@ -514,7 +514,7 @@ impl StubBookPackage {
     }
 }
 
-impl BookPackage for StubBookPackage {
+impl BookPackage for ReaderBookPackage {
     fn metadata(&self) -> &BookMetadata {
         &self.metadata
     }
@@ -530,7 +530,7 @@ impl BookPackage for StubBookPackage {
 
 fn routing_aliases_for_package(
     format_family: FormatFamily,
-    stores: &StubPackageStores,
+    stores: &PackageStores,
 ) -> Vec<BookAlias> {
     if format_family != FormatFamily::LvedSqlite3 {
         return Vec::new();
@@ -550,7 +550,7 @@ fn routing_aliases_for_package(
         .unwrap_or_default()
 }
 
-impl SearchProvider for StubBookPackage {
+impl SearchProvider for ReaderBookPackage {
     fn search(&self, query: &SearchQuery) -> Result<SearchPage> {
         if self.metadata.format_family == FormatFamily::Ssed {
             return self.search_ssed_simple_indexes(query);
@@ -571,7 +571,7 @@ impl SearchProvider for StubBookPackage {
     }
 }
 
-impl NavigationProvider for StubBookPackage {
+impl NavigationProvider for ReaderBookPackage {
     fn home_surfaces(&self) -> Result<Vec<HomeSurface>> {
         let mut surfaces = Vec::new();
         match self.metadata.format_family {
@@ -1023,7 +1023,7 @@ impl NavigationProvider for StubBookPackage {
     }
 }
 
-impl RendererProvider for StubBookPackage {
+impl RendererProvider for ReaderBookPackage {
     fn render_target(
         &self,
         token: &TargetToken,
@@ -1162,14 +1162,14 @@ impl RendererProvider for StubBookPackage {
     }
 }
 
-impl RendererInputProvider for StubBookPackage {
+impl RendererInputProvider for ReaderBookPackage {
     fn renderer_input_for_target(&self, token: &TargetToken) -> Result<RendererInput> {
         let body = self.visual_body_for_target(token)?;
         self.renderer_input_from_visual_body(token.clone(), body)
     }
 }
 
-impl ResourceProvider for StubBookPackage {
+impl ResourceProvider for ReaderBookPackage {
     fn resolve_resource(&self, token: &ResourceToken) -> Result<ResourceRef> {
         match token.decode()? {
             InternalResource::PackageFile {
@@ -1613,7 +1613,7 @@ impl ResourceProvider for StubBookPackage {
     }
 }
 
-impl GaijiProvider for StubBookPackage {
+impl GaijiProvider for ReaderBookPackage {
     fn resolve_gaiji(&self, identity: &str, policy: &GaijiPolicy) -> GaijiResolution {
         let Some(code) = normalize_gaiji_identity(identity) else {
             return GaijiResolution {
@@ -1666,7 +1666,7 @@ impl GaijiProvider for StubBookPackage {
     }
 }
 
-impl SequenceProvider for StubBookPackage {
+impl SequenceProvider for ReaderBookPackage {
     fn resolve_target_window(
         &self,
         target: &TargetToken,
@@ -1750,7 +1750,7 @@ impl SequenceProvider for StubBookPackage {
     }
 }
 
-impl BodyProvider for StubBookPackage {
+impl BodyProvider for ReaderBookPackage {
     fn visual_body_for_target(&self, token: &TargetToken) -> Result<VisualBody> {
         match token.decode()? {
             InternalTarget::SsedDenseAnchor {
@@ -1793,7 +1793,7 @@ impl BodyProvider for StubBookPackage {
     }
 }
 
-impl StubBookPackage {
+impl ReaderBookPackage {
     fn search_lved_sqlite(&self, query: &SearchQuery) -> Result<SearchPage> {
         let Some(store) = &self.lved_store else {
             return Ok(SearchPage::deferred(
@@ -7235,7 +7235,7 @@ fn multiview_menu_item_to_node(item: &MultiviewMenuItem, node_id: &str) -> Resul
 }
 
 fn ssed_menu_records_to_nodes(
-    package: &StubBookPackage,
+    package: &ReaderBookPackage,
     records: &[SsedMenuRecord],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<NavigationNode>> {
@@ -7282,7 +7282,7 @@ fn ssed_menu_records_to_nodes(
 }
 
 fn ssed_encyclopedia_rows_to_nodes(
-    package: &StubBookPackage,
+    package: &ReaderBookPackage,
     rows: &[SsedEncyclopediaRow],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<NavigationNode>> {
@@ -7324,7 +7324,7 @@ fn ssed_encyclopedia_rows_to_nodes(
 }
 
 fn ssed_encyclopedia_row_target(
-    package: &StubBookPackage,
+    package: &ReaderBookPackage,
     row: &SsedEncyclopediaRow,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
@@ -7359,7 +7359,7 @@ fn ssed_encyclopedia_row_target(
 }
 
 fn ssed_aux_index_rows_to_nodes(
-    package: &StubBookPackage,
+    package: &ReaderBookPackage,
     rows: &[SsedAuxIndexRow],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<NavigationNode>> {
@@ -7401,7 +7401,7 @@ fn ssed_aux_index_rows_to_nodes(
 }
 
 fn ssed_aux_index_row_target(
-    package: &StubBookPackage,
+    package: &ReaderBookPackage,
     row: &SsedAuxIndexRow,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
@@ -7458,7 +7458,7 @@ fn navigation_node_mut_at_path<'a>(
 }
 
 fn ssed_menu_record_target(
-    package: &StubBookPackage,
+    package: &ReaderBookPackage,
     record: &SsedMenuRecord,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
@@ -7521,7 +7521,7 @@ fn ssed_menu_record_target(
 }
 
 fn ssed_panel_inline_cell_to_navigation_cell(
-    package: &StubBookPackage,
+    package: &ReaderBookPackage,
     cell: &SsedPanelInlineCell,
 ) -> Result<PanelCell> {
     let target = if !cell.ref_id.is_empty() {
@@ -7546,7 +7546,7 @@ fn ssed_panel_inline_cell_to_navigation_cell(
 }
 
 fn ssed_panel_bin_record_to_navigation_cell(
-    package: &StubBookPackage,
+    package: &ReaderBookPackage,
     data_ref: &SsedPanelDataRef,
     record: &SsedPanelBinRecord,
     diagnostics: &mut Vec<Diagnostic>,
@@ -7564,7 +7564,7 @@ fn ssed_panel_bin_record_to_navigation_cell(
 }
 
 fn ssed_panel_record_target(
-    package: &StubBookPackage,
+    package: &ReaderBookPackage,
     record: &SsedPanelBinRecord,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
@@ -10169,7 +10169,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10179,7 +10179,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores::default(),
+            PackageStores::default(),
         );
         let token = TargetToken::new(&InternalTarget::SsedDenseAnchor {
             anchor: "00100050".to_owned(),
@@ -10262,7 +10262,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10272,7 +10272,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -10342,7 +10342,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10352,7 +10352,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -10427,7 +10427,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10437,7 +10437,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -10527,7 +10527,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10537,7 +10537,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -10594,7 +10594,7 @@ mod tests {
         )
         .unwrap();
 
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             &package_root,
             DetectedPackage {
                 root: package_root.clone(),
@@ -10604,7 +10604,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores::default(),
+            PackageStores::default(),
         );
         let token = ResourceToken::new(&InternalResource::SsedComponentAddress {
             component: "PCMDATA.DIC".to_owned(),
@@ -10655,7 +10655,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10665,7 +10665,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -10718,7 +10718,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10728,7 +10728,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -10779,7 +10779,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10789,7 +10789,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -10886,7 +10886,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10896,7 +10896,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -10984,7 +10984,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -10994,7 +10994,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11056,7 +11056,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11066,7 +11066,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11153,7 +11153,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11163,7 +11163,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11261,7 +11261,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11271,7 +11271,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11325,7 +11325,7 @@ mod tests {
                 trailing_bytes: 0,
             },
         };
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11335,7 +11335,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11364,7 +11364,7 @@ mod tests {
         fs::create_dir(&movie_root).unwrap();
         fs::write(movie_root.join("12345678"), b"movie bytes").unwrap();
 
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             &package_root,
             DetectedPackage {
                 root: package_root.clone(),
@@ -11374,7 +11374,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores::default(),
+            PackageStores::default(),
         );
         let token = ResourceToken::new(&InternalResource::LooseMovie {
             movie_id: "12345678".to_owned(),
@@ -11405,7 +11405,7 @@ mod tests {
         )
         .unwrap();
 
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11415,7 +11415,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             Vec::new(),
-            StubPackageStores::default(),
+            PackageStores::default(),
         );
         let token = ResourceToken::new(&InternalResource::SoundData { sound_id: 10 }).unwrap();
 
@@ -11435,7 +11435,7 @@ mod tests {
     fn dense_honmon_address_target_resolves_sidecar_html() {
         let dir = tempdir().unwrap();
         let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11445,7 +11445,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11479,7 +11479,7 @@ mod tests {
     fn dense_honmon_search_hit_target_resolves_sidecar_html() {
         let dir = tempdir().unwrap();
         let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11489,7 +11489,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11531,7 +11531,7 @@ mod tests {
             dir.path(),
             DenseSidecarFixture::TitleOnlyThenBodyRows,
         );
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11541,7 +11541,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11569,7 +11569,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let catalog =
             write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BlobBodyRows);
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11579,7 +11579,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11608,7 +11608,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let catalog =
             write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::MissingBetaRow);
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11618,7 +11618,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11642,7 +11642,7 @@ mod tests {
     fn ssed_fulltext_searches_honmon_body_windows() {
         let dir = tempdir().unwrap();
         let catalog = write_ssed_fulltext_fixture(dir.path());
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11652,7 +11652,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11703,7 +11703,7 @@ mod tests {
     fn ssed_fulltext_matches_fullwidth_ascii_body_text() {
         let dir = tempdir().unwrap();
         let catalog = write_ssed_fulltext_fixture(dir.path());
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11713,7 +11713,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },
@@ -11894,7 +11894,7 @@ mod tests {
             dir.path(),
             DenseSidecarFixture::AndroidRowidTimesFiveBodyRows,
         );
-        let package = StubBookPackage::new(
+        let package = ReaderBookPackage::new(
             dir.path(),
             DetectedPackage {
                 root: dir.path().to_path_buf(),
@@ -11904,7 +11904,7 @@ mod tests {
                 evidence: Vec::new(),
             },
             ssed_capabilities(&catalog, dir.path()),
-            StubPackageStores {
+            PackageStores {
                 ssed_catalog: Some(catalog),
                 ..Default::default()
             },

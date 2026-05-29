@@ -18,7 +18,7 @@ use crate::search::SearchProvider;
 use crate::sequence::SequenceProvider;
 
 pub use drivers::{
-    HoureiDriver, LvedSqliteDriver, LvlMultiViewDriver, SsedDriver, StubBookPackage,
+    HoureiDriver, LvedSqliteDriver, LvlMultiViewDriver, ReaderBookPackage, SsedDriver,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
