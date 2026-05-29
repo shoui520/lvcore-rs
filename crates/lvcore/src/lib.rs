@@ -71,8 +71,8 @@ pub use ssed::{
     SsedComponentRole, SsedDataFile, SsedDataHeader, SsedDataReader, SsedInfoLayout,
 };
 pub use ssed_aux_index::{
-    SsedAuxIndexRow, SsedAuxIndexSpec, parse_aux_index_specs_from_exinfo,
-    parse_aux_index_text_bytes,
+    SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,
+    parse_aux_index_specs_from_exinfo, parse_aux_index_text_bytes,
 };
 pub use ssed_color_sample::{ColorSampleRecord, ColorSampleTable};
 pub use ssed_encyclopedia::{

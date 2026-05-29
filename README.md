@@ -121,9 +121,9 @@ provider slices:
   navigation targets, and body hotspots resolve to normal SSED address targets;
 - SSED KOJIEN6-style `encyclop.idx` LVEDBRSR multimedia indexes are exposed as
   hierarchical navigation surfaces with normal SSED address targets;
-- SSED `EXINFO.INI` auxiliary text `*.IDX` declarations are exposed as
-  hierarchical navigation surfaces when rows resolve to SSED component
-  addresses;
+- SSED `EXINFO.INI` auxiliary text `*.IDX` declarations and unreferenced
+  numeric auxiliary `00000xxx.idx` trees are exposed as hierarchical navigation
+  surfaces when rows resolve to SSED component addresses;
 - SSED loose KOJIEN6-style media: `_PCM_U/WaveFile.map` can back `PCMDATA.DIC`
   address resources with decrypted MP3 bytes, and `_MOVIE` entries are exposed
   as typed video resources;

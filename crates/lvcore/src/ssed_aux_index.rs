@@ -63,6 +63,17 @@ pub fn parse_aux_index_specs_from_exinfo(data: &[u8]) -> Vec<SsedAuxIndexSpec> {
     specs
 }
 
+pub fn is_numeric_aux_index_filename(name: &str) -> bool {
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    if !extension.eq_ignore_ascii_case("idx") {
+        return false;
+    }
+    let base = stem.split_once('_').map(|(base, _)| base).unwrap_or(stem);
+    base.len() == 8 && base.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
 pub fn parse_aux_index_text_bytes(data: &[u8]) -> Result<Vec<SsedAuxIndexRow>> {
     let (text, _, _) = SHIFT_JIS.decode(data);
     let mut rows = Vec::new();
@@ -167,6 +178,14 @@ mod tests {
         assert_eq!(specs[0].name, "索引");
         assert_eq!(specs[0].info, "00000152.idx");
         assert_eq!(specs[1].name, "オプション");
+    }
+
+    #[test]
+    fn recognizes_numeric_aux_index_filenames() {
+        assert!(is_numeric_aux_index_filename("0000015f.idx"));
+        assert!(is_numeric_aux_index_filename("0000015F_1.IDX"));
+        assert!(!is_numeric_aux_index_filename("DICT.IDX"));
+        assert!(!is_numeric_aux_index_filename("0000015.idx"));
     }
 
     #[test]

@@ -42,12 +42,12 @@ use crate::resources::{
 use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery};
 use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
 use crate::ssed::{
-    BLOCK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
-    SsedDataHeader,
+    ANDROID_LVEDINFO_MAGIC, BLOCK_SIZE, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent,
+    SsedComponentRole, SsedDataFile, SsedDataHeader,
 };
 use crate::ssed_aux_index::{
-    SsedAuxIndexRow, SsedAuxIndexSpec, parse_aux_index_specs_from_exinfo,
-    parse_aux_index_text_bytes,
+    SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,
+    parse_aux_index_specs_from_exinfo, parse_aux_index_text_bytes,
 };
 use crate::ssed_encyclopedia::{SsedEncyclopediaRow, parse_encyclopedia_index};
 use crate::ssed_figure::{FigureDimensions, figure_bitmap_to_png};
@@ -693,7 +693,10 @@ impl NavigationProvider for StubBookPackage {
                         )],
                     });
                 }
-                for spec in self.ssed_aux_index_specs()? {
+                let aux_specs = self.ssed_aux_index_specs()?;
+                let mut declared_aux_paths = BTreeSet::new();
+                for spec in &aux_specs {
+                    declared_aux_paths.insert(spec.info.to_ascii_lowercase());
                     let relative = Path::new(&spec.info);
                     if !path_has_extension(&spec.info, &["idx"]) {
                         continue;
@@ -720,6 +723,25 @@ impl NavigationProvider for StubBookPackage {
                         diagnostics: vec![Diagnostic::info(
                             "ssed_auxiliary_index",
                             "EXINFO.INI declares a tab-indented auxiliary navigation index",
+                        )],
+                    });
+                }
+                for spec in self.ssed_numeric_aux_index_specs(&declared_aux_paths)? {
+                    let title = spec.info.clone();
+                    let surface_id = format!("numeric-aux:{}", spec.info);
+                    surfaces.push(HomeSurface {
+                        surface_id: surface_id.clone(),
+                        kind: NavigationSurfaceKind::AuxiliaryIndex,
+                        status: NavigationStatus::Available,
+                        title_html: escape_plain_label_html(&title),
+                        title_text: title,
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id,
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_numeric_auxiliary_index",
+                            "Numeric tab-indented auxiliary index is present without an EXINFO declaration",
                         )],
                     });
                 }
@@ -922,7 +944,8 @@ impl NavigationProvider for StubBookPackage {
         if self.metadata.format_family == FormatFamily::Ssed && surface_id == "encyclopedia" {
             return self.open_ssed_encyclopedia_surface(surface_id);
         }
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id.starts_with("aux-index:")
+        if self.metadata.format_family == FormatFamily::Ssed
+            && (surface_id.starts_with("aux-index:") || surface_id.starts_with("numeric-aux:"))
         {
             return self.open_ssed_aux_index_surface(surface_id);
         }
@@ -2518,36 +2541,17 @@ impl StubBookPackage {
     }
 
     fn open_ssed_aux_index_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
-        let Some(raw_index) = surface_id.strip_prefix("aux-index:") else {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![Diagnostic::warning(
-                    "ssed_auxiliary_index_invalid_surface",
-                    "auxiliary index surface id is malformed",
-                )],
-            });
-        };
-        let Ok(index) = raw_index.parse::<usize>() else {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![Diagnostic::warning(
-                    "ssed_auxiliary_index_invalid_surface",
-                    "auxiliary index surface id does not contain a numeric EXINFO index",
-                )],
-            });
-        };
-        let Some(spec) = self
-            .ssed_aux_index_specs()?
-            .into_iter()
-            .find(|spec| spec.index == index)
-        else {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![Diagnostic::info(
-                    "ssed_auxiliary_index_missing",
-                    "EXINFO.INI did not declare the requested auxiliary index",
-                )],
-            });
+        let spec = match self.ssed_aux_index_spec_for_surface(surface_id) {
+            Ok(spec) => spec,
+            Err(error) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![Diagnostic::warning(
+                        "ssed_auxiliary_index_invalid_surface",
+                        error.to_string(),
+                    )],
+                });
+            }
         };
         if !path_has_extension(&spec.info, &["idx"]) {
             return Ok(NavigationSurface::Deferred {
@@ -2586,6 +2590,42 @@ impl StubBookPackage {
             surface_id: surface_id.to_owned(),
             nodes,
         })
+    }
+
+    fn ssed_aux_index_spec_for_surface(&self, surface_id: &str) -> Result<SsedAuxIndexSpec> {
+        if let Some(raw_index) = surface_id.strip_prefix("aux-index:") {
+            let Ok(index) = raw_index.parse::<usize>() else {
+                return Err(Error::Driver(
+                    "auxiliary index surface id does not contain a numeric EXINFO index".to_owned(),
+                ));
+            };
+            return self
+                .ssed_aux_index_specs()?
+                .into_iter()
+                .find(|spec| spec.index == index)
+                .ok_or_else(|| {
+                    Error::Driver(
+                        "EXINFO.INI did not declare the requested auxiliary index".to_owned(),
+                    )
+                });
+        }
+        if let Some(name) = surface_id.strip_prefix("numeric-aux:") {
+            let excluded = self
+                .ssed_aux_index_specs()?
+                .into_iter()
+                .map(|spec| spec.info.to_ascii_lowercase())
+                .collect::<BTreeSet<_>>();
+            return self
+                .ssed_numeric_aux_index_specs(&excluded)?
+                .into_iter()
+                .find(|spec| spec.info.eq_ignore_ascii_case(name))
+                .ok_or_else(|| {
+                    Error::Driver(format!("numeric auxiliary index was not found: {name}"))
+                });
+        }
+        Err(Error::Driver(
+            "auxiliary index surface id is malformed".to_owned(),
+        ))
     }
 
     fn open_ssed_panel_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
@@ -6223,6 +6263,37 @@ impl StubBookPackage {
         Ok(parse_aux_index_specs_from_exinfo(&bytes))
     }
 
+    fn ssed_numeric_aux_index_specs(
+        &self,
+        excluded_infos: &BTreeSet<String>,
+    ) -> Result<Vec<SsedAuxIndexSpec>> {
+        let mut specs = Vec::new();
+        for path in self.storage.list_dir(Path::new(""))? {
+            let Some(name) = path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+            else {
+                continue;
+            };
+            if !is_numeric_aux_index_filename(&name) {
+                continue;
+            }
+            if excluded_infos.contains(&name.to_ascii_lowercase()) {
+                continue;
+            }
+            if file_starts_with_ssedinfo_magic(&path)? {
+                continue;
+            }
+            let index = specs.len();
+            specs.push(SsedAuxIndexSpec {
+                index,
+                name: name.clone(),
+                info: name,
+            });
+        }
+        Ok(specs)
+    }
+
     fn discover_ssed_hanrei_pages(&self) -> Result<Vec<SsedHanreiPage>> {
         let mut pages = Vec::new();
         let mut seen = BTreeSet::new();
@@ -8764,13 +8835,17 @@ fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
     if has_any_casefolded(&storage, &["encyclop.idx"]) {
         capabilities.push(Capability::EncyclopediaIndex);
     }
-    if storage.exists(Path::new("EXINFO.INI")).unwrap_or(false)
-        && let Ok(exinfo) = storage.read(Path::new("EXINFO.INI"))
-        && parse_aux_index_specs_from_exinfo(&exinfo)
-            .iter()
-            .filter(|spec| path_has_extension(&spec.info, &["idx"]))
-            .any(|spec| storage.exists(Path::new(&spec.info)).unwrap_or(false))
-    {
+    let has_exinfo_aux = if storage.exists(Path::new("EXINFO.INI")).unwrap_or(false) {
+        storage.read(Path::new("EXINFO.INI")).is_ok_and(|exinfo| {
+            parse_aux_index_specs_from_exinfo(&exinfo)
+                .iter()
+                .filter(|spec| path_has_extension(&spec.info, &["idx"]))
+                .any(|spec| storage.exists(Path::new(&spec.info)).unwrap_or(false))
+        })
+    } else {
+        false
+    };
+    if has_exinfo_aux || has_numeric_aux_index_casefolded(&storage) {
         capabilities.push(Capability::AuxiliaryIndex);
     }
     if has_ssed_hanrei_casefolded(&storage) {
@@ -8832,6 +8907,26 @@ fn has_any_casefolded(storage: &DirectoryStorage, candidates: &[&str]) -> bool {
     candidates
         .iter()
         .any(|candidate| storage.exists(Path::new(candidate)).unwrap_or(false))
+}
+
+fn has_numeric_aux_index_casefolded(storage: &DirectoryStorage) -> bool {
+    let Ok(entries) = storage.list_dir(Path::new("")) else {
+        return false;
+    };
+    entries.into_iter().any(|path| {
+        let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
+            return false;
+        };
+        is_numeric_aux_index_filename(&name)
+            && !file_starts_with_ssedinfo_magic(&path).unwrap_or(true)
+    })
+}
+
+fn file_starts_with_ssedinfo_magic(path: &Path) -> Result<bool> {
+    let mut file = File::open(path)?;
+    let mut prefix = [0u8; 8];
+    let size = file.read(&mut prefix)?;
+    Ok(size == 8 && (&prefix == SSEDINFO_MAGIC || &prefix == ANDROID_LVEDINFO_MAGIC))
 }
 
 fn has_ssed_hanrei_casefolded(storage: &DirectoryStorage) -> bool {
@@ -9845,6 +9940,91 @@ mod tests {
             .unwrap();
         assert_eq!(window.before.len(), 1);
         assert_eq!(window.before[0].title.as_deref(), Some("季語"));
+    }
+
+    #[test]
+    fn ssed_numeric_auxiliary_index_opens_without_exinfo() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("0000015f.idx"),
+            cp932(
+                "00000000\t00000000\tRoot\n\
+                 00005221\t00000722\t\tChild\n",
+            ),
+        )
+        .unwrap();
+        fs::write(dir.path().join("00000001.idx"), SSEDINFO_MAGIC).unwrap();
+        let catalog = SsedCatalog {
+            title: "Numeric".to_owned(),
+            components: vec![SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 0x5221,
+                end_block: 0x5230,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            }],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 1,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some("Numeric".to_owned()),
+                evidence: Vec::new(),
+            },
+            ssed_capabilities(&catalog, dir.path()),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+
+        let home = package.home_surfaces().unwrap();
+        assert!(
+            package
+                .metadata()
+                .capabilities
+                .contains(&Capability::AuxiliaryIndex)
+        );
+        assert!(home.iter().any(|surface| {
+            surface.surface_id == "numeric-aux:0000015f.idx"
+                && surface.kind == NavigationSurfaceKind::AuxiliaryIndex
+        }));
+        assert!(
+            !home
+                .iter()
+                .any(|surface| surface.surface_id == "numeric-aux:00000001.idx")
+        );
+
+        let surface = package.open_surface("numeric-aux:0000015f.idx").unwrap();
+        let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+            panic!("expected numeric auxiliary navigation tree");
+        };
+        let target = nodes[0].children[0]
+            .target
+            .as_ref()
+            .unwrap()
+            .decode()
+            .unwrap();
+        assert!(matches!(
+            target,
+            InternalTarget::SsedAddress {
+                component,
+                block: 0x5221,
+                offset: 0x0722
+            } if component == "HONMON.DIC"
+        ));
     }
 
     #[test]
