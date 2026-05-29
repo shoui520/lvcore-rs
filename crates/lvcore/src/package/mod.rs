@@ -1,5 +1,6 @@
 mod chm_toc;
 mod drivers;
+mod hc_profile;
 mod html;
 mod lved_refs;
 mod render_output;

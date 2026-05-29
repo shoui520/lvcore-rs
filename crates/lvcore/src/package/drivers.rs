@@ -13,6 +13,7 @@ use zip::result::ZipError;
 use super::chm_toc::{
     chm_hanrei_entry_sort_key, chm_hhc_toc_items_to_nodes, chm_local_reference, parse_chm_hhc_toc,
 };
+use super::hc_profile::hc_renderer_profile;
 use super::html::{
     HtmlAttrName, escape_plain_label_html, html_basic_text, html_document_label, html_label_text,
     html_unescape_minimal, next_html_href_or_src_attr, package_html_base_dir,
@@ -70,8 +71,8 @@ use crate::navigation::{
     ScreenMenuScreen,
 };
 use crate::render::{
-    HcRendererProfile, HcRendererProfileSource, HcRendererProfileStatus, RenderMode, RenderOptions,
-    RendererInput, RendererInputProvider, RendererProvider, ResolvedTargetKind, ResolvedTargetView,
+    RenderMode, RenderOptions, RendererInput, RendererInputProvider, RendererProvider,
+    ResolvedTargetKind, ResolvedTargetView,
 };
 use crate::resources::{
     InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
@@ -5075,7 +5076,7 @@ impl ReaderBookPackage {
             } => {
                 let (resources, mut diagnostics) =
                     self.ssed_stream_renderer_resources(&component, offset, length)?;
-                let hc_profile = self.hc_renderer_profile()?;
+                let hc_profile = hc_renderer_profile(&self.storage)?;
                 let profile_hint = hc_profile
                     .as_ref()
                     .map(|profile| profile.profile_id.clone());
@@ -7472,77 +7473,6 @@ impl ReaderBookPackage {
         Ok(dir.join(format!("{hash}.{extension}")))
     }
 
-    fn hc_renderer_profile(&self) -> Result<Option<HcRendererProfile>> {
-        let mut dlls = Vec::new();
-        for path in self.storage.list_dir(Path::new(""))? {
-            let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
-                continue;
-            };
-            let upper = name.to_ascii_uppercase();
-            if upper.len() == "HC0000.DLL".len()
-                && upper.starts_with("HC")
-                && upper.ends_with(".DLL")
-                && upper[2..6].chars().all(|ch| ch.is_ascii_hexdigit())
-            {
-                dlls.push((upper.trim_end_matches(".DLL").to_owned(), name.to_string()));
-            }
-        }
-        dlls.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-        if let Some((profile_id, filename)) = dlls.into_iter().next() {
-            let bytes = self.storage.read(Path::new(&filename))?;
-            let mut hasher = Sha256::new();
-            hasher.update(&bytes);
-            return Ok(Some(HcRendererProfile {
-                profile_id,
-                source: HcRendererProfileSource::HcDll,
-                status: HcRendererProfileStatus::InputOnly,
-                dll_sha256: Some(hex::encode(hasher.finalize())),
-                dll_size: Some(bytes.len() as u64),
-            }));
-        }
-        self.exinfo_hc_renderer_profile()
-    }
-
-    fn exinfo_hc_renderer_profile(&self) -> Result<Option<HcRendererProfile>> {
-        let relative = Path::new("EXINFO.INI");
-        if !self.storage.exists(relative)? {
-            return Ok(None);
-        }
-        let bytes = self.storage.read(relative)?;
-        let (text, _, _) = SHIFT_JIS.decode(&bytes);
-        let mut in_general = false;
-        for raw_line in text.lines() {
-            let line = raw_line.trim_start_matches('\u{feff}').trim();
-            if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
-                continue;
-            }
-            if line.starts_with('[') && line.ends_with(']') {
-                in_general = line[1..line.len() - 1]
-                    .trim()
-                    .eq_ignore_ascii_case("GENERAL");
-                continue;
-            }
-            if !in_general {
-                continue;
-            }
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            if key.trim().eq_ignore_ascii_case("HTMLDLL")
-                && let Some(hint) = extract_hc_profile_hint(value)
-            {
-                return Ok(Some(HcRendererProfile {
-                    profile_id: hint,
-                    source: HcRendererProfileSource::ExinfoHtmlDll,
-                    status: HcRendererProfileStatus::InputOnly,
-                    dll_sha256: None,
-                    dll_size: None,
-                }));
-            }
-        }
-        Ok(None)
-    }
-
     fn ssed_aux_index_specs(&self) -> Result<Vec<SsedAuxIndexSpec>> {
         let relative = Path::new("EXINFO.INI");
         if !self.storage.exists(relative)? {
@@ -8800,21 +8730,6 @@ fn hc03e9_pdfspread_anchor_text(data: &[u8]) -> String {
     text
 }
 
-fn extract_hc_profile_hint(value: &str) -> Option<String> {
-    let upper = value.to_ascii_uppercase();
-    let bytes = upper.as_bytes();
-    for offset in 0..bytes.len().saturating_sub(5) {
-        if bytes[offset] != b'H' || bytes[offset + 1] != b'C' {
-            continue;
-        }
-        let code = &upper[offset + 2..offset + 6];
-        if code.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            return Some(format!("HC{code}"));
-        }
-    }
-    None
-}
-
 fn parse_colscr_pointer(payload: &[u8]) -> Option<(u32, u32)> {
     if payload.len() != 18 {
         return None;
@@ -9418,7 +9333,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::lved_sqlite::apply_sqlcipher_key;
-    use crate::render::RenderCapability;
+    use crate::render::{HcRendererProfileSource, HcRendererProfileStatus, RenderCapability};
     use crate::target::TargetKind;
 
     use super::*;
