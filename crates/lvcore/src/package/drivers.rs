@@ -18,6 +18,11 @@ use super::html::{
     next_html_href_or_src_attr, package_html_base_dir, package_relative_html_reference,
     path_has_extension,
 };
+use super::lved_refs::{
+    LvedHtmlRefKind, is_lved_ref_terminator, lved_binran_target, lved_cross_book_target,
+    lved_dataid_target, lved_image_resource, lved_info_target, lved_media_resource,
+    lved_pdf_resource, lved_viewer_hook_target, next_lved_ref,
+};
 use super::render_output::{
     finalize_generic_html_view as finalize_generic_html_display, finalize_resolved_view,
     generic_html_data_url, generic_html_inline_resource_max_bytes,
@@ -7773,91 +7778,6 @@ struct SsedHanreiPage {
     diagnostics: Vec<Diagnostic>,
 }
 
-fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
-    let (namespace, key) = if let Some(value) = raw_ref.strip_prefix("lved.media.") {
-        value.split_once(':')?
-    } else if let Some(key) = raw_ref.strip_prefix("lved.media:") {
-        ("media", key)
-    } else if let Some(key) = raw_ref.strip_prefix("lved.sound:") {
-        ("sound", key)
-    } else {
-        return None;
-    };
-    let key = lved_resource_key(key)?;
-    if key.is_empty() {
-        return None;
-    }
-    let lower_namespace = namespace.to_lowercase();
-    let lower_key = key.to_lowercase();
-    let audio = lower_namespace.contains("sound")
-        || lower_namespace.contains("audio")
-        || lower_key.ends_with(".mp3")
-        || lower_key.ends_with(".wav");
-    let image = lower_namespace.contains("image")
-        || lower_namespace.contains("picture")
-        || lower_key.ends_with(".png")
-        || lower_key.ends_with(".jpg")
-        || lower_key.ends_with(".jpeg")
-        || lower_key.ends_with(".gif")
-        || lower_key.ends_with(".svg")
-        || lower_key.ends_with(".bmp");
-    let video = lower_namespace.contains("video")
-        || lower_namespace.contains("movie")
-        || lower_key.ends_with(".mp4")
-        || lower_key.ends_with(".m4v")
-        || lower_key.ends_with(".mpg")
-        || lower_key.ends_with(".mpeg")
-        || lower_key.ends_with(".mov");
-    let resource_kind = if audio {
-        ResourceKind::Audio
-    } else if video {
-        ResourceKind::Video
-    } else if image {
-        ResourceKind::Image
-    } else {
-        ResourceKind::MediaBlob
-    };
-    let store = if audio { "lved.mediasub" } else { "lved.media" };
-    Some(InternalResource::MediaBlob {
-        store: store.to_owned(),
-        key,
-        resource_kind,
-    })
-}
-
-fn lved_image_resource(raw_ref: &str) -> Option<InternalResource> {
-    let key = raw_ref
-        .strip_prefix("lved.image:")
-        .or_else(|| raw_ref.strip_prefix("lved.imag:"))
-        .and_then(lved_resource_key)?;
-    Some(InternalResource::MediaBlob {
-        store: "lved.media".to_owned(),
-        key,
-        resource_kind: ResourceKind::Image,
-    })
-}
-
-fn lved_pdf_resource(raw_ref: &str) -> Option<InternalResource> {
-    let key = raw_ref
-        .strip_prefix("lved.pdf:")
-        .and_then(lved_resource_key)?;
-    Some(InternalResource::MediaBlob {
-        store: "lved.media".to_owned(),
-        key,
-        resource_kind: ResourceKind::Pdf,
-    })
-}
-
-fn lved_resource_key(value: &str) -> Option<String> {
-    let value = value
-        .split_once('?')
-        .map_or(value, |(head, _)| head)
-        .split_once('#')
-        .map_or(value, |(head, _)| head)
-        .trim();
-    (!value.is_empty()).then(|| html_unescape_minimal(value))
-}
-
 fn lved_list_label_html(title_html: &str, subtitle_html: &str) -> String {
     if subtitle_html.is_empty() {
         title_html.to_owned()
@@ -9106,154 +9026,6 @@ fn ssed_hanrei_page_label(path: &str) -> String {
         return "Mac help: index".to_owned();
     }
     path.to_owned()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LvedHtmlRefKind {
-    Media,
-    Image,
-    Pdf,
-    DataId,
-    CrossBook,
-    Info,
-    Binran,
-    ViewerHook,
-}
-
-fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
-    let patterns = [
-        ("lved.media.", LvedHtmlRefKind::Media),
-        ("lved.media:", LvedHtmlRefKind::Media),
-        ("lved.sound:", LvedHtmlRefKind::Media),
-        ("lved.image:", LvedHtmlRefKind::Image),
-        ("lved.imag:", LvedHtmlRefKind::Image),
-        ("lved.pdf:", LvedHtmlRefKind::Pdf),
-        ("lved.dataid.dict.", LvedHtmlRefKind::CrossBook),
-        ("lved.contentlink:", LvedHtmlRefKind::CrossBook),
-        ("lved.dataid.result:", LvedHtmlRefKind::DataId),
-        ("lved.dataid:", LvedHtmlRefKind::DataId),
-        ("lved.dataid", LvedHtmlRefKind::DataId),
-        ("lved.info:", LvedHtmlRefKind::Info),
-        ("lved.binran:", LvedHtmlRefKind::Binran),
-        ("lved.bookmark:", LvedHtmlRefKind::ViewerHook),
-        ("lved.plugin:", LvedHtmlRefKind::ViewerHook),
-        ("lved.sql:", LvedHtmlRefKind::ViewerHook),
-        ("lved.findnum:", LvedHtmlRefKind::ViewerHook),
-        ("lved.select:", LvedHtmlRefKind::ViewerHook),
-        ("lved.group.", LvedHtmlRefKind::ViewerHook),
-        ("lved.browser.", LvedHtmlRefKind::ViewerHook),
-    ];
-    let mut cursor = 0usize;
-    while let Some(relative_index) = value[cursor..].find("lved") {
-        let index = cursor + relative_index;
-        let rest = &value[index..];
-        if let Some((_, kind)) = patterns
-            .iter()
-            .find(|(pattern, _)| rest.starts_with(pattern))
-        {
-            return Some((index, *kind));
-        }
-        cursor = index.saturating_add("lved".len());
-    }
-    None
-}
-
-fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {
-    let value = raw_ref
-        .strip_prefix("lved.dataid.result:")
-        .or_else(|| raw_ref.strip_prefix("lved.dataid:"))
-        .or_else(|| raw_ref.strip_prefix("lved.dataid"))?;
-    let value = value.strip_prefix(':').unwrap_or(value);
-    if value.is_empty() || !value.as_bytes().first().is_some_and(u8::is_ascii_digit) {
-        return None;
-    }
-    let (row_id, anchor) = split_lved_target_anchor(value);
-    let row_id = row_id.parse::<i64>().ok()?;
-    Some(InternalTarget::LvedRow {
-        table: "content".to_owned(),
-        row_id,
-        anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
-        query: None,
-    })
-}
-
-fn lved_cross_book_target(raw_ref: &str) -> Option<InternalTarget> {
-    if let Some(value) = raw_ref.strip_prefix("lved.dataid.dict.") {
-        let (dict_code, target) = value.split_once(':')?;
-        let (content_id, anchor) = split_lved_target_anchor(target);
-        if dict_code.is_empty() || content_id.is_empty() {
-            return None;
-        }
-        return Some(InternalTarget::LvedCrossBook {
-            link_kind: "dataid-dict".to_owned(),
-            dict_code: dict_code.to_owned(),
-            content_id: content_id.to_owned(),
-            anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
-        });
-    }
-    if let Some(value) = raw_ref.strip_prefix("lved.contentlink:") {
-        let (dict_code, target) = value.split_once('.')?;
-        let (content_id, anchor) = split_lved_target_anchor(target);
-        if dict_code.is_empty() || content_id.is_empty() {
-            return None;
-        }
-        return Some(InternalTarget::LvedCrossBook {
-            link_kind: "contentlink".to_owned(),
-            dict_code: dict_code.to_owned(),
-            content_id: content_id.to_owned(),
-            anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
-        });
-    }
-    None
-}
-
-fn lved_info_target(raw_ref: &str) -> Option<InternalTarget> {
-    let value = raw_ref.strip_prefix("lved.info:")?;
-    let (name, anchor) = split_lved_target_anchor(value);
-    if name.is_empty() {
-        return None;
-    }
-    Some(InternalTarget::LvedInfoPage {
-        name: html_unescape_minimal(name),
-        anchor: (!anchor.is_empty()).then(|| html_unescape_minimal(anchor)),
-    })
-}
-
-fn lved_binran_target(raw_ref: &str) -> Option<InternalTarget> {
-    let value = raw_ref.strip_prefix("lved.binran:")?;
-    let (name, anchor) = split_lved_target_anchor(value);
-    if name.is_empty() {
-        return None;
-    }
-    Some(InternalTarget::LvedNamedPage {
-        table: "binran".to_owned(),
-        name: html_unescape_minimal(name),
-        anchor: (!anchor.is_empty()).then(|| html_unescape_minimal(anchor)),
-    })
-}
-
-fn lved_viewer_hook_target(raw_ref: &str) -> InternalTarget {
-    let hook = raw_ref
-        .strip_prefix("lved.")
-        .and_then(|rest| {
-            rest.split([':', '.'])
-                .next()
-                .filter(|value| !value.is_empty())
-        })
-        .unwrap_or("unknown");
-    InternalTarget::LvedViewerHook {
-        hook: hook.to_owned(),
-        value: html_unescape_minimal(raw_ref),
-    }
-}
-
-fn split_lved_target_anchor(value: &str) -> (&str, &str) {
-    let value = value.split_once('?').map_or(value, |(head, _)| head);
-    value.split_once('#').unwrap_or((value, ""))
-}
-
-fn is_lved_ref_terminator(ch: char) -> bool {
-    ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>' | ')' | ']')
 }
 
 fn root_fingerprint(root: &Path) -> String {
