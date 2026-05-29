@@ -33,6 +33,10 @@ use super::resource_helpers::{
     resource_kind_from_path, resource_mime_type,
 };
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
+use super::ssed_payload::{
+    file_starts_with_android_wrapped_sseddata, has_component_payload_casefolded,
+    has_supported_sseddata_component_payload_casefolded,
+};
 use super::ssed_search::{
     decode_ssed_body_search_text, normalize_search_match_text,
     ssed_ascii_key_needs_linear_safety_net, ssed_fulltext_snippet_html, ssed_index_row_order_key,
@@ -48,7 +52,7 @@ use crate::crypto::{
     decrypt_android_diw_file_to_path, decrypt_android_diw_prefix,
     decrypt_logofont_cipher_file_to_path, decrypt_logofont_cipher_prefix,
     decrypt_macos_logofont_cipher_file_to_path, decrypt_macos_logofont_cipher_prefix,
-    normalize_android_wrapped_sseddata_bytes, normalize_android_wrapped_sseddata_file_to_path,
+    normalize_android_wrapped_sseddata_file_to_path,
 };
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
@@ -76,7 +80,7 @@ use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQue
 use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
 use crate::ssed::{
     ANDROID_LVEDINFO_MAGIC, BLOCK_SIZE, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent,
-    SsedComponentRole, SsedDataFile, SsedDataHeader, SsedDataReader,
+    SsedComponentRole, SsedDataFile, SsedDataHeader,
 };
 use crate::ssed_aux_index::{
     SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,
@@ -9137,26 +9141,10 @@ fn ssed_navigation_component_has_non_empty_surface(
 }
 
 fn read_ssed_navigation_detection_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
-    if let Ok(mut reader) = SsedDataFile::open(path) {
-        let read_len = reader
-            .header()
-            .expanded_size()
-            .min(SSED_NAVIGATION_DETECTION_MAX_BYTES);
-        return Ok(Some(reader.read_range(0, read_len)?));
-    }
-
-    if file_starts_with_android_wrapped_sseddata(path).unwrap_or(false) {
-        let raw = fs::read(path)?;
-        let normalized = normalize_android_wrapped_sseddata_bytes(&raw);
-        let reader = SsedDataReader::parse_bytes(&normalized)?;
-        let read_len = reader
-            .header()
-            .expanded_size()
-            .min(SSED_NAVIGATION_DETECTION_MAX_BYTES);
-        return Ok(Some(reader.read(0, read_len).to_vec()));
-    }
-
-    Ok(None)
+    super::ssed_payload::read_ssed_navigation_detection_bytes(
+        path,
+        SSED_NAVIGATION_DETECTION_MAX_BYTES,
+    )
 }
 
 fn has_any_casefolded(storage: &DirectoryStorage, candidates: &[&str]) -> bool {
@@ -9256,71 +9244,6 @@ fn has_html_file_under_casefolded(
         }
         child.is_file() && path_has_extension(&file_name, &["html", "htm"])
     })
-}
-
-fn has_component_payload_casefolded(storage: &DirectoryStorage, component: &SsedComponent) -> bool {
-    storage
-        .exists(Path::new(&component.filename))
-        .unwrap_or(false)
-        || ssed_component_filename_aliases(component)
-            .iter()
-            .any(|alias| storage.exists(Path::new(alias)).unwrap_or(false))
-}
-
-fn has_supported_sseddata_component_payload_casefolded(
-    storage: &DirectoryStorage,
-    component: &SsedComponent,
-) -> bool {
-    let mut candidates = Vec::new();
-    if let Ok(Some(path)) = storage.resolve_casefolded(Path::new(&component.filename)) {
-        candidates.push(path);
-    }
-    for alias in ssed_component_filename_aliases(component) {
-        if let Ok(Some(path)) = storage.resolve_casefolded(Path::new(&alias)) {
-            candidates.push(path);
-        }
-    }
-    candidates
-        .iter()
-        .any(|path| is_supported_sseddata_payload_path(path).unwrap_or(false))
-}
-
-fn is_supported_sseddata_payload_path(path: &Path) -> Result<bool> {
-    if SsedDataHeader::parse_file(path).is_ok() {
-        return Ok(true);
-    }
-    if file_starts_with_android_wrapped_sseddata(path)? {
-        return Ok(true);
-    }
-    if looks_like_zip_file(path)? {
-        return Ok(true);
-    }
-
-    let mut file = File::open(path)?;
-    let mut prefix = vec![0_u8; 4096];
-    let read = file.read(&mut prefix)?;
-    prefix.truncate(read);
-    if prefix.len() < 16 {
-        return Ok(false);
-    }
-    for prefix_decrypt in [
-        decrypt_android_diw_prefix as PrefixDecryptFn,
-        decrypt_macos_logofont_cipher_prefix,
-        decrypt_logofont_cipher_prefix,
-    ] {
-        if prefix_decrypt(&prefix, 64).is_ok_and(|decrypted| decrypted.starts_with(SSEDDATA_MAGIC))
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn file_starts_with_android_wrapped_sseddata(path: &Path) -> Result<bool> {
-    let mut file = File::open(path)?;
-    let mut prefix = [0_u8; 11];
-    let read = file.read(&mut prefix)?;
-    Ok(read == prefix.len() && &prefix == b"LV_SSEDDATA")
 }
 
 fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> {

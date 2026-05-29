@@ -5,6 +5,7 @@ mod lved_refs;
 mod render_output;
 mod resource_helpers;
 mod ssed_index_probe;
+mod ssed_payload;
 mod ssed_search;
 mod ssed_zip;
 
