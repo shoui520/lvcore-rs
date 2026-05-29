@@ -14,9 +14,9 @@ use super::chm_toc::{
     chm_hanrei_entry_sort_key, chm_hhc_toc_items_to_nodes, chm_local_reference, parse_chm_hhc_toc,
 };
 use super::html::{
-    HtmlAttrName, html_basic_text, html_document_label, html_label_text, html_unescape_minimal,
-    next_html_href_or_src_attr, package_html_base_dir, package_relative_html_reference,
-    path_has_extension,
+    HtmlAttrName, escape_plain_label_html, html_basic_text, html_document_label, html_label_text,
+    html_unescape_minimal, next_html_href_or_src_attr, package_html_base_dir,
+    package_relative_html_reference, path_has_extension,
 };
 use super::lved_refs::{
     LvedHtmlRefKind, is_lved_ref_terminator, lved_binran_target, lved_cross_book_target,
@@ -8484,21 +8484,6 @@ fn collect_panel_cell_ordered_targets(cells: &[PanelCell], out: &mut Vec<Ordered
             });
         }
     }
-}
-
-pub(super) fn escape_plain_label_html(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
 }
 
 fn looks_like_raw_anchor_label(value: &str) -> bool {

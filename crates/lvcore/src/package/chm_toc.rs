@@ -3,7 +3,7 @@ use crate::navigation::NavigationNode;
 use crate::resources::{InternalResource, ResourceKind, ResourceToken};
 use crate::target::{InternalTarget, TargetToken};
 
-use super::drivers::escape_plain_label_html;
+use super::html::escape_plain_label_html;
 use super::html::{
     PackageHtmlReference, html_attr_value, html_unescape_minimal, normalize_package_relative_path,
     path_has_extension,

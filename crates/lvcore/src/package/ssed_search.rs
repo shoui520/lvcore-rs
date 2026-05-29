@@ -1,6 +1,6 @@
 use encoding_rs::SHIFT_JIS;
 
-use super::drivers::escape_plain_label_html;
+use super::html::escape_plain_label_html;
 use crate::ssed_index::{SsedIndexRow, decode_jis_pair};
 
 const SSED_FULLTEXT_SNIPPET_CHARS: usize = 160;
