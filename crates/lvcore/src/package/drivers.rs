@@ -4,6 +4,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use encoding_rs::SHIFT_JIS;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -422,6 +424,7 @@ const SSED_FULLTEXT_SCAN_WINDOW_BYTES: usize = 256 * 1024;
 const SSED_FULLTEXT_SCAN_OVERLAP_BYTES: usize = 512;
 const SSED_FULLTEXT_SNIPPET_CHARS: usize = 160;
 const SSED_ENTRY_MARKER: [u8; 4] = [0x1f, 0x09, 0x00, 0x01];
+const GENERIC_HTML_INLINE_RESOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Debug, Clone)]
 struct SsedFulltextRow {
     offset: u64,
@@ -1335,7 +1338,7 @@ impl RendererProvider for ReaderBookPackage {
                 self.view_for_renderer_input(input, options)
             }
         }?;
-        Ok(finalize_resolved_view(view, options))
+        self.finalize_resolved_view(view, options)
     }
 }
 
@@ -6015,6 +6018,101 @@ impl ReaderBookPackage {
         })
     }
 
+    fn finalize_resolved_view(
+        &self,
+        view: ResolvedTargetView,
+        options: &RenderOptions,
+    ) -> Result<ResolvedTargetView> {
+        let view = if options.mode == RenderMode::GenericHtml {
+            self.finalize_generic_html_view(view)?
+        } else {
+            view
+        };
+        Ok(finalize_resolved_view(view, options))
+    }
+
+    fn finalize_generic_html_view(
+        &self,
+        mut view: ResolvedTargetView,
+    ) -> Result<ResolvedTargetView> {
+        let Some(html) = view.display_html.take() else {
+            return Ok(view);
+        };
+        let mut output = String::with_capacity(html.len());
+        let mut cursor = 0usize;
+        let lower = html.to_ascii_lowercase();
+        let mut inlined_resources = 0usize;
+        let mut target_links = 0usize;
+
+        while let Some(attr) = next_html_href_or_src_attr(&html, &lower, cursor) {
+            output.push_str(&html[cursor..attr.value_start]);
+            let raw_value = &html[attr.value_start..attr.value_end];
+            if let Some(token) = raw_value.strip_prefix("lvcore://resource/") {
+                match self.generic_html_data_url(token) {
+                    Ok(Some(data_url)) => {
+                        output.push_str(&data_url);
+                        inlined_resources += 1;
+                    }
+                    Ok(None) => output.push_str(raw_value),
+                    Err(error) => {
+                        output.push_str(raw_value);
+                        view.diagnostics.push(Diagnostic::warning(
+                            "generic_html_resource_inline_failed",
+                            error.to_string(),
+                        ));
+                    }
+                }
+            } else if attr.name == HtmlAttrName::Href
+                && let Some(token) = raw_value.strip_prefix("lvcore://target/")
+            {
+                output.push_str("#lvcore-target-");
+                output.push_str(token);
+                target_links += 1;
+            } else {
+                output.push_str(raw_value);
+            }
+            cursor = attr.value_end;
+        }
+        output.push_str(&html[cursor..]);
+
+        if inlined_resources > 0 {
+            view.diagnostics.push(Diagnostic::info(
+                "generic_html_resources_inlined",
+                format!("{inlined_resources} lvcore resources were embedded as data URLs"),
+            ));
+        }
+        if target_links > 0 {
+            view.diagnostics.push(Diagnostic::info(
+                "generic_html_targets_fragmentized",
+                format!("{target_links} lvcore target links were converted to local fragments"),
+            ));
+        }
+        if output.contains("lvcore://target/") || output.contains("lvcore://resource/") {
+            view.diagnostics.push(Diagnostic::warning(
+                "generic_html_router_reference_remaining",
+                "GenericHtml output still contains lvcore router references that could not be rewritten",
+            ));
+        }
+        view.display_html = Some(output);
+        Ok(view)
+    }
+
+    fn generic_html_data_url(&self, token: &str) -> Result<Option<String>> {
+        let resource_token = ResourceToken::from_opaque(token.to_owned());
+        let resource_ref = self.resolve_resource(&resource_token)?;
+        let Some(mime_type) = resource_ref.mime_type.as_deref() else {
+            return Ok(None);
+        };
+        let bytes = self.read_resource(&resource_token)?;
+        if bytes.len() > GENERIC_HTML_INLINE_RESOURCE_MAX_BYTES {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "data:{mime_type};base64,{}",
+            BASE64_STANDARD.encode(bytes)
+        )))
+    }
+
     fn normalize_lved_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
         let mut output = String::with_capacity(html.len());
         let mut resources = Vec::new();
@@ -10161,18 +10259,22 @@ mod tests {
                 },
             )
             .unwrap();
+        let generic_html = generic.display_html.as_deref().unwrap();
+        assert!(!generic_html.contains("lvcore://target/"));
+        assert!(!generic_html.contains("lvcore://resource/"));
+        assert!(generic_html.contains("#lvcore-target-"));
+        assert!(generic_html.contains("data:image/svg+xml;base64,"));
         assert!(
             generic
-                .display_html
-                .as_deref()
-                .unwrap()
-                .contains("lvcore://target/")
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "generic_html_resources_inlined")
         );
         assert!(
             generic
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.code == "generic_html_router_required")
+                .any(|diagnostic| diagnostic.code == "generic_html_targets_fragmentized")
         );
 
         let debug = package
