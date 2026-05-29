@@ -3,7 +3,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use aes::cipher::{BlockDecrypt, KeyInit};
+use aes::cipher::{Block, BlockDecrypt, BlockSizeUser, KeyInit, consts::U16};
 use aes::{Aes128, Aes256};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
@@ -118,9 +118,10 @@ fn decrypt_logofont_cipher_file_to_path_with_variant(
                 "encrypted payload length is not a multiple of 16 bytes".to_owned(),
             ));
         }
-        for chunk in encrypted[..read].chunks_exact(BLOCK_SIZE) {
-            let plain = decrypt_cbc_block(&cipher, chunk, &previous_cipher);
-            previous_cipher.copy_from_slice(chunk);
+        let plaintext = decrypt_cbc_chunk(&cipher, &encrypted[..read], &mut previous_cipher);
+        for chunk in plaintext.chunks_exact(BLOCK_SIZE) {
+            let mut plain = [0_u8; BLOCK_SIZE];
+            plain.copy_from_slice(chunk);
             if let Some(previous_plain) = pending_plain.replace(plain) {
                 outfile.write_all(&previous_plain)?;
             }
@@ -147,14 +148,7 @@ fn decrypt_logofont_cipher_blocks_with_variant(
     let (key, iv) = logofont_cipher_key_iv(variant);
     let cipher = Aes128::new_from_slice(&key)
         .map_err(|_| Error::Driver("invalid LogoFontCipher AES key".to_owned()))?;
-    let mut previous_cipher = iv;
-    let mut plaintext = Vec::with_capacity(data.len());
-    for chunk in data.chunks_exact(BLOCK_SIZE) {
-        let plain = decrypt_cbc_block(&cipher, chunk, &previous_cipher);
-        previous_cipher.copy_from_slice(chunk);
-        plaintext.extend_from_slice(&plain);
-    }
-    Ok(plaintext)
+    Ok(decrypt_cbc_blocks(&cipher, data, iv))
 }
 
 fn decrypt_logofont_cipher_bytes_with_variant(
@@ -198,9 +192,10 @@ fn decrypt_android_diw_file_raw(input: &Path, output: &Path) -> Result<()> {
                 "Android HONMON.DIW length is not an AES block multiple".to_owned(),
             ));
         }
-        for chunk in encrypted[..read].chunks_exact(BLOCK_SIZE) {
-            let plain = decrypt_cbc_block_256(&cipher, chunk, &previous_cipher);
-            previous_cipher.copy_from_slice(chunk);
+        let plaintext = decrypt_cbc_chunk(&cipher, &encrypted[..read], &mut previous_cipher);
+        for chunk in plaintext.chunks_exact(BLOCK_SIZE) {
+            let mut plain = [0_u8; BLOCK_SIZE];
+            plain.copy_from_slice(chunk);
             if let Some(previous_plain) = pending_plain.replace(plain) {
                 outfile.write_all(&previous_plain)?;
             }
@@ -255,14 +250,7 @@ fn decrypt_android_diw_blocks(data: &[u8]) -> Result<Vec<u8>> {
     let key = derive_android_diw_aes_key();
     let cipher = Aes256::new_from_slice(&key)
         .map_err(|_| Error::Driver("invalid Android HONMON.DIW AES key".to_owned()))?;
-    let mut previous_cipher = ANDROID_DIW_IV;
-    let mut plaintext = Vec::with_capacity(data.len());
-    for chunk in data.chunks_exact(BLOCK_SIZE) {
-        let plain = decrypt_cbc_block_256(&cipher, chunk, &previous_cipher);
-        previous_cipher.copy_from_slice(chunk);
-        plaintext.extend_from_slice(&plain);
-    }
-    Ok(plaintext)
+    Ok(decrypt_cbc_blocks(&cipher, data, ANDROID_DIW_IV))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,32 +276,36 @@ fn logofont_cipher_key_iv(variant: LogoFontCipherVariant) -> ([u8; BLOCK_SIZE], 
     (key, iv)
 }
 
-fn decrypt_cbc_block(
-    cipher: &Aes128,
-    encrypted_block: &[u8],
-    previous_cipher: &[u8; BLOCK_SIZE],
-) -> [u8; BLOCK_SIZE] {
-    let mut block = aes::Block::clone_from_slice(encrypted_block);
-    cipher.decrypt_block(&mut block);
-    let mut plain = [0_u8; BLOCK_SIZE];
-    for index in 0..BLOCK_SIZE {
-        plain[index] = block[index] ^ previous_cipher[index];
-    }
-    plain
+fn decrypt_cbc_blocks<C>(cipher: &C, data: &[u8], iv: [u8; BLOCK_SIZE]) -> Vec<u8>
+where
+    C: BlockDecrypt + BlockSizeUser<BlockSize = U16>,
+{
+    let mut previous_cipher = iv;
+    decrypt_cbc_chunk(cipher, data, &mut previous_cipher)
 }
 
-fn decrypt_cbc_block_256(
-    cipher: &Aes256,
-    encrypted_block: &[u8],
-    previous_cipher: &[u8; BLOCK_SIZE],
-) -> [u8; BLOCK_SIZE] {
-    let mut block = aes::Block::clone_from_slice(encrypted_block);
-    cipher.decrypt_block(&mut block);
-    let mut plain = [0_u8; BLOCK_SIZE];
-    for index in 0..BLOCK_SIZE {
-        plain[index] = block[index] ^ previous_cipher[index];
+fn decrypt_cbc_chunk<C>(
+    cipher: &C,
+    encrypted: &[u8],
+    previous_cipher: &mut [u8; BLOCK_SIZE],
+) -> Vec<u8>
+where
+    C: BlockDecrypt + BlockSizeUser<BlockSize = U16>,
+{
+    let mut blocks: Vec<Block<C>> = encrypted
+        .chunks_exact(BLOCK_SIZE)
+        .map(Block::<C>::clone_from_slice)
+        .collect();
+    cipher.decrypt_blocks(&mut blocks);
+
+    let mut plaintext = Vec::with_capacity(encrypted.len());
+    for (block, encrypted_block) in blocks.iter().zip(encrypted.chunks_exact(BLOCK_SIZE)) {
+        for index in 0..BLOCK_SIZE {
+            plaintext.push(block[index] ^ previous_cipher[index]);
+        }
+        previous_cipher.copy_from_slice(encrypted_block);
     }
-    plain
+    plaintext
 }
 
 fn derive_android_diw_aes_key() -> [u8; 32] {
