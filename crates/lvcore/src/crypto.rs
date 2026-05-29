@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::LazyLock;
 
 use aes::cipher::{BlockDecrypt, KeyInit};
 use aes::{Aes128, Aes256};
@@ -20,6 +21,7 @@ const ANDROID_DIW_SALT: [u8; 20] = [
     0xe4, 0x4d, 0x20, 0x8a, 0x8f, 0xdb, 0x4a, 0xd4, 0x1f, 0x58, 0xdd, 0xe7, 0x61, 0x8b, 0xc8, 0x8f,
     0xe1, 0x34, 0xac, 0x6d,
 ];
+static ANDROID_DIW_AES_KEY: LazyLock<[u8; 32]> = LazyLock::new(derive_android_diw_aes_key_uncached);
 
 pub fn decrypt_logofont_cipher_prefix(data: &[u8], size: usize) -> Result<Vec<u8>> {
     decrypt_logofont_cipher_prefix_with_variant(data, size, LogoFontCipherVariant::Windows)
@@ -315,6 +317,10 @@ fn decrypt_cbc_block_256(
 }
 
 fn derive_android_diw_aes_key() -> [u8; 32] {
+    *ANDROID_DIW_AES_KEY
+}
+
+fn derive_android_diw_aes_key_uncached() -> [u8; 32] {
     const U: usize = 20;
     const V: usize = 64;
     const TARGET_LEN: usize = 32;
@@ -372,6 +378,9 @@ fn repeat_to_block_multiple(data: &[u8], block_size: usize) -> Vec<u8> {
 }
 
 fn repeat_to_len(data: &[u8], len: usize) -> Vec<u8> {
+    if data.is_empty() {
+        return Vec::new();
+    }
     let mut out = Vec::with_capacity(len);
     while out.len() < len {
         out.extend_from_slice(data);
