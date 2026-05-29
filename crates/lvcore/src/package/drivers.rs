@@ -6001,7 +6001,44 @@ impl StubBookPackage {
             }
         }
         hints.sort();
-        Ok(hints.into_iter().next())
+        if let Some(hint) = hints.into_iter().next() {
+            return Ok(Some(hint));
+        }
+        self.exinfo_hc_profile_hint()
+    }
+
+    fn exinfo_hc_profile_hint(&self) -> Result<Option<String>> {
+        let relative = Path::new("EXINFO.INI");
+        if !self.storage.exists(relative)? {
+            return Ok(None);
+        }
+        let bytes = self.storage.read(relative)?;
+        let (text, _, _) = SHIFT_JIS.decode(&bytes);
+        let mut in_general = false;
+        for raw_line in text.lines() {
+            let line = raw_line.trim_start_matches('\u{feff}').trim();
+            if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+                continue;
+            }
+            if line.starts_with('[') && line.ends_with(']') {
+                in_general = line[1..line.len() - 1]
+                    .trim()
+                    .eq_ignore_ascii_case("GENERAL");
+                continue;
+            }
+            if !in_general {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if key.trim().eq_ignore_ascii_case("HTMLDLL")
+                && let Some(hint) = extract_hc_profile_hint(value)
+            {
+                return Ok(Some(hint));
+            }
+        }
+        Ok(None)
     }
 
     fn discover_ssed_hanrei_pages(&self) -> Result<Vec<SsedHanreiPage>> {
@@ -7120,6 +7157,21 @@ fn hc03e9_pdfspread_anchor_text(data: &[u8]) -> String {
         offset += 1;
     }
     text
+}
+
+fn extract_hc_profile_hint(value: &str) -> Option<String> {
+    let upper = value.to_ascii_uppercase();
+    let bytes = upper.as_bytes();
+    for offset in 0..bytes.len().saturating_sub(5) {
+        if bytes[offset] != b'H' || bytes[offset + 1] != b'C' {
+            continue;
+        }
+        let code = &upper[offset + 2..offset + 6];
+        if code.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Some(format!("HC{code}"));
+        }
+    }
+    None
 }
 
 fn parse_colscr_pointer(payload: &[u8]) -> Option<(u32, u32)> {
@@ -9691,6 +9743,68 @@ mod tests {
             package.read_resource(&pdf.token).unwrap(),
             b"%PDF-pdfspread"
         );
+    }
+
+    #[test]
+    fn ssed_hc_profile_hint_uses_exinfo_htmldll_without_binary() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("HONMON.DIC"),
+            fixture_sseddata_literal_chunks(&[b"body"], 100, 100),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("EXINFO.INI"),
+            b"[GENERAL]\r\nHTMLDLL=HC03E9.dll\r\n",
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "EXINFO".to_owned(),
+            components: vec![SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            }],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 1,
+                trailing_bytes: 0,
+            },
+        };
+        let package = StubBookPackage::new(
+            dir.path(),
+            DetectedPackage {
+                root: dir.path().to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 80,
+                title: Some("EXINFO".to_owned()),
+                evidence: Vec::new(),
+            },
+            Vec::new(),
+            StubPackageStores {
+                ssed_catalog: Some(catalog),
+                ..Default::default()
+            },
+        );
+        let target = TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 100,
+            offset: 0,
+        })
+        .unwrap();
+
+        let input = package.renderer_input_for_target(&target).unwrap();
+        let RendererInput::HcSsedStream { profile_hint, .. } = input else {
+            panic!("SSED address should produce HC renderer input");
+        };
+        assert_eq!(profile_hint.as_deref(), Some("HC03E9"));
     }
 
     #[test]
