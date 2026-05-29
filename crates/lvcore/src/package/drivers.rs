@@ -2972,8 +2972,7 @@ impl ReaderBookPackage {
             include_external_bins
                 && requested_panel_id.is_none_or(|panel_id| data_ref.panel_id == panel_id)
         }) {
-            let relative = data_ref.filename.replace('\\', "/");
-            let Some(path) = self.storage.resolve_casefolded(Path::new(&relative))? else {
+            let Some(path) = self.resolve_ssed_panel_bin_path(&data_ref.filename)? else {
                 diagnostics.push(Diagnostic::warning(
                     "ssed_panel_bin_missing",
                     format!("Panel BIN {} was not found", data_ref.filename),
@@ -3018,6 +3017,24 @@ impl ReaderBookPackage {
             surface_id: surface_id.to_owned(),
             cells,
         })
+    }
+
+    fn resolve_ssed_panel_bin_path(&self, filename: &str) -> Result<Option<PathBuf>> {
+        let relative = filename.replace('\\', "/");
+        if let Some(path) = self.storage.resolve_casefolded(Path::new(&relative))? {
+            return Ok(Some(path));
+        }
+        let Some(stripped) = relative.strip_prefix("Panel/") else {
+            return Ok(None);
+        };
+        let Some(package_name) = self.root.file_name().and_then(|name| name.to_str()) else {
+            return Ok(None);
+        };
+        let sibling_panel_root = self.root.with_file_name(format!("{package_name}_Panel"));
+        if !sibling_panel_root.is_dir() {
+            return Ok(None);
+        }
+        DirectoryStorage::new(sibling_panel_root).resolve_casefolded(Path::new(stripped))
     }
 
     fn open_ssed_hanrei_surface(
