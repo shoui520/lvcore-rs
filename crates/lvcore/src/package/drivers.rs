@@ -70,8 +70,8 @@ use crate::navigation::{
     ScreenMenuScreen,
 };
 use crate::render::{
-    RenderMode, RenderOptions, RendererInput, RendererInputProvider, RendererProvider,
-    ResolvedTargetKind, ResolvedTargetView,
+    HcRendererProfile, HcRendererProfileSource, HcRendererProfileStatus, RenderMode, RenderOptions,
+    RendererInput, RendererInputProvider, RendererProvider, ResolvedTargetKind, ResolvedTargetView,
 };
 use crate::resources::{
     InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
@@ -5075,6 +5075,10 @@ impl ReaderBookPackage {
             } => {
                 let (resources, mut diagnostics) =
                     self.ssed_stream_renderer_resources(&component, offset, length)?;
+                let hc_profile = self.hc_renderer_profile()?;
+                let profile_hint = hc_profile
+                    .as_ref()
+                    .map(|profile| profile.profile_id.clone());
                 diagnostics.insert(
                     0,
                     Diagnostic::info(
@@ -5087,7 +5091,8 @@ impl ReaderBookPackage {
                     component,
                     offset,
                     length,
-                    profile_hint: self.hc_profile_hint()?,
+                    profile_hint,
+                    hc_profile,
                     resources,
                     diagnostics,
                 })
@@ -5451,6 +5456,7 @@ impl ReaderBookPackage {
                 offset,
                 length,
                 profile_hint,
+                hc_profile,
                 resources,
                 mut diagnostics,
             } => {
@@ -5482,6 +5488,7 @@ impl ReaderBookPackage {
                                     "offset": offset,
                                     "length": length,
                                     "profile_hint": profile_hint,
+                                    "hc_profile": hc_profile,
                                 }
                             })
                             .to_string()
@@ -7465,8 +7472,8 @@ impl ReaderBookPackage {
         Ok(dir.join(format!("{hash}.{extension}")))
     }
 
-    fn hc_profile_hint(&self) -> Result<Option<String>> {
-        let mut hints = Vec::new();
+    fn hc_renderer_profile(&self) -> Result<Option<HcRendererProfile>> {
+        let mut dlls = Vec::new();
         for path in self.storage.list_dir(Path::new(""))? {
             let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
                 continue;
@@ -7477,17 +7484,26 @@ impl ReaderBookPackage {
                 && upper.ends_with(".DLL")
                 && upper[2..6].chars().all(|ch| ch.is_ascii_hexdigit())
             {
-                hints.push(upper.trim_end_matches(".DLL").to_owned());
+                dlls.push((upper.trim_end_matches(".DLL").to_owned(), name.to_string()));
             }
         }
-        hints.sort();
-        if let Some(hint) = hints.into_iter().next() {
-            return Ok(Some(hint));
+        dlls.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        if let Some((profile_id, filename)) = dlls.into_iter().next() {
+            let bytes = self.storage.read(Path::new(&filename))?;
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            return Ok(Some(HcRendererProfile {
+                profile_id,
+                source: HcRendererProfileSource::HcDll,
+                status: HcRendererProfileStatus::InputOnly,
+                dll_sha256: Some(hex::encode(hasher.finalize())),
+                dll_size: Some(bytes.len() as u64),
+            }));
         }
-        self.exinfo_hc_profile_hint()
+        self.exinfo_hc_renderer_profile()
     }
 
-    fn exinfo_hc_profile_hint(&self) -> Result<Option<String>> {
+    fn exinfo_hc_renderer_profile(&self) -> Result<Option<HcRendererProfile>> {
         let relative = Path::new("EXINFO.INI");
         if !self.storage.exists(relative)? {
             return Ok(None);
@@ -7515,7 +7531,13 @@ impl ReaderBookPackage {
             if key.trim().eq_ignore_ascii_case("HTMLDLL")
                 && let Some(hint) = extract_hc_profile_hint(value)
             {
-                return Ok(Some(hint));
+                return Ok(Some(HcRendererProfile {
+                    profile_id: hint,
+                    source: HcRendererProfileSource::ExinfoHtmlDll,
+                    status: HcRendererProfileStatus::InputOnly,
+                    dll_sha256: None,
+                    dll_size: None,
+                }));
             }
         }
         Ok(None)
@@ -10788,10 +10810,21 @@ mod tests {
         .unwrap();
 
         let input = package.renderer_input_for_target(&target).unwrap();
-        let RendererInput::HcSsedStream { profile_hint, .. } = input else {
+        let RendererInput::HcSsedStream {
+            profile_hint,
+            hc_profile,
+            ..
+        } = input
+        else {
             panic!("SSED address should produce HC renderer input");
         };
         assert_eq!(profile_hint.as_deref(), Some("HC03E9"));
+        let hc_profile = hc_profile.expect("EXINFO HTMLDLL should become HC profile metadata");
+        assert_eq!(hc_profile.profile_id, "HC03E9");
+        assert_eq!(hc_profile.source, HcRendererProfileSource::ExinfoHtmlDll);
+        assert_eq!(hc_profile.status, HcRendererProfileStatus::InputOnly);
+        assert_eq!(hc_profile.dll_sha256, None);
+        assert_eq!(hc_profile.dll_size, None);
     }
 
     #[test]

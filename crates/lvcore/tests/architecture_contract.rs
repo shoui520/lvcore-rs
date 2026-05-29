@@ -1981,6 +1981,7 @@ fn render_target_uses_resolved_visual_body_contract() {
         offset,
         length,
         profile_hint,
+        hc_profile,
         diagnostics,
         ..
     } = input
@@ -1991,6 +1992,18 @@ fn render_target_uses_resolved_visual_body_contract() {
     assert_eq!(offset, 2);
     assert_eq!(length, None);
     assert_eq!(profile_hint.as_deref(), Some("HC0158"));
+    let hc_profile = hc_profile.expect("HC DLL profile metadata should be present");
+    assert_eq!(hc_profile.profile_id, "HC0158");
+    assert_eq!(hc_profile.source, lvcore::HcRendererProfileSource::HcDll);
+    assert_eq!(
+        hc_profile.status,
+        lvcore::HcRendererProfileStatus::InputOnly
+    );
+    assert_eq!(hc_profile.dll_size, Some(0));
+    assert_eq!(
+        hc_profile.dll_sha256.as_deref(),
+        Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    );
     assert!(
         diagnostics
             .iter()
@@ -2013,6 +2026,9 @@ fn render_target_uses_resolved_visual_body_contract() {
     assert!(debug_trace.contains("HONMON.DIC"));
     assert!(debug_trace.contains("\"offset\":2"));
     assert!(debug_trace.contains("HC0158"));
+    assert!(
+        debug_trace.contains("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    );
 }
 
 #[test]

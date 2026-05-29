@@ -59,6 +59,30 @@ pub enum RendererInputKind {
     Unsupported,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HcRendererProfileSource {
+    HcDll,
+    ExinfoHtmlDll,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HcRendererProfileStatus {
+    InputOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HcRendererProfile {
+    pub profile_id: String,
+    pub source: HcRendererProfileSource,
+    pub status: HcRendererProfileStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dll_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dll_size: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RendererInput {
@@ -70,6 +94,8 @@ pub enum RendererInput {
         length: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile_hint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hc_profile: Option<HcRendererProfile>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         resources: Vec<ResourceRef>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

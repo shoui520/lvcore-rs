@@ -62,8 +62,9 @@ pub use package::{
     DetectedPackage, DriverRegistry, FormatFamily, PackageDiscoveryOptions, PackageDriver,
 };
 pub use render::{
-    RenderCapability, RenderMode, RenderOptions, RendererInput, RendererInputKind,
-    RendererInputProvider, RendererProvider, ResolvedTargetKind, ResolvedTargetView,
+    HcRendererProfile, HcRendererProfileSource, HcRendererProfileStatus, RenderCapability,
+    RenderMode, RenderOptions, RendererInput, RendererInputKind, RendererInputProvider,
+    RendererProvider, ResolvedTargetKind, ResolvedTargetView,
 };
 pub use resources::{InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken};
 pub use search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery, SearchScope};

@@ -147,11 +147,15 @@ provider slices:
   image resources when the code maps into the observed direct JIS grid range,
   preserving the frontend-controlled gaiji priority policy without handing the
   whole GA16 file to the UI;
-- SSED HC renderer inputs now perform a bounded stream scan for understood
-  media controls and carry typed resource refs for observed `COLSCR.DIC`,
-  `PCMDATA.DIC`, `MONOSCR.DIC`, and `FIGURE.DIC` targets. This gives the
-  future HC/profile renderer the resource tokens it needs without claiming HC
-  rendering parity yet;
+- SSED HC renderer inputs now carry structured HC profile metadata. When an
+  `HC????.dll` is present, lvcore reports the HC profile id, exact DLL SHA-256,
+  DLL size, and input-only support status; when only `EXINFO.INI` declares
+  `HTMLDLL`, lvcore reports that declaration as a weaker profile source. HC
+  inputs also perform a bounded stream scan for understood media controls and
+  carry typed resource refs for observed `COLSCR.DIC`, `PCMDATA.DIC`,
+  `MONOSCR.DIC`, and `FIGURE.DIC` targets. This gives the future HC/profile
+  renderer the resource tokens and binary-family identity it needs without
+  claiming HC rendering parity yet;
 - SSED Mac HC03E9-style PDFSpread sidecars are exposed as PDF resource refs
   from fullwidth HONMON page anchors, with the original PDF bytes available
   through the normal resource API;
@@ -172,10 +176,10 @@ known structures.
 ## Important Gaps
 
 - SSED HC renderer parity is not ported yet. Plain SSED body targets currently
-  resolve to explicit HC renderer input plus discovered resource refs rather
-  than claiming rendered HTML; known entry boundaries are used when available,
-  while supported dense sidecar targets resolve to preserved HTML or exact
-  sidecar text.
+  resolve to explicit HC renderer input plus discovered profile/resource refs
+  rather than claiming rendered HTML; known entry boundaries are used when
+  available, while supported dense sidecar targets resolve to preserved HTML or
+  exact sidecar text.
 - SSED full-text search is implemented as sidecar-body search for understood
   dense HONMON databases plus a bounded, index-anchored HONMON scan for stream
   bodies; it is not a substitute for HC-rendered semantic text and may need more
