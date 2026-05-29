@@ -1,6 +1,7 @@
 mod chm_toc;
 mod drivers;
 mod html;
+mod render_output;
 mod resource_helpers;
 mod ssed_index_probe;
 mod ssed_zip;

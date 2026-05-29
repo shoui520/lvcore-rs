@@ -4,8 +4,6 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use encoding_rs::SHIFT_JIS;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -19,6 +17,10 @@ use super::html::{
     HtmlAttrName, html_basic_text, html_document_label, html_label_text, html_unescape_minimal,
     next_html_href_or_src_attr, package_html_base_dir, package_relative_html_reference,
     path_has_extension,
+};
+use super::render_output::{
+    finalize_generic_html_view as finalize_generic_html_display, finalize_resolved_view,
+    generic_html_data_url, generic_html_inline_resource_max_bytes,
 };
 use super::resource_helpers::{
     MONOSCR_BITMAP_BYTES, MONOSCR_HEIGHT, MONOSCR_WIDTH, monoscr_bitmap_to_rgba,
@@ -54,8 +56,8 @@ use crate::navigation::{
     ScreenMenuScreen,
 };
 use crate::render::{
-    RenderCapability, RenderMode, RenderOptions, RendererInput, RendererInputProvider,
-    RendererProvider, ResolvedTargetKind, ResolvedTargetView,
+    RenderMode, RenderOptions, RendererInput, RendererInputProvider, RendererProvider,
+    ResolvedTargetKind, ResolvedTargetView,
 };
 use crate::resources::{
     InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
@@ -424,7 +426,6 @@ const SSED_FULLTEXT_SCAN_WINDOW_BYTES: usize = 256 * 1024;
 const SSED_FULLTEXT_SCAN_OVERLAP_BYTES: usize = 512;
 const SSED_FULLTEXT_SNIPPET_CHARS: usize = 160;
 const SSED_ENTRY_MARKER: [u8; 4] = [0x1f, 0x09, 0x00, 0x01];
-const GENERIC_HTML_INLINE_RESOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Debug, Clone)]
 struct SsedFulltextRow {
     offset: u64,
@@ -6031,70 +6032,8 @@ impl ReaderBookPackage {
         Ok(finalize_resolved_view(view, options))
     }
 
-    fn finalize_generic_html_view(
-        &self,
-        mut view: ResolvedTargetView,
-    ) -> Result<ResolvedTargetView> {
-        let Some(html) = view.display_html.take() else {
-            return Ok(view);
-        };
-        let mut output = String::with_capacity(html.len());
-        let mut cursor = 0usize;
-        let lower = html.to_ascii_lowercase();
-        let mut inlined_resources = 0usize;
-        let mut target_links = 0usize;
-
-        while let Some(attr) = next_html_href_or_src_attr(&html, &lower, cursor) {
-            output.push_str(&html[cursor..attr.value_start]);
-            let raw_value = &html[attr.value_start..attr.value_end];
-            if let Some(token) = raw_value.strip_prefix("lvcore://resource/") {
-                match self.generic_html_data_url(token) {
-                    Ok(Some(data_url)) => {
-                        output.push_str(&data_url);
-                        inlined_resources += 1;
-                    }
-                    Ok(None) => output.push_str(raw_value),
-                    Err(error) => {
-                        output.push_str(raw_value);
-                        view.diagnostics.push(Diagnostic::warning(
-                            "generic_html_resource_inline_failed",
-                            error.to_string(),
-                        ));
-                    }
-                }
-            } else if attr.name == HtmlAttrName::Href
-                && let Some(token) = raw_value.strip_prefix("lvcore://target/")
-            {
-                output.push_str("#lvcore-target-");
-                output.push_str(token);
-                target_links += 1;
-            } else {
-                output.push_str(raw_value);
-            }
-            cursor = attr.value_end;
-        }
-        output.push_str(&html[cursor..]);
-
-        if inlined_resources > 0 {
-            view.diagnostics.push(Diagnostic::info(
-                "generic_html_resources_inlined",
-                format!("{inlined_resources} lvcore resources were embedded as data URLs"),
-            ));
-        }
-        if target_links > 0 {
-            view.diagnostics.push(Diagnostic::info(
-                "generic_html_targets_fragmentized",
-                format!("{target_links} lvcore target links were converted to local fragments"),
-            ));
-        }
-        if output.contains("lvcore://target/") || output.contains("lvcore://resource/") {
-            view.diagnostics.push(Diagnostic::warning(
-                "generic_html_router_reference_remaining",
-                "GenericHtml output still contains lvcore router references that could not be rewritten",
-            ));
-        }
-        view.display_html = Some(output);
-        Ok(view)
+    fn finalize_generic_html_view(&self, view: ResolvedTargetView) -> Result<ResolvedTargetView> {
+        finalize_generic_html_display(view, |token| self.generic_html_data_url(token))
     }
 
     fn generic_html_data_url(&self, token: &str) -> Result<Option<String>> {
@@ -6104,13 +6043,10 @@ impl ReaderBookPackage {
             return Ok(None);
         };
         let bytes = self.read_resource(&resource_token)?;
-        if bytes.len() > GENERIC_HTML_INLINE_RESOURCE_MAX_BYTES {
+        if bytes.len() > generic_html_inline_resource_max_bytes() {
             return Ok(None);
         }
-        Ok(Some(format!(
-            "data:{mime_type};base64,{}",
-            BASE64_STANDARD.encode(bytes)
-        )))
+        Ok(Some(generic_html_data_url(mime_type, &bytes)))
     }
 
     fn normalize_lved_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
@@ -9172,118 +9108,6 @@ fn ssed_hanrei_page_label(path: &str) -> String {
     path.to_owned()
 }
 
-fn finalize_resolved_view(
-    mut view: ResolvedTargetView,
-    options: &RenderOptions,
-) -> ResolvedTargetView {
-    update_visual_capabilities(&mut view);
-
-    match options.mode {
-        RenderMode::Native => {}
-        RenderMode::BasicText => {
-            if let Some(html) = view.display_html.take() {
-                view.basic_text = Some(html_basic_text(&html));
-                view.resources.clear();
-                view.links.clear();
-                view.capabilities.clear();
-            }
-        }
-        RenderMode::GenericHtml => {
-            if view.display_html.as_deref().is_some_and(|html| {
-                html.contains("lvcore://target/") || html.contains("lvcore://resource/")
-            }) {
-                view.diagnostics.push(Diagnostic::info(
-                    "generic_html_router_required",
-                    "GenericHtml currently preserves lvcore:// links and resources; callers must provide a router or request Native/BasicText output",
-                ));
-            }
-        }
-        RenderMode::Debug => {}
-    }
-
-    if (options.include_debug_trace || options.mode == RenderMode::Debug)
-        && view.debug_trace.is_none()
-    {
-        view.debug_trace = Some(
-            json!({
-                "mode": options.mode,
-                "kind": view.kind,
-                "target": view.target.clone(),
-                "title": view.title.clone(),
-                "has_display_html": view.display_html.is_some(),
-                "has_basic_text": view.basic_text.is_some(),
-                "resource_count": view.resources.len(),
-                "link_count": view.links.len(),
-                "capabilities": view.capabilities.clone(),
-                "diagnostics": view.diagnostics.clone(),
-            })
-            .to_string(),
-        );
-    }
-
-    view
-}
-
-fn update_visual_capabilities(view: &mut ResolvedTargetView) {
-    if let Some(html) = view.display_html.as_deref() {
-        push_render_capability_once(&mut view.capabilities, RenderCapability::Html);
-
-        let lower = html.to_ascii_lowercase();
-        if lower.contains("<script") || lower.contains(".js") {
-            push_render_capability_once(&mut view.capabilities, RenderCapability::Javascript);
-        }
-        if lower.contains("<style") || lower.contains("stylesheet") || lower.contains(".css") {
-            push_render_capability_once(&mut view.capabilities, RenderCapability::Css);
-        }
-        if lower.contains("mathjax")
-            || lower.contains("tex-mml")
-            || lower.contains("<math")
-            || html.contains(r"\(")
-            || html.contains(r"\[")
-            || html.contains("$$")
-        {
-            push_render_capability_once(&mut view.capabilities, RenderCapability::MathJax);
-        }
-        if lower.contains("writing-mode")
-            || lower.contains("vertical-rl")
-            || lower.contains("tb-rl")
-            || lower.contains("tategaki")
-        {
-            push_render_capability_once(&mut view.capabilities, RenderCapability::VerticalText);
-        }
-    }
-
-    for resource in &view.resources {
-        match resource.kind {
-            ResourceKind::Image | ResourceKind::Template | ResourceKind::Colscr => {
-                push_render_capability_once(&mut view.capabilities, RenderCapability::Images);
-            }
-            ResourceKind::Audio | ResourceKind::PcmData | ResourceKind::SoundData => {
-                push_render_capability_once(&mut view.capabilities, RenderCapability::Audio);
-            }
-            ResourceKind::Video => {
-                push_render_capability_once(&mut view.capabilities, RenderCapability::Video);
-            }
-            ResourceKind::Css => {
-                push_render_capability_once(&mut view.capabilities, RenderCapability::Css);
-            }
-            ResourceKind::Javascript => {
-                push_render_capability_once(&mut view.capabilities, RenderCapability::Javascript);
-            }
-            _ => {}
-        }
-    }
-}
-
-fn push_render_capability_once(
-    capabilities: &mut Vec<RenderCapability>,
-    capability: RenderCapability,
-) {
-    if !capabilities.contains(&capability) {
-        capabilities.push(capability);
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LvedHtmlRefKind {
     Media,
@@ -10012,6 +9836,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::lved_sqlite::apply_sqlcipher_key;
+    use crate::render::RenderCapability;
     use crate::target::TargetKind;
 
     use super::*;
