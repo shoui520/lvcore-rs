@@ -57,6 +57,10 @@ pub enum InternalResource {
         width: u32,
         height: u32,
     },
+    SsedGa16Glyph {
+        path: String,
+        code: String,
+    },
     MediaBlob {
         store: String,
         key: String,
@@ -89,7 +93,7 @@ impl InternalResource {
             | Self::SsedComponentAddress { resource_kind, .. }
             | Self::ChmFile { resource_kind, .. } => *resource_kind,
             Self::SsedPcmDataRange { .. } => ResourceKind::PcmData,
-            Self::SsedFigure { .. } => ResourceKind::Image,
+            Self::SsedFigure { .. } | Self::SsedGa16Glyph { .. } => ResourceKind::Image,
             Self::MediaBlob { resource_kind, .. } => *resource_kind,
             Self::SoundData { .. } => ResourceKind::SoundData,
             Self::LooseMovie { .. } => ResourceKind::Video,
@@ -265,5 +269,16 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("FIGURE"));
+    }
+
+    #[test]
+    fn token_round_trips_ssed_ga16_glyph_resource() {
+        let resource = InternalResource::SsedGa16Glyph {
+            path: "GA16FULL".to_owned(),
+            code: "B121".to_owned(),
+        };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("B121"));
     }
 }

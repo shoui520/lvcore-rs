@@ -2978,8 +2978,16 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
     );
     assert_eq!(
         bitmap_first.resource.as_ref().unwrap().label.as_deref(),
-        Some("GA16FULL")
+        Some("GA16FULL:B123")
     );
+    assert_eq!(
+        bitmap_first.resource.as_ref().unwrap().mime_type.as_deref(),
+        Some("image/png")
+    );
+    let bitmap_first_png = package
+        .read_resource(&bitmap_first.resource.as_ref().unwrap().token)
+        .unwrap();
+    assert!(bitmap_first_png.starts_with(b"\x89PNG\r\n\x1a\n"));
 
     let bitmap = package.resolve_gaiji("A128", &GaijiPolicy::default());
     assert_eq!(
@@ -2989,8 +2997,16 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
     assert!(bitmap.unicode.is_none());
     assert_eq!(
         bitmap.resource.as_ref().unwrap().label.as_deref(),
-        Some("GA16HALF")
+        Some("GA16HALF:A128")
     );
+    assert_eq!(
+        bitmap.resource.as_ref().unwrap().mime_type.as_deref(),
+        Some("image/png")
+    );
+    let bitmap_png = package
+        .read_resource(&bitmap.resource.as_ref().unwrap().token)
+        .unwrap();
+    assert!(bitmap_png.starts_with(b"\x89PNG\r\n\x1a\n"));
 
     let unresolved = package.resolve_gaiji("B999", &GaijiPolicy::default());
     assert_eq!(
@@ -4074,11 +4090,16 @@ fn uni_fixture() -> Vec<u8> {
 }
 
 fn ga16_fixture(start_code: u16, count: u16) -> Vec<u8> {
-    let mut data = vec![0u8; 14];
+    let glyph_bytes = 2 * 16;
+    let mut data = vec![0u8; 2048 + usize::from(count) * glyph_bytes];
     data[8] = 16;
     data[9] = 16;
     data[10..12].copy_from_slice(&start_code.to_be_bytes());
     data[12..14].copy_from_slice(&count.to_be_bytes());
+    for index in 0..usize::from(count) {
+        let start = 2048 + index * glyph_bytes;
+        data[start..start + glyph_bytes].fill(0x81);
+    }
     data
 }
 

@@ -79,6 +79,7 @@ use crate::ssed_aux_index::{
 };
 use crate::ssed_encyclopedia::{SsedEncyclopediaRow, parse_encyclopedia_index};
 use crate::ssed_figure::{FigureDimensions, figure_bitmap_to_png};
+use crate::ssed_ga16::{ga16_glyph_png, ga16_resource_covers_code};
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_jis_pair,
     decode_title_text, is_leaf_page, is_simple_leaf_index_type, is_supported_index_type,
@@ -1489,6 +1490,45 @@ impl ResourceProvider for ReaderBookPackage {
                     diagnostics,
                 })
             }
+            InternalResource::SsedGa16Glyph { path, code } => {
+                let resolved = self.resolve_package_file_path(&path)?;
+                let mut diagnostics = Vec::new();
+                let href = if let Some(resolved) = &resolved {
+                    match fs::read(resolved) {
+                        Ok(data) if ga16_resource_covers_code(&data, &code) => {
+                            Some(format!("lvcore://resource/{}", token.as_str()))
+                        }
+                        Ok(_) => {
+                            diagnostics.push(Diagnostic::warning(
+                                "ga16_glyph_missing",
+                                format!("{path} does not contain GA16 glyph {code}"),
+                            ));
+                            None
+                        }
+                        Err(err) => {
+                            diagnostics.push(Diagnostic::warning(
+                                "resource_missing",
+                                format!("{path} could not be read: {err}"),
+                            ));
+                            None
+                        }
+                    }
+                } else {
+                    diagnostics.push(Diagnostic::warning(
+                        "resource_missing",
+                        format!("{path} was not found in the package"),
+                    ));
+                    None
+                };
+                Ok(ResourceRef {
+                    token: token.clone(),
+                    kind: ResourceKind::Image,
+                    label: Some(format!("{path}:{code}")),
+                    href,
+                    mime_type: Some("image/png".to_owned()),
+                    diagnostics,
+                })
+            }
             InternalResource::SsedPcmDataRange {
                 component,
                 start_block,
@@ -1730,6 +1770,13 @@ impl ResourceProvider for ReaderBookPackage {
                 width,
                 height,
             } => self.read_ssed_figure_resource(&component, block, offset, width, height),
+            InternalResource::SsedGa16Glyph { path, code } => {
+                let Some(resolved) = self.resolve_package_file_path(&path)? else {
+                    return Err(Error::Driver(format!("GA16 resource not found: {path}")));
+                };
+                let data = fs::read(resolved)?;
+                ga16_glyph_png(&data, &code)
+            }
             InternalResource::SsedPcmDataRange {
                 component,
                 start_block,
@@ -4666,17 +4713,12 @@ impl ReaderBookPackage {
             if !ga16_resource_covers_code(&data, code) {
                 continue;
             }
-            let token = ResourceToken::new(&InternalResource::PackageFile {
+            let token = ResourceToken::new(&InternalResource::SsedGa16Glyph {
                 path: (*candidate).to_owned(),
-                resource_kind: ResourceKind::Other,
+                code: code.to_owned(),
             })
             .ok()?;
-            let mut resource = self.resolve_resource(&token).ok()?;
-            resource.diagnostics.push(Diagnostic::info(
-                "ga16_glyph_extraction_deferred",
-                format!("{code} maps to a GA16 bitmap resource; glyph extraction is deferred"),
-            ));
-            return Some(resource);
+            return self.resolve_resource(&token).ok();
         }
         None
     }
@@ -9091,35 +9133,6 @@ fn load_package_uni_gaiji_maps(root: &Path) -> BTreeMap<String, String> {
         merged.extend(parse_uni_gaiji_map(&data));
     }
     merged
-}
-
-fn ga16_resource_covers_code(data: &[u8], code: &str) -> bool {
-    if data.len() < 14 {
-        return false;
-    }
-    if data[8] == 0 || data[9] == 0 {
-        return false;
-    }
-    let Ok(code) = u16::from_str_radix(code, 16) else {
-        return false;
-    };
-    let start = u16::from_be_bytes([data[10], data[11]]);
-    let count = u16::from_be_bytes([data[12], data[13]]) as i32;
-    ga16_grid_index(start, code).is_some_and(|index| index >= 0 && index < count)
-}
-
-fn ga16_grid_index(start: u16, code: u16) -> Option<i32> {
-    let start_row = ((start >> 8) & 0xff) as i32;
-    let start_cell = (start & 0xff) as i32;
-    let row = ((code >> 8) & 0xff) as i32;
-    let cell = (code & 0xff) as i32;
-    if !(0x21..=0x7e).contains(&start_cell) || !(0x21..=0x7e).contains(&cell) {
-        return Some(code as i32 - start as i32);
-    }
-    if row < start_row {
-        return None;
-    }
-    Some((row - start_row) * 0x5e + (cell - start_cell))
 }
 
 fn package_root_for_detection(path: &Path) -> &Path {
