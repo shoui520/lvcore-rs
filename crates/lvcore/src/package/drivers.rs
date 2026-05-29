@@ -18,6 +18,11 @@ use super::html::{
     next_html_href_or_src_attr, package_html_base_dir, package_relative_html_reference,
     path_has_extension,
 };
+use super::resource_helpers::{
+    MONOSCR_BITMAP_BYTES, MONOSCR_HEIGHT, MONOSCR_WIDTH, monoscr_bitmap_to_rgba,
+    parse_colscr_wrapped_payload_size, resolved_kind_for_package_html_path,
+    resource_kind_from_path, resource_mime_type,
+};
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::ssed_zip::{
     copy_zip_member_with_size_limit, looks_like_zip_file, ssed_component_filename_aliases,
@@ -417,10 +422,6 @@ const SSED_FULLTEXT_SCAN_WINDOW_BYTES: usize = 256 * 1024;
 const SSED_FULLTEXT_SCAN_OVERLAP_BYTES: usize = 512;
 const SSED_FULLTEXT_SNIPPET_CHARS: usize = 160;
 const SSED_ENTRY_MARKER: [u8; 4] = [0x1f, 0x09, 0x00, 0x01];
-const MONOSCR_WIDTH: u32 = 64;
-const MONOSCR_HEIGHT: u32 = 64;
-const MONOSCR_BITMAP_BYTES: usize = (MONOSCR_WIDTH as usize * MONOSCR_HEIGHT as usize) / 8;
-
 #[derive(Debug, Clone)]
 struct SsedFulltextRow {
     offset: u64,
@@ -9027,131 +9028,6 @@ fn next_britannica_inline_marker(
         .min_by_key(|(offset, _)| *offset)
 }
 
-fn resource_kind_from_path(path: &str) -> ResourceKind {
-    let lower = path.to_ascii_lowercase();
-    if lower.ends_with(".mp3") || lower.ends_with(".wav") {
-        ResourceKind::Audio
-    } else if lower.ends_with(".mp4")
-        || lower.ends_with(".m4v")
-        || lower.ends_with(".mpg")
-        || lower.ends_with(".mpeg")
-        || lower.ends_with(".mov")
-    {
-        ResourceKind::Video
-    } else if lower.ends_with(".png")
-        || lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".gif")
-        || lower.ends_with(".svg")
-        || lower.ends_with(".bmp")
-    {
-        ResourceKind::Image
-    } else if lower.ends_with(".css") {
-        ResourceKind::Css
-    } else if lower.ends_with(".js") {
-        ResourceKind::Javascript
-    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
-        ResourceKind::Html
-    } else if lower.ends_with(".pdf") {
-        ResourceKind::Pdf
-    } else {
-        ResourceKind::Other
-    }
-}
-
-fn resource_mime_type(kind: ResourceKind, path_hint: Option<&str>) -> Option<&'static str> {
-    let lower = path_hint.map(str::to_ascii_lowercase).unwrap_or_default();
-    let from_path = if lower.ends_with(".svg") {
-        Some("image/svg+xml")
-    } else if lower.ends_with(".png") {
-        Some("image/png")
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        Some("image/jpeg")
-    } else if lower.ends_with(".gif") {
-        Some("image/gif")
-    } else if lower.ends_with(".bmp") {
-        Some("image/bmp")
-    } else if lower.ends_with(".webp") {
-        Some("image/webp")
-    } else if lower.ends_with(".mp3") {
-        Some("audio/mpeg")
-    } else if lower.ends_with(".wav") {
-        Some("audio/wav")
-    } else if lower.ends_with(".ogg") {
-        Some("audio/ogg")
-    } else if lower.ends_with(".m4a") {
-        Some("audio/mp4")
-    } else if lower.ends_with(".mp4") || lower.ends_with(".m4v") {
-        Some("video/mp4")
-    } else if lower.ends_with(".mpg") || lower.ends_with(".mpeg") {
-        Some("video/mpeg")
-    } else if lower.ends_with(".mov") {
-        Some("video/quicktime")
-    } else if lower.ends_with(".css") {
-        Some("text/css; charset=utf-8")
-    } else if lower.ends_with(".js") {
-        Some("text/javascript; charset=utf-8")
-    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
-        Some("text/html; charset=utf-8")
-    } else if lower.ends_with(".pdf") {
-        Some("application/pdf")
-    } else if lower.ends_with(".ttf") {
-        Some("font/ttf")
-    } else if lower.ends_with(".otf") {
-        Some("font/otf")
-    } else if lower.ends_with(".woff") {
-        Some("font/woff")
-    } else if lower.ends_with(".woff2") {
-        Some("font/woff2")
-    } else {
-        None
-    };
-    from_path.or(match kind {
-        ResourceKind::Html => Some("text/html; charset=utf-8"),
-        ResourceKind::Css => Some("text/css; charset=utf-8"),
-        ResourceKind::Javascript => Some("text/javascript; charset=utf-8"),
-        ResourceKind::Pdf => Some("application/pdf"),
-        ResourceKind::Image => Some("image/png"),
-        ResourceKind::Colscr => Some("image/bmp"),
-        ResourceKind::PcmData => Some("audio/wav"),
-        ResourceKind::SoundData => Some("audio/wav"),
-        ResourceKind::Video => Some("video/mpeg"),
-        _ => None,
-    })
-}
-
-fn parse_colscr_wrapped_payload_size(data: &[u8]) -> Option<usize> {
-    if data.len() < 12 || &data[..4] != b"data" {
-        return None;
-    }
-    let payload_size = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
-    if payload_size == 0 {
-        return None;
-    }
-    let image = &data[8..];
-    if image.starts_with(b"BM")
-        || image.starts_with(b"\xff\xd8\xff")
-        || image.starts_with(b"\x89PNG\r\n\x1a\n")
-    {
-        return Some(payload_size);
-    }
-    None
-}
-
-fn monoscr_bitmap_to_rgba(bitmap: &[u8]) -> Vec<u8> {
-    let mut pixels = Vec::with_capacity(MONOSCR_WIDTH as usize * MONOSCR_HEIGHT as usize * 4);
-    for byte in bitmap {
-        for bit in 0..8 {
-            if byte & (0x80 >> bit) != 0 {
-                pixels.extend_from_slice(&[0, 0, 0, 255]);
-            } else {
-                pixels.extend_from_slice(&[0, 0, 0, 0]);
-            }
-        }
-    }
-    pixels
-}
-
 fn decode_package_html_text(data: &[u8]) -> String {
     match std::str::from_utf8(data) {
         Ok(value) => value.to_owned(),
@@ -9159,19 +9035,6 @@ fn decode_package_html_text(data: &[u8]) -> String {
             let (decoded, _, _) = SHIFT_JIS.decode(data);
             decoded.into_owned()
         }
-    }
-}
-
-fn resolved_kind_for_package_html_path(path: &str) -> ResolvedTargetKind {
-    let lower = path.to_ascii_lowercase();
-    if lower.contains("hanrei")
-        || lower.contains("_help.localized/")
-        || lower.starts_with("hanrei/")
-        || lower.starts_with("hanrei.")
-    {
-        ResolvedTargetKind::HanreiPage
-    } else {
-        ResolvedTargetKind::InfoPage
     }
 }
 
