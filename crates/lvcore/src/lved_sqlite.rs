@@ -435,68 +435,40 @@ impl LvedSqliteStore {
         let root = self.payload_path.parent().ok_or_else(|| {
             Error::Driver("LVED_SQLITE3 payload has no parent directory".to_owned())
         })?;
-        self.tree_index_paths()?
-            .into_iter()
-            .map(|path| {
-                let source = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                let items = parse_lved_tree_index(&fs::read(&path)?, &source)?;
-                let title = items
-                    .iter()
-                    .find_map(|row| (row.level == 0).then_some(row.label.clone()))
-                    .filter(|label| usable_lved_tree_title(label));
-                Ok(LvedTreeIndex {
-                    source,
-                    title,
-                    items,
-                })
-            })
-            .collect()
+        let mut trees = Vec::new();
+        for path in lved_tree_index_candidate_paths(root)? {
+            let data = fs::read(&path)?;
+            if !is_lved_text_tree_index(&data) {
+                continue;
+            }
+            let source = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let items = parse_lved_tree_index(&data, &source)?;
+            let title = items
+                .iter()
+                .find_map(|row| (row.level == 0).then_some(row.label.clone()))
+                .filter(|label| usable_lved_tree_title(label));
+            trees.push(LvedTreeIndex {
+                source,
+                title,
+                items,
+            });
+        }
+        Ok(trees)
     }
 
     pub fn tree_index_paths(&self) -> Result<Vec<PathBuf>> {
         let Some(root) = self.payload_path.parent() else {
             return Ok(Vec::new());
         };
-        let mut paths = Vec::new();
-        push_lved_tree_index_path(&mut paths, root.join("res/tree.idx"));
-        push_lved_tree_index_path(&mut paths, root.join("tree.idx"));
-        for entry in fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()? {
-            let path = entry.path();
-            if path.is_file()
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
-            {
-                push_lved_tree_index_path(&mut paths, path);
-            }
-        }
-        let res_dir = root.join("res");
-        if res_dir.is_dir() {
-            for entry in fs::read_dir(&res_dir)?.collect::<std::io::Result<Vec<_>>>()? {
-                let path = entry.path();
-                if path.is_file()
-                    && path
-                        .extension()
-                        .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
-                {
-                    push_lved_tree_index_path(&mut paths, path);
-                }
-            }
-        }
-        paths.sort();
-        paths.dedup();
-        let mut retained_trees = Vec::new();
-        for path in paths {
-            let data = fs::read(&path)?;
-            if is_lved_text_tree_index(&data) {
-                retained_trees.push(path);
-            }
-        }
-        Ok(retained_trees)
+        Ok(self
+            .tree_indexes()?
+            .into_iter()
+            .map(|tree| root.join(tree.source))
+            .collect())
     }
 
     pub fn tree_index_path(&self) -> Option<PathBuf> {
@@ -599,6 +571,38 @@ impl LvedSqliteStore {
             }))
         })
     }
+}
+
+fn lved_tree_index_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    push_lved_tree_index_path(&mut paths, root.join("res/tree.idx"));
+    push_lved_tree_index_path(&mut paths, root.join("tree.idx"));
+    for entry in fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()? {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
+        {
+            push_lved_tree_index_path(&mut paths, path);
+        }
+    }
+    let res_dir = root.join("res");
+    if res_dir.is_dir() {
+        for entry in fs::read_dir(&res_dir)?.collect::<std::io::Result<Vec<_>>>()? {
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
+            {
+                push_lved_tree_index_path(&mut paths, path);
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 fn lved_list_available(connection: &Connection) -> Result<bool> {
