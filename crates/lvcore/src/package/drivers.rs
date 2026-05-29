@@ -94,45 +94,25 @@ pub struct LvedSqliteDriver;
 pub struct LvlMultiViewDriver;
 pub struct HoureiDriver;
 
+struct DetectedSsedPackage {
+    detected: DetectedPackage,
+    catalog: SsedCatalog,
+}
+
 impl PackageDriver for SsedDriver {
     fn family(&self) -> FormatFamily {
         FormatFamily::Ssed
     }
 
     fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>> {
-        let package_root = package_root_for_detection(root);
-        let idx_files = if root.is_file()
-            && root
-                .file_name()
-                .map(|v| v.to_string_lossy().to_lowercase().ends_with(".idx"))
-                .unwrap_or(false)
-        {
-            vec![root.to_path_buf()]
-        } else {
-            files_with_suffix(package_root, ".idx")?
-        };
-        for path in idx_files {
-            if let Ok(catalog) = SsedCatalog::parse_file(&path) {
-                return Ok(Some(DetectedPackage {
-                    root: package_root.to_path_buf(),
-                    format_family: FormatFamily::Ssed,
-                    confidence: 95,
-                    title: Some(catalog.title),
-                    evidence: vec![
-                        format!("ssedinfo:{}", display_name(&path)),
-                        format!("components:{}", catalog.components.len()),
-                    ],
-                }));
-            }
-        }
-        Ok(None)
+        Ok(detect_ssed_package(root)?.map(|package| package.detected))
     }
 
     fn open(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
-        let detection = self
-            .detect(root)?
+        let detected = detect_ssed_package(root)?
             .ok_or_else(|| Error::Driver("not an SSED package".to_owned()))?;
-        let catalog = ssed_catalog_for_root(&detection.root)?;
+        let detection = detected.detected;
+        let catalog = detected.catalog;
         let package_root = detection.root.clone();
         let capabilities = ssed_capabilities(&catalog, &package_root);
         let search_modes = ssed_search_modes(&catalog, &package_root);
@@ -9267,6 +9247,36 @@ fn display_name(path: &Path) -> String {
     path.file_name()
         .map(|v| v.to_string_lossy().to_string())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+fn detect_ssed_package(root: &Path) -> Result<Option<DetectedSsedPackage>> {
+    let package_root = package_root_for_detection(root);
+    let idx_files = if root.is_file()
+        && root
+            .file_name()
+            .map(|v| v.to_string_lossy().to_lowercase().ends_with(".idx"))
+            .unwrap_or(false)
+    {
+        vec![root.to_path_buf()]
+    } else {
+        files_with_suffix(package_root, ".idx")?
+    };
+    for path in idx_files {
+        if let Ok(catalog) = SsedCatalog::parse_file(&path) {
+            let detected = DetectedPackage {
+                root: package_root.to_path_buf(),
+                format_family: FormatFamily::Ssed,
+                confidence: 95,
+                title: Some(catalog.title.clone()),
+                evidence: vec![
+                    format!("ssedinfo:{}", display_name(&path)),
+                    format!("components:{}", catalog.components.len()),
+                ],
+            };
+            return Ok(Some(DetectedSsedPackage { detected, catalog }));
+        }
+    }
+    Ok(None)
 }
 
 fn ssed_catalog_for_root(root: &Path) -> Result<SsedCatalog> {
