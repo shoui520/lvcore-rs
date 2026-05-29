@@ -241,6 +241,63 @@ pub(super) fn html_basic_text(fragment: &str) -> String {
         .join("\n")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HtmlAttrName {
+    Href,
+    Src,
+    Data,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct HtmlAttrRange {
+    pub(super) name: HtmlAttrName,
+    pub(super) value_start: usize,
+    pub(super) value_end: usize,
+}
+
+pub(super) fn next_html_href_or_src_attr(
+    html: &str,
+    lower: &str,
+    cursor: usize,
+) -> Option<HtmlAttrRange> {
+    let patterns = [
+        ("href=\"", HtmlAttrName::Href),
+        ("href='", HtmlAttrName::Href),
+        ("src=\"", HtmlAttrName::Src),
+        ("src='", HtmlAttrName::Src),
+        ("data=\"", HtmlAttrName::Data),
+        ("data='", HtmlAttrName::Data),
+    ];
+    let (attr_start, pattern, name) = patterns
+        .iter()
+        .filter_map(|(pattern, name)| {
+            lower[cursor..]
+                .find(pattern)
+                .map(|offset| (cursor + offset, *pattern, *name))
+        })
+        .min_by_key(|(start, _, _)| *start)?;
+    let quote = pattern.as_bytes()[pattern.len() - 1];
+    let value_start = attr_start + pattern.len();
+    let value_end = html.as_bytes()[value_start..]
+        .iter()
+        .position(|byte| *byte == quote)
+        .map(|offset| value_start + offset)?;
+    Some(HtmlAttrRange {
+        name,
+        value_start,
+        value_end,
+    })
+}
+
+pub(super) fn path_has_extension(path: &str, extensions: &[&str]) -> bool {
+    let extension = path.rsplit_once('.').map(|(_, extension)| extension);
+    extension.is_some_and(|extension| {
+        extensions
+            .iter()
+            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +318,20 @@ mod tests {
             .as_deref(),
             Some("有斐閣 法律学小辞典 凡例")
         );
+    }
+
+    #[test]
+    fn scans_href_src_and_data_attrs_in_order() {
+        let html = r#"<a href="one.html"><img src='two.png' data="three.bin"></a>"#;
+        let lower = html.to_ascii_lowercase();
+        let first = next_html_href_or_src_attr(html, &lower, 0).unwrap();
+        assert_eq!(first.name, HtmlAttrName::Href);
+        assert_eq!(&html[first.value_start..first.value_end], "one.html");
+        let second = next_html_href_or_src_attr(html, &lower, first.value_end).unwrap();
+        assert_eq!(second.name, HtmlAttrName::Src);
+        assert_eq!(&html[second.value_start..second.value_end], "two.png");
+        let third = next_html_href_or_src_attr(html, &lower, second.value_end).unwrap();
+        assert_eq!(third.name, HtmlAttrName::Data);
+        assert_eq!(&html[third.value_start..third.value_end], "three.bin");
     }
 }

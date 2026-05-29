@@ -14,8 +14,9 @@ use super::chm_toc::{
     chm_hanrei_entry_sort_key, chm_hhc_toc_items_to_nodes, chm_local_reference, parse_chm_hhc_toc,
 };
 use super::html::{
-    html_basic_text, html_document_label, html_label_text, html_unescape_minimal,
-    package_html_base_dir, package_relative_html_reference,
+    HtmlAttrName, html_basic_text, html_document_label, html_label_text, html_unescape_minimal,
+    next_html_href_or_src_attr, package_html_base_dir, package_relative_html_reference,
+    path_has_extension,
 };
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::ssed_zip::{
@@ -8996,50 +8997,6 @@ fn decode_offset_cursor(cursor: Option<&str>) -> usize {
         .unwrap_or_default()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HtmlAttrName {
-    Href,
-    Src,
-    Data,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HtmlAttrRange {
-    name: HtmlAttrName,
-    value_start: usize,
-    value_end: usize,
-}
-
-fn next_html_href_or_src_attr(html: &str, lower: &str, cursor: usize) -> Option<HtmlAttrRange> {
-    let patterns = [
-        ("href=\"", HtmlAttrName::Href),
-        ("href='", HtmlAttrName::Href),
-        ("src=\"", HtmlAttrName::Src),
-        ("src='", HtmlAttrName::Src),
-        ("data=\"", HtmlAttrName::Data),
-        ("data='", HtmlAttrName::Data),
-    ];
-    let (attr_start, pattern, name) = patterns
-        .iter()
-        .filter_map(|(pattern, name)| {
-            lower[cursor..]
-                .find(pattern)
-                .map(|offset| (cursor + offset, *pattern, *name))
-        })
-        .min_by_key(|(start, _, _)| *start)?;
-    let quote = pattern.as_bytes()[pattern.len() - 1];
-    let value_start = attr_start + pattern.len();
-    let value_end = html.as_bytes()[value_start..]
-        .iter()
-        .position(|byte| *byte == quote)
-        .map(|offset| value_start + offset)?;
-    Some(HtmlAttrRange {
-        name,
-        value_start,
-        value_end,
-    })
-}
-
 #[derive(Debug, Clone, Copy)]
 struct BritannicaInlineMarker {
     start: &'static str,
@@ -9068,15 +9025,6 @@ fn next_britannica_inline_marker(
                 .map(|offset| (cursor + offset, marker))
         })
         .min_by_key(|(offset, _)| *offset)
-}
-
-pub(super) fn path_has_extension(path: &str, extensions: &[&str]) -> bool {
-    let extension = path.rsplit_once('.').map(|(_, extension)| extension);
-    extension.is_some_and(|extension| {
-        extensions
-            .iter()
-            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-    })
 }
 
 fn resource_kind_from_path(path: &str) -> ResourceKind {
