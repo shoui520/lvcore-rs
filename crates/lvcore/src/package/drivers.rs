@@ -8137,14 +8137,22 @@ fn ssed_aux_index_row_target(
         return Ok(None);
     }
     if let Some(selector) = row.virtual_selector() {
-        diagnostics.push(Diagnostic::info(
-            "ssed_auxiliary_index_virtual_selector_deferred",
-            format!(
-                "auxiliary index row {} points to virtual selector {selector}",
-                row.line_number
-            ),
-        ));
-        return Ok(None);
+        let panel_id = format!("{:08X}", row.block);
+        diagnostics.push(
+            Diagnostic::info(
+                "ssed_auxiliary_index_virtual_selector",
+                format!(
+                    "auxiliary index row {} points to virtual selector {selector}; routing through panel {panel_id}",
+                    row.line_number
+                ),
+            )
+            .with_context("panel_id", &panel_id),
+        );
+        return Ok(Some(TargetToken::new(&InternalTarget::PanelCell {
+            panel_id,
+            row: 0,
+            column: 0,
+        })?));
     }
     let Some(catalog) = &package.ssed_catalog else {
         diagnostics.push(Diagnostic::warning(
@@ -10785,7 +10793,8 @@ mod tests {
             cp932(
                 "00000000\t00000000\t大辞林 第四版\n\
                  00005221\t00000722\t\t季語\n\
-                 00005221\t000007C2\t\t\t春\n",
+                 00005221\t000007C2\t\t\t春\n\
+                 10000000\t0000FFFF\t\t西和ABC順\n",
             ),
         )
         .unwrap();
@@ -10857,6 +10866,20 @@ mod tests {
                 offset: 0x07c2
             } if component == "HONMON.DIC"
         ));
+        let panel_target = nodes[0].children[1]
+            .target
+            .as_ref()
+            .unwrap()
+            .decode()
+            .unwrap();
+        assert_eq!(
+            panel_target,
+            InternalTarget::PanelCell {
+                panel_id: "10000000".to_owned(),
+                row: 0,
+                column: 0,
+            }
+        );
         let center = nodes[0].children[0].children[0]
             .target
             .as_ref()
