@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -81,12 +82,20 @@ pub fn parse_menu_data(xml: &str) -> Result<Vec<MultiviewMenuItem>> {
     Ok(roots)
 }
 
-#[derive(Debug)]
 pub struct MultiviewStore {
     payloads: Vec<MultiviewPayloadSource>,
+    connections: Mutex<BTreeMap<PathBuf, Connection>>,
     temp_dir: Mutex<Option<TempDir>>,
     decrypted_paths: Mutex<BTreeMap<PathBuf, PathBuf>>,
     roles: Mutex<BTreeMap<PathBuf, MultiviewPayloadRole>>,
+}
+
+impl std::fmt::Debug for MultiviewStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MultiviewStore")
+            .field("payloads", &self.payloads)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +177,7 @@ impl MultiviewStore {
         }
         Ok(Some(Self {
             payloads,
+            connections: Mutex::new(BTreeMap::new()),
             temp_dir: Mutex::new(None),
             decrypted_paths: Mutex::new(BTreeMap::new()),
             roles: Mutex::new(BTreeMap::new()),
@@ -198,53 +208,54 @@ impl MultiviewStore {
             return Ok(Vec::new());
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
-        let connection = open_sqlite(&sqlite_path)?;
-        if !sqlite_table_has_columns(
-            &connection,
-            "t_search",
-            &["f_ID", "f_KeyWord", "f_TitleMain", "f_All"],
-        )? {
-            return Ok(Vec::new());
-        }
-        let (column, pattern) = match mode {
-            SearchMode::Exact => ("f_KeyWord", format!("%§{query}§%")),
-            SearchMode::Forward => ("f_KeyWord", format!("%§{query}%")),
-            SearchMode::Backward => ("f_KeyWord", format!("%{query}§%")),
-            SearchMode::Partial | SearchMode::FullText | SearchMode::Advanced(_) => {
-                ("f_All", format!("%{query}%"))
+        self.with_connection(&sqlite_path, |connection| {
+            if !sqlite_table_has_columns(
+                connection,
+                "t_search",
+                &["f_ID", "f_KeyWord", "f_TitleMain", "f_All"],
+            )? {
+                return Ok(Vec::new());
             }
-        };
-        let operator = "like";
-        let sql = format!(
-            "select f_ID, f_KeyWord, f_TitleMain, f_All from t_search \
-             where {column} {operator} ? order by f_No limit ? offset ?"
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let rows = statement.query_map((pattern, limit as i64, offset as i64), |row| {
-            let id = sqlite_value_to_string(row.get_ref(0)?)?;
-            let keyword = sqlite_value_to_string(row.get_ref(1)?)?;
-            let title = sqlite_value_to_string(row.get_ref(2)?)?;
-            let all = sqlite_value_to_string(row.get_ref(3)?)?;
-            let href = if id.chars().all(|ch| ch.is_ascii_digit()) {
-                format!("{:06}", id.parse::<i64>().unwrap_or_default())
-            } else {
-                id
+            let (column, pattern) = match mode {
+                SearchMode::Exact => ("f_KeyWord", format!("%§{query}§%")),
+                SearchMode::Forward => ("f_KeyWord", format!("%§{query}%")),
+                SearchMode::Backward => ("f_KeyWord", format!("%{query}§%")),
+                SearchMode::Partial | SearchMode::FullText | SearchMode::Advanced(_) => {
+                    ("f_All", format!("%{query}%"))
+                }
             };
-            let title_html = if title.is_empty() {
-                keyword.clone()
-            } else {
-                title
-            };
-            let title_text = html_to_text(&title_html);
-            Ok(MultiviewSearchHit {
-                href,
-                title_html,
-                title_text,
-                snippet_html: (!all.is_empty()).then_some(all),
-            })
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Error::from)
+            let operator = "like";
+            let sql = format!(
+                "select f_ID, f_KeyWord, f_TitleMain, f_All from t_search \
+                 where {column} {operator} ? order by f_No limit ? offset ?"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map((pattern, limit as i64, offset as i64), |row| {
+                let id = sqlite_value_to_string(row.get_ref(0)?)?;
+                let keyword = sqlite_value_to_string(row.get_ref(1)?)?;
+                let title = sqlite_value_to_string(row.get_ref(2)?)?;
+                let all = sqlite_value_to_string(row.get_ref(3)?)?;
+                let href = if id.chars().all(|ch| ch.is_ascii_digit()) {
+                    format!("{:06}", id.parse::<i64>().unwrap_or_default())
+                } else {
+                    id
+                };
+                let title_html = if title.is_empty() {
+                    keyword.clone()
+                } else {
+                    title
+                };
+                let title_text = html_to_text(&title_html);
+                Ok(MultiviewSearchHit {
+                    href,
+                    title_html,
+                    title_text,
+                    snippet_html: (!all.is_empty()).then_some(all),
+                })
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::from)
+        })
     }
 
     pub fn body_for_href(&self, href: &str) -> Result<Option<MultiviewBody>> {
@@ -268,43 +279,44 @@ impl MultiviewStore {
             return Ok(None);
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
-        let connection = open_sqlite(&sqlite_path)?;
-        if !sqlite_table_has_columns(
-            &connection,
-            "t_hore",
-            &[
-                "f_hore_code",
-                "f_name",
-                "f_name_kana",
-                "f_kana_ini",
-                "f_kana_order",
-            ],
-        )? {
-            return Ok(None);
-        }
-        let mut statement = connection.prepare(
-            "select f_hore_code, f_name, f_name_kana, f_kana_ini \
-             from t_hore \
-             where coalesce(f_hore_code, '') <> '' and coalesce(f_name, '') <> '' \
-             order by f_kana_order, f_name_kana, f_name, f_hore_code",
-        )?;
-        let rows = statement.query_map([], |row| {
-            let code = sqlite_value_to_string(row.get_ref(0)?)?;
-            Ok(MultiviewLawListItem {
-                code,
-                name: sqlite_value_to_string(row.get_ref(1)?)?,
-                kana: sqlite_value_to_string(row.get_ref(2)?)?,
-                kana_initial: sqlite_value_to_string(row.get_ref(3)?)?,
-            })
-        })?;
-        let items = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        if items.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(MultiviewLawList {
-            title: "五十音順法令一覧".to_owned(),
-            items,
-        }))
+        self.with_connection(&sqlite_path, |connection| {
+            if !sqlite_table_has_columns(
+                connection,
+                "t_hore",
+                &[
+                    "f_hore_code",
+                    "f_name",
+                    "f_name_kana",
+                    "f_kana_ini",
+                    "f_kana_order",
+                ],
+            )? {
+                return Ok(None);
+            }
+            let mut statement = connection.prepare(
+                "select f_hore_code, f_name, f_name_kana, f_kana_ini \
+                 from t_hore \
+                 where coalesce(f_hore_code, '') <> '' and coalesce(f_name, '') <> '' \
+                 order by f_kana_order, f_name_kana, f_name, f_hore_code",
+            )?;
+            let rows = statement.query_map([], |row| {
+                let code = sqlite_value_to_string(row.get_ref(0)?)?;
+                Ok(MultiviewLawListItem {
+                    code,
+                    name: sqlite_value_to_string(row.get_ref(1)?)?,
+                    kana: sqlite_value_to_string(row.get_ref(2)?)?,
+                    kana_initial: sqlite_value_to_string(row.get_ref(3)?)?,
+                })
+            })?;
+            let items = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+            if items.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(MultiviewLawList {
+                title: "五十音順法令一覧".to_owned(),
+                items,
+            }))
+        })
     }
 
     fn content_body_for_href(&self, href: &str) -> Result<Option<MultiviewBody>> {
@@ -316,27 +328,29 @@ impl MultiviewStore {
             return Ok(None);
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
-        let connection = open_sqlite(&sqlite_path)?;
-        if !sqlite_table_has_columns(&connection, "t_contents", &["f_ID", "f_Title", "f_Body"])? {
-            return Ok(None);
-        }
-        let row = connection
-            .query_row(
-                "select f_Title, f_Body from t_contents where f_ID = ? limit 1",
-                [content_id],
-                |row| {
-                    Ok((
-                        sqlite_value_to_string(row.get_ref(0)?)?,
-                        sqlite_value_to_string(row.get_ref(1)?)?,
-                    ))
-                },
-            )
-            .optional()?;
-        Ok(row.map(|(title, html)| MultiviewBody {
-            title: html_to_text(&title),
-            html,
-            source: format!("{}:t_contents", payload.name),
-        }))
+        self.with_connection(&sqlite_path, |connection| {
+            if !sqlite_table_has_columns(connection, "t_contents", &["f_ID", "f_Title", "f_Body"])?
+            {
+                return Ok(None);
+            }
+            let row = connection
+                .query_row(
+                    "select f_Title, f_Body from t_contents where f_ID = ? limit 1",
+                    [content_id],
+                    |row| {
+                        Ok((
+                            sqlite_value_to_string(row.get_ref(0)?)?,
+                            sqlite_value_to_string(row.get_ref(1)?)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            Ok(row.map(|(title, html)| MultiviewBody {
+                title: html_to_text(&title),
+                html,
+                source: format!("{}:t_contents", payload.name),
+            }))
+        })
     }
 
     fn law_body_for_href(&self, href: &str) -> Result<Option<MultiviewBody>> {
@@ -348,53 +362,54 @@ impl MultiviewStore {
             return Ok(None);
         }
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
-        let connection = open_sqlite(&sqlite_path)?;
-        let table = if sqlite_table_exists(&connection, &format!("t_{table_hint}"))? {
-            Some(format!("t_{table_hint}"))
-        } else {
-            table_with_anchor(&connection, href)?
-        };
-        let Some(table) = table else {
-            return Ok(None);
-        };
-        if !sqlite_table_has_columns(&connection, &table, &["f_text"])? {
-            return Ok(None);
-        }
+        self.with_connection(&sqlite_path, |connection| {
+            let table = if sqlite_table_exists(connection, &format!("t_{table_hint}"))? {
+                Some(format!("t_{table_hint}"))
+            } else {
+                table_with_anchor(connection, href)?
+            };
+            let Some(table) = table else {
+                return Ok(None);
+            };
+            if !sqlite_table_has_columns(connection, &table, &["f_text"])? {
+                return Ok(None);
+            }
 
-        let rows = if sqlite_table_has_columns(&connection, &table, &["f_anchor"])? {
-            query_law_rows_by_anchor(&connection, &table, href)?
-        } else {
-            Vec::new()
-        };
-        let rows = if rows.is_empty() {
-            query_law_rows_by_hore_code(&connection, &table, table_hint)?
-        } else {
-            rows
-        };
-        if rows.is_empty() {
-            return Ok(None);
-        }
-        let title = rows
-            .iter()
-            .find_map(|row| {
-                let title = [row.title_no.as_str(), row.title_sub.as_str()]
-                    .into_iter()
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                (!title.is_empty()).then_some(title)
-            })
-            .unwrap_or_else(|| href.to_owned());
-        let html = rows
-            .into_iter()
-            .map(|row| row.text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(Some(MultiviewBody {
-            title,
-            html,
-            source: format!("{}:{table}", payload.name),
-        }))
+            let rows = if sqlite_table_has_columns(connection, &table, &["f_anchor"])? {
+                query_law_rows_by_anchor(connection, &table, href)?
+            } else {
+                Vec::new()
+            };
+            let rows = if rows.is_empty() {
+                query_law_rows_by_hore_code(connection, &table, table_hint)?
+            } else {
+                rows
+            };
+            if rows.is_empty() {
+                return Ok(None);
+            }
+            let title = rows
+                .iter()
+                .find_map(|row| {
+                    let title = [row.title_no.as_str(), row.title_sub.as_str()]
+                        .into_iter()
+                        .filter(|part| !part.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    (!title.is_empty()).then_some(title)
+                })
+                .unwrap_or_else(|| href.to_owned());
+            let html = rows
+                .into_iter()
+                .map(|row| row.text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(Some(MultiviewBody {
+                title,
+                html,
+                source: format!("{}:{table}", payload.name),
+            }))
+        })
     }
 
     fn html_index_body_for_href(&self, href: &str) -> Result<Option<MultiviewBody>> {
@@ -403,37 +418,38 @@ impl MultiviewStore {
             return Ok(None);
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
-        let connection = open_sqlite(&sqlite_path)?;
-        if !sqlite_table_has_columns(
-            &connection,
-            "t_index",
-            &["f_hore_code", "f_title_no", "f_title_sub", "f_text"],
-        )? {
-            return Ok(None);
-        }
-        let rows = query_index_rows(&connection, code)?;
-        if rows.is_empty() {
-            return Ok(None);
-        }
-        let title = [rows[0].title_no.as_str(), rows[0].title_sub.as_str()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let html = rows
-            .into_iter()
-            .map(|row| row.text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(Some(MultiviewBody {
-            title: if title.is_empty() {
-                code.to_owned()
-            } else {
-                title
-            },
-            html,
-            source: format!("{}:t_index", payload.name),
-        }))
+        self.with_connection(&sqlite_path, |connection| {
+            if !sqlite_table_has_columns(
+                connection,
+                "t_index",
+                &["f_hore_code", "f_title_no", "f_title_sub", "f_text"],
+            )? {
+                return Ok(None);
+            }
+            let rows = query_index_rows(connection, code)?;
+            if rows.is_empty() {
+                return Ok(None);
+            }
+            let title = [rows[0].title_no.as_str(), rows[0].title_sub.as_str()]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let html = rows
+                .into_iter()
+                .map(|row| row.text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(Some(MultiviewBody {
+                title: if title.is_empty() {
+                    code.to_owned()
+                } else {
+                    title
+                },
+                html,
+                source: format!("{}:t_index", payload.name),
+            }))
+        })
     }
 
     fn first_payload_by_role(
@@ -485,6 +501,24 @@ impl MultiviewStore {
                 self.decrypted_sqlite_path(&payload.path)
             }
         }
+    }
+
+    fn with_connection<T>(
+        &self,
+        sqlite_path: &Path,
+        read: impl FnOnce(&Connection) -> Result<T>,
+    ) -> Result<T> {
+        let mut guard = self
+            .connections
+            .lock()
+            .map_err(|_| Error::Driver("multiview connection cache was poisoned".to_owned()))?;
+        if !guard.contains_key(sqlite_path) {
+            guard.insert(sqlite_path.to_path_buf(), open_sqlite(sqlite_path)?);
+        }
+        let connection = guard
+            .get(sqlite_path)
+            .ok_or_else(|| Error::Driver("multiview connection cache is empty".to_owned()))?;
+        read(connection)
     }
 
     fn decrypted_sqlite_path(&self, path: &Path) -> Result<PathBuf> {
@@ -558,6 +592,9 @@ fn hinted_payload_role(name: &str, payload_count: usize) -> Option<MultiviewPayl
     }
     if lower == "blvbat" {
         return Some(MultiviewPayloadRole::LawBody);
+    }
+    if lower == "hlvbat" {
+        return Some(MultiviewPayloadRole::CaseDigestBody);
     }
     if lower.starts_with("ilv") {
         return Some(MultiviewPayloadRole::HtmlIndex);
@@ -665,7 +702,7 @@ fn is_multiview_payload_name(name: &str) -> bool {
 }
 
 fn multiview_payload_storage(path: &Path) -> Result<Option<MultiviewPayloadStorage>> {
-    let prefix = fs::read(path).map(|bytes| bytes.into_iter().take(4096).collect::<Vec<_>>())?;
+    let prefix = read_file_prefix(path, 4096)?;
     if prefix.starts_with(SQLITE_MAGIC) {
         return Ok(Some(MultiviewPayloadStorage::PlainSqlite));
     }
@@ -677,6 +714,14 @@ fn multiview_payload_storage(path: &Path) -> Result<Option<MultiviewPayloadStora
         return Ok(None);
     }
     Ok(Some(MultiviewPayloadStorage::LogoFontCipherSqlite))
+}
+
+fn read_file_prefix(path: &Path, limit: usize) -> Result<Vec<u8>> {
+    let mut file = fs::File::open(path)?;
+    let mut bytes = vec![0; limit];
+    let read = file.read(&mut bytes)?;
+    bytes.truncate(read);
+    Ok(bytes)
 }
 
 fn classify_sqlite_payload(path: &Path) -> Result<MultiviewPayloadRole> {
@@ -884,6 +929,7 @@ fn quote_identifier(identifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn parses_nested_menu_data_items() {
@@ -934,6 +980,10 @@ mod tests {
             Some(MultiviewPayloadRole::LawBody)
         );
         assert_eq!(
+            hinted_payload_role("hlvbat", 5),
+            Some(MultiviewPayloadRole::CaseDigestBody)
+        );
+        assert_eq!(
             hinted_payload_role("ilvbat", 5),
             Some(MultiviewPayloadRole::HtmlIndex)
         );
@@ -947,5 +997,17 @@ mod tests {
             1,
             MultiviewPayloadRole::ContentSearchBody
         ));
+    }
+
+    #[test]
+    fn payload_header_probe_reads_only_requested_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blvbat");
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(b"SQLite format 3\0payload").unwrap();
+        file.set_len(128 * 1024 * 1024).unwrap();
+
+        let prefix = read_file_prefix(&path, 16).unwrap();
+        assert_eq!(prefix, b"SQLite format 3\0");
     }
 }
