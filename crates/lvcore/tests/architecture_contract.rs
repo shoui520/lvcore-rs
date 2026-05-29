@@ -2750,6 +2750,34 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
 }
 
 #[test]
+fn ssed_template_resources_can_live_in_package_adjacent_templates_directory() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("IWKOKU7N");
+    let sibling_templates_root = root.path().join("IWKOKU7N_Templates");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(&sibling_templates_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(sibling_templates_root.join("B123.SVG"), b"<svg/>").unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let resolved = package.resolve_gaiji("B123", &GaijiPolicy::default());
+    assert_eq!(
+        resolved.preferred_source,
+        Some(GaijiSourcePreference::ExternalResource)
+    );
+    let resource = resolved.resource.unwrap();
+    assert_eq!(resource.kind, ResourceKind::Template);
+    assert!(resource.href.is_some());
+
+    let token = ResourceToken::new(&InternalResource::PackageFile {
+        path: "templates/b123.svg".to_owned(),
+        resource_kind: ResourceKind::Template,
+    })
+    .unwrap();
+    assert_eq!(package.read_resource(&token).unwrap(), b"<svg/>");
+}
+
+#[test]
 fn ssed_detection_uses_actual_idx_magic() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("fake.idx"), b"not-ssed").unwrap();

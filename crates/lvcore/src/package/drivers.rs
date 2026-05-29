@@ -1265,7 +1265,7 @@ impl ResourceProvider for ReaderBookPackage {
                 resource_kind,
             } => {
                 let relative = Path::new(&path);
-                let resolved = self.storage.resolve_casefolded(relative)?;
+                let resolved = self.resolve_package_file_path(&path)?;
                 let mut diagnostics = Vec::new();
                 let href = if resolved.is_some() {
                     Some(format!("lvcore://resource/{}", token.as_str()))
@@ -1583,8 +1583,7 @@ impl ResourceProvider for ReaderBookPackage {
     fn read_resource(&self, token: &ResourceToken) -> Result<Vec<u8>> {
         match token.decode()? {
             InternalResource::PackageFile { path, .. } => {
-                let relative = Path::new(&path);
-                let Some(resolved) = self.storage.resolve_casefolded(relative)? else {
+                let Some(resolved) = self.resolve_package_file_path(&path)? else {
                     return Err(Error::Driver(format!("resource not found: {path}")));
                 };
                 Ok(fs::read(resolved)?)
@@ -3069,6 +3068,43 @@ impl ReaderBookPackage {
         DirectoryStorage::new(sibling_panel_root).resolve_casefolded(Path::new(stripped))
     }
 
+    fn resolve_package_file_path(&self, path: &str) -> Result<Option<PathBuf>> {
+        let normalized = path.replace('\\', "/");
+        if let Some(path) = self.storage.resolve_casefolded(Path::new(&normalized))? {
+            return Ok(Some(path));
+        }
+        self.resolve_adjacent_templates_file_path(&normalized)
+    }
+
+    fn resolve_adjacent_templates_file_path(&self, path: &str) -> Result<Option<PathBuf>> {
+        let relative = Path::new(path);
+        let mut components = relative.components();
+        let Some(first) = components.next() else {
+            return Ok(None);
+        };
+        if !first
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("Templates")
+        {
+            return Ok(None);
+        }
+        let stripped = components.as_path();
+        if stripped.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        let Some(package_name) = self.root.file_name().and_then(|name| name.to_str()) else {
+            return Ok(None);
+        };
+        let sibling_templates_root = self
+            .root
+            .with_file_name(format!("{package_name}_Templates"));
+        if !sibling_templates_root.is_dir() {
+            return Ok(None);
+        }
+        DirectoryStorage::new(sibling_templates_root).resolve_casefolded(stripped)
+    }
+
     fn open_ssed_hanrei_surface(
         &self,
         surface_id: &str,
@@ -4089,8 +4125,7 @@ impl ReaderBookPackage {
         for extension in ["svg", "png", "gif", "jpg", "jpeg"] {
             let candidate = format!("Templates/{code}.{extension}");
             if self
-                .storage
-                .resolve_casefolded(Path::new(&candidate))
+                .resolve_package_file_path(&candidate)
                 .ok()
                 .flatten()
                 .is_none()
