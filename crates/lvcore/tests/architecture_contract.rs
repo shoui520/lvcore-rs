@@ -5,9 +5,9 @@ use std::path::Path;
 use lvcore::{
     ANDROID_LVEDINFO_MAGIC, BodySourceKind, BookLibrary, Capability, DriverRegistry, FormatFamily,
     GaijiPolicy, GaijiSourcePreference, InternalResource, InternalTarget, NavigationStatus,
-    NavigationSurface, NavigationSurfaceKind, RenderMode, RenderOptions, RendererInput,
-    ResolvedTargetKind, ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode,
-    SearchQuery, SearchScope, StorageBackend, TargetKind, TargetToken, VisualBody,
+    NavigationSurface, NavigationSurfaceKind, PackageDiscoveryOptions, RenderMode, RenderOptions,
+    RendererInput, ResolvedTargetKind, ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC,
+    SearchMode, SearchQuery, SearchScope, StorageBackend, TargetKind, TargetToken, VisualBody,
 };
 use rusqlite::Connection;
 use tempfile::tempdir;
@@ -42,6 +42,27 @@ fn driver_registry_detects_first_class_families() {
         registry.detect(hourei.path()).unwrap()[0].format_family,
         FormatFamily::Hourei
     );
+}
+
+#[test]
+fn driver_registry_discovers_packages_from_library_roots() {
+    let root = tempdir().unwrap();
+    let package = root.path().join("NestedBook");
+    fs::create_dir_all(&package).unwrap();
+    write_minimal_lved_sqlite_fixture(&package);
+
+    let registry = DriverRegistry::default();
+    let roots = registry
+        .discover_roots(root.path(), PackageDiscoveryOptions::default())
+        .unwrap();
+    let detections = registry
+        .detect_all(root.path(), PackageDiscoveryOptions::default())
+        .unwrap();
+
+    assert_eq!(roots, vec![package.clone()]);
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].root, package);
+    assert_eq!(detections[0].format_family, FormatFamily::LvedSqlite3);
 }
 
 #[test]

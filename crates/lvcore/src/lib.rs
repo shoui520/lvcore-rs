@@ -54,7 +54,7 @@ pub use navigation::{
 };
 pub use package::{
     BookAlias, BookAliasKind, BookId, BookMetadata, BookPackage, BookPackageExt, Capability,
-    DetectedPackage, DriverRegistry, FormatFamily, PackageDriver,
+    DetectedPackage, DriverRegistry, FormatFamily, PackageDiscoveryOptions, PackageDriver,
 };
 pub use render::{
     RenderCapability, RenderMode, RenderOptions, RendererInput, RendererInputKind,

@@ -1,9 +1,11 @@
 mod drivers;
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::lved_sqlite::is_lved_payload_name;
 use crate::search::SearchMode;
 
 use crate::body::BodyProvider;
@@ -101,6 +103,17 @@ pub struct DetectedPackage {
     pub evidence: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PackageDiscoveryOptions {
+    pub max: Option<usize>,
+}
+
+impl PackageDiscoveryOptions {
+    pub fn with_max(max: usize) -> Self {
+        Self { max: Some(max) }
+    }
+}
+
 pub trait BookPackage:
     Send
     + Sync
@@ -166,6 +179,33 @@ impl DriverRegistry {
         Ok(rows)
     }
 
+    pub fn detect_all(
+        &self,
+        root: &Path,
+        options: PackageDiscoveryOptions,
+    ) -> Result<Vec<DetectedPackage>> {
+        let direct = self.detect(root)?;
+        if !direct.is_empty() {
+            return Ok(direct);
+        }
+
+        let mut rows = Vec::new();
+        for package_root in self.discover_roots(root, options)? {
+            rows.extend(self.detect(&package_root)?);
+        }
+        Ok(rows)
+    }
+
+    pub fn discover_roots(
+        &self,
+        root: &Path,
+        options: PackageDiscoveryOptions,
+    ) -> Result<Vec<PathBuf>> {
+        let mut roots = Vec::new();
+        self.discover_roots_into(root, options.max, &mut roots)?;
+        Ok(roots)
+    }
+
     pub fn open_best(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
         let detected = self
             .detect(root)?
@@ -181,6 +221,43 @@ impl DriverRegistry {
             detected.format_family.ui_label().to_owned(),
         ))
     }
+
+    fn discover_roots_into(
+        &self,
+        path: &Path,
+        max: Option<usize>,
+        out: &mut Vec<PathBuf>,
+    ) -> Result<()> {
+        if max.is_some_and(|max| out.len() >= max) {
+            return Ok(());
+        }
+        if !path.exists() {
+            return Ok(());
+        }
+        if path.is_file() && !is_package_file_candidate(path) {
+            return Ok(());
+        }
+        if path.is_dir() && is_obvious_resource_only_dir(path) {
+            return Ok(());
+        }
+        if is_obvious_package_candidate(path)? && !self.detect(path)?.is_empty() {
+            out.push(path.to_path_buf());
+            return Ok(());
+        }
+        if !path.is_dir() {
+            return Ok(());
+        }
+
+        let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            self.discover_roots_into(&entry.path(), max, out)?;
+            if max.is_some_and(|max| out.len() >= max) {
+                break;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn family_priority(family: FormatFamily) -> u8 {
@@ -191,6 +268,116 @@ fn family_priority(family: FormatFamily) -> u8 {
         FormatFamily::Ssed => 10,
         FormatFamily::Unknown => 0,
     }
+}
+
+fn is_package_file_candidate(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    name == "main.data" || name.ends_with(".dbc") || name.ends_with(".idx") || name.ends_with(".db")
+}
+
+fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
+    if path.is_file() {
+        return Ok(is_package_file_candidate(path));
+    }
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    if path.join("main.data").is_file()
+        || directory_has_file_suffix(path, ".dbc")?
+        || directory_has_lved_payload(path)?
+    {
+        return Ok(true);
+    }
+    if directory_has_file_suffix(path, ".idx")? {
+        return Ok(true);
+    }
+    if path.join("menuData.xml").is_file() && directory_has_multiview_payload(path)? {
+        return Ok(true);
+    }
+    let hourei_required = [
+        "_DataBase/hore_base.db",
+        "_DataBase/hore_search_a.db",
+        "_DataBase/horejo_base.db",
+    ];
+    Ok(hourei_required
+        .iter()
+        .all(|relative| path.join(relative).is_file()))
+}
+
+fn directory_has_lved_payload(path: &Path) -> Result<bool> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        if entry_path.is_file() && is_lved_payload_name(&entry_path) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn is_obvious_resource_only_dir(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    name.ends_with("_media")
+        || name.ends_with("_sound_files")
+        || name.ends_with("_mathjax")
+        || name.ends_with("_templates")
+        || name == "templates"
+        || name == "template"
+        || name == "img"
+        || name == "images"
+        || name == "sound"
+        || name == "sounds"
+        || name == "mathjax"
+}
+
+fn directory_has_file_suffix(path: &Path, suffix: &str) -> Result<bool> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    let suffix = suffix.to_lowercase();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.path().is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .to_lowercase()
+                .ends_with(&suffix)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn directory_has_multiview_payload(path: &Path) -> Result<bool> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if name.len() == 6
+            && name.as_bytes()[1] == b'l'
+            && name.as_bytes()[2] == b'v'
+            && (name.ends_with("bat") || name.ends_with("dat"))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 impl Default for DriverRegistry {

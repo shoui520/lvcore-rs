@@ -1,14 +1,12 @@
-use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
-    BookId, BookLibrary, BookMetadata, DetectedPackage, DriverRegistry, Error, HomeSurface,
-    NavigationStatus, NavigationSurface, RenderMode, RenderOptions, ResourceToken, Result,
+    BookId, BookLibrary, BookMetadata, DriverRegistry, Error, HomeSurface, NavigationStatus,
+    NavigationSurface, PackageDiscoveryOptions, RenderMode, RenderOptions, ResourceToken, Result,
     SearchMode, SearchQuery, SearchScope, SequenceHint, TargetToken,
-    lved_sqlite::is_lved_payload_name,
 };
 use serde_json::json;
 
@@ -259,7 +257,7 @@ fn main() -> Result<()> {
     match args.command {
         Command::Detect { path } => {
             let registry = DriverRegistry::default();
-            let detected = detect_command_detections(&registry, &path)?;
+            let detected = registry.detect_all(&path, PackageDiscoveryOptions::default())?;
             println!("{}", serde_json::to_string_pretty(&detected)?);
         }
         Command::Validate {
@@ -271,8 +269,12 @@ fn main() -> Result<()> {
             let registry = DriverRegistry::default();
             let mut package_paths = Vec::new();
             for path in paths {
-                discover_packages(&registry, &path, max, &mut package_paths)?;
-                if max.is_some_and(|max| package_paths.len() >= max) {
+                package_paths
+                    .extend(registry.discover_roots(&path, PackageDiscoveryOptions { max })?);
+                if let Some(limit) = max
+                    && package_paths.len() >= limit
+                {
+                    package_paths.truncate(limit);
                     break;
                 }
             }
@@ -770,176 +772,12 @@ fn search_probe_prefix(title: &str) -> Option<&str> {
     (end > 0).then_some(&trimmed[..end])
 }
 
-fn discover_packages(
-    registry: &DriverRegistry,
-    path: &Path,
-    max: Option<usize>,
-    out: &mut Vec<PathBuf>,
-) -> Result<()> {
-    if max.is_some_and(|max| out.len() >= max) {
-        return Ok(());
-    }
-    if !path.exists() {
-        return Ok(());
-    }
-    if path.is_file() && !is_package_file_candidate(path) {
-        return Ok(());
-    }
-    if path.is_dir() && is_obvious_resource_only_dir(path) {
-        return Ok(());
-    }
-    if is_obvious_package_candidate(path)? && !registry.detect(path)?.is_empty() {
-        out.push(path.to_path_buf());
-        return Ok(());
-    }
-    if !path.is_dir() {
-        return Ok(());
-    }
-
-    let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|entry| entry.path());
-    for entry in entries {
-        discover_packages(registry, &entry.path(), max, out)?;
-        if max.is_some_and(|max| out.len() >= max) {
-            break;
-        }
-    }
-    Ok(())
-}
-
-fn detect_command_detections(
-    registry: &DriverRegistry,
-    path: &Path,
-) -> Result<Vec<DetectedPackage>> {
-    let direct = registry.detect(path)?;
-    if !direct.is_empty() {
-        return Ok(direct);
-    }
-
-    let mut package_paths = Vec::new();
-    discover_packages(registry, path, None, &mut package_paths)?;
-    let mut detections = Vec::new();
-    for package_path in package_paths {
-        detections.extend(registry.detect(&package_path)?);
-    }
-    Ok(detections)
-}
-
-fn is_package_file_candidate(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .map(|value| value.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    name == "main.data" || name.ends_with(".dbc") || name.ends_with(".idx") || name.ends_with(".db")
-}
-
-fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
-    if path.is_file() {
-        return Ok(is_package_file_candidate(path));
-    }
-    if !path.is_dir() {
-        return Ok(false);
-    }
-    if path.join("main.data").is_file()
-        || directory_has_file_suffix(path, ".dbc")?
-        || directory_has_lved_payload(path)?
-    {
-        return Ok(true);
-    }
-    if directory_has_file_suffix(path, ".idx")? {
-        return Ok(true);
-    }
-    if path.join("menuData.xml").is_file() && directory_has_multiview_payload(path)? {
-        return Ok(true);
-    }
-    let hourei_required = [
-        "_DataBase/hore_base.db",
-        "_DataBase/hore_search_a.db",
-        "_DataBase/horejo_base.db",
-    ];
-    Ok(hourei_required
-        .iter()
-        .all(|relative| path.join(relative).is_file()))
-}
-
-fn directory_has_lved_payload(path: &Path) -> Result<bool> {
-    if !path.is_dir() {
-        return Ok(false);
-    }
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let entry_path = entry.path();
-        if entry_path.is_file() && is_lved_payload_name(&entry_path) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn is_obvious_resource_only_dir(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .map(|value| value.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    name.ends_with("_media")
-        || name.ends_with("_sound_files")
-        || name.ends_with("_mathjax")
-        || name.ends_with("_templates")
-        || name == "templates"
-        || name == "template"
-        || name == "img"
-        || name == "images"
-        || name == "sound"
-        || name == "sounds"
-        || name == "mathjax"
-}
-
-fn directory_has_file_suffix(path: &Path, suffix: &str) -> Result<bool> {
-    if !path.is_dir() {
-        return Ok(false);
-    }
-    let suffix = suffix.to_lowercase();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        if entry.path().is_file()
-            && entry
-                .file_name()
-                .to_string_lossy()
-                .to_lowercase()
-                .ends_with(&suffix)
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn directory_has_multiview_payload(path: &Path) -> Result<bool> {
-    if !path.is_dir() {
-        return Ok(false);
-    }
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        if !entry.path().is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_lowercase();
-        if name.len() == 6
-            && name.as_bytes()[1] == b'l'
-            && name.as_bytes()[2] == b'v'
-            && (name.ends_with("bat") || name.ends_with("dat"))
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use lvcore::lved_sqlite::apply_sqlcipher_key;
     use rusqlite::Connection;
+    use std::fs;
 
     #[test]
     fn discovery_ignores_resource_directories_with_non_package_idx_files() {
@@ -948,14 +786,9 @@ mod tests {
         fs::create_dir_all(&resources).unwrap();
         fs::write(resources.join("Localizable.idx"), b"not an SSED catalog").unwrap();
 
-        let mut discovered = Vec::new();
-        discover_packages(
-            &DriverRegistry::default(),
-            dir.path(),
-            None,
-            &mut discovered,
-        )
-        .unwrap();
+        let discovered = DriverRegistry::default()
+            .discover_roots(dir.path(), PackageDiscoveryOptions::default())
+            .unwrap();
 
         assert!(discovered.is_empty());
     }
@@ -967,7 +800,9 @@ mod tests {
         fs::create_dir_all(&package).unwrap();
         write_lved_cli_fixture(&package);
 
-        let detections = detect_command_detections(&DriverRegistry::default(), dir.path()).unwrap();
+        let detections = DriverRegistry::default()
+            .detect_all(dir.path(), PackageDiscoveryOptions::default())
+            .unwrap();
 
         assert_eq!(detections.len(), 1);
         assert_eq!(

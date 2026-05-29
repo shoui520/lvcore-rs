@@ -73,6 +73,9 @@ provider slices:
 
 - typed package-family detection for SSED, LVED_SQLITE3, LVLMultiView, and
   Hourei;
+- library-owned package-root discovery for corpus/library directories, so the
+  reader can find nested books without duplicating LogoVista package heuristics
+  in frontend code;
 - casefolded storage lookup with casing preservation;
 - readable SSED component materialization for plain payloads, LogoFontCipher
   payloads, Mac OS X AES payloads, and observed Mac OS X ZipCrypto `HONMON`
