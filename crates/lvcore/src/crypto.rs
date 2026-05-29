@@ -14,6 +14,7 @@ const LOGOFONT_CIPHER_PASSPHRASE: &[u8] = b"LogoFontCipher";
 const BLOCK_SIZE: usize = 16;
 const STREAM_DECRYPT_BUFFER_SIZE: usize = 64 * 1024 * BLOCK_SIZE;
 const ANDROID_DIW_PREFIX: &[u8] = b"LV_";
+const SSEDDATA_MAGIC: &[u8] = b"SSEDDATA";
 const ANDROID_DIW_PASSWORD: &str = "resworbncidnatsivogol--emulator";
 const ANDROID_DIW_IV: [u8; BLOCK_SIZE] = [
     0x24, 0xc0, 0x15, 0xa3, 0x37, 0xa5, 0x25, 0xae, 0x70, 0xd0, 0x00, 0xcf, 0x0a, 0x41, 0xeb, 0x40,
@@ -92,6 +93,26 @@ pub fn decrypt_android_diw_file_to_path(input: &Path, output: &Path) -> Result<(
     })();
     let _ = fs::remove_file(&raw_path);
     result
+}
+
+pub fn normalize_android_wrapped_sseddata_file_to_path(input: &Path, output: &Path) -> Result<()> {
+    normalize_android_lved_sseddata_file(input, output)
+}
+
+pub fn normalize_android_wrapped_sseddata_bytes(data: &[u8]) -> Vec<u8> {
+    let prefix_len = usize::from(data.starts_with(ANDROID_DIW_PREFIX)) * ANDROID_DIW_PREFIX.len();
+    let logical = &data[prefix_len.min(data.len())..];
+    let remove_alignment_pad = logical.starts_with(SSEDDATA_MAGIC)
+        && logical.len() >= 70
+        && u32::from_be_bytes([logical[64], logical[65], logical[66], logical[67]]) == 0
+        && u32::from_be_bytes([logical[66], logical[67], logical[68], logical[69]]) > 0;
+    if remove_alignment_pad {
+        let mut normalized = Vec::with_capacity(data.len().saturating_sub(prefix_len + 2));
+        normalized.extend_from_slice(&data[prefix_len..prefix_len + 64]);
+        normalized.extend_from_slice(&data[prefix_len + 66..]);
+        return normalized;
+    }
+    data[prefix_len.min(data.len())..].to_vec()
 }
 
 fn decrypt_logofont_cipher_file_to_path_with_variant(
@@ -226,13 +247,17 @@ fn decrypt_android_diw_file_raw(input: &Path, output: &Path) -> Result<()> {
 }
 
 fn normalize_android_diw_file(input: &Path, output: &Path) -> Result<()> {
+    normalize_android_lved_sseddata_file(input, output)
+}
+
+fn normalize_android_lved_sseddata_file(input: &Path, output: &Path) -> Result<()> {
     let mut infile = File::open(input)?;
     let mut prefix = [0_u8; 96];
     let read = infile.read(&mut prefix)?;
     let sample = &prefix[..read];
     let prefix_len = usize::from(sample.starts_with(ANDROID_DIW_PREFIX)) * ANDROID_DIW_PREFIX.len();
     let logical = &sample[prefix_len.min(sample.len())..];
-    let remove_alignment_pad = logical.starts_with(b"SSEDDATA")
+    let remove_alignment_pad = logical.starts_with(SSEDDATA_MAGIC)
         && logical.len() >= 70
         && u32::from_be_bytes([logical[64], logical[65], logical[66], logical[67]]) == 0
         && u32::from_be_bytes([logical[66], logical[67], logical[68], logical[69]]) > 0;
@@ -480,6 +505,22 @@ mod tests {
         let decrypted = std::fs::read(output).unwrap();
         assert!(decrypted.starts_with(b"SSEDDATA"));
         assert!(!decrypted.starts_with(b"LV_"));
+    }
+
+    #[test]
+    fn android_wrapped_sseddata_normalization_removes_alignment_pad() {
+        let mut header = vec![0_u8; 64];
+        header[..SSEDDATA_MAGIC.len()].copy_from_slice(SSEDDATA_MAGIC);
+        let table_and_body = b"\x00\x00\x00\x44body";
+        let mut wrapped = b"LV_".to_vec();
+        wrapped.extend_from_slice(&header);
+        wrapped.extend_from_slice(&[0, 0]);
+        wrapped.extend_from_slice(table_and_body);
+
+        let normalized = normalize_android_wrapped_sseddata_bytes(&wrapped);
+
+        assert_eq!(&normalized[..64], header.as_slice());
+        assert_eq!(&normalized[64..], table_and_body);
     }
 
     fn encrypt_cbc_for_test(data: &[u8], variant: LogoFontCipherVariant) -> Vec<u8> {

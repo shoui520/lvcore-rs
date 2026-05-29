@@ -1146,6 +1146,67 @@ fn ssed_missing_declared_indexes_do_not_advertise_search_or_title_browse() {
 }
 
 #[test]
+fn ssed_android_wrapped_index_title_and_menu_payloads_are_supported() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        android_wrapped_sseddata_fixture(sseddata_literal_fixture(&menu_stream_fixture(10, 2))),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        android_wrapped_sseddata_fixture(sseddata_literal_fixture(b"keyless\x1f\x0a")),
+    )
+    .unwrap();
+    let mut page = vec![0u8; 2048];
+    page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    page[4..8].copy_from_slice(&1u32.to_be_bytes());
+    page[8..10].copy_from_slice(&14u16.to_be_bytes());
+    page[11..15].copy_from_slice(&13u32.to_be_bytes());
+    page[15..17].copy_from_slice(&0u16.to_be_bytes());
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        android_wrapped_sseddata_fixture(sseddata_literal_fixture(&page)),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::NativeSearch),
+        "Android-wrapped index SSEDDATA is a supported SSED index payload"
+    );
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::TitleIndexBrowse),
+        "Android-wrapped index SSEDDATA should advertise title/index browse"
+    );
+    assert!(
+        package.metadata().capabilities.contains(&Capability::Menu),
+        "Android-wrapped MENU.DIC should advertise a menu when it decodes to rows"
+    );
+    let NavigationSurface::SimpleMenu { nodes, .. } = package.open_surface("menu").unwrap() else {
+        panic!("Android-wrapped MENU.DIC should open as a simple menu");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "あ");
+    let NavigationSurface::TitleIndexBrowse { items, .. } =
+        package.open_surface("title-index").unwrap()
+    else {
+        panic!("Android-wrapped title/index files should open");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "keyless");
+}
+
+#[test]
 fn ssed_panels_can_read_package_adjacent_panel_sidecar_directory() {
     let root = tempdir().unwrap();
     let package_root = root.path().join("DICT");
@@ -3713,6 +3774,15 @@ fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
         data.extend_from_slice(&[0, 0, *literal]);
     }
     data
+}
+
+fn android_wrapped_sseddata_fixture(payload: Vec<u8>) -> Vec<u8> {
+    assert!(payload.len() >= 64);
+    let mut wrapped = b"LV_".to_vec();
+    wrapped.extend_from_slice(&payload[..64]);
+    wrapped.extend_from_slice(&[0, 0]);
+    wrapped.extend_from_slice(&payload[64..]);
+    wrapped
 }
 
 fn write_zipcrypto_honmon_wrapper(path: &Path, member_name: &str, password: &[u8], payload: &[u8]) {

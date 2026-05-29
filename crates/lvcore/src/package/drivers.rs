@@ -27,6 +27,7 @@ use crate::crypto::{
     decrypt_android_diw_file_to_path, decrypt_android_diw_prefix,
     decrypt_logofont_cipher_file_to_path, decrypt_logofont_cipher_prefix,
     decrypt_macos_logofont_cipher_file_to_path, decrypt_macos_logofont_cipher_prefix,
+    normalize_android_wrapped_sseddata_bytes, normalize_android_wrapped_sseddata_file_to_path,
 };
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
@@ -54,7 +55,7 @@ use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQue
 use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
 use crate::ssed::{
     ANDROID_LVEDINFO_MAGIC, BLOCK_SIZE, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent,
-    SsedComponentRole, SsedDataFile, SsedDataHeader,
+    SsedComponentRole, SsedDataFile, SsedDataHeader, SsedDataReader,
 };
 use crate::ssed_aux_index::{
     SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,
@@ -6620,6 +6621,22 @@ impl ReaderBookPackage {
             return Ok(Some(path.to_path_buf()));
         }
 
+        if file_starts_with_android_wrapped_sseddata(path)? {
+            let cache_path =
+                self.ssed_component_cache_path(component, path, "android_lved_wrapped", "dic")?;
+            if SsedDataHeader::parse_file(&cache_path).is_ok() {
+                return Ok(Some(cache_path));
+            }
+            let tmp_path = cache_path.with_extension("tmp");
+            if tmp_path.exists() {
+                fs::remove_file(&tmp_path)?;
+            }
+            normalize_android_wrapped_sseddata_file_to_path(path, &tmp_path)?;
+            SsedDataHeader::parse_file(&tmp_path)?;
+            fs::rename(&tmp_path, &cache_path)?;
+            return Ok(Some(cache_path));
+        }
+
         if looks_like_zip_file(path)?
             && let Some(extracted) = self.extract_zipped_ssed_component(component, path)?
         {
@@ -9082,9 +9099,9 @@ fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
         capabilities.push(Capability::NativeSearch);
     }
     if has_index_payload
-        && catalog
-            .honmon()
-            .is_some_and(|component| has_component_payload_casefolded(&storage, component))
+        && catalog.honmon().is_some_and(|component| {
+            has_supported_sseddata_component_payload_casefolded(&storage, component)
+        })
     {
         capabilities.push(Capability::FullTextSearch);
     }
@@ -9170,13 +9187,27 @@ fn ssed_navigation_component_has_non_empty_surface(
     }
 
     for path in candidates {
-        let Ok(mut reader) = SsedDataFile::open(&path) else {
-            continue;
-        };
-        if reader.header().expanded_size() > BLOCK_SIZE as usize {
-            return true;
-        }
-        let Ok(data) = reader.read_range(0, reader.header().expanded_size()) else {
+        let data = if let Ok(mut reader) = SsedDataFile::open(&path) {
+            if reader.header().expanded_size() > BLOCK_SIZE as usize {
+                return true;
+            }
+            match reader.read_range(0, reader.header().expanded_size()) {
+                Ok(data) => data,
+                Err(_) => continue,
+            }
+        } else if file_starts_with_android_wrapped_sseddata(&path).unwrap_or(false) {
+            let Ok(raw) = fs::read(&path) else {
+                continue;
+            };
+            let normalized = normalize_android_wrapped_sseddata_bytes(&raw);
+            let Ok(reader) = SsedDataReader::parse_bytes(&normalized) else {
+                continue;
+            };
+            if reader.header().expanded_size() > BLOCK_SIZE as usize {
+                return true;
+            }
+            reader.read(0, reader.header().expanded_size()).to_vec()
+        } else {
             continue;
         };
         let parsed = parse_menu_stream(&data);
@@ -9298,8 +9329,65 @@ fn ssed_has_index_payload(catalog: &SsedCatalog, storage: &DirectoryStorage) -> 
     catalog
         .components_by_role(SsedComponentRole::Index)
         .any(|component| {
-            component.has_positive_range() && has_component_payload_casefolded(storage, component)
+            component.has_positive_range()
+                && has_supported_sseddata_component_payload_casefolded(storage, component)
         })
+}
+
+fn has_supported_sseddata_component_payload_casefolded(
+    storage: &DirectoryStorage,
+    component: &SsedComponent,
+) -> bool {
+    let mut candidates = Vec::new();
+    if let Ok(Some(path)) = storage.resolve_casefolded(Path::new(&component.filename)) {
+        candidates.push(path);
+    }
+    for alias in ssed_component_filename_aliases(component) {
+        if let Ok(Some(path)) = storage.resolve_casefolded(Path::new(&alias)) {
+            candidates.push(path);
+        }
+    }
+    candidates
+        .iter()
+        .any(|path| is_supported_sseddata_payload_path(path).unwrap_or(false))
+}
+
+fn is_supported_sseddata_payload_path(path: &Path) -> Result<bool> {
+    if SsedDataHeader::parse_file(path).is_ok() {
+        return Ok(true);
+    }
+    if file_starts_with_android_wrapped_sseddata(path)? {
+        return Ok(true);
+    }
+    if looks_like_zip_file(path)? {
+        return Ok(true);
+    }
+
+    let mut file = File::open(path)?;
+    let mut prefix = vec![0_u8; 4096];
+    let read = file.read(&mut prefix)?;
+    prefix.truncate(read);
+    if prefix.len() < 16 {
+        return Ok(false);
+    }
+    for prefix_decrypt in [
+        decrypt_android_diw_prefix as PrefixDecryptFn,
+        decrypt_macos_logofont_cipher_prefix,
+        decrypt_logofont_cipher_prefix,
+    ] {
+        if prefix_decrypt(&prefix, 64).is_ok_and(|decrypted| decrypted.starts_with(SSEDDATA_MAGIC))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn file_starts_with_android_wrapped_sseddata(path: &Path) -> Result<bool> {
+    let mut file = File::open(path)?;
+    let mut prefix = [0_u8; 11];
+    let read = file.read(&mut prefix)?;
+    Ok(read == prefix.len() && &prefix == b"LV_SSEDDATA")
 }
 
 fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> {
