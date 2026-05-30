@@ -2551,72 +2551,56 @@ impl ReaderBookPackage {
         fallback_name: &str,
     ) -> Result<NavigationSurface> {
         let Some(catalog) = &self.ssed_catalog else {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![Diagnostic::error(
-                    "ssed_catalog_missing",
-                    "SSED MENU/TOC surfaces require a parsed SSEDINFO catalog",
-                )],
-            });
+            return Ok(deferred_surface_error(
+                surface_id,
+                "ssed_catalog_missing",
+                "SSED MENU/TOC surfaces require a parsed SSEDINFO catalog",
+            ));
         };
         let Some(component) = catalog
             .component_named(fallback_name)
             .filter(|component| component.has_positive_range())
         else {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![Diagnostic::info(
-                    "ssed_navigation_component_missing",
-                    format!("{fallback_name} is not declared in this SSED catalog"),
-                )],
-            });
+            return Ok(deferred_surface_info(
+                surface_id,
+                "ssed_navigation_component_missing",
+                format!("{fallback_name} is not declared in this SSED catalog"),
+            ));
         };
         let path = match self.resolve_readable_ssed_component_path(component) {
             Ok(Some(path)) => path,
             Ok(None) => {
-                return Ok(NavigationSurface::Deferred {
-                    surface_id: surface_id.to_owned(),
-                    diagnostics: vec![
-                        Diagnostic::warning(
-                            "ssed_navigation_component_file_missing",
-                            format!("{} is declared but not present on disk", component.filename),
-                        )
-                        .with_context("component", &component.filename),
-                    ],
-                });
+                return Ok(deferred_component_surface_warning(
+                    surface_id,
+                    "ssed_navigation_component_file_missing",
+                    format!("{} is declared but not present on disk", component.filename),
+                    component,
+                ));
             }
             Err(error) => {
-                return Ok(NavigationSurface::Deferred {
-                    surface_id: surface_id.to_owned(),
-                    diagnostics: vec![
-                        Diagnostic::warning(
-                            "ssed_navigation_component_decode_failed",
-                            format!(
-                                "{} is not readable as SSEDDATA: {error}",
-                                component.filename
-                            ),
-                        )
-                        .with_context("component", &component.filename),
-                    ],
-                });
+                return Ok(deferred_component_surface_warning(
+                    surface_id,
+                    "ssed_navigation_component_decode_failed",
+                    format!(
+                        "{} is not readable as SSEDDATA: {error}",
+                        component.filename
+                    ),
+                    component,
+                ));
             }
         };
         let mut reader = match SsedDataFile::open(&path) {
             Ok(reader) => reader,
             Err(error) => {
-                return Ok(NavigationSurface::Deferred {
-                    surface_id: surface_id.to_owned(),
-                    diagnostics: vec![
-                        Diagnostic::warning(
-                            "ssed_navigation_component_decode_failed",
-                            format!(
-                                "{} is not readable as plain SSEDDATA: {error}",
-                                component.filename
-                            ),
-                        )
-                        .with_context("component", &component.filename),
-                    ],
-                });
+                return Ok(deferred_component_surface_warning(
+                    surface_id,
+                    "ssed_navigation_component_decode_failed",
+                    format!(
+                        "{} is not readable as plain SSEDDATA: {error}",
+                        component.filename
+                    ),
+                    component,
+                ));
             }
         };
         let data = reader.read_range(0, reader.header().expanded_size())?;
@@ -2636,20 +2620,14 @@ impl ReaderBookPackage {
                     format!("{} did not decode any navigation rows", component.filename),
                 )
             };
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![
-                    Diagnostic::info(code, message).with_context("component", &component.filename),
-                ],
-            });
+            return Ok(deferred_component_surface_info(
+                surface_id, code, message, component,
+            ));
         }
         let mut diagnostics = Vec::new();
         let nodes = ssed_menu_records_to_nodes(self, &parsed.records, &mut diagnostics)?;
         if nodes.is_empty() {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics,
-            });
+            return Ok(deferred_surface(surface_id, diagnostics));
         }
         Ok(NavigationSurface::SimpleMenu {
             surface_id: surface_id.to_owned(),
@@ -3014,74 +2992,58 @@ impl ReaderBookPackage {
 
     fn open_ssed_screen_menu_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
         let Some(catalog) = &self.ssed_catalog else {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![Diagnostic::error(
-                    "ssed_catalog_missing",
-                    "SSED screen-menu surfaces require a parsed SSEDINFO catalog",
-                )],
-            });
+            return Ok(deferred_surface_error(
+                surface_id,
+                "ssed_catalog_missing",
+                "SSED screen-menu surfaces require a parsed SSEDINFO catalog",
+            ));
         };
         let Some(component) = catalog
             .components_by_role(SsedComponentRole::ScreenMenu)
             .find(|component| component.has_positive_range())
             .or_else(|| catalog.component_named("SCRMENU.DIC"))
         else {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![Diagnostic::info(
-                    "ssed_screen_menu_missing",
-                    "SCRMENU.DIC is not declared in this SSED catalog",
-                )],
-            });
+            return Ok(deferred_surface_info(
+                surface_id,
+                "ssed_screen_menu_missing",
+                "SCRMENU.DIC is not declared in this SSED catalog",
+            ));
         };
         let path = match self.resolve_readable_ssed_component_path(component) {
             Ok(Some(path)) => path,
             Ok(None) => {
-                return Ok(NavigationSurface::Deferred {
-                    surface_id: surface_id.to_owned(),
-                    diagnostics: vec![
-                        Diagnostic::warning(
-                            "ssed_screen_menu_file_missing",
-                            format!("{} is declared but not present on disk", component.filename),
-                        )
-                        .with_context("component", &component.filename),
-                    ],
-                });
+                return Ok(deferred_component_surface_warning(
+                    surface_id,
+                    "ssed_screen_menu_file_missing",
+                    format!("{} is declared but not present on disk", component.filename),
+                    component,
+                ));
             }
             Err(error) => {
-                return Ok(NavigationSurface::Deferred {
-                    surface_id: surface_id.to_owned(),
-                    diagnostics: vec![
-                        Diagnostic::warning(
-                            "ssed_screen_menu_decode_failed",
-                            format!(
-                                "{} is not readable as SSEDDATA: {error}",
-                                component.filename
-                            ),
-                        )
-                        .with_context("component", &component.filename),
-                    ],
-                });
+                return Ok(deferred_component_surface_warning(
+                    surface_id,
+                    "ssed_screen_menu_decode_failed",
+                    format!(
+                        "{} is not readable as SSEDDATA: {error}",
+                        component.filename
+                    ),
+                    component,
+                ));
             }
         };
         let mut reader = SsedDataFile::open(&path)?;
         let data = reader.read_range(0, reader.header().expanded_size())?;
         let parsed = parse_screen_menu_stream(&data, Some(catalog));
         if parsed.screens.is_empty() {
-            return Ok(NavigationSurface::Deferred {
-                surface_id: surface_id.to_owned(),
-                diagnostics: vec![
-                    Diagnostic::info(
-                        "ssed_screen_menu_empty",
-                        format!(
-                            "{} did not decode any screen-menu screens",
-                            component.filename
-                        ),
-                    )
-                    .with_context("component", &component.filename),
-                ],
-            });
+            return Ok(deferred_component_surface_info(
+                surface_id,
+                "ssed_screen_menu_empty",
+                format!(
+                    "{} did not decode any screen-menu screens",
+                    component.filename
+                ),
+                component,
+            ));
         }
         let screens = self.ssed_screen_menu_screens(surface_id, &parsed)?;
         Ok(NavigationSurface::ScreenMenu {
@@ -7884,6 +7846,53 @@ fn push_surface_if_exists(
         });
     }
     Ok(())
+}
+
+fn deferred_surface(surface_id: &str, diagnostics: Vec<Diagnostic>) -> NavigationSurface {
+    NavigationSurface::Deferred {
+        surface_id: surface_id.to_owned(),
+        diagnostics,
+    }
+}
+
+fn deferred_surface_info(
+    surface_id: &str,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> NavigationSurface {
+    deferred_surface(surface_id, vec![Diagnostic::info(code, message)])
+}
+
+fn deferred_surface_error(
+    surface_id: &str,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> NavigationSurface {
+    deferred_surface(surface_id, vec![Diagnostic::error(code, message)])
+}
+
+fn deferred_component_surface_info(
+    surface_id: &str,
+    code: impl Into<String>,
+    message: impl Into<String>,
+    component: &SsedComponent,
+) -> NavigationSurface {
+    deferred_surface(
+        surface_id,
+        vec![Diagnostic::info(code, message).with_context("component", &component.filename)],
+    )
+}
+
+fn deferred_component_surface_warning(
+    surface_id: &str,
+    code: impl Into<String>,
+    message: impl Into<String>,
+    component: &SsedComponent,
+) -> NavigationSurface {
+    deferred_surface(
+        surface_id,
+        vec![Diagnostic::warning(code, message).with_context("component", &component.filename)],
+    )
 }
 
 #[derive(Debug, Clone)]
