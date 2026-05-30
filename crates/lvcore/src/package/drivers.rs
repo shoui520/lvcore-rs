@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 mod body;
 mod gaiji;
+mod renderer_input;
 mod resources;
 mod ssed_navigation;
 
@@ -1009,13 +1010,6 @@ impl RendererProvider for ReaderBookPackage {
             }
         }?;
         self.finalize_resolved_view(view, options)
-    }
-}
-
-impl RendererInputProvider for ReaderBookPackage {
-    fn renderer_input_for_target(&self, token: &TargetToken) -> Result<RendererInput> {
-        let body = self.visual_body_for_target(token)?;
-        self.renderer_input_from_visual_body(token.clone(), body)
     }
 }
 
