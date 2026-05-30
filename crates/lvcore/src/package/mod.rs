@@ -5,6 +5,7 @@ mod html;
 mod lved_refs;
 mod render_output;
 mod resource_helpers;
+mod ssed_body_helpers;
 mod ssed_detection;
 mod ssed_index_probe;
 mod ssed_payload;
