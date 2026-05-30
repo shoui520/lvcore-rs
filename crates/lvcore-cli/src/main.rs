@@ -4,9 +4,9 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
-    BookId, BookLibrary, BookMetadata, DriverRegistry, Error, HomeSurface, NavigationStatus,
-    NavigationSurface, PackageDiscoveryOptions, RenderMode, RenderOptions, ResourceToken, Result,
-    SearchMode, SearchQuery, SearchScope, SequenceHint, TargetToken,
+    BookId, BookLibrary, BookMetadata, DriverRegistry, Error, HomeSurface, LibraryImportReport,
+    NavigationStatus, NavigationSurface, PackageDiscoveryOptions, RenderMode, RenderOptions,
+    ResourceToken, Result, SearchMode, SearchQuery, SearchScope, SequenceHint, TargetToken,
 };
 use serde_json::json;
 
@@ -491,10 +491,11 @@ fn open_library_from_paths(
     registry: &DriverRegistry,
     paths: &[PathBuf],
     max: Option<usize>,
-) -> Result<BookLibrary> {
+) -> (BookLibrary, LibraryImportReport) {
     let mut library = BookLibrary::new();
-    library.open_discovered_paths(paths, registry, PackageDiscoveryOptions { max })?;
-    Ok(library)
+    let report =
+        library.try_open_discovered_paths(paths, registry, PackageDiscoveryOptions { max });
+    (library, report)
 }
 
 fn metadata_for(library: &BookLibrary, book_id: &BookId) -> BookMetadata {
@@ -528,7 +529,7 @@ fn library_search_command_json(
     render_options: RenderOptions,
     render_first: bool,
 ) -> Result<serde_json::Value> {
-    let library = open_library_from_paths(registry, paths, max)?;
+    let (library, import_report) = open_library_from_paths(registry, paths, max);
     let metadata = library.metadata_snapshot();
     let page = library.search(&SearchQuery {
         scope: SearchScope::AllBooks,
@@ -548,6 +549,8 @@ fn library_search_command_json(
     Ok(json!({
         "books": metadata,
         "book_count": library.len(),
+        "opened_book_ids": import_report.opened,
+        "import_diagnostics": import_report.diagnostics,
         "hits": page.hits,
         "next_cursor": page.next_cursor,
         "diagnostics": page.diagnostics,
@@ -1066,6 +1069,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(output["book_count"].as_u64(), Some(2));
+        assert_eq!(output["opened_book_ids"].as_array().unwrap().len(), 2);
+        assert!(output["import_diagnostics"].as_array().unwrap().is_empty());
         assert_eq!(output["hits"].as_array().unwrap().len(), 2);
         assert_eq!(output["rendered_first"]["view"]["kind"], "entry_body");
         assert!(output["rendered_first"]["book_id"].as_str().is_some());

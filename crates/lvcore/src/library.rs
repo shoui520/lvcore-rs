@@ -38,6 +38,13 @@ pub struct RoutedTargetWindow {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryImportReport {
+    pub opened: Vec<BookId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LibrarySearchCursor {
     version: u8,
@@ -94,6 +101,54 @@ impl BookLibrary {
             }
         }
         Ok(opened)
+    }
+
+    pub fn try_open_discovered_paths(
+        &mut self,
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+        registry: &DriverRegistry,
+        options: PackageDiscoveryOptions,
+    ) -> LibraryImportReport {
+        let mut report = LibraryImportReport::default();
+        for path in paths {
+            let path = path.as_ref();
+            let remaining = options
+                .max
+                .map(|max| max.saturating_sub(report.opened.len()));
+            if remaining == Some(0) {
+                break;
+            }
+            let roots =
+                match registry.discover_roots(path, PackageDiscoveryOptions { max: remaining }) {
+                    Ok(roots) => roots,
+                    Err(error) => {
+                        report.diagnostics.push(
+                            Diagnostic::warning(
+                                "library_discovery_failed",
+                                format!("package discovery failed for {}: {error}", path.display()),
+                            )
+                            .with_context("path", path.display().to_string()),
+                        );
+                        continue;
+                    }
+                };
+            for root in roots {
+                if options.max.is_some_and(|max| report.opened.len() >= max) {
+                    break;
+                }
+                match self.open_path(&root, registry) {
+                    Ok(book_id) => report.opened.push(book_id),
+                    Err(error) => report.diagnostics.push(
+                        Diagnostic::warning(
+                            "book_open_failed",
+                            format!("package open failed for {}: {error}", root.display()),
+                        )
+                        .with_context("path", root.display().to_string()),
+                    ),
+                }
+            }
+        }
+        report
     }
 
     pub fn insert(&mut self, package: Box<dyn BookPackage>) {
