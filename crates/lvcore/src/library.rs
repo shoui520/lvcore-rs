@@ -9,7 +9,8 @@ use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::navigation::{HomeSurface, NavigationNode, NavigationSurface};
 use crate::package::{
-    BookAliasKind, BookId, BookMetadata, BookPackage, DriverRegistry, PackageDiscoveryOptions,
+    BookAliasKind, BookId, BookMetadata, BookPackage, DetectedPackage, DriverRegistry,
+    PackageDiscoveryOptions,
 };
 use crate::render::{RenderOptions, RendererInput, ResolvedTargetKind, ResolvedTargetView};
 use crate::resources::{ResourceRef, ResourceToken};
@@ -94,6 +95,17 @@ impl BookLibrary {
         Ok(book_id)
     }
 
+    pub fn open_detected_package(
+        &mut self,
+        detected: DetectedPackage,
+        registry: &DriverRegistry,
+    ) -> Result<BookId> {
+        let package = registry.open_detected_package(detected)?;
+        let book_id = package.metadata().book_id.clone();
+        self.insert(package);
+        Ok(book_id)
+    }
+
     pub fn open_discovered_paths(
         &mut self,
         paths: impl IntoIterator<Item = impl AsRef<Path>>,
@@ -106,13 +118,15 @@ impl BookLibrary {
             if remaining == Some(0) {
                 break;
             }
-            let roots = registry
-                .discover_roots(path.as_ref(), PackageDiscoveryOptions { max: remaining })?;
-            for root in roots {
+            let packages = registry.discover_best_packages(
+                path.as_ref(),
+                PackageDiscoveryOptions { max: remaining },
+            )?;
+            for detected in packages {
                 if options.max.is_some_and(|max| opened.len() >= max) {
                     break;
                 }
-                opened.push(self.open_path(root, registry)?);
+                opened.push(self.open_detected_package(detected, registry)?);
             }
         }
         Ok(opened)
@@ -133,25 +147,27 @@ impl BookLibrary {
             if remaining == Some(0) {
                 break;
             }
-            let roots =
-                match registry.discover_roots(path, PackageDiscoveryOptions { max: remaining }) {
-                    Ok(roots) => roots,
-                    Err(error) => {
-                        report.diagnostics.push(
-                            Diagnostic::warning(
-                                "library_discovery_failed",
-                                format!("package discovery failed for {}: {error}", path.display()),
-                            )
-                            .with_context("path", path.display().to_string()),
-                        );
-                        continue;
-                    }
-                };
-            for root in roots {
+            let packages = match registry
+                .discover_best_packages(path, PackageDiscoveryOptions { max: remaining })
+            {
+                Ok(roots) => roots,
+                Err(error) => {
+                    report.diagnostics.push(
+                        Diagnostic::warning(
+                            "library_discovery_failed",
+                            format!("package discovery failed for {}: {error}", path.display()),
+                        )
+                        .with_context("path", path.display().to_string()),
+                    );
+                    continue;
+                }
+            };
+            for detected in packages {
                 if options.max.is_some_and(|max| report.opened.len() >= max) {
                     break;
                 }
-                match self.open_path(&root, registry) {
+                let root = detected.root.clone();
+                match self.open_detected_package(detected, registry) {
                     Ok(book_id) => report.opened.push(book_id),
                     Err(error) => report.diagnostics.push(
                         Diagnostic::warning(

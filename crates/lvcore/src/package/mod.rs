@@ -218,9 +218,21 @@ impl DriverRegistry {
         root: &Path,
         options: PackageDiscoveryOptions,
     ) -> Result<Vec<PathBuf>> {
-        let mut roots = Vec::new();
-        self.discover_roots_into(root, options.max, &mut roots)?;
-        Ok(roots)
+        Ok(self
+            .discover_best_packages(root, options)?
+            .into_iter()
+            .map(|detected| detected.root)
+            .collect())
+    }
+
+    pub fn discover_best_packages(
+        &self,
+        root: &Path,
+        options: PackageDiscoveryOptions,
+    ) -> Result<Vec<DetectedPackage>> {
+        let mut rows = Vec::new();
+        self.discover_best_packages_into(root, options.max, &mut rows)?;
+        Ok(rows)
     }
 
     pub fn open_best(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
@@ -239,11 +251,22 @@ impl DriverRegistry {
         ))
     }
 
-    fn discover_roots_into(
+    pub fn open_detected_package(&self, detected: DetectedPackage) -> Result<Box<dyn BookPackage>> {
+        for driver in &self.drivers {
+            if driver.family() == detected.format_family {
+                return driver.open_detected(detected);
+            }
+        }
+        Err(Error::UnsupportedFamily(
+            detected.format_family.ui_label().to_owned(),
+        ))
+    }
+
+    fn discover_best_packages_into(
         &self,
         path: &Path,
         max: Option<usize>,
-        out: &mut Vec<PathBuf>,
+        out: &mut Vec<DetectedPackage>,
     ) -> Result<()> {
         if max.is_some_and(|max| out.len() >= max) {
             return Ok(());
@@ -257,8 +280,10 @@ impl DriverRegistry {
         if path.is_dir() && is_obvious_resource_only_dir(path) {
             return Ok(());
         }
-        if is_obvious_package_candidate(path)? && !self.detect(path)?.is_empty() {
-            out.push(path.to_path_buf());
+        if is_obvious_package_candidate(path)?
+            && let Some(detected) = self.detect(path)?.into_iter().next()
+        {
+            out.push(detected);
             return Ok(());
         }
         if !path.is_dir() {
@@ -268,7 +293,7 @@ impl DriverRegistry {
         let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
         entries.sort_by_key(|entry| entry.path());
         for entry in entries {
-            self.discover_roots_into(&entry.path(), max, out)?;
+            self.discover_best_packages_into(&entry.path(), max, out)?;
             if max.is_some_and(|max| out.len() >= max) {
                 break;
             }
