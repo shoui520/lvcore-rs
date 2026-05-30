@@ -21,6 +21,8 @@ mod sequence;
 mod ssed_components;
 mod ssed_index;
 mod ssed_navigation;
+mod ssed_panel_surfaces;
+mod ssed_screen_surfaces;
 mod ssed_surfaces;
 
 use encoding_rs::SHIFT_JIS;
