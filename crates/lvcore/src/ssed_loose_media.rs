@@ -149,6 +149,7 @@ pub fn find_loose_media_root(package_root: &Path, root_name: &str) -> Result<Opt
     {
         if let Some(path) = find_child_casefolded(parent, root_name)?
             && path.is_dir()
+            && path_stays_inside_root(parent, &path)?
         {
             return Ok(Some(path));
         }
@@ -369,6 +370,9 @@ pub(super) fn find_loose_media_dir(
             .canonicalize()
             .unwrap_or_else(|_| directory.clone());
         if !seen.insert(key) || !directory.is_dir() {
+            continue;
+        }
+        if !path_stays_inside_root(&parent, &directory)? {
             continue;
         }
         if require_wave_map && find_child_casefolded(&directory, "WaveFile.map")?.is_none() {
@@ -862,5 +866,21 @@ mod tests {
 
         let error = find_movie_file(&package, "00000001").unwrap_err();
         assert!(error.to_string().contains("outside its loose media root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loose_media_root_symlink_escape_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("dict");
+        std::fs::create_dir_all(&package).unwrap();
+        let outside = dir.path().join("outside-media");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::create_dir(outside.join("whatday")).unwrap();
+        std::fs::write(outside.join("whatday").join("1-1.body"), b"<body>x</body>").unwrap();
+        std::os::unix::fs::symlink(&outside, package.join("Media")).unwrap();
+
+        let roots = discover_britannica_media_roots(&package).unwrap();
+        assert!(roots.is_empty());
     }
 }
