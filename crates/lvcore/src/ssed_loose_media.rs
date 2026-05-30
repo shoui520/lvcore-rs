@@ -750,4 +750,20 @@ mod tests {
         assert!(rendered.contains("<TD>603年</TD><TD>event</TD>"));
         assert!(!rendered.contains("<BODY>"));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn pcmu_record_symlink_escape_is_not_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("dict");
+        let pcmu = package.join("_PCM_U");
+        std::fs::create_dir_all(&pcmu).unwrap();
+        std::fs::write(pcmu.join("WaveFile.map"), b"sound.bin 123\n").unwrap();
+        let outside = dir.path().join("outside.bin");
+        std::fs::write(&outside, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside, pcmu.join("sound.bin")).unwrap();
+
+        let error = read_pcmu_record(&package, 123).unwrap_err();
+        assert!(error.to_string().contains("outside its loose media root"));
+    }
 }

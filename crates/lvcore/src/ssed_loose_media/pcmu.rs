@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::crypto::decrypt_logofont_cipher_bytes;
 use crate::error::Result;
+use crate::storage::path_stays_inside_root;
 
 use super::{find_child_casefolded, find_loose_media_dir};
 
@@ -79,8 +80,17 @@ pub fn resolve_pcmu_record(package_root: &Path, start_block: u32) -> Result<Opti
 }
 
 pub fn read_pcmu_record(package_root: &Path, start_block: u32) -> Result<Option<Vec<u8>>> {
-    let Some(record) = resolve_pcmu_record(package_root, start_block)? else {
+    let Some(index) = load_pcmu_index(package_root)? else {
         return Ok(None);
     };
-    decrypt_logofont_cipher_bytes(&fs::read(record.path)?).map(Some)
+    let Some(record) = index.record_for_start_block(start_block) else {
+        return Ok(None);
+    };
+    if !path_stays_inside_root(&index.directory, &record.path)? {
+        return Err(crate::error::Error::Driver(format!(
+            "_PCM_U audio path is outside its loose media root: {}",
+            record.path.display()
+        )));
+    }
+    decrypt_logofont_cipher_bytes(&fs::read(&record.path)?).map(Some)
 }
