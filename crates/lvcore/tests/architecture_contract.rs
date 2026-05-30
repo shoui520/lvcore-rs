@@ -2407,6 +2407,67 @@ fn ssed_simple_index_search_supports_backward_matching() {
 }
 
 #[test]
+fn ssed_reversed_backward_index_supports_suffix_search() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_backward_index(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("ahpla", 1, 2, 13, 0),
+            ("ateb", 1, 4, 13, 7),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let backward = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "ha".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(backward.hits.len(), 1);
+    assert_eq!(backward.hits[0].title_text, "alpha");
+
+    let exact = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(exact.hits.len(), 1);
+    assert_eq!(exact.hits[0].title_text, "alpha");
+
+    assert_eq!(
+        backward.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+        }
+    );
+}
+
+#[test]
 fn ssed_tagged_index_search_supports_grouped_rows_across_pages() {
     let dir = tempdir().unwrap();
     fs::write(
@@ -3640,6 +3701,45 @@ fn ssedinfo_fixture_with_index_type(index_type: u8) -> Vec<u8> {
 
 fn ssedinfo_fixture_with_index_type_and_blocks(index_type: u8, index_blocks: u32) -> Vec<u8> {
     ssedinfo_fixture_with_honmon_index_type_and_blocks("HONMON.DIC", index_type, index_blocks)
+}
+
+fn ssedinfo_fixture_with_backward_index() -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 4 * 0x30];
+    data[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Backward Fixture";
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 4;
+    write_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x30..record_start + 0x60],
+        0x07,
+        13,
+        14,
+        "BHTITLE.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x60..record_start + 0x90],
+        0x71,
+        15,
+        15,
+        "BHINDEX.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x90..record_start + 0xc0],
+        0xf2,
+        17,
+        18,
+        "GA16HALF",
+    );
+    data
 }
 
 fn write_minimal_lved_sqlite_fixture(root: &Path) {

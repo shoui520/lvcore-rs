@@ -39,7 +39,7 @@ use super::ssed_payload::{
     has_supported_sseddata_component_payload_casefolded,
 };
 use super::ssed_search::{
-    decode_ssed_body_search_text, normalize_search_match_text,
+    decode_ssed_body_search_text, normalize_search_match_text, reverse_search_match_text,
     ssed_ascii_key_needs_linear_safety_net, ssed_fulltext_snippet_html, ssed_index_row_order_key,
     ssed_index_search_key_candidates,
 };
@@ -489,7 +489,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
     }
 
     fn push_row(&mut self, row: SsedIndexRow) -> Result<bool> {
-        let key = normalize_search_match_text(&row.key);
+        let key = ssed_index_row_match_text(&row);
         let row_matches = match self.mode {
             SearchMode::Exact => key == self.needle,
             SearchMode::Forward => key.starts_with(self.needle),
@@ -544,6 +544,19 @@ impl<'a> SsedIndexSearchCollector<'a> {
             next_cursor,
             diagnostics: self.diagnostics,
         }
+    }
+}
+
+fn ssed_index_component_name_is_backward(component: &str) -> bool {
+    component.to_ascii_uppercase().starts_with('B')
+}
+
+fn ssed_index_row_match_text(row: &SsedIndexRow) -> String {
+    let key = normalize_search_match_text(&row.key);
+    if ssed_index_component_name_is_backward(&row.component) {
+        reverse_search_match_text(&key)
+    } else {
+        key
     }
 }
 
@@ -2120,7 +2133,10 @@ impl ReaderBookPackage {
         let mut optimized_scan_components = 0usize;
         let mut scan_needs_linear_fallback = false;
         let ascii_key_needs_linear_safety_net = ssed_ascii_key_needs_linear_safety_net(&needle);
-        if matches!(query.mode, SearchMode::Exact | SearchMode::Forward) {
+        if matches!(
+            query.mode,
+            SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+        ) {
             let scan_result =
                 self.scan_ssed_simple_leaf_index_rows_near_key(&query.mode, &needle, |row| {
                     collector.push_row(row)
@@ -4014,8 +4030,13 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let mut scanned_components = 0usize;
         let mut needs_linear_fallback = false;
-        let needle_keys = ssed_index_search_key_candidates(needle);
-        if needle_keys.is_empty() && !needle.is_empty() {
+        let probe = if *mode == SearchMode::Backward {
+            reverse_search_match_text(needle)
+        } else {
+            needle.to_owned()
+        };
+        let needle_keys = ssed_index_search_key_candidates(&probe);
+        if needle_keys.is_empty() && !probe.is_empty() {
             return Ok(SsedNearKeyScanResult {
                 scanned_components: 0,
                 needs_linear_fallback: true,
@@ -4027,10 +4048,11 @@ impl ReaderBookPackage {
                 if !is_simple_leaf_index_type(component.component_type) {
                     continue;
                 }
-                if matches!(mode, SearchMode::Exact | SearchMode::Forward)
-                    && component.filename.to_ascii_uppercase().starts_with('B')
-                {
-                    continue;
+                let is_backward_index = ssed_index_component_name_is_backward(&component.filename);
+                match mode {
+                    SearchMode::Exact | SearchMode::Forward if is_backward_index => continue,
+                    SearchMode::Backward if !is_backward_index => continue,
+                    _ => {}
                 }
                 let path = match self.resolve_readable_ssed_component_path(component) {
                     Ok(Some(path)) => path,
@@ -4095,7 +4117,7 @@ impl ReaderBookPackage {
                         );
                     }
                     for row in rows {
-                        let key = normalize_search_match_text(&row.key);
+                        let key = ssed_index_row_match_text(&row);
                         let key_bytes = ssed_index_row_order_key(&row);
                         let key_has_needle_prefix =
                             !needle_key.is_empty() && key_bytes.starts_with(&needle_key);
@@ -4109,6 +4131,7 @@ impl ReaderBookPackage {
                         let row_matches = match mode {
                             SearchMode::Exact => key == needle,
                             SearchMode::Forward => key.starts_with(needle),
+                            SearchMode::Backward => key.ends_with(needle),
                             _ => false,
                         };
                         let passed_match_region = match mode {
@@ -4117,6 +4140,11 @@ impl ReaderBookPackage {
                                     && key_bytes.as_slice() > needle_key.as_slice()
                             }
                             SearchMode::Forward => {
+                                !needs_linear_fallback
+                                    && !key_has_needle_prefix
+                                    && key_bytes.as_slice() > needle_key.as_slice()
+                            }
+                            SearchMode::Backward => {
                                 !needs_linear_fallback
                                     && !key_has_needle_prefix
                                     && key_bytes.as_slice() > needle_key.as_slice()

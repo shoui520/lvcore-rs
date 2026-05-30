@@ -90,6 +90,10 @@ pub(super) fn normalize_search_match_text(value: &str) -> String {
     narrow_fullwidth_ascii_text(value).to_lowercase()
 }
 
+pub(super) fn reverse_search_match_text(value: &str) -> String {
+    value.chars().rev().collect()
+}
+
 pub(super) fn ssed_ascii_key_needs_linear_safety_net(needle: &str) -> bool {
     needle.is_ascii() && needle.bytes().any(|byte| byte.is_ascii_alphabetic())
 }

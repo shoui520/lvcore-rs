@@ -184,9 +184,10 @@ known structures.
   dense HONMON databases plus a bounded, index-anchored HONMON scan for stream
   bodies; it is not a substitute for HC-rendered semantic text and may need more
   product tuning.
-- SSED internal-page traversal is currently implemented only for simple
-  exact/forward title-index paths. Backward, partial, keyword, cross-reference,
-  and multi-selector performance still need format-specific indexing work.
+- SSED internal-page traversal is currently implemented for simple
+  exact/forward title-index paths and reversed-key backward indexes. Partial,
+  keyword, cross-reference, and multi-selector performance still need
+  format-specific indexing work.
 - KOJIEN6-specific COLSMPL official RGB/rendering parity remains deferred; the
   parser preserves exact Munsell/label data but does not fake the proprietary
   color-map bridge.
