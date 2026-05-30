@@ -33,10 +33,15 @@ use super::resource_helpers::{
     parse_colscr_wrapped_payload_size, resolved_kind_for_package_html_path,
     resource_kind_from_path, resource_mime_type,
 };
+use super::ssed_detection::{
+    SSED_NAVIGATION_DETECTION_MAX_BYTES, detect_ssed_package, file_starts_with_ssedinfo_magic,
+    inferred_folder_title, load_package_uni_gaiji_maps, multiview_menu_title,
+    package_root_for_detection, read_ssed_navigation_detection_bytes, root_fingerprint,
+    ssed_capabilities, ssed_catalog_for_root, ssed_hanrei_page_label, usable_multiview_title,
+};
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::ssed_payload::{
-    file_starts_with_android_wrapped_sseddata, has_component_payload_casefolded,
-    has_supported_sseddata_component_payload_casefolded,
+    file_starts_with_android_wrapped_sseddata, has_supported_sseddata_component_payload_casefolded,
 };
 use super::ssed_search::{
     decode_ssed_body_search_text, normalize_search_match_text, reverse_search_match_text,
@@ -59,7 +64,7 @@ use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::gaiji::{
     GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference, RichLabel,
-    normalize_gaiji_identity, parse_uni_gaiji_map, resolve_rich_label,
+    normalize_gaiji_identity, resolve_rich_label,
 };
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
 use crate::image::encode_png_rgba;
@@ -80,8 +85,8 @@ use crate::resources::{
 use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery};
 use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
 use crate::ssed::{
-    ANDROID_LVEDINFO_MAGIC, BLOCK_SIZE, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent,
-    SsedComponentRole, SsedDataFile, SsedDataHeader,
+    BLOCK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
+    SsedDataHeader,
 };
 use crate::ssed_aux_index::{
     SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,
@@ -136,13 +141,6 @@ pub struct SsedDriver;
 pub struct LvedSqliteDriver;
 pub struct LvlMultiViewDriver;
 pub struct HoureiDriver;
-
-const SSED_NAVIGATION_DETECTION_MAX_BYTES: usize = 1024 * 1024;
-
-struct DetectedSsedPackage {
-    detected: DetectedPackage,
-    catalog: SsedCatalog,
-}
 
 impl PackageDriver for SsedDriver {
     fn family(&self) -> FormatFamily {
@@ -8962,406 +8960,6 @@ fn scroll_anchor_for_token(target: &TargetToken) -> Result<Option<String>> {
     })
 }
 
-fn ssed_hanrei_page_label(path: &str) -> String {
-    if let Some((_chm, entry)) = path.split_once("!/") {
-        return format!("CHM: {entry}");
-    }
-    if path_has_extension(path, &["chm"]) {
-        return "HANREI.chm".to_owned();
-    }
-    if path.contains("_HELP.localized/contents/hanrei.") {
-        return "Mac help: 凡例".to_owned();
-    }
-    if path.contains("_HELP.localized/contents/copyright.") {
-        return "Mac help: copyright".to_owned();
-    }
-    if path.contains("_HELP.localized/menu.") {
-        return "Mac help: menu".to_owned();
-    }
-    if path.contains("_HELP.localized/top.") {
-        return "Mac help: top".to_owned();
-    }
-    if path.contains("_HELP.localized/index.") {
-        return "Mac help: index".to_owned();
-    }
-    path.to_owned()
-}
-
-fn root_fingerprint(root: &Path) -> String {
-    let mut names = BTreeSet::new();
-    if let Ok(entries) = fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(metadata) = entry.metadata() else {
-                continue;
-            };
-            let name = path
-                .file_name()
-                .map(|v| v.to_string_lossy().to_string())
-                .unwrap_or_default();
-            names.insert(
-                json!({
-                    "name": name,
-                    "is_file": metadata.is_file(),
-                    "len": metadata.len(),
-                })
-                .to_string(),
-            );
-        }
-    }
-    let mut hasher = Sha256::new();
-    for name in names {
-        hasher.update(name.as_bytes());
-        hasher.update(b"\n");
-    }
-    hex::encode(hasher.finalize())
-}
-
-fn files_with_suffix(root: &Path, suffix: &str) -> Result<Vec<PathBuf>> {
-    let mut rows = Vec::new();
-    if !root.is_dir() {
-        return Ok(rows);
-    }
-    let suffix = suffix.to_lowercase();
-    for entry in fs::read_dir(root)? {
-        let path = entry?.path();
-        if path.is_file()
-            && path
-                .file_name()
-                .map(|v| v.to_string_lossy().to_lowercase().ends_with(&suffix))
-                .unwrap_or(false)
-        {
-            rows.push(path);
-        }
-    }
-    rows.sort();
-    Ok(rows)
-}
-
-fn load_package_uni_gaiji_maps(root: &Path) -> BTreeMap<String, String> {
-    let mut merged = BTreeMap::new();
-    let Ok(paths) = files_with_suffix(root, ".uni") else {
-        return merged;
-    };
-    for path in paths {
-        let Ok(data) = fs::read(&path) else {
-            continue;
-        };
-        merged.extend(parse_uni_gaiji_map(&data));
-    }
-    merged
-}
-
-fn package_root_for_detection(path: &Path) -> &Path {
-    if path.is_file() {
-        path.parent().unwrap_or(path)
-    } else {
-        path
-    }
-}
-
-fn inferred_folder_title(root: &Path) -> Option<String> {
-    root.file_name().map(|name| {
-        let raw = name.to_string_lossy();
-        raw.strip_prefix("_DCT_").unwrap_or(raw.as_ref()).to_owned()
-    })
-}
-
-fn multiview_menu_title(root: &Path) -> Result<Option<String>> {
-    let path = root.join("menuData.xml");
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let xml = fs::read_to_string(path)?;
-    let items = parse_menu_data(&xml)?;
-    Ok(items
-        .into_iter()
-        .map(|item| item.label.trim().to_owned())
-        .find(|label| !label.is_empty()))
-}
-
-fn usable_multiview_title(title: &str) -> Option<String> {
-    let title = title.trim();
-    if title.is_empty() || title.contains('○') {
-        None
-    } else {
-        Some(title.to_owned())
-    }
-}
-
-fn display_name(path: &Path) -> String {
-    path.file_name()
-        .map(|v| v.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.display().to_string())
-}
-
-fn detect_ssed_package(root: &Path) -> Result<Option<DetectedSsedPackage>> {
-    let package_root = package_root_for_detection(root);
-    let idx_files = if root.is_file()
-        && root
-            .file_name()
-            .map(|v| v.to_string_lossy().to_lowercase().ends_with(".idx"))
-            .unwrap_or(false)
-    {
-        vec![root.to_path_buf()]
-    } else {
-        files_with_suffix(package_root, ".idx")?
-    };
-    for path in idx_files {
-        if let Ok(catalog) = SsedCatalog::parse_file(&path) {
-            let detected = DetectedPackage {
-                root: package_root.to_path_buf(),
-                format_family: FormatFamily::Ssed,
-                confidence: 95,
-                title: Some(catalog.title.clone()),
-                evidence: vec![
-                    format!("ssedinfo:{}", display_name(&path)),
-                    format!("components:{}", catalog.components.len()),
-                ],
-            };
-            return Ok(Some(DetectedSsedPackage { detected, catalog }));
-        }
-    }
-    Ok(None)
-}
-
-fn ssed_catalog_for_root(root: &Path) -> Result<SsedCatalog> {
-    for path in files_with_suffix(root, ".idx")? {
-        if let Ok(catalog) = SsedCatalog::parse_file(&path) {
-            return Ok(catalog);
-        }
-    }
-    Err(Error::Driver(
-        "SSED catalog vanished after detection".to_owned(),
-    ))
-}
-
-fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {
-    let mut capabilities = vec![
-        Capability::Resources,
-        Capability::HcRenderInput,
-        Capability::ContinuousView,
-        Capability::DeferredRendering,
-    ];
-    let storage = DirectoryStorage::new(root.to_path_buf());
-    let has_decodable_index_rows = has_decodable_ssed_index_rows(catalog, &storage);
-    if has_decodable_index_rows {
-        capabilities.push(Capability::NativeSearch);
-    }
-    if has_decodable_index_rows
-        && catalog.honmon().is_some_and(|component| {
-            has_supported_sseddata_component_payload_casefolded(&storage, component)
-        })
-    {
-        capabilities.push(Capability::FullTextSearch);
-    }
-    if has_decodable_index_rows {
-        capabilities.push(Capability::TitleIndexBrowse);
-    }
-    if ssed_navigation_component_has_non_empty_surface(
-        catalog,
-        &storage,
-        SsedComponentRole::Menu,
-        "MENU.DIC",
-    ) {
-        capabilities.push(Capability::Menu);
-    }
-    if ssed_navigation_component_has_non_empty_surface(
-        catalog,
-        &storage,
-        SsedComponentRole::Toc,
-        "TOC.DIC",
-    ) {
-        capabilities.push(Capability::Toc);
-    }
-    if catalog
-        .components_by_role(SsedComponentRole::MultiDescriptor)
-        .any(|component| {
-            component.has_positive_range() && has_component_payload_casefolded(&storage, component)
-        })
-    {
-        capabilities.push(Capability::MultiSelector);
-    }
-    if catalog
-        .components_by_role(SsedComponentRole::ScreenMenu)
-        .any(|component| {
-            component.has_positive_range() && has_component_payload_casefolded(&storage, component)
-        })
-    {
-        capabilities.push(Capability::ScreenMenu);
-    }
-    if has_any_casefolded(&storage, &["encyclop.idx"]) {
-        capabilities.push(Capability::EncyclopediaIndex);
-    }
-    let has_exinfo_aux = if storage.exists(Path::new("EXINFO.INI")).unwrap_or(false) {
-        storage.read(Path::new("EXINFO.INI")).is_ok_and(|exinfo| {
-            parse_aux_index_specs_from_exinfo(&exinfo)
-                .iter()
-                .filter(|spec| path_has_extension(&spec.info, &["idx"]))
-                .any(|spec| storage.exists(Path::new(&spec.info)).unwrap_or(false))
-        })
-    } else {
-        false
-    };
-    if has_exinfo_aux || has_numeric_aux_index_casefolded(&storage) {
-        capabilities.push(Capability::AuxiliaryIndex);
-    }
-    if has_ssed_hanrei_casefolded(&storage) {
-        capabilities.push(Capability::Hanrei);
-    }
-    if has_any_casefolded(&storage, &["Panels.xml", "Panel"]) {
-        capabilities.push(Capability::Panels);
-    }
-    if catalog.has_role(SsedComponentRole::GaijiFull)
-        || catalog.has_role(SsedComponentRole::GaijiHalf)
-    {
-        capabilities.push(Capability::Gaiji);
-    }
-    capabilities
-}
-
-fn ssed_navigation_component_has_non_empty_surface(
-    catalog: &SsedCatalog,
-    storage: &DirectoryStorage,
-    _role: SsedComponentRole,
-    fallback_name: &str,
-) -> bool {
-    let Some(component) = catalog
-        .component_named(fallback_name)
-        .filter(|component| component.has_positive_range())
-    else {
-        return false;
-    };
-
-    let mut candidates = Vec::new();
-    if let Ok(Some(path)) = storage.resolve_casefolded(Path::new(&component.filename)) {
-        candidates.push(path);
-    }
-    for alias in ssed_component_filename_aliases(component) {
-        if let Ok(Some(path)) = storage.resolve_casefolded(Path::new(&alias)) {
-            candidates.push(path);
-        }
-    }
-
-    for path in candidates {
-        let Ok(Some(data)) = read_ssed_navigation_detection_bytes(&path) else {
-            continue;
-        };
-        let parsed = parse_menu_stream(&data);
-        if !parsed.records.is_empty() {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn read_ssed_navigation_detection_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
-    super::ssed_payload::read_ssed_navigation_detection_bytes(
-        path,
-        SSED_NAVIGATION_DETECTION_MAX_BYTES,
-    )
-}
-
-fn has_any_casefolded(storage: &DirectoryStorage, candidates: &[&str]) -> bool {
-    candidates
-        .iter()
-        .any(|candidate| storage.exists(Path::new(candidate)).unwrap_or(false))
-}
-
-fn has_numeric_aux_index_casefolded(storage: &DirectoryStorage) -> bool {
-    let Ok(entries) = storage.list_dir(Path::new("")) else {
-        return false;
-    };
-    entries.into_iter().any(|path| {
-        let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
-            return false;
-        };
-        is_numeric_aux_index_filename(&name)
-            && !file_starts_with_ssedinfo_magic(&path).unwrap_or(true)
-    })
-}
-
-fn file_starts_with_ssedinfo_magic(path: &Path) -> Result<bool> {
-    let mut file = File::open(path)?;
-    let mut prefix = [0u8; 8];
-    let size = file.read(&mut prefix)?;
-    Ok(size == 8 && (&prefix == SSEDINFO_MAGIC || &prefix == ANDROID_LVEDINFO_MAGIC))
-}
-
-fn has_ssed_hanrei_casefolded(storage: &DirectoryStorage) -> bool {
-    if has_any_casefolded(
-        storage,
-        &[
-            "HANREI.chm",
-            "hanrei.html",
-            "HANREI.html",
-            "HANREI/index.html",
-            "HANREI/index.htm",
-            "HANREI/hanrei.html",
-            "HANREI/hanrei.htm",
-        ],
-    ) {
-        return true;
-    }
-    if has_html_file_under_casefolded(storage, "HANREI", 0) {
-        return true;
-    }
-    let Ok(entries) = storage.list_dir(Path::new("")) else {
-        return false;
-    };
-    entries.into_iter().any(|path| {
-        if !path.is_dir() {
-            return false;
-        }
-        let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
-            return false;
-        };
-        if name.starts_with("._") || !name.to_ascii_lowercase().ends_with("_help.localized") {
-            return false;
-        }
-        let root = name.replace('\\', "/");
-        [
-            format!("{root}/index.html"),
-            format!("{root}/index.htm"),
-            format!("{root}/menu.html"),
-            format!("{root}/top.html"),
-            format!("{root}/contents/hanrei.html"),
-            format!("{root}/contents/hanrei.htm"),
-            format!("{root}/contents/copyright.html"),
-            format!("{root}/contents/copyright.htm"),
-        ]
-        .into_iter()
-        .any(|candidate| storage.exists(Path::new(&candidate)).unwrap_or(false))
-    })
-}
-
-fn has_html_file_under_casefolded(
-    storage: &DirectoryStorage,
-    relative_dir: &str,
-    depth: usize,
-) -> bool {
-    if depth > 8 || !storage.exists(Path::new(relative_dir)).unwrap_or(false) {
-        return false;
-    }
-    let Ok(children) = storage.list_dir(Path::new(relative_dir)) else {
-        return false;
-    };
-    children.into_iter().any(|child| {
-        let Some(file_name) = child.file_name().map(|value| value.to_string_lossy()) else {
-            return false;
-        };
-        if file_name.starts_with("._") {
-            return false;
-        }
-        let candidate = format!("{relative_dir}/{file_name}");
-        if child.is_dir() {
-            return has_html_file_under_casefolded(storage, &candidate, depth + 1);
-        }
-        child.is_file() && path_has_extension(&file_name, &["html", "htm"])
-    })
-}
-
 fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> {
     let mut capabilities = vec![
         Capability::TitleIndexBrowse,
@@ -9457,6 +9055,7 @@ mod tests {
 
     use crate::lved_sqlite::apply_sqlcipher_key;
     use crate::render::{HcRendererProfileSource, HcRendererProfileStatus, RenderCapability};
+    use crate::ssed::SSEDINFO_MAGIC;
     use crate::target::TargetKind;
 
     use super::*;
