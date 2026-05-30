@@ -473,6 +473,25 @@ mod tests {
     }
 
     #[test]
+    fn truncated_panel_bin_records_do_not_panic() {
+        let data = (2u32)
+            .to_le_bytes()
+            .into_iter()
+            .chain((4u32).to_le_bytes())
+            .chain((3u32).to_le_bytes())
+            .chain((0x20u32).to_le_bytes())
+            .chain([0x24, 0x22, 0, 0])
+            .chain((4u32).to_le_bytes())
+            .chain((0x30u32).to_le_bytes())
+            .chain([0x24, 0x24, 0, 0])
+            .collect::<Vec<_>>();
+
+        for len in 0..=data.len() {
+            let _ = parse_panel_bin(&data[..len]);
+        }
+    }
+
+    #[test]
     fn panel_bin_rejects_overflowing_layout_header() {
         let data = u32::MAX
             .to_le_bytes()

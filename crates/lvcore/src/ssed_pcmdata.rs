@@ -436,6 +436,38 @@ mod tests {
     }
 
     #[test]
+    fn truncated_wave_chunks_do_not_panic() {
+        let chunks = wave_chunks_for_slice(
+            WaveFormat {
+                format_tag: 1,
+                channels: 1,
+                sample_rate: 8000,
+                byte_rate: 8000,
+                block_align: 1,
+                bits_per_sample: 8,
+            },
+            b"abcdef",
+        );
+
+        for len in 0..=chunks.len() {
+            let raw = &chunks[..len];
+            let _ = pcmdata_audio_summary(0, raw, &[]);
+            let _ = pcmdata_portable_audio_bytes(0, raw, &[]);
+        }
+    }
+
+    #[test]
+    fn oversized_riff_chunk_does_not_panic_or_wrap() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"fmt ");
+        data.extend_from_slice(&u32::MAX.to_le_bytes());
+        data.extend_from_slice(&[0; 16]);
+
+        assert!(pcmdata_audio_summary(0, &data, &[]).is_err());
+        assert!(pcmdata_portable_audio_bytes(0, &data, &[]).is_err());
+    }
+
+    #[test]
     fn shared_wave_range_rejects_overflowing_data_extent() {
         let stream = SharedWaveStream {
             fmt_offset: 0,

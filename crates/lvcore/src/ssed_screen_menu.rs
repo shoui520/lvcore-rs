@@ -407,6 +407,41 @@ mod tests {
         assert_eq!(parsed.stats["hotspot_direct_targets"], 1);
     }
 
+    #[test]
+    fn truncated_screen_menu_controls_do_not_panic() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x1f, SCREEN_START, 0x00, 0x00]);
+        data.extend_from_slice(&[
+            0x1f,
+            SCREEN_IMAGE,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0x08,
+            0x00,
+            0x06,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x30,
+            0x00,
+            0x00,
+        ]);
+        data.extend_from_slice(&hotspot(1, 2, 3, 4, 10, 62));
+        data.extend_from_slice(&[0x1f, SCREEN_END]);
+        data.extend_from_slice(&[0x1f, DIRECT_TARGET, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00]);
+
+        for len in 0..=data.len() {
+            let _ = parse_screen_menu_stream(&data[..len], None);
+        }
+    }
+
     fn component(
         filename: &str,
         role: SsedComponentRole,
