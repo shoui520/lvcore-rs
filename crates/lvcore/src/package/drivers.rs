@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 mod body;
 mod gaiji;
+mod lved_navigation;
 mod navigation;
 mod renderer;
 mod renderer_input;
