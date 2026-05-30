@@ -111,6 +111,12 @@ fn library_tolerant_import_reports_opened_books_without_aborting() {
     assert_eq!(report.opened.len(), 2);
     assert!(report.diagnostics.is_empty());
     assert_eq!(library.len(), 2);
+
+    let import_result = library.import_result(report);
+    assert_eq!(import_result.book_count, 2);
+    assert_eq!(import_result.books.len(), 2);
+    assert_eq!(import_result.opened_book_ids.len(), 2);
+    assert!(import_result.import_diagnostics.is_empty());
 }
 
 #[test]

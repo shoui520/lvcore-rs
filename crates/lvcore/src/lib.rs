@@ -48,7 +48,10 @@ pub use gaiji::{
     resolve_rich_label,
 };
 pub use hourei::{HoureiLawEntry, HoureiLawWindow, HoureiSearchHit, HoureiStore};
-pub use library::{BookLibrary, LibraryImportReport, RoutedTargetView, RoutedTargetWindow};
+pub use library::{
+    BookLibrary, LibraryImportReport, LibraryImportResult, LibrarySnapshot, RoutedTargetView,
+    RoutedTargetWindow,
+};
 pub use lved_sqlite::{
     AndroidDictInfo, LvedInfoPage, LvedKeyFile, LvedListItem, LvedListWindow, LvedSearchHit,
     LvedSqliteStore, LvedSqliteSummary, LvedTreeIndex, LvedTreeIndexItem,

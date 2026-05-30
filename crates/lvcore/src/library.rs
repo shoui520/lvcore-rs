@@ -46,6 +46,21 @@ pub struct LibraryImportReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibrarySnapshot {
+    pub books: Vec<BookMetadata>,
+    pub book_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryImportResult {
+    pub books: Vec<BookMetadata>,
+    pub book_count: usize,
+    pub opened_book_ids: Vec<BookId>,
+    #[serde(default)]
+    pub import_diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LibrarySearchCursor {
     version: u8,
     book_index: usize,
@@ -173,6 +188,23 @@ impl BookLibrary {
             .values()
             .map(|book| book.metadata().clone())
             .collect()
+    }
+
+    pub fn snapshot(&self) -> LibrarySnapshot {
+        LibrarySnapshot {
+            books: self.metadata_snapshot(),
+            book_count: self.len(),
+        }
+    }
+
+    pub fn import_result(&self, report: LibraryImportReport) -> LibraryImportResult {
+        let snapshot = self.snapshot();
+        LibraryImportResult {
+            books: snapshot.books,
+            book_count: snapshot.book_count,
+            opened_book_ids: report.opened,
+            import_diagnostics: report.diagnostics,
+        }
     }
 
     pub fn book(&self, book_id: &BookId) -> Option<&dyn BookPackage> {

@@ -5,8 +5,9 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
     BookId, BookLibrary, BookMetadata, DriverRegistry, Error, HomeSurface, LibraryImportReport,
-    NavigationStatus, NavigationSurface, PackageDiscoveryOptions, RenderMode, RenderOptions,
-    ResourceToken, Result, SearchMode, SearchQuery, SearchScope, SequenceHint, TargetToken,
+    LibraryImportResult, NavigationStatus, NavigationSurface, PackageDiscoveryOptions, RenderMode,
+    RenderOptions, ResourceToken, Result, SearchMode, SearchQuery, SearchScope, SequenceHint,
+    TargetToken,
 };
 use serde_json::json;
 
@@ -523,14 +524,9 @@ fn library_import_command_json(
     registry: &DriverRegistry,
     paths: &[PathBuf],
     max: Option<usize>,
-) -> serde_json::Value {
+) -> LibraryImportResult {
     let (library, import_report) = open_library_from_paths(registry, paths, max);
-    json!({
-        "books": library.metadata_snapshot(),
-        "book_count": library.len(),
-        "opened_book_ids": import_report.opened,
-        "import_diagnostics": import_report.diagnostics,
-    })
+    library.import_result(import_report)
 }
 
 fn home_command_json(registry: &DriverRegistry, path: &Path) -> Result<serde_json::Value> {
@@ -1118,6 +1114,7 @@ mod tests {
             &[dir.path().to_path_buf()],
             None,
         );
+        let output = serde_json::to_value(output).unwrap();
 
         assert_eq!(output["book_count"].as_u64(), Some(2));
         assert_eq!(output["opened_book_ids"].as_array().unwrap().len(), 2);
