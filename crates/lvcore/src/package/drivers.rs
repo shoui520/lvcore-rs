@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 mod body;
 mod gaiji;
+mod hourei_labels;
 mod hourei_navigation;
 mod html_resource_render;
 mod law_render_refs;
@@ -29,8 +30,10 @@ mod ssed_components;
 mod ssed_hanrei_discovery;
 mod ssed_hanrei_surfaces;
 mod ssed_index;
+mod ssed_multi_ids;
 mod ssed_multi_surfaces;
 mod ssed_navigation;
+mod ssed_panel_navigation;
 mod ssed_panel_surfaces;
 mod ssed_renderer_resources;
 mod ssed_screen_surfaces;
@@ -180,13 +183,18 @@ use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
 use crate::storage::{DirectoryStorage, StorageBackend, path_stays_inside_root, private_cache_dir};
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
+use self::hourei_labels::hourei_law_node_label;
+use self::ssed_multi_ids::{
+    parse_ssed_multi_surface_id, ssed_multi_record_index_ref, ssed_multi_record_menu_ref,
+    ssed_multi_record_surface_id, ssed_multi_root_surface_id,
+};
 use self::ssed_navigation::{
-    SsedHanreiPage, hourei_law_node_label, parse_ssed_multi_surface_id,
-    read_path_inside_loose_root, read_path_inside_resolved_parent, ssed_aux_index_rows_to_nodes,
-    ssed_encyclopedia_rows_to_nodes, ssed_menu_records_to_nodes, ssed_multi_record_index_ref,
-    ssed_multi_record_menu_ref, ssed_multi_record_surface_id, ssed_multi_root_surface_id,
-    ssed_multi_selector_records_to_nodes, ssed_panel_bin_record_to_navigation_cell,
-    ssed_panel_inline_cell_to_navigation_cell,
+    SsedHanreiPage, read_path_inside_loose_root, read_path_inside_resolved_parent,
+    ssed_aux_index_rows_to_nodes, ssed_encyclopedia_rows_to_nodes, ssed_menu_records_to_nodes,
+    ssed_multi_selector_records_to_nodes,
+};
+use self::ssed_panel_navigation::{
+    ssed_panel_bin_record_to_navigation_cell, ssed_panel_inline_cell_to_navigation_cell,
 };
 use super::{
     BookAlias, BookAliasKind, BookId, BookMetadata, BookPackage, Capability, DetectedPackage,
