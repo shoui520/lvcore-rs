@@ -517,6 +517,7 @@ dependencies = [
  "clap",
  "lvcore",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
 ]

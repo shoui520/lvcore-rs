@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -298,7 +299,7 @@ fn main() -> Result<()> {
         Command::Detect { path } => {
             let registry = DriverRegistry::default();
             let detected = registry.detect_all(&path, PackageDiscoveryOptions::default())?;
-            println!("{}", serde_json::to_string_pretty(&detected)?);
+            write_json_pretty(&detected)?;
         }
         Command::Validate {
             paths,
@@ -331,20 +332,20 @@ fn main() -> Result<()> {
                     );
                 }
                 if jsonl {
-                    println!("{}", serde_json::to_string(&row)?);
-                    io::stdout().flush()?;
+                    write_stdout_line(&serde_json::to_string(&row)?)?;
+                    flush_stdout()?;
                 } else {
                     rows.push(row);
                 }
             }
             if !jsonl {
-                println!("{}", serde_json::to_string_pretty(&rows)?);
+                write_json_pretty(&rows)?;
             }
         }
         Command::Home { path } => {
             let registry = DriverRegistry::default();
             let output = home_command_json(&registry, &path)?;
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            write_json_pretty(&output)?;
         }
         Command::Search {
             path,
@@ -372,7 +373,7 @@ fn main() -> Result<()> {
                 window_before,
                 window_after,
             )?;
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            write_json_pretty(&output)?;
         }
         Command::LibrarySearch {
             query,
@@ -398,12 +399,12 @@ fn main() -> Result<()> {
                 cli_render_options(render_mode, debug_trace),
                 render_first,
             )?;
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            write_json_pretty(&output)?;
         }
         Command::LibraryImport { paths, max } => {
             let registry = DriverRegistry::default();
             let output = library_import_command_json(&registry, &paths, max);
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            write_json_pretty(&output)?;
         }
         Command::Surface {
             path,
@@ -416,15 +417,12 @@ fn main() -> Result<()> {
             let metadata = metadata_for(&library, &book_id);
             let surface =
                 library.open_surface_page(&book_id, &surface_id, cursor.as_deref(), limit)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "metadata": metadata,
-                    "cursor": cursor,
-                    "limit": limit,
-                    "surface": surface,
-                }))?
-            );
+            write_json_pretty(&json!({
+                "metadata": metadata,
+                "cursor": cursor,
+                "limit": limit,
+                "surface": surface,
+            }))?;
         }
         Command::Render {
             path,
@@ -438,14 +436,11 @@ fn main() -> Result<()> {
             let target = TargetToken::from_opaque(token);
             let render_options = cli_render_options(mode, debug_trace);
             let view = library.render_target(&book_id, &target, &render_options)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "metadata": metadata,
-                    "render_options": render_options,
-                    "view": view,
-                }))?
-            );
+            write_json_pretty(&json!({
+                "metadata": metadata,
+                "render_options": render_options,
+                "view": view,
+            }))?;
         }
         Command::RendererInput { path, token } => {
             let registry = DriverRegistry::default();
@@ -453,13 +448,10 @@ fn main() -> Result<()> {
             let metadata = metadata_for(&library, &book_id);
             let target = TargetToken::from_opaque(token);
             let input = library.renderer_input_for_target(&book_id, &target)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "metadata": metadata,
-                    "renderer_input": input,
-                }))?
-            );
+            write_json_pretty(&json!({
+                "metadata": metadata,
+                "renderer_input": input,
+            }))?;
         }
         Command::Window {
             path,
@@ -481,15 +473,36 @@ fn main() -> Result<()> {
                 after,
                 cli_render_options(render_mode, debug_trace),
             )?;
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            write_json_pretty(&output)?;
         }
         Command::Resource { path, token } => {
             let registry = DriverRegistry::default();
             let output = resource_command_json(&registry, &path, token)?;
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            write_json_pretty(&output)?;
         }
     }
     Ok(())
+}
+
+fn write_json_pretty(value: &impl serde::Serialize) -> Result<()> {
+    write_stdout_line(&serde_json::to_string_pretty(value)?)
+}
+
+fn write_stdout_line(line: &str) -> Result<()> {
+    let mut stdout = io::stdout().lock();
+    match writeln!(stdout, "{line}") {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => process::exit(0),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn flush_stdout() -> Result<()> {
+    match io::stdout().flush() {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => process::exit(0),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn open_single_book_library(
