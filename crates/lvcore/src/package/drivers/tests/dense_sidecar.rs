@@ -1,6 +1,97 @@
 use super::*;
 
 #[test]
+fn dense_honmon_body_is_not_exposed_as_numeric_text() {
+    let dir = tempdir().unwrap();
+    let catalog = SsedCatalog {
+        title: String::new(),
+        components: Vec::new(),
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 0,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 1,
+            title: None,
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores::default(),
+    );
+    let token = TargetToken::new(&InternalTarget::SsedDenseAnchor {
+        anchor: "00100050".to_owned(),
+        resolver_hint: Some("vlpljbl".to_owned()),
+    })
+    .unwrap();
+    let body = package.visual_body_for_target(&token).unwrap();
+    let text = serde_json::to_string(&body).unwrap();
+    assert!(!text.contains("00100050"));
+    assert!(matches!(body, VisualBody::Unsupported { .. }));
+}
+
+#[test]
+fn parses_observed_styled_dense_anchor_records() {
+    let mut record = Vec::new();
+    record.extend_from_slice(&SSED_ENTRY_MARKER);
+    record.extend_from_slice(&[0x1f, 0x41, 0x01, 0x60, 0x1f, 0x04]);
+    record.extend_from_slice(&body_jis("00000005"));
+    record.extend_from_slice(&[0x1f, 0x05, 0x1f, 0x61, 0x1f, 0x0a]);
+
+    assert_eq!(
+        parse_observed_ssed_dense_anchor_id(&record),
+        Some("00000005".to_owned())
+    );
+}
+
+#[test]
+fn android_ssed_body_database_uses_rowid_times_five_anchor_rule() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_dense_sidecar_fixture(
+        dir.path(),
+        DenseSidecarFixture::AndroidRowidTimesFiveBodyRows,
+    );
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("DENSE".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 32,
+    })
+    .unwrap();
+
+    let body = package.visual_body_for_target(&target).unwrap();
+
+    assert_eq!(
+        body,
+        VisualBody::PreservedHtml {
+            html: "<div>android beta html</div>".to_owned(),
+            source: BodySourceKind::SidecarHtml,
+        }
+    );
+}
+
+#[test]
 fn dense_honmon_address_target_resolves_sidecar_html() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
