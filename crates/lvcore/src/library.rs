@@ -386,6 +386,11 @@ impl BookLibrary {
         self.required_book(book_id)?.read_resource(resource)
     }
 
+    pub fn resolve_scoped_resource_href(&self, href: &str) -> Result<ResourceRef> {
+        let (book_id, resource) = parse_scoped_resource_href(href)?;
+        self.resolve_resource(&book_id, &resource)
+    }
+
     pub fn read_scoped_resource_href(&self, href: &str) -> Result<Vec<u8>> {
         let (book_id, resource) = parse_scoped_resource_href(href)?;
         self.read_resource(&book_id, &resource)

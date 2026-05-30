@@ -645,6 +645,9 @@ fn library_scopes_resource_hrefs_in_search_result_labels() {
         library.read_scoped_resource_href(href).unwrap(),
         b"png".to_vec()
     );
+    let resource = library.resolve_scoped_resource_href(href).unwrap();
+    assert_eq!(resource.mime_type.as_deref(), Some("image/png"));
+    assert_eq!(resource.href.as_deref(), Some(*href));
 }
 
 #[test]
@@ -3671,6 +3674,10 @@ fn library_rejects_invalid_scoped_resource_hrefs() {
     ));
     assert!(matches!(
         library.read_scoped_resource_href("https://example.test/resource"),
+        Err(lvcore::Error::InvalidResourceHref)
+    ));
+    assert!(matches!(
+        library.resolve_scoped_resource_href("lvcore://resource/not-scoped"),
         Err(lvcore::Error::InvalidResourceHref)
     ));
 }
