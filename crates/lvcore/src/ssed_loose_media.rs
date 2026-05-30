@@ -94,7 +94,19 @@ pub fn find_movie_file(package_root: &Path, movie_id: &str) -> Result<Option<Pat
     let Some(directory) = find_loose_media_dir(package_root, "_MOVIE", false)? else {
         return Ok(None);
     };
-    Ok(find_child_casefolded(&directory, movie_id)?.filter(|path| path.is_file()))
+    let Some(path) = find_child_casefolded(&directory, movie_id)? else {
+        return Ok(None);
+    };
+    if !path.is_file() {
+        return Ok(None);
+    }
+    if !path_stays_inside_root(&directory, &path)? {
+        return Err(Error::Driver(format!(
+            "_MOVIE file is outside its loose media root: {}",
+            path.display()
+        )));
+    }
+    Ok(Some(path))
 }
 
 pub fn discover_britannica_media_roots(package_root: &Path) -> Result<Vec<BritannicaMediaRoot>> {
@@ -155,14 +167,23 @@ pub fn resolve_loose_media_file(
     let Some(normalized) = normalize_relative_path(relative_path) else {
         return Ok(None);
     };
-    let mut current = root;
+    let mut current = root.clone();
     for part in normalized.split('/') {
         let Some(next) = find_child_casefolded(&current, part)? else {
             return Ok(None);
         };
         current = next;
     }
-    Ok(current.is_file().then_some(current))
+    if !current.is_file() {
+        return Ok(None);
+    }
+    if !path_stays_inside_root(&root, &current)? {
+        return Err(Error::Driver(format!(
+            "loose media file is outside its media root: {}",
+            current.display()
+        )));
+    }
+    Ok(Some(current))
 }
 
 pub fn discover_britannica_whatday_files(
@@ -826,5 +847,20 @@ mod tests {
 
         let error = discover_britannica_top_dat_files(&package).unwrap_err();
         assert!(error.to_string().contains("outside its media root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loose_movie_symlink_escape_is_not_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("dict");
+        let movie = package.join("_MOVIE");
+        std::fs::create_dir_all(&movie).unwrap();
+        let outside = dir.path().join("00000001");
+        std::fs::write(&outside, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside, movie.join("00000001")).unwrap();
+
+        let error = find_movie_file(&package, "00000001").unwrap_err();
+        assert!(error.to_string().contains("outside its loose media root"));
     }
 }
