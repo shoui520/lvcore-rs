@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 mod body;
+mod body_hourei;
+mod body_lved;
+mod body_multiview;
+mod body_ssed;
 mod gaiji;
 mod hourei_labels;
 mod hourei_navigation;
