@@ -1,6 +1,7 @@
 mod capabilities;
 mod chm_toc;
 mod drivers;
+mod family_drivers;
 mod hc_profile;
 mod html;
 mod lved_refs;

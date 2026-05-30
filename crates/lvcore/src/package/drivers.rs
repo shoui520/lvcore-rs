@@ -10,10 +10,7 @@ use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 use zip::result::ZipError;
 
-use super::capabilities::{
-    default_search_modes_for_family, hourei_capabilities, lved_capabilities,
-    multiview_capabilities, ssed_search_modes, standard_search_modes,
-};
+use super::capabilities::default_search_modes_for_family;
 use super::chm_toc::{
     chm_hanrei_entry_sort_key, chm_hhc_toc_items_to_nodes, chm_local_reference, parse_chm_hhc_toc,
 };
@@ -51,10 +48,8 @@ use super::ssed_body_helpers::{
     ssed_reader_generic_entry_marker_len,
 };
 use super::ssed_detection::{
-    SSED_NAVIGATION_DETECTION_MAX_BYTES, detect_ssed_package, file_starts_with_ssedinfo_magic,
-    inferred_folder_title, load_package_uni_gaiji_maps, multiview_menu_title,
-    package_root_for_detection, read_ssed_navigation_detection_bytes, root_fingerprint,
-    ssed_capabilities, ssed_catalog_for_root, ssed_hanrei_page_label, usable_multiview_title,
+    SSED_NAVIGATION_DETECTION_MAX_BYTES, file_starts_with_ssedinfo_magic, inferred_folder_title,
+    read_ssed_navigation_detection_bytes, root_fingerprint, ssed_hanrei_page_label,
 };
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::ssed_payload::file_starts_with_android_wrapped_sseddata;
@@ -149,269 +144,13 @@ use crate::target::{InternalTarget, TargetLink, TargetToken};
 
 use super::{
     BookAlias, BookAliasKind, BookId, BookMetadata, BookPackage, Capability, DetectedPackage,
-    FormatFamily, PackageDriver,
+    FormatFamily,
 };
 
 pub struct SsedDriver;
 pub struct LvedSqliteDriver;
 pub struct LvlMultiViewDriver;
 pub struct HoureiDriver;
-
-impl PackageDriver for SsedDriver {
-    fn family(&self) -> FormatFamily {
-        FormatFamily::Ssed
-    }
-
-    fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>> {
-        Ok(detect_ssed_package(root)?.map(|package| package.detected))
-    }
-
-    fn open(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
-        let detected = detect_ssed_package(root)?
-            .ok_or_else(|| Error::Driver("not an SSED package".to_owned()))?;
-        let detection = detected.detected;
-        let catalog = detected.catalog;
-        self.open_with_catalog(detection, catalog)
-    }
-
-    fn open_detected(&self, detected: DetectedPackage) -> Result<Box<dyn BookPackage>> {
-        let catalog = ssed_catalog_for_root(&detected.root)?;
-        self.open_with_catalog(detected, catalog)
-    }
-}
-
-impl SsedDriver {
-    fn open_with_catalog(
-        &self,
-        detection: DetectedPackage,
-        catalog: SsedCatalog,
-    ) -> Result<Box<dyn BookPackage>> {
-        let package_root = detection.root.clone();
-        let capabilities = ssed_capabilities(&catalog, &package_root);
-        let search_modes = ssed_search_modes(&catalog, &package_root);
-        Ok(Box::new(ReaderBookPackage::new(
-            &package_root,
-            detection,
-            capabilities,
-            PackageStores {
-                ssed_catalog: Some(catalog),
-                gaiji_unicode_map: load_package_uni_gaiji_maps(&package_root),
-                search_modes,
-                ..Default::default()
-            },
-        )))
-    }
-}
-
-impl PackageDriver for LvedSqliteDriver {
-    fn family(&self) -> FormatFamily {
-        FormatFamily::LvedSqlite3
-    }
-
-    fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>> {
-        let package_root = package_root_for_detection(root);
-        if let Some(store) = LvedSqliteStore::discover(root)? {
-            let mut evidence = vec![
-                store
-                    .payload_path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "lved_sqlite_payload".to_owned()),
-            ];
-            if let Some(key_file) = &store.key_file {
-                evidence.push(format!("key_file:{}", key_file.match_kind));
-            }
-            if store.android_info.is_some() {
-                evidence.push("android_dictinfo".to_owned());
-            }
-            let title = match store.title() {
-                Ok(title) => title.or_else(|| inferred_folder_title(package_root)),
-                Err(_) => return Ok(None),
-            };
-            return Ok(Some(DetectedPackage {
-                root: package_root.to_path_buf(),
-                format_family: FormatFamily::LvedSqlite3,
-                confidence: 98,
-                title,
-                evidence,
-            }));
-        }
-        Ok(None)
-    }
-
-    fn open(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
-        let package_root = package_root_for_detection(root).to_path_buf();
-        let store = LvedSqliteStore::discover(root)?
-            .ok_or_else(|| Error::Driver("not an LVED_SQLITE3 package".to_owned()))?;
-        let mut evidence = vec![
-            store
-                .payload_path
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "lved_sqlite_payload".to_owned()),
-        ];
-        if let Some(key_file) = &store.key_file {
-            evidence.push(format!("key_file:{}", key_file.match_kind));
-        }
-        if store.android_info.is_some() {
-            evidence.push("android_dictinfo".to_owned());
-        }
-        self.open_with_store(
-            DetectedPackage {
-                root: package_root.clone(),
-                format_family: FormatFamily::LvedSqlite3,
-                confidence: 98,
-                title: None,
-                evidence,
-            },
-            store,
-        )
-    }
-
-    fn open_detected(&self, detected: DetectedPackage) -> Result<Box<dyn BookPackage>> {
-        let store = LvedSqliteStore::discover(&detected.root)?
-            .ok_or_else(|| Error::Driver("not an LVED_SQLITE3 package".to_owned()))?;
-        self.open_with_store(detected, store)
-    }
-}
-
-impl LvedSqliteDriver {
-    fn open_with_store(
-        &self,
-        mut detection: DetectedPackage,
-        store: LvedSqliteStore,
-    ) -> Result<Box<dyn BookPackage>> {
-        let package_root = detection.root.clone();
-        let summary = store.summary()?;
-        let search_modes = store.search_modes()?;
-        detection.title = summary
-            .title
-            .clone()
-            .or_else(|| inferred_folder_title(&package_root));
-        Ok(Box::new(ReaderBookPackage::new(
-            &package_root,
-            detection,
-            lved_capabilities(&search_modes),
-            PackageStores {
-                lved_store: Some(store),
-                lved_summary: Some(summary),
-                search_modes,
-                ..Default::default()
-            },
-        )))
-    }
-}
-
-impl PackageDriver for LvlMultiViewDriver {
-    fn family(&self) -> FormatFamily {
-        FormatFamily::LvlMultiView
-    }
-
-    fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>> {
-        let storage = DirectoryStorage::new(root);
-        if !storage.exists(Path::new("menuData.xml"))? {
-            return Ok(None);
-        }
-        let payloads = fs::read_dir(root)?
-            .filter_map(std::result::Result::ok)
-            .filter(|entry| {
-                let name = entry.file_name().to_string_lossy().to_lowercase();
-                name.len() == 6
-                    && name.as_bytes()[1] == b'l'
-                    && name.as_bytes()[2] == b'v'
-                    && (name.ends_with("bat") || name.ends_with("dat"))
-            })
-            .count();
-        if payloads == 0 {
-            return Ok(None);
-        }
-        let retained_ssed_title = ssed_catalog_for_root(root)
-            .ok()
-            .and_then(|catalog| usable_multiview_title(&catalog.title));
-        let menu_title = multiview_menu_title(root)?;
-        Ok(Some(DetectedPackage {
-            root: root.to_path_buf(),
-            format_family: FormatFamily::LvlMultiView,
-            confidence: 98,
-            title: retained_ssed_title
-                .or(menu_title)
-                .or_else(|| inferred_folder_title(root)),
-            evidence: vec!["menuData.xml".to_owned(), "*lvbat/*lvdat".to_owned()],
-        }))
-    }
-
-    fn open(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
-        let detection = self
-            .detect(root)?
-            .ok_or_else(|| Error::Driver("not an LVLMultiView package".to_owned()))?;
-        self.open_detected(detection)
-    }
-
-    fn open_detected(&self, detection: DetectedPackage) -> Result<Box<dyn BookPackage>> {
-        let package_root = detection.root.clone();
-        let store = MultiviewStore::discover(&package_root)?;
-        Ok(Box::new(ReaderBookPackage::new(
-            &package_root,
-            detection,
-            multiview_capabilities(),
-            PackageStores {
-                multiview_store: store,
-                search_modes: standard_search_modes(),
-                ..Default::default()
-            },
-        )))
-    }
-}
-
-impl PackageDriver for HoureiDriver {
-    fn family(&self) -> FormatFamily {
-        FormatFamily::Hourei
-    }
-
-    fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>> {
-        let storage = DirectoryStorage::new(root);
-        let required = [
-            "_DataBase/hore_base.db",
-            "_DataBase/hore_search_a.db",
-            "_DataBase/horejo_base.db",
-        ];
-        if required
-            .iter()
-            .all(|path| storage.exists(Path::new(path)).unwrap_or(false))
-        {
-            return Ok(Some(DetectedPackage {
-                root: root.to_path_buf(),
-                format_family: FormatFamily::Hourei,
-                confidence: 98,
-                title: Some("LogoVista電子法令 Professional".to_owned()),
-                evidence: required.iter().map(|v| (*v).to_owned()).collect(),
-            }));
-        }
-        Ok(None)
-    }
-
-    fn open(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
-        let detection = self
-            .detect(root)?
-            .ok_or_else(|| Error::Driver("not a Hourei package".to_owned()))?;
-        self.open_detected(detection)
-    }
-
-    fn open_detected(&self, detection: DetectedPackage) -> Result<Box<dyn BookPackage>> {
-        let package_root = detection.root.clone();
-        let store = HoureiStore::discover(&package_root)?;
-        Ok(Box::new(ReaderBookPackage::new(
-            &package_root,
-            detection,
-            hourei_capabilities(),
-            PackageStores {
-                hourei_store: store,
-                search_modes: standard_search_modes(),
-                ..Default::default()
-            },
-        )))
-    }
-}
 
 pub struct ReaderBookPackage {
     root: PathBuf,
@@ -8542,6 +8281,9 @@ mod tests {
     use crate::ssed::SSEDINFO_MAGIC;
     use crate::target::TargetKind;
 
+    use super::super::PackageDriver;
+    use super::super::capabilities::ssed_search_modes;
+    use super::super::ssed_detection::ssed_capabilities;
     use super::*;
 
     #[test]
