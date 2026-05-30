@@ -40,6 +40,9 @@ enum Command {
         /// Stream one JSON object per package as soon as it is validated.
         #[arg(long)]
         jsonl: bool,
+        /// Exit nonzero if any package or deep exercise reports an error status.
+        #[arg(long)]
+        fail_on_error: bool,
     },
     /// Open one package and print reader home surfaces.
     Home {
@@ -306,9 +309,11 @@ fn main() -> Result<()> {
             max,
             deep,
             jsonl,
+            fail_on_error,
         } => {
             let registry = DriverRegistry::default();
             let mut package_paths = Vec::new();
+            let mut failures = Vec::new();
             for path in paths {
                 package_paths
                     .extend(registry.discover_roots(&path, PackageDiscoveryOptions { max })?);
@@ -335,11 +340,21 @@ fn main() -> Result<()> {
                     write_stdout_line(&serde_json::to_string(&row)?)?;
                     flush_stdout()?;
                 } else {
-                    rows.push(row);
+                    rows.push(row.clone());
+                }
+                if fail_on_error && validate_row_has_failure(&row) {
+                    failures.push(path.display().to_string());
                 }
             }
             if !jsonl {
                 write_json_pretty(&rows)?;
+            }
+            if fail_on_error && !failures.is_empty() {
+                return Err(Error::Driver(format!(
+                    "validate found {} failing package(s): {}",
+                    failures.len(),
+                    failures.join(", ")
+                )));
             }
         }
         Command::Home { path } => {
@@ -638,6 +653,24 @@ fn validate_package_json(registry: &DriverRegistry, path: &Path, deep: bool) -> 
             "error": error.to_string(),
         }),
     }
+}
+
+fn validate_row_has_failure(row: &serde_json::Value) -> bool {
+    let Some(status) = row.get("status").and_then(serde_json::Value::as_str) else {
+        return true;
+    };
+    if status != "ok" {
+        return true;
+    }
+    row.get("exercises")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|exercises| exercises.iter().any(validate_exercise_has_failure))
+}
+
+fn validate_exercise_has_failure(row: &serde_json::Value) -> bool {
+    row.get("status")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|status| status.ends_with("_error"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1032,6 +1065,30 @@ mod tests {
                 { "advanced": "advanced2" },
             ])
         );
+        assert!(!validate_row_has_failure(&output));
+    }
+
+    #[test]
+    fn validate_failure_detector_flags_open_and_deep_exercise_errors() {
+        assert!(validate_row_has_failure(&serde_json::json!({
+            "status": "open_error",
+            "error": "broken",
+        })));
+        assert!(validate_row_has_failure(&serde_json::json!({
+            "status": "ok",
+            "exercises": [
+                { "status": "ok" },
+                { "status": "render_error", "error": "broken" }
+            ],
+        })));
+        assert!(!validate_row_has_failure(&serde_json::json!({
+            "status": "ok",
+            "exercises": [
+                { "status": "ok" },
+                { "status": "deferred" },
+                { "status": "no_target" }
+            ],
+        })));
     }
 
     #[test]
