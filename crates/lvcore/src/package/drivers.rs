@@ -1166,74 +1166,63 @@ impl NavigationProvider for ReaderBookPackage {
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<NavigationSurface> {
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "title-index" {
-            return self.open_ssed_title_index_surface(surface_id, cursor, limit);
-        }
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "menu" {
-            return self.open_ssed_menu_surface(surface_id, SsedComponentRole::Menu, "MENU.DIC");
-        }
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "toc" {
-            return self.open_ssed_menu_surface(surface_id, SsedComponentRole::Toc, "TOC.DIC");
-        }
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id.starts_with("multi:") {
-            return self.open_ssed_multi_selector_surface(surface_id, cursor, limit);
-        }
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "screen-menu" {
-            return self.open_ssed_screen_menu_surface(surface_id);
-        }
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "encyclopedia" {
-            return self.open_ssed_encyclopedia_surface(surface_id);
-        }
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "britannica-whatday" {
-            return self.open_britannica_whatday_surface(surface_id, cursor, limit);
-        }
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "britannica-top" {
-            return self.open_britannica_top_surface(surface_id);
-        }
-        if self.metadata.format_family == FormatFamily::Ssed
-            && (surface_id.starts_with("aux-index:") || surface_id.starts_with("numeric-aux:"))
-        {
-            return self.open_ssed_aux_index_surface(surface_id);
-        }
-        if self.metadata.format_family == FormatFamily::Ssed && surface_id == "hanrei" {
-            return self.open_ssed_hanrei_surface(surface_id, cursor, limit);
-        }
-        if self.metadata.format_family == FormatFamily::Ssed
-            && (surface_id == "panels" || surface_id.starts_with("panels:"))
-        {
-            return self.open_ssed_panel_surface(surface_id);
-        }
-        if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "lved-list" {
-            return self.open_lved_list_surface(surface_id, cursor, limit);
-        }
-        if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "info" {
-            return self.open_lved_info_surface(surface_id, cursor, limit);
-        }
-        if self.metadata.format_family == FormatFamily::LvedSqlite3 && surface_id == "lved-tree" {
-            return self.open_lved_tree_surface(surface_id);
-        }
-        if self.metadata.format_family == FormatFamily::LvlMultiView && surface_id == "menuData" {
-            return self.open_multiview_menu_surface(surface_id);
-        }
-        if self.metadata.format_family == FormatFamily::Hourei && surface_id == "law-tree" {
-            return self.open_hourei_law_tree_surface(surface_id);
-        }
-        if self.metadata.format_family == FormatFamily::Ssed {
-            return Ok(NavigationSurface::Deferred {
+        match (self.metadata.format_family, surface_id) {
+            (FormatFamily::Ssed, "title-index") => {
+                self.open_ssed_title_index_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::Ssed, "menu") => {
+                self.open_ssed_menu_surface(surface_id, SsedComponentRole::Menu, "MENU.DIC")
+            }
+            (FormatFamily::Ssed, "toc") => {
+                self.open_ssed_menu_surface(surface_id, SsedComponentRole::Toc, "TOC.DIC")
+            }
+            (FormatFamily::Ssed, id) if id.starts_with("multi:") => {
+                self.open_ssed_multi_selector_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::Ssed, "screen-menu") => self.open_ssed_screen_menu_surface(surface_id),
+            (FormatFamily::Ssed, "encyclopedia") => self.open_ssed_encyclopedia_surface(surface_id),
+            (FormatFamily::Ssed, "britannica-whatday") => {
+                self.open_britannica_whatday_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::Ssed, "britannica-top") => self.open_britannica_top_surface(surface_id),
+            (FormatFamily::Ssed, id)
+                if id.starts_with("aux-index:") || id.starts_with("numeric-aux:") =>
+            {
+                self.open_ssed_aux_index_surface(surface_id)
+            }
+            (FormatFamily::Ssed, "hanrei") => {
+                self.open_ssed_hanrei_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::Ssed, "panels") => self.open_ssed_panel_surface(surface_id),
+            (FormatFamily::Ssed, id) if id.starts_with("panels:") => {
+                self.open_ssed_panel_surface(surface_id)
+            }
+            (FormatFamily::LvedSqlite3, "lved-list") => {
+                self.open_lved_list_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::LvedSqlite3, "info") => {
+                self.open_lved_info_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::LvedSqlite3, "lved-tree") => self.open_lved_tree_surface(surface_id),
+            (FormatFamily::LvlMultiView, "menuData") => {
+                self.open_multiview_menu_surface(surface_id)
+            }
+            (FormatFamily::Hourei, "law-tree") => self.open_hourei_law_tree_surface(surface_id),
+            (FormatFamily::Ssed, _) => Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics: vec![Diagnostic::info(
                     "surface_open_deferred",
                     "surface parsing is not implemented yet",
                 )],
-            });
+            }),
+            _ => Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "surface_open_deferred",
+                    "surface parsing will be implemented by the matching provider",
+                )],
+            }),
         }
-        Ok(NavigationSurface::Deferred {
-            surface_id: surface_id.to_owned(),
-            diagnostics: vec![Diagnostic::info(
-                "surface_open_deferred",
-                "surface parsing will be implemented by the matching provider",
-            )],
-        })
     }
 }
 
