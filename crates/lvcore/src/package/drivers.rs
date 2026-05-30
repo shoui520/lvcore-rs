@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -57,6 +57,12 @@ use super::ssed_search::{
     decode_ssed_body_search_text, normalize_search_match_text, reverse_search_match_text,
     ssed_ascii_key_needs_linear_safety_net, ssed_fulltext_snippet_html, ssed_index_row_order_key,
     ssed_index_search_key_candidates,
+};
+use super::ssed_search_runtime::{
+    SSED_FULLTEXT_BODY_WINDOW_BYTES, SSED_FULLTEXT_SCAN_OVERLAP_BYTES,
+    SSED_FULLTEXT_SCAN_WINDOW_BYTES, SsedFulltextRow, SsedIndexSearchCollector,
+    SsedNearKeyScanResult, ssed_fulltext_body_window_len, ssed_index_component_name_is_backward,
+    ssed_index_row_match_text,
 };
 use super::ssed_zip::{
     copy_zip_member_with_size_limit, looks_like_zip_file, ssed_component_filename_aliases,
@@ -190,127 +196,6 @@ struct NormalizedHtmlRefs {
 type PrefixDecryptFn = fn(&[u8], usize) -> Result<Vec<u8>>;
 type FileDecryptFn = fn(&Path, &Path) -> Result<()>;
 
-const SSED_FULLTEXT_BODY_WINDOW_BYTES: usize = 16 * 1024;
-const SSED_FULLTEXT_SCAN_WINDOW_BYTES: usize = 256 * 1024;
-const SSED_FULLTEXT_SCAN_OVERLAP_BYTES: usize = 512;
-#[derive(Debug, Clone)]
-struct SsedFulltextRow {
-    offset: u64,
-    row: SsedIndexRow,
-}
-
-#[derive(Debug, Default)]
-struct SsedNearKeyScanResult {
-    scanned_components: usize,
-    needs_linear_fallback: bool,
-    diagnostics: Vec<Diagnostic>,
-}
-
-struct SsedIndexSearchCollector<'a> {
-    package: &'a ReaderBookPackage,
-    mode: &'a SearchMode,
-    needle: &'a str,
-    offset: usize,
-    page_limit: usize,
-    matched_count: usize,
-    hits: Vec<SearchHit>,
-    diagnostics: Vec<Diagnostic>,
-    seen_targets: HashSet<String>,
-}
-
-impl<'a> SsedIndexSearchCollector<'a> {
-    fn new(
-        package: &'a ReaderBookPackage,
-        mode: &'a SearchMode,
-        needle: &'a str,
-        offset: usize,
-        page_limit: usize,
-    ) -> Self {
-        Self {
-            package,
-            mode,
-            needle,
-            offset,
-            page_limit,
-            matched_count: 0,
-            hits: Vec::new(),
-            diagnostics: Vec::new(),
-            seen_targets: HashSet::new(),
-        }
-    }
-
-    fn push_row(&mut self, row: SsedIndexRow) -> Result<bool> {
-        let key = ssed_index_row_match_text(&row);
-        let row_matches = match self.mode {
-            SearchMode::Exact => key == self.needle,
-            SearchMode::Forward => key.starts_with(self.needle),
-            SearchMode::Backward => key.ends_with(self.needle),
-            SearchMode::Partial => key.contains(self.needle),
-            SearchMode::FullText | SearchMode::Advanced(_) => false,
-        };
-        if !row_matches {
-            return Ok(true);
-        }
-        let target = match self.package.ssed_target_for_index_pointer(row.body)? {
-            Ok(target) => target,
-            Err(diagnostic) => {
-                self.diagnostics.push(diagnostic);
-                return Ok(true);
-            }
-        };
-        if !self.seen_targets.insert(target.as_str().to_owned()) {
-            return Ok(true);
-        }
-        if self.matched_count < self.offset {
-            self.matched_count = self.matched_count.saturating_add(1);
-            return Ok(true);
-        }
-        let title = self.package.ssed_display_text_for_index_row(&row);
-        let label = self.package.ssed_rich_label(&title);
-        self.hits.push(SearchHit {
-            book_id: self.package.metadata.book_id.clone(),
-            target,
-            title_html: label.html,
-            title_text: label.text,
-            snippet_html: None,
-            diagnostics: label.diagnostics,
-        });
-        self.matched_count = self.matched_count.saturating_add(1);
-        Ok(self.hits.len() < self.page_limit)
-    }
-
-    fn has_hits(&self) -> bool {
-        !self.hits.is_empty()
-    }
-
-    fn extend_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) {
-        self.diagnostics.extend(diagnostics);
-    }
-
-    fn into_search_page(mut self, limit: usize) -> SearchPage {
-        let next_cursor = (self.hits.len() > limit).then(|| (self.offset + limit).to_string());
-        self.hits.truncate(limit);
-        SearchPage {
-            hits: self.hits,
-            next_cursor,
-            diagnostics: self.diagnostics,
-        }
-    }
-}
-
-fn ssed_index_component_name_is_backward(component: &str) -> bool {
-    component.to_ascii_uppercase().starts_with('B')
-}
-
-fn ssed_index_row_match_text(row: &SsedIndexRow) -> String {
-    let key = normalize_search_match_text(&row.key);
-    if ssed_index_component_name_is_backward(&row.component) {
-        reverse_search_match_text(&key)
-    } else {
-        key
-    }
-}
-
 impl ReaderBookPackage {
     pub fn new(
         root: &Path,
@@ -360,6 +245,10 @@ impl ReaderBookPackage {
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),
         }
+    }
+
+    pub(super) fn book_id_for_hit(&self) -> BookId {
+        self.metadata.book_id.clone()
     }
 
     fn ssed_navigation_home_surface(
@@ -4172,11 +4061,11 @@ impl ReaderBookPackage {
         (!title.is_empty()).then_some(title)
     }
 
-    fn ssed_rich_label(&self, value: &str) -> RichLabel {
+    pub(super) fn ssed_rich_label(&self, value: &str) -> RichLabel {
         resolve_rich_label(self, value, &GaijiPolicy::default())
     }
 
-    fn ssed_target_for_index_pointer(
+    pub(super) fn ssed_target_for_index_pointer(
         &self,
         pointer: SsedIndexPointer,
     ) -> Result<std::result::Result<TargetToken, Diagnostic>> {
@@ -4812,7 +4701,7 @@ impl ReaderBookPackage {
         self.ssed_rich_label(&label)
     }
 
-    fn ssed_display_text_for_index_row(&self, row: &SsedIndexRow) -> String {
+    pub(super) fn ssed_display_text_for_index_row(&self, row: &SsedIndexRow) -> String {
         let title = self.ssed_title_text(row.title);
         match title {
             Some(title) if !looks_like_raw_anchor_label(&title) => title,
@@ -8197,22 +8086,6 @@ fn hourei_law_node_label(entry: &crate::hourei::HoureiLawEntry) -> String {
         return abbr1.clone();
     }
     entry.hore_id.clone()
-}
-
-fn ssed_fulltext_body_window_len(rows: &[SsedFulltextRow], index: usize) -> usize {
-    let Some(row) = rows.get(index) else {
-        return SSED_FULLTEXT_BODY_WINDOW_BYTES;
-    };
-    rows[index + 1..]
-        .iter()
-        .find_map(|next| {
-            next.offset
-                .checked_sub(row.offset)
-                .filter(|length| *length > 0)
-        })
-        .and_then(|length| usize::try_from(length).ok())
-        .map(|length| length.min(SSED_FULLTEXT_BODY_WINDOW_BYTES))
-        .unwrap_or(SSED_FULLTEXT_BODY_WINDOW_BYTES)
 }
 
 #[derive(Debug, Clone, Copy)]

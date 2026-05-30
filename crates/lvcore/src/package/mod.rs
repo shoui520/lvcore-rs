@@ -13,6 +13,7 @@ mod ssed_detection;
 mod ssed_index_probe;
 mod ssed_payload;
 mod ssed_search;
+mod ssed_search_runtime;
 mod ssed_zip;
 
 use std::collections::BTreeSet;
