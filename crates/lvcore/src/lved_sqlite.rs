@@ -30,7 +30,7 @@ pub struct LvedSqliteStore {
     #[serde(skip, default = "default_lved_connection_cache")]
     connection: Arc<Mutex<Option<Connection>>>,
     #[serde(skip, default = "default_lved_tree_index_cache")]
-    tree_indexes_cache: Arc<Mutex<Option<Vec<LvedTreeIndex>>>>,
+    tree_indexes_cache: Arc<Mutex<Option<Arc<Vec<LvedTreeIndex>>>>>,
     #[serde(skip, default = "default_lved_title_cache")]
     title_cache: Arc<Mutex<Option<Option<String>>>>,
     #[serde(skip, default = "default_lved_schema_cache")]
@@ -41,7 +41,7 @@ fn default_lved_connection_cache() -> Arc<Mutex<Option<Connection>>> {
     Arc::new(Mutex::new(None))
 }
 
-fn default_lved_tree_index_cache() -> Arc<Mutex<Option<Vec<LvedTreeIndex>>>> {
+fn default_lved_tree_index_cache() -> Arc<Mutex<Option<Arc<Vec<LvedTreeIndex>>>>> {
     Arc::new(Mutex::new(None))
 }
 
@@ -256,7 +256,7 @@ impl LvedSqliteStore {
                 title,
                 list_available: lved_list_available(connection, &schema)?,
                 info_available: lved_info_available(connection, &schema)?,
-                tree_available: !self.tree_indexes()?.is_empty(),
+                tree_available: !self.tree_indexes_arc()?.is_empty(),
             })
         })
     }
@@ -468,28 +468,32 @@ impl LvedSqliteStore {
 
     pub fn tree_index_items(&self) -> Result<Vec<LvedTreeIndexItem>> {
         Ok(self
-            .tree_indexes()?
-            .into_iter()
-            .flat_map(|tree| tree.items)
+            .tree_indexes_arc()?
+            .iter()
+            .flat_map(|tree| tree.items.iter().cloned())
             .collect())
     }
 
     pub fn tree_indexes(&self) -> Result<Vec<LvedTreeIndex>> {
+        Ok(self.tree_indexes_arc()?.as_ref().clone())
+    }
+
+    fn tree_indexes_arc(&self) -> Result<Arc<Vec<LvedTreeIndex>>> {
         {
             let cache = self.tree_indexes_cache.lock().map_err(|_| {
                 Error::Driver("LVED_SQLITE3 tree index cache is poisoned".to_owned())
             })?;
             if let Some(trees) = cache.as_ref() {
-                return Ok(trees.clone());
+                return Ok(Arc::clone(trees));
             }
         }
 
-        let trees = self.load_tree_indexes()?;
+        let trees = Arc::new(self.load_tree_indexes()?);
         let mut cache = self
             .tree_indexes_cache
             .lock()
             .map_err(|_| Error::Driver("LVED_SQLITE3 tree index cache is poisoned".to_owned()))?;
-        Ok(cache.get_or_insert(trees).clone())
+        Ok(Arc::clone(cache.get_or_insert(trees)))
     }
 
     fn load_tree_indexes(&self) -> Result<Vec<LvedTreeIndex>> {
@@ -526,23 +530,25 @@ impl LvedSqliteStore {
             return Ok(Vec::new());
         };
         Ok(self
-            .tree_indexes()?
-            .into_iter()
-            .map(|tree| root.join(tree.source))
+            .tree_indexes_arc()?
+            .iter()
+            .map(|tree| root.join(&tree.source))
             .collect())
     }
 
     pub fn tree_index_path(&self) -> Option<PathBuf> {
         let root = self.payload_path.parent()?;
-        self.tree_indexes()
+        self.tree_indexes_arc()
             .ok()?
-            .into_iter()
-            .next()
-            .map(|tree| root.join(tree.source))
+            .first()
+            .map(|tree| root.join(&tree.source))
     }
 
     pub fn tree_index_title(&self) -> Result<Option<String>> {
-        Ok(self.tree_indexes()?.into_iter().find_map(|tree| tree.title))
+        Ok(self
+            .tree_indexes_arc()?
+            .iter()
+            .find_map(|tree| tree.title.clone()))
     }
 
     pub fn media_blob(&self, store: &str, key: &str) -> Result<Option<Vec<u8>>> {
