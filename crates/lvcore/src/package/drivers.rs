@@ -20,12 +20,15 @@ mod resources;
 mod search;
 mod sequence;
 mod ssed_aux_surfaces;
+mod ssed_component_resources;
 mod ssed_components;
+mod ssed_hanrei_discovery;
 mod ssed_hanrei_surfaces;
 mod ssed_index;
 mod ssed_multi_surfaces;
 mod ssed_navigation;
 mod ssed_panel_surfaces;
+mod ssed_renderer_resources;
 mod ssed_screen_surfaces;
 mod ssed_surfaces;
 
