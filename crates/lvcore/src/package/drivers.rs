@@ -21,6 +21,8 @@ mod navigation;
 mod package_files;
 mod renderer;
 mod renderer_input;
+mod resource_common;
+mod resource_ssed;
 mod resources;
 mod search;
 mod search_hourei;
