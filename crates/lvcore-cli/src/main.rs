@@ -109,6 +109,14 @@ enum Command {
         #[arg(long)]
         debug_trace: bool,
     },
+    /// Open a library/corpus set and print frontend-cacheable book metadata.
+    LibraryImport {
+        /// Package roots, payload paths, or corpus roots to inspect.
+        paths: Vec<PathBuf>,
+        /// Stop after this many discovered packages.
+        #[arg(long)]
+        max: Option<usize>,
+    },
     /// Open a reader navigation surface for one package.
     Surface {
         /// Package root or payload path to inspect.
@@ -391,6 +399,11 @@ fn main() -> Result<()> {
             )?;
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
+        Command::LibraryImport { paths, max } => {
+            let registry = DriverRegistry::default();
+            let output = library_import_command_json(&registry, &paths, max);
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
         Command::Surface {
             path,
             surface_id,
@@ -504,6 +517,20 @@ fn metadata_for(library: &BookLibrary, book_id: &BookId) -> BookMetadata {
         .expect("book id returned by open_path must exist")
         .metadata()
         .clone()
+}
+
+fn library_import_command_json(
+    registry: &DriverRegistry,
+    paths: &[PathBuf],
+    max: Option<usize>,
+) -> serde_json::Value {
+    let (library, import_report) = open_library_from_paths(registry, paths, max);
+    json!({
+        "books": library.metadata_snapshot(),
+        "book_count": library.len(),
+        "opened_book_ids": import_report.opened,
+        "import_diagnostics": import_report.diagnostics,
+    })
 }
 
 fn home_command_json(registry: &DriverRegistry, path: &Path) -> Result<serde_json::Value> {
@@ -1074,6 +1101,32 @@ mod tests {
         assert_eq!(output["hits"].as_array().unwrap().len(), 2);
         assert_eq!(output["rendered_first"]["view"]["kind"], "entry_body");
         assert!(output["rendered_first"]["book_id"].as_str().is_some());
+    }
+
+    #[test]
+    fn library_import_command_returns_cacheable_book_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("FirstDictionary");
+        let second = dir.path().join("SecondDictionary");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        write_lved_cli_fixture(&first);
+        write_lved_cli_fixture(&second);
+
+        let output = library_import_command_json(
+            &DriverRegistry::default(),
+            &[dir.path().to_path_buf()],
+            None,
+        );
+
+        assert_eq!(output["book_count"].as_u64(), Some(2));
+        assert_eq!(output["opened_book_ids"].as_array().unwrap().len(), 2);
+        assert_eq!(output["books"].as_array().unwrap().len(), 2);
+        assert!(output["import_diagnostics"].as_array().unwrap().is_empty());
+        assert_eq!(
+            output["books"][0]["format_label"].as_str(),
+            Some("LVED_SQLITE3")
+        );
     }
 
     #[test]

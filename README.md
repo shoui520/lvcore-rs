@@ -76,9 +76,11 @@ provider slices:
 - library-owned package-root discovery for corpus/library directories, so the
   reader can find nested books without duplicating LogoVista package heuristics
   in frontend code;
-- library-owned multi-root import through `BookLibrary::open_discovered_paths`,
-  plus a developer `library-search` CLI command that exercises all-book
-  串刺し検索 and routed first-hit rendering across opened books;
+- library-owned multi-root import through `BookLibrary::open_discovered_paths`
+  and tolerant `try_open_discovered_paths` import reports, plus developer
+  `library-import` and `library-search` CLI commands that exercise
+  frontend-cacheable book metadata, all-book 串刺し検索, and routed first-hit
+  rendering across opened books;
 - casefolded storage lookup with casing preservation;
 - readable SSED component materialization for plain payloads, LogoFontCipher
   payloads, Mac OS X AES payloads, and observed Mac OS X ZipCrypto `HONMON`
