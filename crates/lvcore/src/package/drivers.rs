@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 mod body;
 mod gaiji;
 mod hourei_navigation;
+mod html_resource_render;
 mod law_render_refs;
 mod lved_navigation;
 mod lved_render_refs;
