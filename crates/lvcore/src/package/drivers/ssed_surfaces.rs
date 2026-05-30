@@ -1059,7 +1059,7 @@ impl ReaderBookPackage {
                 )],
             });
         }
-        let Some(path) = self.storage.resolve_casefolded(Path::new(&spec.info))? else {
+        if !self.storage.exists(Path::new(&spec.info))? {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics: vec![Diagnostic::info(
@@ -1067,8 +1067,8 @@ impl ReaderBookPackage {
                     format!("EXINFO auxiliary index {} was not found", spec.info),
                 )],
             });
-        };
-        let rows = parse_aux_index_text_bytes(&fs::read(path)?)?;
+        }
+        let rows = parse_aux_index_text_bytes(&self.storage.read(Path::new(&spec.info))?)?;
         let mut diagnostics = Vec::new();
         let nodes = ssed_aux_index_rows_to_nodes(self, &rows, &mut diagnostics)?;
         if nodes.is_empty() {
@@ -1123,7 +1123,7 @@ impl ReaderBookPackage {
     }
 
     pub(super) fn open_ssed_panel_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
-        let Some(path) = self.storage.resolve_casefolded(Path::new("Panels.xml"))? else {
+        if !self.storage.exists(Path::new("Panels.xml"))? {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics: vec![Diagnostic::info(
@@ -1131,8 +1131,8 @@ impl ReaderBookPackage {
                     "Panels.xml was not found",
                 )],
             });
-        };
-        let parsed = match parse_panel_xml_bytes(&fs::read(path)?) {
+        }
+        let parsed = match parse_panel_xml_bytes(&self.storage.read(Path::new("Panels.xml"))?) {
             Ok(parsed) => parsed,
             Err(error) => {
                 return Ok(NavigationSurface::Deferred {
@@ -1169,14 +1169,14 @@ impl ReaderBookPackage {
             include_external_bins
                 && requested_panel_id.is_none_or(|panel_id| data_ref.panel_id == panel_id)
         }) {
-            let Some(path) = self.resolve_ssed_panel_bin_path(&data_ref.filename)? else {
+            let Some(data) = self.read_ssed_panel_bin_bytes(&data_ref.filename)? else {
                 diagnostics.push(Diagnostic::warning(
                     "ssed_panel_bin_missing",
                     format!("Panel BIN {} was not found", data_ref.filename),
                 ));
                 continue;
             };
-            let panel = match parse_panel_bin(&fs::read(path)?) {
+            let panel = match parse_panel_bin(&data) {
                 Ok(panel) => panel,
                 Err(error) => {
                     diagnostics.push(Diagnostic::warning(
@@ -1216,10 +1216,11 @@ impl ReaderBookPackage {
         })
     }
 
-    fn resolve_ssed_panel_bin_path(&self, filename: &str) -> Result<Option<PathBuf>> {
+    fn read_ssed_panel_bin_bytes(&self, filename: &str) -> Result<Option<Vec<u8>>> {
         let relative = filename.replace('\\', "/");
-        if let Some(path) = self.storage.resolve_casefolded(Path::new(&relative))? {
-            return Ok(Some(path));
+        let relative_path = Path::new(&relative);
+        if self.storage.exists(relative_path)? {
+            return self.storage.read(relative_path).map(Some);
         }
         let Some(stripped) = relative.strip_prefix("Panel/") else {
             return Ok(None);
@@ -1231,7 +1232,12 @@ impl ReaderBookPackage {
         if !sibling_panel_root.is_dir() {
             return Ok(None);
         }
-        DirectoryStorage::new(sibling_panel_root).resolve_casefolded(Path::new(stripped))
+        let sibling_storage = DirectoryStorage::new(sibling_panel_root);
+        let stripped_path = Path::new(stripped);
+        if sibling_storage.exists(stripped_path)? {
+            return sibling_storage.read(stripped_path).map(Some);
+        }
+        Ok(None)
     }
 
     pub(super) fn resolve_package_file_path(&self, path: &str) -> Result<Option<PathBuf>> {

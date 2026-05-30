@@ -3884,6 +3884,75 @@ fn adjacent_templates_resource_symlink_escape_is_not_resolvable() {
     assert!(package.read_resource(&token).is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn ga16_gaiji_symlink_escape_is_not_resolved() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    let outside = dir.path().with_file_name("outside-lvcore-ga16");
+    fs::write(&outside, ga16_fixture(0xB121, 1)).unwrap();
+    symlink(&outside, dir.path().join("GA16FULL")).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let resolved = package.resolve_gaiji(
+        "B121",
+        &GaijiPolicy {
+            priority: vec![
+                GaijiSourcePreference::Ga16Bitmap,
+                GaijiSourcePreference::Unresolved,
+            ],
+        },
+    );
+
+    assert_eq!(
+        resolved.preferred_source,
+        Some(GaijiSourcePreference::Unresolved)
+    );
+    assert!(resolved.resource.is_none());
+
+    fs::remove_file(outside).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn adjacent_panel_bin_symlink_escape_is_not_decoded() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("Book");
+    let panel_root = root.path().join("Book_Panel");
+    fs::create_dir_all(&package_root).unwrap();
+    fs::create_dir_all(&panel_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("Panels.xml"),
+        r#"<panels>
+  <panel index="01010000" paneltype="contents">
+    <title>あ</title>
+    <data type="bin" filename="Panel\All-A.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    let outside = root.path().join("outside-panel-bin");
+    fs::write(&outside, panel_bin_fixture(10, 2)).unwrap();
+    symlink(&outside, panel_root.join("All-A.bin")).unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let surface = package.open_surface("panels:01010000").unwrap();
+
+    let NavigationSurface::Deferred { diagnostics, .. } = surface else {
+        panic!("escaped sibling Panel BIN must not decode into a panel surface");
+    };
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_panel_bin_missing" || diagnostic.code == "ssed_panels_empty"
+    }));
+
+    fs::remove_file(outside).unwrap();
+}
+
 #[test]
 fn resource_targets_render_as_media_resource_views() {
     let dir = tempdir().unwrap();

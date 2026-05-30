@@ -30,15 +30,7 @@ impl ReaderBookPackage {
             _ => &[],
         };
         for candidate in candidates {
-            let Some(path) = self
-                .storage
-                .resolve_casefolded(Path::new(candidate))
-                .ok()
-                .flatten()
-            else {
-                continue;
-            };
-            let Ok(data) = fs::read(&path) else {
+            let Ok(data) = self.read_package_file_bytes(candidate) else {
                 continue;
             };
             if !ga16_resource_covers_code(&data, code) {
