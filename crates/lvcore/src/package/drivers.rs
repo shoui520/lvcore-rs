@@ -1208,19 +1208,12 @@ impl NavigationProvider for ReaderBookPackage {
             return self.open_hourei_law_tree_surface(surface_id);
         }
         if self.metadata.format_family == FormatFamily::Ssed {
-            let (code, message) = match surface_id {
-                "panels" => (
-                    "ssed_panels_deferred",
-                    "SSED Panels.xml/Panel parsing is not implemented yet",
-                ),
-                _ => (
-                    "surface_open_deferred",
-                    "surface parsing is not implemented yet",
-                ),
-            };
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
-                diagnostics: vec![Diagnostic::info(code, message)],
+                diagnostics: vec![Diagnostic::info(
+                    "surface_open_deferred",
+                    "surface parsing is not implemented yet",
+                )],
             });
         }
         Ok(NavigationSurface::Deferred {
