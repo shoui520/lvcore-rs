@@ -1,9 +1,7 @@
 use rusqlite::{Connection, Row};
 
-use super::{
-    LvedSearchHit, LvedSqliteSchema, has_column, html_to_text, nonempty_string,
-    sqlite_value_to_string,
-};
+use super::title::html_to_text;
+use super::{LvedSearchHit, LvedSqliteSchema, has_column, nonempty_string, sqlite_value_to_string};
 use crate::error::{Error, Result};
 use crate::search::SearchMode;
 

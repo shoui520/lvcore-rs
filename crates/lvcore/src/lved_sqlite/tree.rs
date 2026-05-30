@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use encoding_rs::SHIFT_JIS;
 
-use super::{LvedTreeIndexItem, decode_sqlite_text, html_to_text};
+use super::title::html_to_text;
+use super::{LvedTreeIndexItem, decode_sqlite_text};
 use crate::error::Result;
 
 pub(super) fn lved_tree_index_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
