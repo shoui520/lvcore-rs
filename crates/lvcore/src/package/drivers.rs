@@ -4001,7 +4001,11 @@ impl ReaderBookPackage {
         }
         let mut rows = Vec::new();
         let mut seen = 0usize;
+        let skip_backward_rows = self.ssed_has_forward_browse_index();
         let diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
+            if skip_backward_rows && ssed_index_component_name_is_backward(&row.component) {
+                return Ok(true);
+            }
             if seen >= offset {
                 rows.push(row);
             }
@@ -4009,6 +4013,17 @@ impl ReaderBookPackage {
             Ok(rows.len() < limit)
         })?;
         Ok((rows, diagnostics))
+    }
+
+    fn ssed_has_forward_browse_index(&self) -> bool {
+        self.ssed_catalog.as_ref().is_some_and(|catalog| {
+            catalog
+                .components_by_role(SsedComponentRole::Index)
+                .any(|component| {
+                    is_supported_index_type(component.component_type)
+                        && !ssed_index_component_name_is_backward(&component.filename)
+                })
+        })
     }
 
     fn scan_ssed_simple_leaf_index_rows_near_key(

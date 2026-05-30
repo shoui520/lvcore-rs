@@ -2238,6 +2238,69 @@ fn title_index_surfaces_are_cursor_paged_by_backend() {
 }
 
 #[test]
+fn title_index_browse_prefers_forward_rows_over_backward_search_rows() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_forward_and_backward_indexes(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("beta", 1, 4, 13, 7),
+        ])),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("ahpla", 1, 2, 15, 0),
+            ("ateb", 1, 4, 15, 7),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("expected SSED title/index browse");
+    };
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "beta"]
+    );
+
+    let backward = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "ha".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(backward.hits.len(), 1);
+    assert_eq!(backward.hits[0].title_text, "alpha");
+}
+
+#[test]
 fn ssed_simple_index_search_returns_title_backed_hits() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -3737,6 +3800,59 @@ fn ssedinfo_fixture_with_backward_index() -> Vec<u8> {
         0xf2,
         17,
         18,
+        "GA16HALF",
+    );
+    data
+}
+
+fn ssedinfo_fixture_with_forward_and_backward_indexes() -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 6 * 0x30];
+    data[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Bidirectional Fixture";
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 6;
+    write_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x30..record_start + 0x60],
+        0x05,
+        13,
+        14,
+        "FHTITLE.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x60..record_start + 0x90],
+        0x91,
+        17,
+        17,
+        "FHINDEX.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x90..record_start + 0xc0],
+        0x07,
+        15,
+        16,
+        "BHTITLE.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0xc0..record_start + 0xf0],
+        0x71,
+        18,
+        18,
+        "BHINDEX.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0xf0..record_start + 0x120],
+        0xf2,
+        19,
+        20,
         "GA16HALF",
     );
     data
