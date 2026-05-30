@@ -96,10 +96,10 @@ use crate::ssed_index::{
     parse_internal_page, parse_simple_leaf_page, parse_supported_leaf_page,
 };
 use crate::ssed_loose_media::{
-    discover_britannica_top_dat_files, discover_britannica_whatday_paths, find_movie_file,
-    has_britannica_top_dat_files, has_britannica_whatday_files, parse_lved_address,
-    read_pcmu_record, render_britannica_html_fragment, resolve_loose_media_file,
-    resolve_pcmu_record,
+    discover_britannica_top_dat_files, discover_britannica_whatday_paths, find_loose_media_root,
+    find_movie_file, has_britannica_top_dat_files, has_britannica_whatday_files,
+    parse_lved_address, read_pcmu_record, render_britannica_html_fragment,
+    resolve_loose_media_file, resolve_pcmu_record,
 };
 use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
 use crate::ssed_multi::{
@@ -124,7 +124,7 @@ use crate::ssed_sidecar::{
     search_ssed_dense_sidecar_bodies_with_resolvers,
 };
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
-use crate::storage::{DirectoryStorage, StorageBackend};
+use crate::storage::{DirectoryStorage, StorageBackend, path_stays_inside_root, private_cache_dir};
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
 use super::{
@@ -1512,10 +1512,9 @@ impl ResourceProvider for ReaderBookPackage {
                 })
             }
             InternalResource::SsedGa16Glyph { path, code } => {
-                let resolved = self.resolve_package_file_path(&path)?;
                 let mut diagnostics = Vec::new();
-                let href = if let Some(resolved) = &resolved {
-                    match fs::read(resolved) {
+                let href = if self.resolve_package_file_path(&path)?.is_some() {
+                    match self.read_package_file_bytes(&path) {
                         Ok(data) if ga16_resource_covers_code(&data, &code) => {
                             Some(format!("lvcore://resource/{}", token.as_str()))
                         }
@@ -1741,12 +1740,7 @@ impl ResourceProvider for ReaderBookPackage {
 
     fn read_resource(&self, token: &ResourceToken) -> Result<Vec<u8>> {
         match token.decode()? {
-            InternalResource::PackageFile { path, .. } => {
-                let Some(resolved) = self.resolve_package_file_path(&path)? else {
-                    return Err(Error::Driver(format!("resource not found: {path}")));
-                };
-                Ok(fs::read(resolved)?)
-            }
+            InternalResource::PackageFile { path, .. } => self.read_package_file_bytes(&path),
             InternalResource::SsedLooseFile {
                 root_name, path, ..
             } => {
@@ -1756,7 +1750,7 @@ impl ResourceProvider for ReaderBookPackage {
                         "loose SSED resource not found: {root_name}/{path}"
                     )));
                 };
-                Ok(fs::read(resolved)?)
+                read_path_inside_loose_root(&self.root, &root_name, &resolved)
             }
             InternalResource::SsedComponentAddress {
                 component,
@@ -1792,10 +1786,10 @@ impl ResourceProvider for ReaderBookPackage {
                 height,
             } => self.read_ssed_figure_resource(&component, block, offset, width, height),
             InternalResource::SsedGa16Glyph { path, code } => {
-                let Some(resolved) = self.resolve_package_file_path(&path)? else {
+                if self.resolve_package_file_path(&path)?.is_none() {
                     return Err(Error::Driver(format!("GA16 resource not found: {path}")));
-                };
-                let data = fs::read(resolved)?;
+                }
+                let data = self.read_package_file_bytes(&path)?;
                 ga16_glyph_png(&data, &code)
             }
             InternalResource::SsedPcmDataRange {
@@ -1820,7 +1814,7 @@ impl ResourceProvider for ReaderBookPackage {
                 let Some(path) = find_movie_file(&self.root, &movie_id)? else {
                     return Err(Error::Driver(format!("_MOVIE file not found: {movie_id}")));
                 };
-                Ok(fs::read(path)?)
+                read_path_inside_resolved_parent(&path, "_MOVIE")
             }
             InternalResource::SsedPdfSpread { page_id } => {
                 let Some(lookup) = self.lookup_pdfspread_page(&page_id)? else {
@@ -1850,6 +1844,11 @@ impl ResourceProvider for ReaderBookPackage {
                 let Some(resolved) = self.storage.resolve_casefolded(relative)? else {
                     return Err(Error::Driver(format!("resource not found: {chm_path}")));
                 };
+                if !path_stays_inside_root(&self.root, &resolved)? {
+                    return Err(Error::Driver(format!(
+                        "CHM resource path is outside the package: {chm_path}"
+                    )));
+                }
                 read_chm_entry(&resolved, &entry_path)
             }
             InternalResource::MediaBlob { store, key, .. } => {
@@ -3605,39 +3604,66 @@ impl ReaderBookPackage {
 
     fn resolve_package_file_path(&self, path: &str) -> Result<Option<PathBuf>> {
         let normalized = path.replace('\\', "/");
-        if let Some(path) = self.storage.resolve_casefolded(Path::new(&normalized))? {
+        let relative = Path::new(&normalized);
+        if self.storage.exists(relative)?
+            && let Some(path) = self.storage.resolve_casefolded(relative)?
+        {
             return Ok(Some(path));
         }
         self.resolve_adjacent_templates_file_path(&normalized)
     }
 
+    fn read_package_file_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let normalized = path.replace('\\', "/");
+        let relative = Path::new(&normalized);
+        if self.storage.exists(relative)? {
+            return self.storage.read(relative);
+        }
+        let Some((templates_root, stripped)) = self.adjacent_templates_root_and_path(relative)
+        else {
+            return Err(Error::Driver(format!("resource not found: {path}")));
+        };
+        DirectoryStorage::new(templates_root).read(stripped)
+    }
+
     fn resolve_adjacent_templates_file_path(&self, path: &str) -> Result<Option<PathBuf>> {
         let relative = Path::new(path);
-        let mut components = relative.components();
-        let Some(first) = components.next() else {
+        let Some((templates_root, stripped)) = self.adjacent_templates_root_and_path(relative)
+        else {
             return Ok(None);
         };
+        let storage = DirectoryStorage::new(templates_root);
+        if storage.exists(stripped)? {
+            return storage.resolve_casefolded(stripped);
+        }
+        Ok(None)
+    }
+
+    fn adjacent_templates_root_and_path<'a>(
+        &self,
+        relative: &'a Path,
+    ) -> Option<(PathBuf, &'a Path)> {
+        let mut components = relative.components();
+        let first = components.next()?;
         if !first
             .as_os_str()
             .to_string_lossy()
             .eq_ignore_ascii_case("Templates")
         {
-            return Ok(None);
+            return None;
         }
         let stripped = components.as_path();
         if stripped.as_os_str().is_empty() {
-            return Ok(None);
+            return None;
         }
-        let Some(package_name) = self.root.file_name().and_then(|name| name.to_str()) else {
-            return Ok(None);
-        };
+        let package_name = self.root.file_name().and_then(|name| name.to_str())?;
         let sibling_templates_root = self
             .root
             .with_file_name(format!("{package_name}_Templates"));
         if !sibling_templates_root.is_dir() {
-            return Ok(None);
+            return None;
         }
-        DirectoryStorage::new(sibling_templates_root).resolve_casefolded(stripped)
+        Some((sibling_templates_root, stripped))
     }
 
     fn open_ssed_hanrei_surface(
@@ -7507,10 +7533,7 @@ impl ReaderBookPackage {
         hasher.update(metadata.len().to_le_bytes());
         hasher.update(modified.to_le_bytes());
         let hash = hex::encode(hasher.finalize());
-        let dir = std::env::temp_dir()
-            .join("lvcore-rs")
-            .join("ssed-components");
-        fs::create_dir_all(&dir)?;
+        let dir = private_cache_dir("ssed-components")?;
         Ok(dir.join(format!("{hash}.{extension}")))
     }
 
@@ -7883,6 +7906,38 @@ fn lved_list_label_html(title_html: &str, subtitle_html: &str) -> String {
     } else {
         format!(r#"{title_html}<span class="lvcore-subtitle"> {subtitle_html}</span>"#)
     }
+}
+
+fn read_path_inside_loose_root(
+    package_root: &Path,
+    root_name: &str,
+    resolved: &Path,
+) -> Result<Vec<u8>> {
+    let Some(root) = find_loose_media_root(package_root, root_name)? else {
+        return Err(Error::Driver(format!(
+            "loose SSED resource root not found: {root_name}"
+        )));
+    };
+    if !path_stays_inside_root(&root, resolved)? {
+        return Err(Error::Driver(format!(
+            "loose SSED resource path is outside its root: {root_name}"
+        )));
+    }
+    Ok(fs::read(resolved)?)
+}
+
+fn read_path_inside_resolved_parent(resolved: &Path, label: &str) -> Result<Vec<u8>> {
+    let Some(root) = resolved.parent() else {
+        return Err(Error::Driver(format!(
+            "{label} resource path has no parent directory"
+        )));
+    };
+    if !path_stays_inside_root(root, resolved)? {
+        return Err(Error::Driver(format!(
+            "{label} resource path is outside its resolved root"
+        )));
+    }
+    Ok(fs::read(resolved)?)
 }
 
 fn home_surface_reader_priority(surface: &HomeSurface) -> (u8, u8) {

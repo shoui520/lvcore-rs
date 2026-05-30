@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::crypto::{decrypt_logofont_cipher_file_to_path, decrypt_logofont_cipher_prefix};
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
+use crate::storage::private_cache_dir;
 use encoding_rs::SHIFT_JIS;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -677,9 +678,7 @@ fn decrypted_sidecar_cache_path(path: &Path) -> Result<PathBuf> {
         .file_name()
         .map(|name| name.to_string_lossy())
         .unwrap_or_else(|| "sidecar".into());
-    Ok(std::env::temp_dir()
-        .join("lvcore-ssed-sidecars")
-        .join(format!("{stem}-{digest}.sqlite")))
+    Ok(private_cache_dir("ssed-sidecars")?.join(format!("{stem}-{digest}.sqlite")))
 }
 
 fn open_readonly_sqlite(path: &Path) -> Result<Connection> {

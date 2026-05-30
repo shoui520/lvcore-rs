@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,8 @@ pub struct LvedSqliteStore {
     tree_indexes_cache: Arc<Mutex<Option<Vec<LvedTreeIndex>>>>,
     #[serde(skip, default = "default_lved_title_cache")]
     title_cache: Arc<Mutex<Option<Option<String>>>>,
+    #[serde(skip, default = "default_lved_schema_cache")]
+    schema_cache: Arc<Mutex<Option<Arc<LvedSqliteSchema>>>>,
 }
 
 fn default_lved_connection_cache() -> Arc<Mutex<Option<Connection>>> {
@@ -43,6 +46,10 @@ fn default_lved_tree_index_cache() -> Arc<Mutex<Option<Vec<LvedTreeIndex>>>> {
 }
 
 fn default_lved_title_cache() -> Arc<Mutex<Option<Option<String>>>> {
+    Arc::new(Mutex::new(None))
+}
+
+fn default_lved_schema_cache() -> Arc<Mutex<Option<Arc<LvedSqliteSchema>>>> {
     Arc::new(Mutex::new(None))
 }
 
@@ -140,6 +147,38 @@ pub struct LvedTreeIndex {
     pub items: Vec<LvedTreeIndexItem>,
 }
 
+#[derive(Debug, Clone)]
+struct LvedSqliteSchema {
+    tables: BTreeMap<String, Vec<String>>,
+}
+
+impl LvedSqliteSchema {
+    fn load(connection: &Connection) -> Result<Self> {
+        let mut tables = BTreeMap::new();
+        for table in sqlite_table_names(connection)? {
+            let columns = sqlite_columns(connection, &table)?;
+            tables.insert(table.to_lowercase(), columns);
+        }
+        Ok(Self { tables })
+    }
+
+    fn table_exists(&self, table: &str) -> bool {
+        self.tables.contains_key(&table.to_lowercase())
+    }
+
+    fn columns(&self, table: &str) -> &[String] {
+        self.tables
+            .get(&table.to_lowercase())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn table_has_columns(&self, table: &str, required: &[&str]) -> bool {
+        let columns = self.columns(table);
+        required.iter().all(|column| has_column(columns, column))
+    }
+}
+
 impl LvedSqliteStore {
     pub fn discover(root: &Path) -> Result<Option<Self>> {
         let Some(payload_path) = lved_payload_path(root)? else {
@@ -154,6 +193,7 @@ impl LvedSqliteStore {
             connection: default_lved_connection_cache(),
             tree_indexes_cache: default_lved_tree_index_cache(),
             title_cache: default_lved_title_cache(),
+            schema_cache: default_lved_schema_cache(),
         }))
     }
 
@@ -210,14 +250,34 @@ impl LvedSqliteStore {
 
     pub fn summary(&self) -> Result<LvedSqliteSummary> {
         self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
             let title = self.cached_title(connection)?;
             Ok(LvedSqliteSummary {
                 title,
-                list_available: lved_list_available(connection)?,
-                info_available: lved_info_available(connection)?,
+                list_available: lved_list_available(connection, &schema)?,
+                info_available: lved_info_available(connection, &schema)?,
                 tree_available: !self.tree_indexes()?.is_empty(),
             })
         })
+    }
+
+    fn schema(&self, connection: &Connection) -> Result<Arc<LvedSqliteSchema>> {
+        {
+            let cache = self
+                .schema_cache
+                .lock()
+                .map_err(|_| Error::Driver("LVED_SQLITE3 schema cache is poisoned".to_owned()))?;
+            if let Some(schema) = cache.as_ref() {
+                return Ok(Arc::clone(schema));
+            }
+        }
+
+        let schema = Arc::new(LvedSqliteSchema::load(connection)?);
+        let mut cache = self
+            .schema_cache
+            .lock()
+            .map_err(|_| Error::Driver("LVED_SQLITE3 schema cache is poisoned".to_owned()))?;
+        Ok(Arc::clone(cache.get_or_insert(schema)))
     }
 
     fn cached_title(&self, connection: &Connection) -> Result<Option<String>> {
@@ -238,7 +298,9 @@ impl LvedSqliteStore {
             }
         }
 
-        let title = lved_sqlite_title_from_connection(connection).or(self.tree_index_title()?);
+        let schema = self.schema(connection)?;
+        let title =
+            lved_sqlite_title_from_connection(connection, &schema).or(self.tree_index_title()?);
         let mut cache = self
             .title_cache
             .lock()
@@ -247,7 +309,10 @@ impl LvedSqliteStore {
     }
 
     pub fn search_modes(&self) -> Result<Vec<SearchMode>> {
-        self.with_connection(lved_available_search_modes)
+        self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
+            Ok(lved_available_search_modes(&schema))
+        })
     }
 
     pub fn search(
@@ -270,15 +335,15 @@ impl LvedSqliteStore {
             return Ok(Vec::new());
         }
         self.with_connection(|connection| {
-            search_lved_sqlite_connection(connection, query, mode, offset, limit)
+            let schema = self.schema(connection)?;
+            search_lved_sqlite_connection(connection, &schema, query, mode, offset, limit)
         })
     }
 
     pub fn content_html(&self, content_id: i64) -> Result<Option<String>> {
         self.with_connection(|connection| {
-            if !sqlite_table_exists(connection, "content")
-                || !sqlite_table_has_columns(connection, "content", &["id", "body"])
-            {
+            let schema = self.schema(connection)?;
+            if !schema.table_has_columns("content", &["id", "body"]) {
                 return Ok(None);
             }
             let mut statement =
@@ -293,9 +358,8 @@ impl LvedSqliteStore {
 
     pub fn info_html(&self, row_id: i64) -> Result<Option<String>> {
         self.with_connection(|connection| {
-            if !sqlite_table_exists(connection, "info")
-                || !sqlite_table_has_columns(connection, "info", &["id", "body"])
-            {
+            let schema = self.schema(connection)?;
+            if !schema.table_has_columns("info", &["id", "body"]) {
                 return Ok(None);
             }
             let mut statement =
@@ -310,9 +374,8 @@ impl LvedSqliteStore {
 
     pub fn info_html_by_name(&self, name: &str) -> Result<Option<String>> {
         self.with_connection(|connection| {
-            if !sqlite_table_exists(connection, "info")
-                || !sqlite_table_has_columns(connection, "info", &["name", "body"])
-            {
+            let schema = self.schema(connection)?;
+            if !schema.table_has_columns("info", &["name", "body"]) {
                 return Ok(None);
             }
             let mut statement =
@@ -327,9 +390,9 @@ impl LvedSqliteStore {
 
     pub fn named_html_by_name(&self, table: &str, name: &str) -> Result<Option<String>> {
         self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
             if !is_safe_sqlite_identifier(table)
-                || !sqlite_table_exists(connection, table)
-                || !sqlite_table_has_columns(connection, table, &["name", "body"])
+                || !schema.table_has_columns(table, &["name", "body"])
             {
                 return Ok(None);
             }
@@ -352,10 +415,8 @@ impl LvedSqliteStore {
 
     pub fn info_pages_page(&self, offset: usize, limit: usize) -> Result<Vec<LvedInfoPage>> {
         self.with_connection(|connection| {
-            if limit == 0
-                || !sqlite_table_exists(connection, "info")
-                || !sqlite_table_has_columns(connection, "info", &["id", "name", "body"])
-            {
+            let schema = self.schema(connection)?;
+            if limit == 0 || !schema.table_has_columns("info", &["id", "name", "body"]) {
                 return Ok(Vec::new());
             }
             let mut statement = connection.prepare(
@@ -387,14 +448,14 @@ impl LvedSqliteStore {
 
     pub fn list_items_page(&self, offset: usize, limit: usize) -> Result<Vec<LvedListItem>> {
         self.with_connection(|connection| {
-            let list_columns = sqlite_columns(connection, "list")?;
-            if limit == 0 || !has_column(&list_columns, "id") || !has_column(&list_columns, "refid")
-            {
+            let schema = self.schema(connection)?;
+            let list_columns = schema.columns("list");
+            if limit == 0 || !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
                 return Ok(Vec::new());
             }
             let rows = lved_list_hits_by_id_clause_offset(
                 connection,
-                &list_columns,
+                list_columns,
                 "1 = ?",
                 "l.id",
                 1,
@@ -491,9 +552,8 @@ impl LvedSqliteStore {
                 "lved.mediasub" | "mediasub" => "mediasub",
                 _ => return Ok(None),
             };
-            if !sqlite_table_exists(connection, table)
-                || !sqlite_table_has_columns(connection, table, &["name", "main"])
-            {
+            let schema = self.schema(connection)?;
+            if !schema.table_has_columns(table, &["name", "main"]) {
                 return Ok(None);
             }
             let stem = Path::new(key)
@@ -520,8 +580,9 @@ impl LvedSqliteStore {
         after: usize,
     ) -> Result<Option<LvedListWindow>> {
         self.with_connection(|connection| {
-            let list_columns = sqlite_columns(connection, "list")?;
-            if !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
+            let schema = self.schema(connection)?;
+            let list_columns = schema.columns("list");
+            if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
                 return Ok(None);
             }
             let Some(center_list_id) = connection
@@ -536,7 +597,7 @@ impl LvedSqliteStore {
             };
             let center = lved_list_hits_by_id_clause(
                 connection,
-                &list_columns,
+                list_columns,
                 "l.id = ?",
                 "l.id",
                 center_list_id,
@@ -549,7 +610,7 @@ impl LvedSqliteStore {
             };
             let mut before_rows = lved_list_hits_by_id_clause(
                 connection,
-                &list_columns,
+                list_columns,
                 "l.id < ?",
                 "l.id desc",
                 center_list_id,
@@ -558,7 +619,7 @@ impl LvedSqliteStore {
             before_rows.reverse();
             let after_rows = lved_list_hits_by_id_clause(
                 connection,
-                &list_columns,
+                list_columns,
                 "l.id > ?",
                 "l.id",
                 center_list_id,
@@ -605,9 +666,9 @@ fn lved_tree_index_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-fn lved_list_available(connection: &Connection) -> Result<bool> {
-    let list_columns = sqlite_columns(connection, "list")?;
-    if !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
+fn lved_list_available(connection: &Connection, schema: &LvedSqliteSchema) -> Result<bool> {
+    let list_columns = schema.columns("list");
+    if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
         return Ok(false);
     }
     connection
@@ -617,10 +678,8 @@ fn lved_list_available(connection: &Connection) -> Result<bool> {
         .map_err(Error::from)
 }
 
-fn lved_info_available(connection: &Connection) -> Result<bool> {
-    if !sqlite_table_exists(connection, "info")
-        || !sqlite_table_has_columns(connection, "info", &["id", "name", "body"])
-    {
+fn lved_info_available(connection: &Connection, schema: &LvedSqliteSchema) -> Result<bool> {
+    if !schema.table_has_columns("info", &["id", "name", "body"]) {
         return Ok(false);
     }
     connection
@@ -1193,29 +1252,30 @@ pub fn sqlite_table_names(connection: &Connection) -> Result<Vec<String>> {
 
 fn search_lved_sqlite_connection(
     connection: &Connection,
+    schema: &LvedSqliteSchema,
     query: &str,
     mode: &SearchMode,
     offset: usize,
     limit: usize,
 ) -> Result<Vec<LvedSearchHit>> {
-    if !sqlite_table_exists(connection, "search") || !sqlite_table_exists(connection, "list") {
+    if !schema.table_exists("search") || !schema.table_exists("list") {
         return Ok(Vec::new());
     }
-    let search_columns = sqlite_columns(connection, "search")?;
-    let list_columns = sqlite_columns(connection, "list")?;
-    if !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
+    let search_columns = schema.columns("search");
+    let list_columns = schema.columns("list");
+    if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
         return Ok(Vec::new());
     }
     let normalized = normalize_lved_query(query);
     if normalized.is_empty() {
         return Ok(Vec::new());
     }
-    let Some((where_clause, parameter)) = lved_search_where(&normalized, mode, &search_columns)
+    let Some((where_clause, parameter)) = lved_search_where(&normalized, mode, search_columns)
     else {
         return Ok(Vec::new());
     };
 
-    let projection = lved_list_projection(&list_columns);
+    let projection = lved_list_projection(list_columns);
     let sql = format!(
         "select l.id, l.refid, {}, {}, {}, {} \
          from search s join list l on l.id = s.rowid where {where_clause} order by l.id limit ? offset ?",
@@ -1327,38 +1387,39 @@ fn lved_search_where(
     }
 }
 
-fn lved_available_search_modes(connection: &Connection) -> Result<Vec<SearchMode>> {
-    if !sqlite_table_exists(connection, "search") || !sqlite_table_exists(connection, "list") {
-        return Ok(Vec::new());
+fn lved_available_search_modes(schema: &LvedSqliteSchema) -> Vec<SearchMode> {
+    if !schema.table_exists("search") || !schema.table_exists("list") {
+        return Vec::new();
     }
-    let search_columns = sqlite_columns(connection, "search")?;
-    let list_columns = sqlite_columns(connection, "list")?;
-    if !has_column(&list_columns, "id") || !has_column(&list_columns, "refid") {
-        return Ok(Vec::new());
+    let search_columns = schema.columns("search");
+    let list_columns = schema.columns("list");
+    if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
+        return Vec::new();
     }
     let mut modes = Vec::new();
-    if has_column(&search_columns, "filter") || has_column(&search_columns, "forward") {
+    if has_column(search_columns, "filter") || has_column(search_columns, "forward") {
         modes.push(SearchMode::Exact);
     }
-    if has_column(&search_columns, "forward") {
+    if has_column(search_columns, "forward") {
         modes.push(SearchMode::Forward);
     }
-    if has_column(&search_columns, "back") {
+    if has_column(search_columns, "back") {
         modes.push(SearchMode::Backward);
     }
-    if has_column(&search_columns, "part") {
+    if has_column(search_columns, "part") {
         modes.push(SearchMode::Partial);
     }
-    if has_column(&search_columns, "fts") {
+    if has_column(search_columns, "fts") {
         modes.push(SearchMode::FullText);
     }
     modes.extend(
         search_columns
-            .into_iter()
+            .iter()
             .filter(|column| column.starts_with("advanced"))
+            .cloned()
             .map(SearchMode::Advanced),
     );
-    Ok(modes)
+    modes
 }
 
 fn fts_match(
@@ -1530,10 +1591,11 @@ fn validate_sqlite_connection(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn lved_sqlite_title_from_connection(connection: &Connection) -> Option<String> {
-    if !sqlite_table_exists(connection, "info")
-        || !sqlite_table_has_columns(connection, "info", &["name", "body"])
-    {
+fn lved_sqlite_title_from_connection(
+    connection: &Connection,
+    schema: &LvedSqliteSchema,
+) -> Option<String> {
+    if !schema.table_has_columns("info", &["name", "body"]) {
         return None;
     }
     let mut statement = connection
@@ -1603,23 +1665,6 @@ fn lved_sqlite_title_from_connection(connection: &Connection) -> Option<String> 
         .into_iter()
         .next()
         .and_then(|(score, _, title)| (score > 0).then_some(title))
-}
-
-fn sqlite_table_exists(connection: &Connection, table: &str) -> bool {
-    connection
-        .query_row(
-            "select 1 from sqlite_master where type in ('table', 'view') and lower(name) = lower(?) limit 1",
-            [table],
-            |_| Ok(()),
-        )
-        .is_ok()
-}
-
-fn sqlite_table_has_columns(connection: &Connection, table: &str, required: &[&str]) -> bool {
-    let Ok(columns) = sqlite_columns(connection, table) else {
-        return false;
-    };
-    required.iter().all(|column| has_column(&columns, column))
 }
 
 fn sqlite_columns(connection: &Connection, table: &str) -> Result<Vec<String>> {
@@ -2336,8 +2381,9 @@ mod tests {
             )
             .unwrap();
 
+        let schema = LvedSqliteSchema::load(&connection).unwrap();
         assert_eq!(
-            lved_sqlite_title_from_connection(&connection).as_deref(),
+            lved_sqlite_title_from_connection(&connection, &schema).as_deref(),
             Some("研究社　類義語使い分け辞典")
         );
     }
@@ -2407,8 +2453,9 @@ mod tests {
             )
             .unwrap();
 
+        let schema = LvedSqliteSchema::load(&connection).unwrap();
         assert_eq!(
-            lved_sqlite_title_from_connection(&connection).as_deref(),
+            lved_sqlite_title_from_connection(&connection, &schema).as_deref(),
             Some("エースクラウン英和辞典 第4版")
         );
     }
@@ -2436,8 +2483,9 @@ mod tests {
             )
             .unwrap();
 
+        let schema = LvedSqliteSchema::load(&connection).unwrap();
         assert_eq!(
-            lved_sqlite_title_from_connection(&connection).as_deref(),
+            lved_sqlite_title_from_connection(&connection, &schema).as_deref(),
             Some("現代用語の基礎知識 2022")
         );
     }

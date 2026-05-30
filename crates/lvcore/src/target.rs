@@ -131,6 +131,12 @@ impl InternalTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// Opaque, round-trippable frontend handle for LogoVista targets.
+///
+/// The token is transport data, not authority. Callers must resolve it through
+/// the owning `BookPackage`/`BookLibrary`, because those sinks validate that
+/// decoded internals actually exist in the opened book before reading bodies or
+/// resources.
 pub struct TargetToken(String);
 
 impl TargetToken {

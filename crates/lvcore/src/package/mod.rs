@@ -10,6 +10,7 @@ mod ssed_payload;
 mod ssed_search;
 mod ssed_zip;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -173,6 +174,8 @@ pub struct DriverRegistry {
     drivers: Vec<Box<dyn PackageDriver>>,
 }
 
+const MAX_PACKAGE_DISCOVERY_DEPTH: usize = 32;
+
 impl DriverRegistry {
     pub fn new(drivers: Vec<Box<dyn PackageDriver>>) -> Self {
         Self { drivers }
@@ -231,7 +234,8 @@ impl DriverRegistry {
         options: PackageDiscoveryOptions,
     ) -> Result<Vec<DetectedPackage>> {
         let mut rows = Vec::new();
-        self.discover_best_packages_into(root, options.max, &mut rows)?;
+        let mut visited = BTreeSet::new();
+        self.discover_best_packages_into(root, options.max, &mut rows, 0, &mut visited)?;
         Ok(rows)
     }
 
@@ -267,18 +271,33 @@ impl DriverRegistry {
         path: &Path,
         max: Option<usize>,
         out: &mut Vec<DetectedPackage>,
+        depth: usize,
+        visited: &mut BTreeSet<PathBuf>,
     ) -> Result<()> {
         if max.is_some_and(|max| out.len() >= max) {
             return Ok(());
         }
-        if !path.exists() {
+        if depth > MAX_PACKAGE_DISCOVERY_DEPTH {
             return Ok(());
         }
-        if path.is_file() && !is_package_file_candidate(path) {
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            return Ok(());
+        };
+        if metadata.file_type().is_symlink() {
             return Ok(());
         }
-        if path.is_dir() && is_obvious_resource_only_dir(path) {
+        if metadata.is_file() && !is_package_file_candidate(path) {
             return Ok(());
+        }
+        if metadata.is_dir() {
+            if is_obvious_resource_only_dir(path) {
+                return Ok(());
+            }
+            if let Ok(canonical) = fs::canonicalize(path)
+                && !visited.insert(canonical)
+            {
+                return Ok(());
+            }
         }
         if is_obvious_package_candidate(path)?
             && let Some(detected) = self.detect(path)?.into_iter().next()
@@ -286,14 +305,20 @@ impl DriverRegistry {
             out.push(detected);
             return Ok(());
         }
-        if !path.is_dir() {
+        if !metadata.is_dir() {
             return Ok(());
         }
 
         let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
         entries.sort_by_key(|entry| entry.path());
         for entry in entries {
-            self.discover_best_packages_into(&entry.path(), max, out)?;
+            if entry
+                .file_type()
+                .is_ok_and(|file_type| file_type.is_symlink())
+            {
+                continue;
+            }
+            self.discover_best_packages_into(&entry.path(), max, out, depth + 1, visited)?;
             if max.is_some_and(|max| out.len() >= max) {
                 break;
             }

@@ -20,7 +20,7 @@ use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexScanState, is_leaf_page, is_supported_index_type,
     parse_supported_leaf_page,
 };
-use crate::storage::{DirectoryStorage, StorageBackend};
+use crate::storage::{DirectoryStorage, StorageBackend, private_cache_dir};
 
 type PrefixDecryptFn = fn(&[u8], usize) -> Result<Vec<u8>>;
 type FileDecryptFn = fn(&Path, &Path) -> Result<()>;
@@ -209,10 +209,7 @@ fn component_probe_cache_path(
     hasher.update(metadata.len().to_le_bytes());
     hasher.update(modified.to_le_bytes());
     let hash = hex::encode(hasher.finalize());
-    let dir = std::env::temp_dir()
-        .join("lvcore-rs")
-        .join("ssed-component-probes");
-    fs::create_dir_all(&dir)?;
+    let dir = private_cache_dir("ssed-component-probes")?;
     Ok(dir.join(format!("{hash}.{extension}")))
 }
 

@@ -159,6 +159,11 @@ pub struct ResolvedTargetView {
     pub target: TargetToken,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Reader-ready HTML after lvcore has normalized package links/resources.
+    ///
+    /// Package content is still dictionary-authored HTML. Dedicated reader
+    /// frontends should render it inside a constrained webview/document sandbox,
+    /// not mix it into privileged application chrome.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

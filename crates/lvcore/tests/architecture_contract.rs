@@ -65,6 +65,27 @@ fn driver_registry_discovers_packages_from_library_roots() {
     assert_eq!(detections[0].format_family, FormatFamily::LvedSqlite3);
 }
 
+#[cfg(unix)]
+#[test]
+fn driver_registry_discovery_skips_symlink_cycles() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let package = root.path().join("NestedBook");
+    fs::create_dir_all(&package).unwrap();
+    write_minimal_lved_sqlite_fixture(&package);
+    symlink(root.path(), root.path().join("Loop")).unwrap();
+
+    let registry = DriverRegistry::default();
+    let detections = registry
+        .detect_all(root.path(), PackageDiscoveryOptions::default())
+        .unwrap();
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].root, package);
+    assert_eq!(detections[0].format_family, FormatFamily::LvedSqlite3);
+}
+
 #[test]
 fn library_opens_discovered_package_roots_for_frontend_library_import() {
     let root = tempdir().unwrap();
@@ -3808,6 +3829,59 @@ fn package_file_resources_resolve_and_read_with_preserved_casing() {
     );
     assert!(resource.diagnostics.is_empty());
     assert_eq!(package.read_resource(&token).unwrap(), b"<svg/>");
+}
+
+#[cfg(unix)]
+#[test]
+fn package_file_resource_symlink_escape_is_not_resolvable() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    let outside = dir.path().with_file_name("outside-lvcore-resource.svg");
+    fs::write(&outside, b"<svg/>").unwrap();
+    symlink(&outside, dir.path().join("Templates/Escape.SVG")).unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = ResourceToken::new(&InternalResource::PackageFile {
+        path: "Templates/Escape.SVG".to_owned(),
+        resource_kind: ResourceKind::Template,
+    })
+    .unwrap();
+
+    let resource = package.resolve_resource(&token).unwrap();
+    assert!(resource.href.is_none());
+    assert!(!resource.diagnostics.is_empty());
+    assert!(package.read_resource(&token).is_err());
+
+    fs::remove_file(outside).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn adjacent_templates_resource_symlink_escape_is_not_resolvable() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("Book");
+    let templates_root = root.path().join("Book_Templates");
+    fs::create_dir_all(&package_root).unwrap();
+    fs::create_dir_all(&templates_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    let outside = root.path().join("outside-lvcore-adjacent-resource.svg");
+    fs::write(&outside, b"<svg/>").unwrap();
+    symlink(&outside, templates_root.join("B123.SVG")).unwrap();
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let token = ResourceToken::new(&InternalResource::PackageFile {
+        path: "Templates/B123.SVG".to_owned(),
+        resource_kind: ResourceKind::Template,
+    })
+    .unwrap();
+
+    let resource = package.resolve_resource(&token).unwrap();
+    assert!(resource.href.is_none());
+    assert!(!resource.diagnostics.is_empty());
+    assert!(package.read_resource(&token).is_err());
 }
 
 #[test]

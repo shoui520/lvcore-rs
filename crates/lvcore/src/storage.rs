@@ -14,6 +14,46 @@ pub trait StorageBackend: Send + Sync {
     fn list_dir(&self, relative: &Path) -> Result<Vec<PathBuf>>;
 }
 
+pub(crate) fn private_cache_dir(namespace: &str) -> Result<PathBuf> {
+    let dir = user_cache_base_dir().join("lvcore-rs").join(namespace);
+    create_private_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn user_cache_base_dir() -> PathBuf {
+    if let Some(value) = std::env::var_os("XDG_CACHE_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(value);
+    }
+    if let Some(value) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(value).join(".cache");
+    }
+    if let Some(value) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+        return PathBuf::from(value);
+    }
+    if let Some(value) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+        return PathBuf::from(value);
+    }
+    std::env::temp_dir().join(format!("lvcore-rs-cache-{}", std::process::id()))
+}
+
+#[cfg(unix)]
+fn create_private_dir_all(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_private_dir_all(path: &Path) -> Result<()> {
+    fs::create_dir_all(path)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct DirectoryStorage {
     resolver: CaseFoldedDirectory,
@@ -39,7 +79,7 @@ impl StorageBackend for DirectoryStorage {
                 relative.display()
             )));
         };
-        if !path_stays_inside_root(self.root(), &path)? {
+        if !self.resolver.path_stays_inside_root(&path)? {
             return Err(Error::Driver(format!(
                 "storage path is outside the package: {}",
                 relative.display()
@@ -52,7 +92,7 @@ impl StorageBackend for DirectoryStorage {
         let Some(path) = self.resolve_casefolded(relative)? else {
             return Ok(false);
         };
-        path_stays_inside_root(self.root(), &path)
+        self.resolver.path_stays_inside_root(&path)
     }
 
     fn resolve_casefolded(&self, relative: &Path) -> Result<Option<PathBuf>> {
@@ -66,7 +106,7 @@ impl StorageBackend for DirectoryStorage {
         if !base.is_dir() {
             return Ok(Vec::new());
         }
-        if !path_stays_inside_root(self.root(), &base)? {
+        if !self.resolver.path_stays_inside_root(&base)? {
             return Ok(Vec::new());
         }
         let mut rows = Vec::new();
@@ -89,6 +129,7 @@ impl StorageBackend for DirectoryStorage {
 pub struct CaseFoldedDirectory {
     root: PathBuf,
     directory_cache: Arc<Mutex<BTreeMap<PathBuf, BTreeMap<String, PathBuf>>>>,
+    canonical_root: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl CaseFoldedDirectory {
@@ -96,6 +137,7 @@ impl CaseFoldedDirectory {
         Self {
             root: root.into(),
             directory_cache: Arc::new(Mutex::new(BTreeMap::new())),
+            canonical_root: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -116,28 +158,26 @@ impl CaseFoldedDirectory {
             if wanted == ".." {
                 return Ok(None);
             }
-            let children = self.children_by_casefold(&current)?;
-            let Some(next) = children.get(&wanted) else {
+            let Some(next) = self.find_child_by_casefold(&current, &wanted)? else {
                 return Ok(None);
             };
-            current = next.clone();
+            current = next;
         }
         Ok(Some(current))
     }
 
     pub fn find_child_named(&self, directory: &Path, name: &str) -> Result<Option<PathBuf>> {
-        let children = self.children_by_casefold(directory)?;
-        Ok(children.get(&name.casefold()).cloned())
+        self.find_child_by_casefold(directory, &name.casefold())
     }
 
-    fn children_by_casefold(&self, directory: &Path) -> Result<BTreeMap<String, PathBuf>> {
+    fn find_child_by_casefold(&self, directory: &Path, wanted: &str) -> Result<Option<PathBuf>> {
         {
             let cache = self
                 .directory_cache
                 .lock()
                 .map_err(|_| Error::Driver("casefold directory cache is poisoned".to_owned()))?;
             if let Some(children) = cache.get(directory) {
-                return Ok(children.clone());
+                return Ok(children.get(wanted).cloned());
             }
         }
 
@@ -149,7 +189,30 @@ impl CaseFoldedDirectory {
         Ok(cache
             .entry(directory.to_path_buf())
             .or_insert(children)
-            .clone())
+            .get(wanted)
+            .cloned())
+    }
+
+    fn path_stays_inside_root(&self, path: &Path) -> Result<bool> {
+        path_stays_inside_root_canonical(&self.canonical_root()?, path)
+    }
+
+    fn canonical_root(&self) -> Result<PathBuf> {
+        {
+            let cache = self
+                .canonical_root
+                .lock()
+                .map_err(|_| Error::Driver("canonical root cache is poisoned".to_owned()))?;
+            if let Some(root) = cache.as_ref() {
+                return Ok(root.clone());
+            }
+        }
+        let root = fs::canonicalize(&self.root)?;
+        let mut cache = self
+            .canonical_root
+            .lock()
+            .map_err(|_| Error::Driver("canonical root cache is poisoned".to_owned()))?;
+        Ok(cache.get_or_insert(root).clone())
     }
 }
 
@@ -170,10 +233,13 @@ fn directory_children_by_casefold(directory: &Path) -> Result<BTreeMap<String, P
     Ok(children)
 }
 
-fn path_stays_inside_root(root: &Path, path: &Path) -> Result<bool> {
-    let root = fs::canonicalize(root)?;
+pub(crate) fn path_stays_inside_root(root: &Path, path: &Path) -> Result<bool> {
+    path_stays_inside_root_canonical(&fs::canonicalize(root)?, path)
+}
+
+fn path_stays_inside_root_canonical(canonical_root: &Path, path: &Path) -> Result<bool> {
     let path = fs::canonicalize(path)?;
-    Ok(path.starts_with(root))
+    Ok(path.starts_with(canonical_root))
 }
 
 trait Casefold {

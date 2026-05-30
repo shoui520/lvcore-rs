@@ -206,7 +206,11 @@ impl SsedDataFile {
         let end = min(offset.saturating_add(size), self.header.expanded_size());
         let first_chunk = offset / CHUNK_SIZE;
         let last_chunk = (end - 1) / CHUNK_SIZE;
-        let mut out = Vec::with_capacity(end - offset);
+        let requested_len = end.saturating_sub(offset);
+        let capacity_hint = requested_len
+            .min(CHUNK_SIZE)
+            .min(usize::try_from(self.file_len).unwrap_or(usize::MAX));
+        let mut out = Vec::with_capacity(capacity_hint);
 
         for chunk_index in first_chunk..=last_chunk {
             let expanded = self.read_expanded_chunk(chunk_index)?;
@@ -644,6 +648,20 @@ mod tests {
         let error = SsedDataReader::parse_bytes(&data).unwrap_err();
 
         assert!(error.to_string().contains("too large for in-memory"));
+    }
+
+    #[test]
+    fn file_backed_reader_does_not_reserve_huge_declared_expanded_size() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("MENU.DIC");
+        fs::write(&path, fixture_sseddata_literal_chunks(&[b"a"], 1, u32::MAX)).unwrap();
+
+        let mut file = SsedDataFile::open(&path).unwrap();
+        let error = file
+            .read_range(0, file.header().expanded_size())
+            .unwrap_err();
+
+        assert!(error.to_string().contains("chunk index outside header"));
     }
 
     #[test]
