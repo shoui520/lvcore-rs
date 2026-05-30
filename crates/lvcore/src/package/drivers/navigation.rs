@@ -1,6 +1,160 @@
 use super::*;
 
 impl ReaderBookPackage {
+    fn ssed_navigation_home_surface(
+        &self,
+        surface_id: &str,
+        kind: NavigationSurfaceKind,
+        title: &str,
+        role: SsedComponentRole,
+        fallback_name: &str,
+    ) -> Result<Option<HomeSurface>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(None);
+        };
+        let Some(component) = catalog
+            .component_named(fallback_name)
+            .filter(|component| component.has_positive_range())
+        else {
+            return Ok(None);
+        };
+
+        match self.resolve_readable_ssed_component_path(component) {
+            Ok(Some(_)) => {}
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                return Ok(Some(HomeSurface {
+                    surface_id: surface_id.to_owned(),
+                    kind,
+                    status: NavigationStatus::Deferred,
+                    title_html: title.to_owned(),
+                    title_text: title.to_owned(),
+                    target: None,
+                    diagnostics: vec![
+                        Diagnostic::warning(
+                            "ssed_navigation_component_decode_failed",
+                            format!(
+                                "{} is present but not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                }));
+            }
+        }
+
+        let empty_diagnostic = self.ssed_navigation_empty_diagnostic(role, fallback_name)?;
+        let is_empty = empty_diagnostic.is_some();
+        let target = if is_empty {
+            None
+        } else {
+            Some(match role {
+                SsedComponentRole::Toc => TargetToken::new(&InternalTarget::TocItem {
+                    surface_id: surface_id.to_owned(),
+                    item_id: "root".to_owned(),
+                })?,
+                _ => TargetToken::new(&InternalTarget::MenuItem {
+                    surface_id: surface_id.to_owned(),
+                    item_id: "root".to_owned(),
+                })?,
+            })
+        };
+
+        Ok(Some(HomeSurface {
+            surface_id: surface_id.to_owned(),
+            kind,
+            status: if is_empty {
+                NavigationStatus::Empty
+            } else {
+                NavigationStatus::Available
+            },
+            title_html: title.to_owned(),
+            title_text: title.to_owned(),
+            target,
+            diagnostics: empty_diagnostic.into_iter().collect(),
+        }))
+    }
+
+    fn ssed_multi_home_surfaces(&self) -> Result<Vec<HomeSurface>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(Vec::new());
+        };
+        let mut surfaces = Vec::new();
+        for component in catalog.components_by_role(SsedComponentRole::MultiDescriptor) {
+            if !component.has_positive_range() {
+                continue;
+            }
+            let surface_id = ssed_multi_root_surface_id(&component.filename);
+            let title = format!("Multi Selector: {}", component.filename);
+            match self.read_ssed_multi_descriptor(component) {
+                Ok(descriptor) if !descriptor.records.is_empty() => {
+                    surfaces.push(HomeSurface {
+                        surface_id: surface_id.clone(),
+                        kind: NavigationSurfaceKind::MultiSelector,
+                        status: NavigationStatus::Available,
+                        title_html: escape_plain_label_html(&title),
+                        title_text: title,
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id,
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: Vec::new(),
+                    });
+                }
+                Ok(_) => surfaces.push(HomeSurface {
+                    surface_id,
+                    kind: NavigationSurfaceKind::MultiSelector,
+                    status: NavigationStatus::Empty,
+                    title_html: escape_plain_label_html(&title),
+                    title_text: title,
+                    target: None,
+                    diagnostics: vec![
+                        Diagnostic::info(
+                            "ssed_multi_descriptor_empty",
+                            format!("{} did not decode any selector records", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                }),
+                Err(error) => surfaces.push(HomeSurface {
+                    surface_id,
+                    kind: NavigationSurfaceKind::MultiSelector,
+                    status: NavigationStatus::Deferred,
+                    title_html: escape_plain_label_html(&title),
+                    title_text: title,
+                    target: None,
+                    diagnostics: vec![
+                        Diagnostic::warning(
+                            "ssed_multi_descriptor_decode_failed",
+                            format!("{} could not be decoded: {error}", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                }),
+            }
+        }
+        Ok(surfaces)
+    }
+
+    fn read_ssed_multi_descriptor(&self, component: &SsedComponent) -> Result<SsedMultiDescriptor> {
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Err(Error::Driver(format!(
+                "{} is declared but not present on disk",
+                component.filename
+            )));
+        };
+        let mut reader = SsedDataFile::open(path)?;
+        let read_len = reader
+            .header()
+            .expanded_size()
+            .min(SSED_NAVIGATION_DETECTION_MAX_BYTES);
+        let data = reader.read_range(0, read_len)?;
+        parse_multi_descriptor(&data)
+    }
+}
+
+impl ReaderBookPackage {
     fn open_ssed_title_index_surface(
         &self,
         surface_id: &str,
