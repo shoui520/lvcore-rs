@@ -8,6 +8,7 @@ mod body;
 mod gaiji;
 mod hourei_navigation;
 mod lved_navigation;
+mod lved_render_refs;
 mod multiview_navigation;
 mod navigation;
 mod renderer;
