@@ -66,6 +66,31 @@ fn driver_registry_discovers_packages_from_library_roots() {
 }
 
 #[test]
+fn library_opens_discovered_package_roots_for_frontend_library_import() {
+    let root = tempdir().unwrap();
+    let first = root.path().join("FirstBook");
+    let second = root.path().join("SecondBook");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    write_minimal_lved_sqlite_fixture(&first);
+    write_minimal_lved_sqlite_fixture(&second);
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let opened = library
+        .open_discovered_paths(
+            [root.path()],
+            &registry,
+            PackageDiscoveryOptions { max: Some(1) },
+        )
+        .unwrap();
+
+    assert_eq!(opened.len(), 1);
+    assert_eq!(library.len(), 1);
+    assert_eq!(library.metadata_snapshot().len(), 1);
+}
+
+#[test]
 fn multiview_container_wins_over_retained_ssed_facade() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

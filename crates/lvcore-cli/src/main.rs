@@ -493,22 +493,7 @@ fn open_library_from_paths(
     max: Option<usize>,
 ) -> Result<BookLibrary> {
     let mut library = BookLibrary::new();
-    let mut opened = 0usize;
-    for path in paths {
-        let remaining = max.map(|limit| limit.saturating_sub(opened));
-        if remaining == Some(0) {
-            break;
-        }
-        for package_path in
-            registry.discover_roots(path, PackageDiscoveryOptions { max: remaining })?
-        {
-            if max.is_some_and(|limit| opened >= limit) {
-                break;
-            }
-            library.open_path(package_path, registry)?;
-            opened += 1;
-        }
-    }
+    library.open_discovered_paths(paths, registry, PackageDiscoveryOptions { max })?;
     Ok(library)
 }
 

@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
 use crate::navigation::{HomeSurface, NavigationNode, NavigationSurface};
-use crate::package::{BookAliasKind, BookId, BookMetadata, BookPackage, DriverRegistry};
+use crate::package::{
+    BookAliasKind, BookId, BookMetadata, BookPackage, DriverRegistry, PackageDiscoveryOptions,
+};
 use crate::render::{RenderOptions, RendererInput, ResolvedTargetKind, ResolvedTargetView};
 use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::{SearchPage, SearchQuery, SearchScope};
@@ -68,6 +70,30 @@ impl BookLibrary {
         let book_id = package.metadata().book_id.clone();
         self.insert(package);
         Ok(book_id)
+    }
+
+    pub fn open_discovered_paths(
+        &mut self,
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+        registry: &DriverRegistry,
+        options: PackageDiscoveryOptions,
+    ) -> Result<Vec<BookId>> {
+        let mut opened = Vec::new();
+        for path in paths {
+            let remaining = options.max.map(|max| max.saturating_sub(opened.len()));
+            if remaining == Some(0) {
+                break;
+            }
+            let roots = registry
+                .discover_roots(path.as_ref(), PackageDiscoveryOptions { max: remaining })?;
+            for root in roots {
+                if options.max.is_some_and(|max| opened.len() >= max) {
+                    break;
+                }
+                opened.push(self.open_path(root, registry)?);
+            }
+        }
+        Ok(opened)
     }
 
     pub fn insert(&mut self, package: Box<dyn BookPackage>) {
