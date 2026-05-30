@@ -57,6 +57,20 @@ LogoVista internals. The frontend receives:
 The frontend should not parse HONMON, `lved.*` links, Panel rows, law references,
 or gaiji codes directly.
 
+### Integration Safety Contract
+
+- `TargetToken` and `ResourceToken` are opaque routing/cache handles, not trust
+  boundaries. Frontends may store and return them to lvcore, but lvcore must
+  always re-resolve them against the opened book before reading bodies,
+  resources, SQL rows, paths, or byte ranges.
+- `display_html` is reader-ready, package-authored HTML after lvcore has
+  rewritten understood package links and resource references. It is not
+  sanitized application UI. Dedicated frontends should render it in a constrained
+  document/webview context with app chrome and privileged APIs kept separate.
+- `BasicText` is the low-risk flattened mode. It is useful for snippets,
+  previews, and simple external integrations, but it is not the visual parity
+  path for LogoVista dictionaries.
+
 ## Non-Goals
 
 - No export support.

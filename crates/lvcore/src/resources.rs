@@ -104,6 +104,13 @@ impl InternalResource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// Opaque, round-trippable frontend handle for LogoVista resources.
+///
+/// Like `TargetToken`, this is transport data, not authority. Resource tokens
+/// are intentionally stable enough for frontend routing and cache keys, but all
+/// decoded internals must still be resolved through `ResourceProvider`, where
+/// package-relative paths, table names, and byte ranges are validated against
+/// the opened book.
 pub struct ResourceToken(String);
 
 impl ResourceToken {
