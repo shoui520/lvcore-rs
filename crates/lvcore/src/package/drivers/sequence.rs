@@ -339,9 +339,9 @@ impl ReaderBookPackage {
         let Some(store) = &self.lved_store else {
             return Ok(None);
         };
-        let rows = store
-            .tree_index_items()?
-            .into_iter()
+        let rows = store.tree_index_items_arc()?;
+        let rows = rows
+            .iter()
             .filter(|row| row.data_id >= 0)
             .collect::<Vec<_>>();
         if rows.is_empty() {
@@ -358,7 +358,7 @@ impl ReaderBookPackage {
                 )],
             }));
         };
-        let mut center = self.render_lved_tree_item(&rows[center_index], options)?;
+        let mut center = self.render_lved_tree_item(rows[center_index], options)?;
         center.title = Some(rows[center_index].label.clone());
         let before_start = center_index.saturating_sub(before);
         let before_views = rows[before_start..center_index]

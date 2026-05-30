@@ -1512,7 +1512,7 @@ impl ReaderBookPackage {
                 )],
             });
         };
-        let rows = store.tree_index_items()?;
+        let rows = store.tree_index_items_arc()?;
         if rows.is_empty() {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -1524,7 +1524,7 @@ impl ReaderBookPackage {
         }
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
-            nodes: lved_tree_items_to_nodes(&rows)?,
+            nodes: lved_tree_items_to_nodes(rows.as_ref())?,
         })
     }
 

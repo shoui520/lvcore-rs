@@ -54,6 +54,8 @@ pub struct LvedSqliteStore {
     connection: Arc<Mutex<Option<Connection>>>,
     #[serde(skip, default = "default_lved_tree_index_cache")]
     tree_indexes_cache: Arc<Mutex<Option<Arc<Vec<LvedTreeIndex>>>>>,
+    #[serde(skip, default = "default_lved_tree_index_items_cache")]
+    tree_index_items_cache: Arc<Mutex<Option<Arc<Vec<LvedTreeIndexItem>>>>>,
     #[serde(skip, default = "default_lved_title_cache")]
     title_cache: Arc<Mutex<Option<Option<String>>>>,
     #[serde(skip, default = "default_lved_schema_cache")]
@@ -65,6 +67,10 @@ fn default_lved_connection_cache() -> Arc<Mutex<Option<Connection>>> {
 }
 
 fn default_lved_tree_index_cache() -> Arc<Mutex<Option<Arc<Vec<LvedTreeIndex>>>>> {
+    Arc::new(Mutex::new(None))
+}
+
+fn default_lved_tree_index_items_cache() -> Arc<Mutex<Option<Arc<Vec<LvedTreeIndexItem>>>>> {
     Arc::new(Mutex::new(None))
 }
 
@@ -183,6 +189,7 @@ impl LvedSqliteStore {
             android_info,
             connection: default_lved_connection_cache(),
             tree_indexes_cache: default_lved_tree_index_cache(),
+            tree_index_items_cache: default_lved_tree_index_items_cache(),
             title_cache: default_lved_title_cache(),
             schema_cache: default_lved_schema_cache(),
         }))
@@ -458,11 +465,29 @@ impl LvedSqliteStore {
     }
 
     pub fn tree_index_items(&self) -> Result<Vec<LvedTreeIndexItem>> {
-        Ok(self
-            .tree_indexes_arc()?
-            .iter()
-            .flat_map(|tree| tree.items.iter().cloned())
-            .collect())
+        Ok(self.tree_index_items_arc()?.as_ref().clone())
+    }
+
+    pub(crate) fn tree_index_items_arc(&self) -> Result<Arc<Vec<LvedTreeIndexItem>>> {
+        {
+            let cache = self.tree_index_items_cache.lock().map_err(|_| {
+                Error::Driver("LVED_SQLITE3 tree index item cache is poisoned".to_owned())
+            })?;
+            if let Some(items) = cache.as_ref() {
+                return Ok(Arc::clone(items));
+            }
+        }
+
+        let items = Arc::new(
+            self.tree_indexes_arc()?
+                .iter()
+                .flat_map(|tree| tree.items.iter().cloned())
+                .collect(),
+        );
+        let mut cache = self.tree_index_items_cache.lock().map_err(|_| {
+            Error::Driver("LVED_SQLITE3 tree index item cache is poisoned".to_owned())
+        })?;
+        Ok(Arc::clone(cache.get_or_insert(items)))
     }
 
     pub fn tree_indexes(&self) -> Result<Vec<LvedTreeIndex>> {
