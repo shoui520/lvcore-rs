@@ -21,6 +21,7 @@ mod sequence;
 mod ssed_components;
 mod ssed_index;
 mod ssed_navigation;
+mod ssed_surfaces;
 
 use encoding_rs::SHIFT_JIS;
 use serde_json::json;
