@@ -1142,6 +1142,11 @@ impl NavigationProvider for ReaderBookPackage {
             target: None,
             diagnostics: Vec::new(),
         });
+        surfaces.sort_by(|left, right| {
+            home_surface_reader_priority(left)
+                .cmp(&home_surface_reader_priority(right))
+                .then_with(|| left.surface_id.cmp(&right.surface_id))
+        });
         Ok(surfaces)
     }
 
@@ -7878,6 +7883,33 @@ fn lved_list_label_html(title_html: &str, subtitle_html: &str) -> String {
     } else {
         format!(r#"{title_html}<span class="lvcore-subtitle"> {subtitle_html}</span>"#)
     }
+}
+
+fn home_surface_reader_priority(surface: &HomeSurface) -> (u8, u8) {
+    let status_group = match (surface.status, surface.target.is_some()) {
+        (NavigationStatus::Available, true) => 0,
+        (NavigationStatus::Available, false) => 1,
+        (NavigationStatus::Empty, _) => 2,
+        (NavigationStatus::Deferred, _) => 3,
+        (NavigationStatus::Unsupported, _) => 4,
+        (NavigationStatus::Missing, _) => 5,
+    };
+    let kind_group = match surface.kind {
+        NavigationSurfaceKind::Menu | NavigationSurfaceKind::ScreenMenu => 0,
+        NavigationSurfaceKind::Panel => 1,
+        NavigationSurfaceKind::LawTree
+        | NavigationSurfaceKind::MultiviewTree
+        | NavigationSurfaceKind::LvedTree => 2,
+        NavigationSurfaceKind::Hanrei => 3,
+        NavigationSurfaceKind::Toc
+        | NavigationSurfaceKind::MultiSelector
+        | NavigationSurfaceKind::EncyclopediaIndex
+        | NavigationSurfaceKind::AuxiliaryIndex => 4,
+        NavigationSurfaceKind::TitleIndexBrowse => 5,
+        NavigationSurfaceKind::Info => 6,
+        NavigationSurfaceKind::SearchFallback => 7,
+    };
+    (status_group, kind_group)
 }
 
 fn lved_tree_items_to_nodes(

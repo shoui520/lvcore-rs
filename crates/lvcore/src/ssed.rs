@@ -268,7 +268,7 @@ impl SsedCatalog {
         }
         let title_len = data.get(0x0c).copied().unwrap_or(0) as usize;
         let title_end = 0x0dusize.saturating_add(title_len).min(data.len());
-        let title_bytes = &data[0x0d..title_end];
+        let title_bytes = data.get(0x0d..title_end).unwrap_or_default();
         let title = decode_cp932_lossy(split_nul(title_bytes));
 
         let mut parsed = Vec::new();
@@ -609,6 +609,11 @@ mod tests {
         let catalog = SsedCatalog::parse_bytes(&data).unwrap();
         assert_eq!(catalog.layout.component_count_offset, 0x4c);
         assert_eq!(catalog.layout.record_start, 0x7f);
+    }
+
+    #[test]
+    fn rejects_short_ssedinfo_without_panicking() {
+        assert!(SsedCatalog::parse_bytes(SSEDINFO_MAGIC).is_err());
     }
 
     #[test]

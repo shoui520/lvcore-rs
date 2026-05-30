@@ -1354,6 +1354,16 @@ fn ssed_missing_declared_menu_does_not_hide_panel_home_surface() {
     fs::create_dir(&sibling_panel_root).unwrap();
     fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
     fs::write(
+        package_root.join("EXINFO.INI"),
+        b"[GENERAL]\nIDXCOUNT=1\nIDXNAME0=Index\nIDXINFO0=0000015E.IDX\n",
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("0000015E.IDX"),
+        b"00000000\t00000000\tRoot\n00000010\t00000002\t\tChild\n",
+    )
+    .unwrap();
+    fs::write(
         package_root.join("Panels.xml"),
         r#"<panels>
   <panel index="01000000" paneltype="menu" count_x="1">
@@ -1395,6 +1405,18 @@ fn ssed_missing_declared_menu_does_not_hide_panel_home_surface() {
         surface.kind == NavigationSurfaceKind::Panel
             && surface.status == NavigationStatus::Available
     }));
+    let panel_index = surfaces
+        .iter()
+        .position(|surface| surface.surface_id == "panels")
+        .expect("panel surface should be advertised");
+    let aux_index = surfaces
+        .iter()
+        .position(|surface| surface.surface_id == "aux-index:0")
+        .expect("auxiliary index surface should be advertised");
+    assert!(
+        panel_index < aux_index,
+        "Panels are a native book-home surface and should sort before auxiliary indexes"
+    );
     let child_panel = package.open_surface("panels:01010000").unwrap();
     let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
         panic!("Panels remain the native navigation surface when MENU.DIC is absent");
