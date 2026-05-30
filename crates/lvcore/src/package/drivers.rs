@@ -10,6 +10,10 @@ use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 use zip::result::ZipError;
 
+use super::capabilities::{
+    default_search_modes_for_family, hourei_capabilities, lved_capabilities,
+    multiview_capabilities, ssed_search_modes, standard_search_modes,
+};
 use super::chm_toc::{
     chm_hanrei_entry_sort_key, chm_hhc_toc_items_to_nodes, chm_local_reference, parse_chm_hhc_toc,
 };
@@ -47,9 +51,7 @@ use super::ssed_detection::{
     ssed_capabilities, ssed_catalog_for_root, ssed_hanrei_page_label, usable_multiview_title,
 };
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
-use super::ssed_payload::{
-    file_starts_with_android_wrapped_sseddata, has_supported_sseddata_component_payload_casefolded,
-};
+use super::ssed_payload::file_starts_with_android_wrapped_sseddata;
 use super::ssed_search::{
     decode_ssed_body_search_text, normalize_search_match_text, reverse_search_match_text,
     ssed_ascii_key_needs_linear_safety_net, ssed_fulltext_snippet_html, ssed_index_row_order_key,
@@ -8690,89 +8692,6 @@ fn scroll_anchor_for_token(target: &TargetToken) -> Result<Option<String>> {
         | InternalTarget::Resource { anchor, .. } => anchor,
         _ => None,
     })
-}
-
-fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> {
-    let mut capabilities = vec![
-        Capability::TitleIndexBrowse,
-        Capability::Hanrei,
-        Capability::Resources,
-        Capability::Gaiji,
-        Capability::PreservedHtml,
-        Capability::ContinuousView,
-        Capability::DeferredRendering,
-    ];
-    if !search_modes.is_empty() {
-        capabilities.push(Capability::NativeSearch);
-    }
-    if search_modes.contains(&SearchMode::FullText) {
-        capabilities.push(Capability::FullTextSearch);
-    }
-    capabilities
-}
-
-fn multiview_capabilities() -> Vec<Capability> {
-    vec![
-        Capability::NativeSearch,
-        Capability::FullTextSearch,
-        Capability::TitleIndexBrowse,
-        Capability::Menu,
-        Capability::Resources,
-        Capability::Gaiji,
-        Capability::PreservedHtml,
-        Capability::ContinuousView,
-        Capability::LawNavigation,
-        Capability::DeferredRendering,
-    ]
-}
-
-fn hourei_capabilities() -> Vec<Capability> {
-    vec![
-        Capability::NativeSearch,
-        Capability::FullTextSearch,
-        Capability::TitleIndexBrowse,
-        Capability::Resources,
-        Capability::PreservedHtml,
-        Capability::ContinuousView,
-        Capability::LawNavigation,
-        Capability::DeferredRendering,
-    ]
-}
-
-fn standard_search_modes() -> Vec<SearchMode> {
-    vec![
-        SearchMode::Exact,
-        SearchMode::Forward,
-        SearchMode::Backward,
-        SearchMode::Partial,
-        SearchMode::FullText,
-    ]
-}
-
-fn default_search_modes_for_family(format_family: FormatFamily) -> Vec<SearchMode> {
-    match format_family {
-        FormatFamily::LvlMultiView | FormatFamily::Hourei => standard_search_modes(),
-        _ => Vec::new(),
-    }
-}
-
-fn ssed_search_modes(catalog: &SsedCatalog, root: &Path) -> Vec<SearchMode> {
-    let storage = DirectoryStorage::new(root.to_path_buf());
-    if !has_decodable_ssed_index_rows(catalog, &storage) {
-        return Vec::new();
-    }
-    let mut modes = vec![
-        SearchMode::Exact,
-        SearchMode::Forward,
-        SearchMode::Backward,
-        SearchMode::Partial,
-    ];
-    if catalog.honmon().is_some_and(|component| {
-        has_supported_sseddata_component_payload_casefolded(&storage, component)
-    }) {
-        modes.push(SearchMode::FullText);
-    }
-    modes
 }
 
 #[cfg(test)]

@@ -1,0 +1,91 @@
+use std::path::Path;
+
+use super::ssed_index_probe::has_decodable_ssed_index_rows;
+use super::ssed_payload::has_supported_sseddata_component_payload_casefolded;
+use super::{Capability, FormatFamily};
+use crate::search::SearchMode;
+use crate::ssed::SsedCatalog;
+use crate::storage::DirectoryStorage;
+
+pub(super) fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> {
+    let mut capabilities = vec![
+        Capability::TitleIndexBrowse,
+        Capability::Hanrei,
+        Capability::Resources,
+        Capability::Gaiji,
+        Capability::PreservedHtml,
+        Capability::ContinuousView,
+        Capability::DeferredRendering,
+    ];
+    if !search_modes.is_empty() {
+        capabilities.push(Capability::NativeSearch);
+    }
+    if search_modes.contains(&SearchMode::FullText) {
+        capabilities.push(Capability::FullTextSearch);
+    }
+    capabilities
+}
+
+pub(super) fn multiview_capabilities() -> Vec<Capability> {
+    vec![
+        Capability::NativeSearch,
+        Capability::FullTextSearch,
+        Capability::TitleIndexBrowse,
+        Capability::Menu,
+        Capability::Resources,
+        Capability::Gaiji,
+        Capability::PreservedHtml,
+        Capability::ContinuousView,
+        Capability::LawNavigation,
+        Capability::DeferredRendering,
+    ]
+}
+
+pub(super) fn hourei_capabilities() -> Vec<Capability> {
+    vec![
+        Capability::NativeSearch,
+        Capability::FullTextSearch,
+        Capability::TitleIndexBrowse,
+        Capability::Resources,
+        Capability::PreservedHtml,
+        Capability::ContinuousView,
+        Capability::LawNavigation,
+        Capability::DeferredRendering,
+    ]
+}
+
+pub(super) fn standard_search_modes() -> Vec<SearchMode> {
+    vec![
+        SearchMode::Exact,
+        SearchMode::Forward,
+        SearchMode::Backward,
+        SearchMode::Partial,
+        SearchMode::FullText,
+    ]
+}
+
+pub(super) fn default_search_modes_for_family(format_family: FormatFamily) -> Vec<SearchMode> {
+    match format_family {
+        FormatFamily::LvlMultiView | FormatFamily::Hourei => standard_search_modes(),
+        _ => Vec::new(),
+    }
+}
+
+pub(super) fn ssed_search_modes(catalog: &SsedCatalog, root: &Path) -> Vec<SearchMode> {
+    let storage = DirectoryStorage::new(root.to_path_buf());
+    if !has_decodable_ssed_index_rows(catalog, &storage) {
+        return Vec::new();
+    }
+    let mut modes = vec![
+        SearchMode::Exact,
+        SearchMode::Forward,
+        SearchMode::Backward,
+        SearchMode::Partial,
+    ];
+    if catalog.honmon().is_some_and(|component| {
+        has_supported_sseddata_component_payload_casefolded(&storage, component)
+    }) {
+        modes.push(SearchMode::FullText);
+    }
+    modes
+}

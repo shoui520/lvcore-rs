@@ -1,3 +1,4 @@
+mod capabilities;
 mod chm_toc;
 mod drivers;
 mod hc_profile;
