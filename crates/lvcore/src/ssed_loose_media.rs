@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::storage::path_stays_inside_root;
 
 mod britannica_html;
 mod pcmu;
@@ -257,7 +258,11 @@ pub fn parse_britannica_whatday_file(
             path.display()
         )));
     };
-    let raw_html = decode_loose_text(&fs::read(&path)?);
+    let raw_html = decode_loose_text(&read_loose_media_file_checked(
+        package_root,
+        root_name,
+        &path,
+    )?);
     let html = render_britannica_html_fragment(&raw_html);
     Ok(BritannicaWhatdayFile {
         root_name: root_name.to_owned(),
@@ -513,6 +518,12 @@ fn parse_britannica_top_dat_path(
             path.display()
         )));
     };
+    if !path_stays_inside_root(media_root, path)? {
+        return Err(Error::Driver(format!(
+            "Britannica top DAT path is outside its media root: {}",
+            path.display()
+        )));
+    }
     let text = decode_loose_text(&fs::read(path)?);
     let lines = text
         .lines()
@@ -664,6 +675,25 @@ fn decode_loose_text(data: &[u8]) -> String {
     }
 }
 
+fn read_loose_media_file_checked(
+    package_root: &Path,
+    root_name: &str,
+    path: &Path,
+) -> Result<Vec<u8>> {
+    let Some(root) = find_loose_media_root(package_root, root_name)? else {
+        return Err(Error::Driver(format!(
+            "loose media root not found: {root_name}"
+        )));
+    };
+    if !path_stays_inside_root(&root, path)? {
+        return Err(Error::Driver(format!(
+            "loose media file is outside its media root: {}",
+            path.display()
+        )));
+    }
+    Ok(fs::read(path)?)
+}
+
 fn extract_loose_addresses(fragment: &str) -> Vec<LooseAddress> {
     let mut addresses = Vec::new();
     let mut cursor = 0usize;
@@ -765,5 +795,36 @@ mod tests {
 
         let error = read_pcmu_record(&package, 123).unwrap_err();
         assert!(error.to_string().contains("outside its loose media root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn britannica_whatday_symlink_escape_is_not_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("dict");
+        let whatday = package.join("Media").join("whatday");
+        std::fs::create_dir_all(&whatday).unwrap();
+        let outside = dir.path().join("outside.body");
+        std::fs::write(&outside, b"<body>outside</body>").unwrap();
+        std::os::unix::fs::symlink(&outside, whatday.join("1-1.body")).unwrap();
+
+        let error =
+            parse_britannica_whatday_file(&package, "Media", "whatday/1-1.body").unwrap_err();
+        assert!(error.to_string().contains("outside its media root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn britannica_top_dat_symlink_escape_is_not_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("dict");
+        let top = package.join("Media").join("top");
+        std::fs::create_dir_all(&top).unwrap();
+        let outside = dir.path().join("top_people.dat");
+        std::fs::write(&outside, b"id\ntitle\ndesc\n00000001:0000\nimage.jpg\n").unwrap();
+        std::os::unix::fs::symlink(&outside, top.join("top_people.dat")).unwrap();
+
+        let error = discover_britannica_top_dat_files(&package).unwrap_err();
+        assert!(error.to_string().contains("outside its media root"));
     }
 }
