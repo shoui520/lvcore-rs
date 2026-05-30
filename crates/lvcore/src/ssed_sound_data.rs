@@ -3,7 +3,8 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::storage::path_stays_inside_root;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoundDataMapRecord {
@@ -16,6 +17,7 @@ pub struct SoundDataMapRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoundDataIndex {
+    pub directory: PathBuf,
     pub sounddata_path: PathBuf,
     pub map_path: PathBuf,
     pub rows: Vec<SoundDataMapRecord>,
@@ -41,6 +43,12 @@ impl SoundDataIndex {
         let Ok(length) = usize::try_from(record.length) else {
             return Ok(None);
         };
+        if !path_stays_inside_root(&self.directory, &self.sounddata_path)? {
+            return Err(Error::Driver(format!(
+                "SoundData path is outside its loose media root: {}",
+                self.sounddata_path.display()
+            )));
+        }
         let mut file = fs::File::open(&self.sounddata_path)?;
         file.seek(SeekFrom::Start(record.offset))?;
         let mut raw = vec![0_u8; length];
@@ -65,6 +73,18 @@ pub fn load_sounddata_index(package_root: &Path) -> Result<Option<SoundDataIndex
     if !sounddata_path.is_file() || !map_path.is_file() {
         return Ok(None);
     }
+    if !path_stays_inside_root(&sound_dir, &sounddata_path)? {
+        return Err(Error::Driver(format!(
+            "SoundData path is outside its loose media root: {}",
+            sounddata_path.display()
+        )));
+    }
+    if !path_stays_inside_root(&sound_dir, &map_path)? {
+        return Err(Error::Driver(format!(
+            "WaveFile.map path is outside its loose media root: {}",
+            map_path.display()
+        )));
+    }
 
     let rows = parse_wavefile_map(&fs::read_to_string(&map_path)?);
     if rows.is_empty() {
@@ -75,6 +95,7 @@ pub fn load_sounddata_index(package_root: &Path) -> Result<Option<SoundDataIndex
         records.entry(row.sound_id).or_insert_with(|| row.clone());
     }
     Ok(Some(SoundDataIndex {
+        directory: sound_dir,
         sounddata_path,
         map_path,
         rows,
@@ -220,5 +241,20 @@ mod tests {
         let bytes = read_sounddata_record(dir.path(), 1).unwrap();
 
         assert!(bytes.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sounddata_symlink_escape_is_not_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let sound_dir = dir.path().join("Sound");
+        fs::create_dir(&sound_dir).unwrap();
+        let outside = dir.path().join("outside.wav");
+        fs::write(&outside, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside, sound_dir.join("SoundData")).unwrap();
+        fs::write(sound_dir.join("WaveFile.map"), b"0000000000000000:0007 1\n").unwrap();
+
+        let error = read_sounddata_record(dir.path(), 1).unwrap_err();
+        assert!(error.to_string().contains("outside its loose media root"));
     }
 }
