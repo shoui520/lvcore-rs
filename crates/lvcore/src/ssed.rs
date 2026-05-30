@@ -225,36 +225,32 @@ impl SsedDataFile {
         Ok(out)
     }
 
-    fn read_expanded_chunk(&mut self, chunk_index: usize) -> Result<Vec<u8>> {
-        if self.cached_chunk_index == Some(chunk_index) {
-            return Ok(self.cached_chunk.clone());
+    fn read_expanded_chunk(&mut self, chunk_index: usize) -> Result<&[u8]> {
+        if self.cached_chunk_index != Some(chunk_index) {
+            let start =
+                *self.header.chunk_offsets.get(chunk_index).ok_or_else(|| {
+                    Error::Driver("SSEDDATA chunk index outside header".to_owned())
+                })? as u64;
+            let end = self
+                .header
+                .chunk_offsets
+                .get(chunk_index + 1)
+                .map(|offset| u64::from(*offset))
+                .unwrap_or(self.file_len);
+            if start >= self.file_len || end < start || end > self.file_len {
+                return Err(Error::Driver(
+                    "SSEDDATA chunk byte range outside file".to_owned(),
+                ));
+            }
+            let size = usize::try_from(end - start)
+                .map_err(|_| Error::Driver("SSEDDATA chunk is too large".to_owned()))?;
+            let mut bytes = vec![0u8; size];
+            self.file.seek(SeekFrom::Start(start))?;
+            self.file.read_exact(&mut bytes)?;
+            self.cached_chunk = expand_sseddata_chunk(&bytes, 0)?;
+            self.cached_chunk_index = Some(chunk_index);
         }
-        let start = *self
-            .header
-            .chunk_offsets
-            .get(chunk_index)
-            .ok_or_else(|| Error::Driver("SSEDDATA chunk index outside header".to_owned()))?
-            as u64;
-        let end = self
-            .header
-            .chunk_offsets
-            .get(chunk_index + 1)
-            .map(|offset| u64::from(*offset))
-            .unwrap_or(self.file_len);
-        if start >= self.file_len || end < start || end > self.file_len {
-            return Err(Error::Driver(
-                "SSEDDATA chunk byte range outside file".to_owned(),
-            ));
-        }
-        let size = usize::try_from(end - start)
-            .map_err(|_| Error::Driver("SSEDDATA chunk is too large".to_owned()))?;
-        let mut bytes = vec![0u8; size];
-        self.file.seek(SeekFrom::Start(start))?;
-        self.file.read_exact(&mut bytes)?;
-        let expanded = expand_sseddata_chunk(&bytes, 0)?;
-        self.cached_chunk_index = Some(chunk_index);
-        self.cached_chunk = expanded.clone();
-        Ok(expanded)
+        Ok(&self.cached_chunk)
     }
 }
 
