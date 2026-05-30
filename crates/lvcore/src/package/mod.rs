@@ -4,6 +4,7 @@ mod drivers;
 mod hc_profile;
 mod html;
 mod lved_refs;
+mod navigation_helpers;
 mod render_output;
 mod resource_helpers;
 mod ssed_body_helpers;
