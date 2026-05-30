@@ -78,6 +78,37 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         window_after: usize,
     },
+    /// Open a library/corpus set and run cross-book search.
+    LibrarySearch {
+        /// Query text.
+        query: String,
+        /// Package roots, payload paths, or corpus roots to inspect.
+        paths: Vec<PathBuf>,
+        /// Stop after this many discovered packages.
+        #[arg(long)]
+        max: Option<usize>,
+        /// Search mode to run.
+        #[arg(long, default_value = "forward")]
+        mode: CliSearchMode,
+        /// LVED advanced FTS column to search, for example `advanced1` or `advanced2`.
+        #[arg(long)]
+        advanced_column: Option<String>,
+        /// Maximum hits to return.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Opaque cursor from a previous search page.
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Resolve and render the first hit through library routing.
+        #[arg(long)]
+        render_first: bool,
+        /// Render mode to use with --render-first.
+        #[arg(long, default_value = "native")]
+        render_mode: CliRenderMode,
+        /// Include backend debug trace in rendered output.
+        #[arg(long)]
+        debug_trace: bool,
+    },
     /// Open a reader navigation surface for one package.
     Surface {
         /// Package root or payload path to inspect.
@@ -334,6 +365,32 @@ fn main() -> Result<()> {
             )?;
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
+        Command::LibrarySearch {
+            query,
+            paths,
+            max,
+            mode,
+            advanced_column,
+            limit,
+            cursor,
+            render_first,
+            render_mode,
+            debug_trace,
+        } => {
+            let registry = DriverRegistry::default();
+            let output = library_search_command_json(
+                &registry,
+                &paths,
+                max,
+                query,
+                cli_search_mode(mode, advanced_column),
+                limit,
+                cursor,
+                cli_render_options(render_mode, debug_trace),
+                render_first,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
         Command::Surface {
             path,
             surface_id,
@@ -430,6 +487,31 @@ fn open_single_book_library(
     Ok((library, book_id))
 }
 
+fn open_library_from_paths(
+    registry: &DriverRegistry,
+    paths: &[PathBuf],
+    max: Option<usize>,
+) -> Result<BookLibrary> {
+    let mut library = BookLibrary::new();
+    let mut opened = 0usize;
+    for path in paths {
+        let remaining = max.map(|limit| limit.saturating_sub(opened));
+        if remaining == Some(0) {
+            break;
+        }
+        for package_path in
+            registry.discover_roots(path, PackageDiscoveryOptions { max: remaining })?
+        {
+            if max.is_some_and(|limit| opened >= limit) {
+                break;
+            }
+            library.open_path(package_path, registry)?;
+            opened += 1;
+        }
+    }
+    Ok(library)
+}
+
 fn metadata_for(library: &BookLibrary, book_id: &BookId) -> BookMetadata {
     library
         .book(book_id)
@@ -446,6 +528,45 @@ fn home_command_json(registry: &DriverRegistry, path: &Path) -> Result<serde_jso
         "metadata": metadata,
         "surface_count": surfaces.len(),
         "surfaces": surfaces,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn library_search_command_json(
+    registry: &DriverRegistry,
+    paths: &[PathBuf],
+    max: Option<usize>,
+    query: String,
+    mode: SearchMode,
+    limit: usize,
+    cursor: Option<String>,
+    render_options: RenderOptions,
+    render_first: bool,
+) -> Result<serde_json::Value> {
+    let library = open_library_from_paths(registry, paths, max)?;
+    let metadata = library.metadata_snapshot();
+    let page = library.search(&SearchQuery {
+        scope: SearchScope::AllBooks,
+        mode,
+        query,
+        cursor,
+        limit,
+    })?;
+    let rendered_first = if render_first {
+        page.hits
+            .first()
+            .map(|hit| library.render_target_routed(&hit.book_id, &hit.target, &render_options))
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(json!({
+        "books": metadata,
+        "book_count": library.len(),
+        "hits": page.hits,
+        "next_cursor": page.next_cursor,
+        "diagnostics": page.diagnostics,
+        "rendered_first": rendered_first,
     }))
 }
 
@@ -934,6 +1055,35 @@ mod tests {
                 .unwrap()
                 .contains("body")
         );
+    }
+
+    #[test]
+    fn library_search_command_uses_all_books_scope_and_routed_rendering() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("FirstDictionary");
+        let second = dir.path().join("SecondDictionary");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        write_lved_cli_fixture(&first);
+        write_lved_cli_fixture(&second);
+
+        let output = library_search_command_json(
+            &DriverRegistry::default(),
+            &[dir.path().to_path_buf()],
+            None,
+            "alp".to_owned(),
+            SearchMode::Forward,
+            10,
+            None,
+            RenderOptions::default(),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(output["book_count"].as_u64(), Some(2));
+        assert_eq!(output["hits"].as_array().unwrap().len(), 2);
+        assert_eq!(output["rendered_first"]["view"]["kind"], "entry_body");
+        assert!(output["rendered_first"]["book_id"].as_str().is_some());
     }
 
     #[test]
