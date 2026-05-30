@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,10 +11,12 @@ use crate::error::{Error, Result};
 use crate::search::SearchMode;
 
 mod discovery;
+mod schema;
 mod sql_search;
 mod title;
 mod tree;
 
+use schema::{LvedSqliteSchema, has_column};
 #[cfg(test)]
 use sql_search::{LvedListProjection, lved_list_projection};
 use sql_search::{
@@ -167,38 +168,6 @@ pub struct LvedTreeIndex {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub items: Vec<LvedTreeIndexItem>,
-}
-
-#[derive(Debug, Clone)]
-struct LvedSqliteSchema {
-    tables: BTreeMap<String, Vec<String>>,
-}
-
-impl LvedSqliteSchema {
-    fn load(connection: &Connection) -> Result<Self> {
-        let mut tables = BTreeMap::new();
-        for table in sqlite_table_names(connection)? {
-            let columns = sqlite_columns(connection, &table)?;
-            tables.insert(table.to_lowercase(), columns);
-        }
-        Ok(Self { tables })
-    }
-
-    fn table_exists(&self, table: &str) -> bool {
-        self.tables.contains_key(&table.to_lowercase())
-    }
-
-    fn columns(&self, table: &str) -> &[String] {
-        self.tables
-            .get(&table.to_lowercase())
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    fn table_has_columns(&self, table: &str, required: &[&str]) -> bool {
-        let columns = self.columns(table);
-        required.iter().all(|column| has_column(columns, column))
-    }
 }
 
 impl LvedSqliteStore {
@@ -754,27 +723,6 @@ fn validate_sqlite_connection(connection: &Connection) -> Result<()> {
     let _: i64 =
         connection.query_row("select count(*) from sqlite_master", [], |row| row.get(0))?;
     Ok(())
-}
-
-fn sqlite_columns(connection: &Connection, table: &str) -> Result<Vec<String>> {
-    let Ok(mut statement) =
-        connection.prepare(&format!("pragma table_info({})", quote_identifier(table)))
-    else {
-        return Ok(Vec::new());
-    };
-    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map(|columns| {
-            columns
-                .into_iter()
-                .map(|column| column.to_lowercase())
-                .collect()
-        })
-        .map_err(Error::from)
-}
-
-fn has_column(columns: &[String], column: &str) -> bool {
-    columns.iter().any(|found| found == &column.to_lowercase())
 }
 
 fn quote_identifier(value: &str) -> String {
