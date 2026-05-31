@@ -42,6 +42,10 @@ where
         output.push_str(&html[cursor..attr.value_start]);
         let raw_value = &html[attr.value_start..attr.value_end];
         if let Some(token) = raw_value.strip_prefix("lvcore://resource/") {
+            let token = token
+                .split_once(['?', '#'])
+                .map(|(token, _)| token)
+                .unwrap_or(token);
             match data_url_for_resource(token) {
                 Ok(Some(data_url)) => {
                     output.push_str(&data_url);
@@ -224,7 +228,7 @@ mod tests {
             target: token("entry"),
             title: None,
             display_html: Some(
-                r#"<a href="lvcore://target/target-token">next</a><img src="lvcore://resource/res-token">"#
+                r#"<a href = "lvcore://target/target-token">next</a><img src = "lvcore://resource/res-token?variant=small#fig">"#
                     .to_owned(),
             ),
             basic_text: None,

@@ -207,7 +207,7 @@ fn package_html_resource_targets_decode_cp932_and_rewrite_html_links() {
         [
             b"<html><head><title>".as_slice(),
             &[0x96, 0x7b, 0x95, 0xb6],
-            b"</title></head><body><a href=\"sub/page.html#x\">next</a><img src=\"pic.png\"></body></html>",
+            b"</title></head><body><a href = \"sub/page.html#x\">next</a><img src = \"pic.png\"></body></html>",
         ]
         .concat(),
     )

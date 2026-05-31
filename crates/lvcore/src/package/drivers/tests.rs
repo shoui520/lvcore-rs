@@ -538,12 +538,12 @@ fn write_lved_search_fixture(root: &Path) {
                       advanced2,
                       filter
                     );
-                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><object class=\"icon\" data=\"AC6E.svg\"></object><a href=\"lved.media.sound:00010033.mp3\">sound</a><a href=\"lved.dataid:101#jump\">next</a><a href=\"lved.info:help.html#top\">help</a></article>', '');
+                    insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p><object class=\"icon\" data = \"AC6E.svg\"></object><a href = \"lved.media.sound:00010033.mp3\">sound</a><a href = \"lved.dataid:101#jump\">next</a><a href = \"lved.info:help.html#top\">help</a></article>', '');
                     insert into content values (101, 1, '<article><h1>Beta</h1></article>', '');
                     insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
                     insert into media values (1, 'AC6E', 4, X'3C7376672F3E');
                     insert into mediasub values (1, '00010033', 5, X'49443303');
-                    insert into list values (1, 100, 1, 'body-anchor', '<img class=\"icon\" src=\"AC6E.svg\"><b>alpha</b>', '<span>subtitle</span>');
+                    insert into list values (1, 100, 1, 'body-anchor', '<img class=\"icon\" src = \"AC6E.svg\"><b>alpha</b>', '<span>subtitle</span>');
                     insert into list values (2, 101, 1, '', '<b>beta</b>', '');
                     insert into list values (3, 102, 1, '', '<b>gamma</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)

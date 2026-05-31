@@ -138,13 +138,17 @@ fn scope_resource_hrefs_in_html(book_id: &BookId, html: &str) -> String {
 }
 
 fn is_resource_href_delimiter(value: char) -> bool {
-    value.is_whitespace() || matches!(value, '"' | '\'' | '<' | '>' | ')' | '(')
+    value.is_whitespace() || matches!(value, '"' | '\'' | '<' | '>' | ')' | '(' | '?' | '#')
 }
 
 pub(super) fn parse_scoped_resource_href(href: &str) -> Result<(BookId, ResourceToken)> {
     let Some(rest) = href.strip_prefix("lvcore://resource/") else {
         return Err(Error::InvalidResourceHref);
     };
+    let rest = rest
+        .split_once(['?', '#'])
+        .map(|(target, _)| target)
+        .unwrap_or(rest);
     let mut parts = rest.split('/');
     let Some(book_scope) = parts.next().filter(|value| !value.is_empty()) else {
         return Err(Error::InvalidResourceHref);
@@ -160,4 +164,32 @@ pub(super) fn parse_scoped_resource_href(href: &str) -> Result<(BookId, Resource
         .map_err(|_| Error::InvalidResourceHref)?;
     let book_id = String::from_utf8(book_id_bytes).map_err(|_| Error::InvalidResourceHref)?;
     Ok((BookId(book_id), ResourceToken::from_opaque(resource_token)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scopes_resource_href_without_swallowing_query_or_fragment() {
+        let scoped = scope_resource_hrefs_in_html(
+            &BookId("DAIJIRN4".to_owned()),
+            r#"<img src="lvcore://resource/token123?variant=small#fig1">"#,
+        );
+        assert!(scoped.contains("lvcore://resource/REFJSklSTjQ/token123?variant=small#fig1"));
+    }
+
+    #[test]
+    fn parses_scoped_resource_href_with_query_or_fragment_suffix() {
+        let (book_id, token) =
+            parse_scoped_resource_href("lvcore://resource/REFJSklSTjQ/token123?variant=small#fig1")
+                .unwrap();
+        assert_eq!(book_id, BookId("DAIJIRN4".to_owned()));
+        assert_eq!(token, ResourceToken::from_opaque("token123"));
+
+        let (book_id, token) =
+            parse_scoped_resource_href("lvcore://resource/REFJSklSTjQ/token123#fig1").unwrap();
+        assert_eq!(book_id, BookId("DAIJIRN4".to_owned()));
+        assert_eq!(token, ResourceToken::from_opaque("token123"));
+    }
 }

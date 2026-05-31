@@ -275,33 +275,74 @@ pub(super) fn next_html_href_or_src_attr(
     lower: &str,
     cursor: usize,
 ) -> Option<HtmlAttrRange> {
-    let patterns = [
-        ("href=\"", HtmlAttrName::Href),
-        ("href='", HtmlAttrName::Href),
-        ("src=\"", HtmlAttrName::Src),
-        ("src='", HtmlAttrName::Src),
-        ("data=\"", HtmlAttrName::Data),
-        ("data='", HtmlAttrName::Data),
+    let attributes = [
+        ("href", HtmlAttrName::Href),
+        ("src", HtmlAttrName::Src),
+        ("data", HtmlAttrName::Data),
     ];
-    let (attr_start, pattern, name) = patterns
+    let (name, value_start, value_end) = attributes
         .iter()
-        .filter_map(|(pattern, name)| {
-            lower[cursor..]
-                .find(pattern)
-                .map(|offset| (cursor + offset, *pattern, *name))
+        .filter_map(|(attr_name, name)| {
+            next_quoted_html_attr_value(html, lower, cursor, attr_name).map(
+                |(attr_start, value_start, value_end)| (attr_start, *name, value_start, value_end),
+            )
         })
-        .min_by_key(|(start, _, _)| *start)?;
-    let quote = pattern.as_bytes()[pattern.len() - 1];
-    let value_start = attr_start + pattern.len();
-    let value_end = html.as_bytes()[value_start..]
-        .iter()
-        .position(|byte| *byte == quote)
-        .map(|offset| value_start + offset)?;
+        .min_by_key(|(attr_start, _, _, _)| *attr_start)
+        .map(|(_, name, value_start, value_end)| (name, value_start, value_end))?;
     Some(HtmlAttrRange {
         name,
         value_start,
         value_end,
     })
+}
+
+fn next_quoted_html_attr_value(
+    html: &str,
+    lower: &str,
+    cursor: usize,
+    attr_name: &str,
+) -> Option<(usize, usize, usize)> {
+    let mut search = cursor;
+    while search < lower.len() {
+        let attr_start = lower[search..]
+            .find(attr_name)
+            .map(|offset| search + offset)?;
+        if !is_html_attr_name_boundary(lower, attr_start, attr_name.len()) {
+            search = attr_start + attr_name.len();
+            continue;
+        }
+
+        let mut index = attr_start + attr_name.len();
+        index = skip_ascii_whitespace(lower, index)?;
+        if !lower[index..].starts_with('=') {
+            search = attr_start + attr_name.len();
+            continue;
+        }
+        index += 1;
+        index = skip_ascii_whitespace(lower, index)?;
+        let quote = *lower.as_bytes().get(index)?;
+        if quote != b'"' && quote != b'\'' {
+            search = attr_start + attr_name.len();
+            continue;
+        }
+        let value_start = index + 1;
+        let value_end = html.as_bytes()[value_start..]
+            .iter()
+            .position(|byte| *byte == quote)
+            .map(|offset| value_start + offset)?;
+        return Some((attr_start, value_start, value_end));
+    }
+    None
+}
+
+fn is_html_attr_name_boundary(lower: &str, attr_start: usize, attr_len: usize) -> bool {
+    let before = lower[..attr_start].chars().next_back();
+    if before.is_some_and(|ch| !ch.is_ascii_whitespace() && ch != '<') {
+        return false;
+    }
+    let after_index = attr_start + attr_len;
+    let after = lower[after_index..].chars().next();
+    after.is_some_and(|ch| ch.is_ascii_whitespace() || ch == '=')
 }
 
 pub(super) fn path_has_extension(path: &str, extensions: &[&str]) -> bool {
@@ -337,7 +378,7 @@ mod tests {
 
     #[test]
     fn scans_href_src_and_data_attrs_in_order() {
-        let html = r#"<a href="one.html"><img src='two.png' data="three.bin"></a>"#;
+        let html = r#"<a href = "one.html"><img src = 'two.png' data="three.bin"></a>"#;
         let lower = html.to_ascii_lowercase();
         let first = next_html_href_or_src_attr(html, &lower, 0).unwrap();
         assert_eq!(first.name, HtmlAttrName::Href);
@@ -348,5 +389,14 @@ mod tests {
         let third = next_html_href_or_src_attr(html, &lower, second.value_end).unwrap();
         assert_eq!(third.name, HtmlAttrName::Data);
         assert_eq!(&html[third.value_start..third.value_end], "three.bin");
+    }
+
+    #[test]
+    fn does_not_scan_prefixed_href_like_attrs() {
+        let html = r#"<a data-href="skip.html" href="keep.html"></a>"#;
+        let lower = html.to_ascii_lowercase();
+        let attr = next_html_href_or_src_attr(html, &lower, 0).unwrap();
+        assert_eq!(attr.name, HtmlAttrName::Href);
+        assert_eq!(&html[attr.value_start..attr.value_end], "keep.html");
     }
 }
