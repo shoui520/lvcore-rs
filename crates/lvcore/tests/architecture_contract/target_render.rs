@@ -156,8 +156,17 @@ fn render_target_uses_resolved_visual_body_contract() {
     );
 
     let view = package.render_target(&token, &options).unwrap();
-    assert_eq!(view.kind, ResolvedTargetKind::Deferred);
-    assert!(view.display_html.is_none());
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        view.display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("lv-hc-basic-text-fallback"))
+    );
+    assert!(
+        view.basic_text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+    );
     assert!(
         view.capabilities
             .contains(&lvcore::RenderCapability::HcRenderInput)
@@ -165,7 +174,7 @@ fn render_target_uses_resolved_visual_body_contract() {
     assert!(
         view.diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "hc_render_deferred")
+            .any(|diagnostic| diagnostic.code == "hc_render_basic_text_fallback")
     );
     let debug_trace = view.debug_trace.as_deref().unwrap_or_default();
     assert!(debug_trace.contains("HONMON.DIC"));

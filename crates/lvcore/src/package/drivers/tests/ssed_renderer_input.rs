@@ -124,11 +124,17 @@ fn ssed_hc_renderer_input_carries_stream_resource_refs() {
     let view = package
         .render_target(&token, &RenderOptions::default())
         .unwrap();
-    assert_eq!(view.kind, ResolvedTargetKind::Deferred);
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(view.display_html.is_some());
     assert_eq!(view.resources.len(), resources.len());
     assert!(view.capabilities.contains(&RenderCapability::HcRenderInput));
     assert!(view.capabilities.contains(&RenderCapability::Images));
     assert!(view.capabilities.contains(&RenderCapability::Audio));
+    assert!(
+        view.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "hc_render_basic_text_fallback")
+    );
 }
 
 #[test]

@@ -505,7 +505,8 @@ fn library_delegates_reader_operations_by_book_id() {
     let view = library
         .render_target(&book_id, &target, &RenderOptions::default())
         .unwrap();
-    assert_eq!(view.kind, ResolvedTargetKind::Deferred);
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(view.display_html.is_some());
     assert!(matches!(
         library
             .renderer_input_for_target(&book_id, &target)

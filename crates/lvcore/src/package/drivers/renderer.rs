@@ -209,24 +209,37 @@ impl ReaderBookPackage {
                             }),
                     });
                 }
+                let data = self.read_ssed_stream_render_slice(&component, offset, length)?;
+                let rendered = decode_hc_stream_basic_text_with_gaiji(&data, |code| {
+                    let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
+                    let resolved = resolution.unicode.is_some();
+                    let text = resolution
+                        .unicode
+                        .clone()
+                        .unwrap_or_else(|| "〓".to_owned());
+                    diagnostics.extend(resolution.diagnostics);
+                    Some(HcBasicTextGaiji { text, resolved })
+                });
+                let title = self
+                    .title_for_body_target(&target)?
+                    .unwrap_or_else(|| "SSED entry stream".to_owned());
+                diagnostics.extend(rendered.diagnostics);
+                diagnostics.push(Diagnostic::warning(
+                    "hc_render_basic_text_fallback",
+                    "SSED stream was rendered through the HC basic-text fallback; product visual HC/profile rendering is not implemented yet",
+                ));
                 Ok(ResolvedTargetView {
-                    kind: crate::render::ResolvedTargetKind::Deferred,
+                    kind: crate::render::ResolvedTargetKind::EntryBody,
                     target,
-                    title: Some("SSED entry stream".to_owned()),
-                    display_html: None,
-                    basic_text: None,
+                    title: Some(title),
+                    display_html: Some(hc_basic_text_html(&rendered.text)),
+                    basic_text: Some(rendered.text),
                     scroll_anchor,
                     surface: None,
                     resources,
                     links: Vec::new(),
                     capabilities: vec![crate::render::RenderCapability::HcRenderInput],
-                    diagnostics: {
-                        diagnostics.push(Diagnostic::info(
-                            "hc_render_deferred",
-                            "SSED stream resolved successfully; HC/profile rendering is not implemented yet",
-                        ));
-                        diagnostics
-                    },
+                    diagnostics,
                     debug_trace: (options.include_debug_trace || options.mode == RenderMode::Debug)
                         .then(|| {
                             json!({
@@ -390,6 +403,18 @@ impl ReaderBookPackage {
         })?;
         Ok(())
     }
+}
+
+fn hc_basic_text_html(text: &str) -> String {
+    let mut html = String::from("<div class=\"lv-hc-basic-text-fallback\">");
+    for (index, line) in text.lines().enumerate() {
+        if index > 0 {
+            html.push_str("<br>");
+        }
+        html.push_str(&escape_plain_label_html(line));
+    }
+    html.push_str("</div>");
+    html
 }
 
 impl RendererProvider for ReaderBookPackage {
