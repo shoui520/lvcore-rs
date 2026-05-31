@@ -259,6 +259,27 @@ pub(super) fn ssed_aux_index_rows_to_nodes(
     Ok(roots)
 }
 
+pub(super) fn ssed_aux_index_rows_to_flat_nodes(
+    package: &ReaderBookPackage,
+    rows: &[SsedAuxIndexRow],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Vec<NavigationNode>> {
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let rich_label = package.ssed_rich_label(&row.label);
+            Ok(NavigationNode {
+                node_id: format!("aux-index:{}:{index}", row.line_number),
+                label_html: rich_label.html,
+                label_text: rich_label.text,
+                target: ssed_aux_index_row_target(package, row, diagnostics)?,
+                diagnostics: rich_label.diagnostics,
+                children: Vec::new(),
+            })
+        })
+        .collect()
+}
+
 fn ssed_aux_index_row_target(
     package: &ReaderBookPackage,
     row: &SsedAuxIndexRow,

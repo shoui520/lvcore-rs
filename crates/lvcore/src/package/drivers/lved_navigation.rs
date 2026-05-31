@@ -151,6 +151,7 @@ impl ReaderBookPackage {
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
             nodes: lved_tree_items_to_nodes(rows.as_ref())?,
+            next_cursor: None,
         })
     }
 }

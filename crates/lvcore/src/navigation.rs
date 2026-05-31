@@ -77,6 +77,8 @@ pub enum NavigationSurface {
     HierarchicalTree {
         surface_id: String,
         nodes: Vec<NavigationNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_cursor: Option<String>,
     },
     InfoPages {
         surface_id: String,
@@ -207,7 +209,9 @@ impl NavigationSurface {
             Self::SimpleMenu {
                 surface_id, nodes, ..
             }
-            | Self::HierarchicalTree { surface_id, nodes } => {
+            | Self::HierarchicalTree {
+                surface_id, nodes, ..
+            } => {
                 let mut targets = Vec::new();
                 collect_node_targets(surface_id, nodes, &mut targets);
                 targets
@@ -365,6 +369,7 @@ mod tests {
                     children: Vec::new(),
                 }],
             }],
+            next_cursor: None,
         };
 
         let targets = surface.actionable_targets();

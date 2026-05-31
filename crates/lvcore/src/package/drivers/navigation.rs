@@ -369,7 +369,7 @@ impl NavigationProvider for ReaderBookPackage {
             (FormatFamily::Ssed, id)
                 if id.starts_with("aux-index:") || id.starts_with("numeric-aux:") =>
             {
-                self.open_ssed_aux_index_surface(surface_id)
+                self.open_ssed_aux_index_surface(surface_id, cursor, limit)
             }
             (FormatFamily::Ssed, "hanrei") => {
                 self.open_ssed_hanrei_surface(surface_id, cursor, limit)

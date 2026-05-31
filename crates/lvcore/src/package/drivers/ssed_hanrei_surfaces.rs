@@ -14,6 +14,7 @@ impl ReaderBookPackage {
             return Ok(NavigationSurface::HierarchicalTree {
                 surface_id: surface_id.to_owned(),
                 nodes,
+                next_cursor: None,
             });
         }
         if limit == 0 {

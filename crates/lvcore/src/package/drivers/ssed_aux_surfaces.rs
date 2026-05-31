@@ -40,6 +40,7 @@ impl ReaderBookPackage {
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
             nodes,
+            next_cursor: None,
         })
     }
 
@@ -198,13 +199,23 @@ impl ReaderBookPackage {
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
             nodes,
+            next_cursor: None,
         })
     }
 
     pub(super) fn open_ssed_aux_index_surface(
         &self,
         surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
     ) -> Result<NavigationSurface> {
+        if limit == 0 {
+            return Ok(NavigationSurface::HierarchicalTree {
+                surface_id: surface_id.to_owned(),
+                nodes: Vec::new(),
+                next_cursor: None,
+            });
+        }
         let spec = match self.ssed_aux_index_spec_for_surface(surface_id) {
             Ok(spec) => spec,
             Err(error) => {
@@ -239,8 +250,25 @@ impl ReaderBookPackage {
             });
         }
         let rows = parse_aux_index_text_bytes(&self.storage.read(Path::new(&spec.info))?)?;
+        let offset = decode_offset_cursor(cursor);
+        let next_cursor = (rows.len() > offset.saturating_add(limit))
+            .then(|| offset.saturating_add(limit).to_string());
+        let page_rows = rows
+            .get(offset..offset.saturating_add(limit).min(rows.len()))
+            .unwrap_or_default();
+        if page_rows.is_empty() && offset > 0 {
+            return Ok(NavigationSurface::HierarchicalTree {
+                surface_id: surface_id.to_owned(),
+                nodes: Vec::new(),
+                next_cursor: None,
+            });
+        }
         let mut diagnostics = Vec::new();
-        let nodes = ssed_aux_index_rows_to_nodes(self, &rows, &mut diagnostics)?;
+        let nodes = if offset == 0 {
+            ssed_aux_index_rows_to_nodes(self, page_rows, &mut diagnostics)?
+        } else {
+            ssed_aux_index_rows_to_flat_nodes(self, page_rows, &mut diagnostics)?
+        };
         if nodes.is_empty() {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -253,6 +281,7 @@ impl ReaderBookPackage {
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
             nodes,
+            next_cursor,
         })
     }
 

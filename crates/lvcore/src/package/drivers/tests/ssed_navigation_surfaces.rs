@@ -333,6 +333,32 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
         .unwrap();
     assert_eq!(window.before.len(), 1);
     assert_eq!(window.before[0].title.as_deref(), Some("季語"));
+
+    let first_page = package.open_surface_page("aux-index:0", None, 2).unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = first_page
+    else {
+        panic!("expected paged auxiliary navigation tree");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "大辞林 第四版");
+    assert_eq!(nodes[0].children[0].label_text, "季語");
+    assert_eq!(next_cursor.as_deref(), Some("2"));
+
+    let second_page = package
+        .open_surface_page("aux-index:0", next_cursor.as_deref(), 2)
+        .unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = second_page
+    else {
+        panic!("expected second paged auxiliary navigation tree");
+    };
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0].label_text, "春");
+    assert_eq!(nodes[1].label_text, "西和ABC順");
+    assert_eq!(next_cursor.as_deref(), Some("4"));
 }
 
 #[test]
