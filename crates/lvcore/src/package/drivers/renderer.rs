@@ -139,7 +139,16 @@ impl ReaderBookPackage {
                 let scroll_anchor = scroll_anchor_for_token(&target)?;
                 if options.mode == RenderMode::BasicText {
                     let data = self.read_ssed_stream_render_slice(&component, offset, length)?;
-                    let rendered = decode_hc_stream_basic_text(&data);
+                    let rendered = decode_hc_stream_basic_text_with_gaiji(&data, |code| {
+                        let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
+                        let resolved = resolution.unicode.is_some();
+                        let text = resolution
+                            .unicode
+                            .clone()
+                            .unwrap_or_else(|| "〓".to_owned());
+                        diagnostics.extend(resolution.diagnostics);
+                        Some(HcBasicTextGaiji { text, resolved })
+                    });
                     let title = self
                         .title_for_body_target(&target)?
                         .unwrap_or_else(|| "SSED entry stream".to_owned());

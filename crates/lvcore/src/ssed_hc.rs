@@ -29,6 +29,14 @@ pub struct HcTextStats {
     pub cp932_pairs: usize,
     pub ascii_bytes: usize,
     pub skipped_gaiji_pairs: usize,
+    pub resolved_gaiji_pairs: usize,
+    pub placeholder_gaiji_pairs: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HcBasicTextGaiji {
+    pub text: String,
+    pub resolved: bool,
 }
 
 const STYLE_START_OPS: &[(u8, HcTextStyle)] = &[
@@ -72,6 +80,13 @@ enum HcTextStyle {
 }
 
 pub fn decode_hc_stream_basic_text(data: &[u8]) -> HcTextRender {
+    decode_hc_stream_basic_text_with_gaiji(data, |_code| None)
+}
+
+pub fn decode_hc_stream_basic_text_with_gaiji(
+    data: &[u8],
+    mut gaiji_text: impl FnMut(&str) -> Option<HcBasicTextGaiji>,
+) -> HcTextRender {
     let mut text = String::with_capacity(data.len());
     let mut stats = HcTextStats::default();
     let mut unknown_ops = BTreeSet::new();
@@ -199,7 +214,18 @@ pub fn decode_hc_stream_basic_text(data: &[u8]) -> HcTextRender {
         }
 
         if offset + 1 < data.len() && (0xa1..=0xfe).contains(&byte) {
-            stats.skipped_gaiji_pairs += 1;
+            let second = data[offset + 1];
+            let code = format!("{byte:02X}{second:02X}");
+            if let Some(resolved) = gaiji_text(&code) {
+                text.push_str(&resolved.text);
+                if resolved.resolved {
+                    stats.resolved_gaiji_pairs += 1;
+                } else {
+                    stats.placeholder_gaiji_pairs += 1;
+                }
+            } else {
+                stats.skipped_gaiji_pairs += 1;
+            }
             offset += 2;
             continue;
         }
@@ -241,6 +267,15 @@ pub fn decode_hc_stream_basic_text(data: &[u8]) -> HcTextRender {
             format!(
                 "{} raw gaiji/control byte pair(s) require gaiji resolution beyond BasicText",
                 stats.skipped_gaiji_pairs
+            ),
+        ));
+    }
+    if stats.placeholder_gaiji_pairs > 0 {
+        diagnostics.push(Diagnostic::info(
+            "hc_basic_text_gaiji_placeholders",
+            format!(
+                "{} raw gaiji byte pair(s) could not be resolved to BasicText Unicode and were rendered as placeholders",
+                stats.placeholder_gaiji_pairs
             ),
         ));
     }
@@ -325,7 +360,9 @@ fn be16_at(data: &[u8], offset: usize) -> Option<u16> {
 mod tests {
     use encoding_rs::SHIFT_JIS;
 
-    use super::decode_hc_stream_basic_text;
+    use super::{
+        HcBasicTextGaiji, decode_hc_stream_basic_text, decode_hc_stream_basic_text_with_gaiji,
+    };
 
     #[test]
     fn basic_text_decodes_jis_controls_and_halfwidth_scope() {
@@ -361,6 +398,35 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.code == "hc_basic_text_truncated_control")
+        );
+    }
+
+    #[test]
+    fn basic_text_can_resolve_raw_gaiji_pairs() {
+        let mut data = body_jis("本文");
+        data.extend_from_slice(&[0xb1, 0x23]);
+        data.extend_from_slice(&[0xb9, 0x99]);
+
+        let rendered = decode_hc_stream_basic_text_with_gaiji(&data, |code| match code {
+            "B123" => Some(HcBasicTextGaiji {
+                text: "一".to_owned(),
+                resolved: true,
+            }),
+            "B999" => Some(HcBasicTextGaiji {
+                text: "〓".to_owned(),
+                resolved: false,
+            }),
+            _ => None,
+        });
+
+        assert_eq!(rendered.text, "本文一〓");
+        assert_eq!(rendered.stats.resolved_gaiji_pairs, 1);
+        assert_eq!(rendered.stats.placeholder_gaiji_pairs, 1);
+        assert!(
+            rendered
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "hc_basic_text_gaiji_placeholders")
         );
     }
 

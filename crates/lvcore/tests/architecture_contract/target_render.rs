@@ -180,11 +180,14 @@ fn render_target_uses_resolved_visual_body_contract() {
 fn basic_text_mode_decodes_hc_ssed_stream_instead_of_returning_empty_deferred_view() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
     let mut honmon = body_jis("見出し");
     honmon.extend_from_slice(&[0x1f, 0x0a]);
     honmon.extend_from_slice(&[0x1f, 0x04]);
     honmon.extend_from_slice(&body_jis("ＡＢＣ"));
     honmon.extend_from_slice(&[0x1f, 0x05]);
+    honmon.extend_from_slice(&[0xb1, 0x23]);
+    honmon.extend_from_slice(&[0xb9, 0x99]);
     honmon.extend_from_slice(&body_jis("本文"));
     fs::write(
         dir.path().join("HONMON.DIC"),
@@ -208,7 +211,7 @@ fn basic_text_mode_decodes_hc_ssed_stream_instead_of_returning_empty_deferred_vi
 
     assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
     assert_eq!(view.display_html, None);
-    assert_eq!(view.basic_text.as_deref(), Some("見出し\nABC本文"));
+    assert_eq!(view.basic_text.as_deref(), Some("見出し\nABC一〓本文"));
     assert!(
         view.capabilities
             .contains(&lvcore::RenderCapability::HcRenderInput)
