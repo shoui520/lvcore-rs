@@ -46,11 +46,38 @@ impl ReaderBookPackage {
                 || scan_needs_linear_fallback
                 || ascii_key_needs_linear_safety_net)
         {
-            let scan_diagnostics =
-                self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?;
+            let scan_diagnostics = if query.mode == SearchMode::Partial {
+                self.scan_ssed_partial_index_rows(&needle, |row| collector.push_row(row))?
+            } else {
+                self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?
+            };
             collector.extend_diagnostics(scan_diagnostics);
         }
         Ok(collector.into_search_page(query.limit))
+    }
+
+    fn scan_ssed_partial_index_rows(
+        &self,
+        needle: &str,
+        on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<Vec<Diagnostic>> {
+        let forward_candidates = ssed_raw_search_key_prefilter_candidates(needle);
+        if forward_candidates.is_empty() {
+            return self.scan_ssed_simple_index_rows(None, on_row);
+        }
+        let reversed_needle = reverse_search_match_text(needle);
+        let reverse_candidates = ssed_raw_search_key_prefilter_candidates(&reversed_needle);
+        self.scan_ssed_simple_index_rows_with_page_filter(
+            None,
+            |component, page| {
+                if ssed_index_component_name_is_backward(&component.filename) {
+                    ssed_body_window_may_contain_query(page, &reverse_candidates)
+                } else {
+                    ssed_body_window_may_contain_query(page, &forward_candidates)
+                }
+            },
+            on_row,
+        )
     }
 
     fn search_ssed_fulltext_body_windows(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -462,7 +489,7 @@ impl ReaderBookPackage {
             page_limit,
         );
         let scan_diagnostics =
-            self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?;
+            self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
         collector.extend_diagnostics(scan_diagnostics);
         let mut page = collector.into_search_page(query.limit);
         if page.hits.len() < query.limit {

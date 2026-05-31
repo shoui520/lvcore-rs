@@ -209,6 +209,15 @@ impl ReaderBookPackage {
     pub(super) fn scan_ssed_simple_index_rows(
         &self,
         row_limit: Option<usize>,
+        on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<Vec<Diagnostic>> {
+        self.scan_ssed_simple_index_rows_with_page_filter(row_limit, |_, _| true, on_row)
+    }
+
+    pub(super) fn scan_ssed_simple_index_rows_with_page_filter(
+        &self,
+        row_limit: Option<usize>,
+        mut page_may_match: impl FnMut(&SsedComponent, &[u8]) -> bool,
         mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
     ) -> Result<Vec<Diagnostic>> {
         let Some(catalog) = &self.ssed_catalog else {
@@ -272,6 +281,9 @@ impl ReaderBookPackage {
                 }
                 let word = u16::from_be_bytes([page[0], page[1]]);
                 if !is_leaf_page(word) {
+                    continue;
+                }
+                if !page_may_match(component, &page) {
                     continue;
                 }
                 let logical_block = component.start_block + page_index as u32;
