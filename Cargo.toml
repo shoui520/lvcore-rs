@@ -30,6 +30,3 @@ opt-level = 3
 
 [profile.dev.package.cipher]
 opt-level = 3
-
-[profile.dev.package.lvcore]
-opt-level = 2
