@@ -1,13 +1,24 @@
 use std::path::Path;
 
 use lvcore::{
-    BookId, BookLibrary, DriverRegistry, HomeSurface, NavigationStatus, NavigationSurface,
-    NavigationSurfaceKind, RenderOptions, ResolvedTargetView, SearchMode, SearchQuery, SearchScope,
-    TargetToken,
+    BookId, BookLibrary, DriverRegistry, FormatFamily, HomeSurface, NavigationStatus,
+    NavigationSurface, NavigationSurfaceKind, NavigationTarget, RenderOptions, ResolvedTargetView,
+    ResourceKind, SearchHit, SearchMode, SearchQuery, SearchScope,
 };
 use serde_json::json;
 
 use super::{metadata_for, open_single_book_library};
+
+const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 32;
+const VALIDATE_SEARCH_HIT_RENDER_LIMIT: usize = 3;
+
+struct SurfaceRenderedProbeContext<'a> {
+    surface_id: &'a str,
+    surface_kind: &'a NavigationSurfaceKind,
+    opened_kind: &'a str,
+    label: String,
+    resource_scan: serde_json::Value,
+}
 
 pub(crate) fn validate_package_json(
     registry: &DriverRegistry,
@@ -20,7 +31,12 @@ pub(crate) fn validate_package_json(
             match library.home_surfaces(&book_id) {
                 Ok(surfaces) => {
                     let exercises = if deep {
-                        Some(exercise_reader_paths(&library, &book_id, &surfaces))
+                        Some(exercise_reader_paths(
+                            &library,
+                            &book_id,
+                            &surfaces,
+                            metadata.format_family,
+                        ))
                     } else {
                         None
                     };
@@ -89,8 +105,10 @@ fn exercise_reader_paths(
     library: &BookLibrary,
     book_id: &BookId,
     surfaces: &[HomeSurface],
+    format_family: FormatFamily,
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
+    let resource_scan_limit = resource_scan_limit_for(format_family);
     for surface in surfaces {
         if surface.status != NavigationStatus::Available || surface.surface_id == "search" {
             continue;
@@ -107,8 +125,12 @@ fn exercise_reader_paths(
                         "diagnostic_count": diagnostics.len(),
                     })
                 } else {
-                    let (target, label) = first_surface_target(&opened)
-                        .map(|(target, label)| (Some(target), label))
+                    let targets = opened.actionable_targets();
+                    let resource_scan =
+                        rendered_resource_scan(library, book_id, &targets, resource_scan_limit);
+                    let (target, label) = targets
+                        .first()
+                        .map(|target| (Some(target.target.clone()), target.label_text.clone()))
                         .unwrap_or((None, String::new()));
                     match target {
                         Some(target) => {
@@ -118,10 +140,13 @@ fn exercise_reader_paths(
                                     library,
                                     book_id,
                                     &view,
-                                    &surface.surface_id,
-                                    &surface.kind,
-                                    navigation_surface_kind_name(&opened),
-                                    label,
+                                    SurfaceRenderedProbeContext {
+                                        surface_id: &surface.surface_id,
+                                        surface_kind: &surface.kind,
+                                        opened_kind: navigation_surface_kind_name(&opened),
+                                        label,
+                                        resource_scan,
+                                    },
                                 ),
                                 Err(error) => json!({
                                     "kind": "surface_first_target",
@@ -129,6 +154,7 @@ fn exercise_reader_paths(
                                     "surface_kind": surface.kind,
                                     "status": "render_error",
                                     "label": label,
+                                    "resource_scan": resource_scan,
                                     "error": error.to_string(),
                                 }),
                             }
@@ -139,6 +165,7 @@ fn exercise_reader_paths(
                             "surface_kind": surface.kind,
                             "opened_kind": navigation_surface_kind_name(&opened),
                             "status": "no_target",
+                            "resource_scan": resource_scan,
                         }),
                     }
                 }
@@ -171,17 +198,10 @@ fn exercise_reader_paths(
         limit: 3,
     }) {
         Ok(page) => {
-            let rendered_first = page.hits.first().map(|hit| {
-                library
-                    .render_target(book_id, &hit.target, &RenderOptions::default())
-                    .map(|view| rendered_view_probe(library, book_id, &view))
-                    .unwrap_or_else(|error| {
-                        json!({
-                            "status": "render_error",
-                            "error": error.to_string(),
-                        })
-                    })
-            });
+            let rendered_hits = rendered_search_hit_probes(library, book_id, &page.hits);
+            let rendered_first = rendered_hits.first().cloned();
+            let resource_scan =
+                rendered_search_resource_scan(library, book_id, &page.hits, resource_scan_limit);
             json!({
                 "kind": "search_forward",
                 "status": "ok",
@@ -189,6 +209,8 @@ fn exercise_reader_paths(
                 "hit_count": page.hits.len(),
                 "diagnostic_count": page.diagnostics.len(),
                 "rendered_first": rendered_first,
+                "rendered_hit_count": rendered_hits.len(),
+                "resource_scan": resource_scan,
             })
         }
         Err(error) => json!({
@@ -232,20 +254,126 @@ fn surface_rendered_view_probe(
     library: &BookLibrary,
     book_id: &BookId,
     view: &ResolvedTargetView,
-    surface_id: &str,
-    surface_kind: &NavigationSurfaceKind,
-    opened_kind: &str,
-    label: String,
+    context: SurfaceRenderedProbeContext<'_>,
 ) -> serde_json::Value {
     let mut row = rendered_view_probe(library, book_id, view);
     if let Some(object) = row.as_object_mut() {
         object.insert("kind".to_owned(), json!("surface_first_target"));
-        object.insert("surface_id".to_owned(), json!(surface_id));
-        object.insert("surface_kind".to_owned(), json!(surface_kind));
-        object.insert("opened_kind".to_owned(), json!(opened_kind));
-        object.insert("label".to_owned(), json!(label));
+        object.insert("surface_id".to_owned(), json!(context.surface_id));
+        object.insert("surface_kind".to_owned(), json!(context.surface_kind));
+        object.insert("opened_kind".to_owned(), json!(context.opened_kind));
+        object.insert("label".to_owned(), json!(context.label));
+        object.insert("resource_scan".to_owned(), context.resource_scan);
     }
     row
+}
+
+fn rendered_search_hit_probes(
+    library: &BookLibrary,
+    book_id: &BookId,
+    hits: &[SearchHit],
+) -> Vec<serde_json::Value> {
+    hits.iter()
+        .take(VALIDATE_SEARCH_HIT_RENDER_LIMIT)
+        .map(|hit| {
+            library
+                .render_target(book_id, &hit.target, &RenderOptions::default())
+                .map(|view| rendered_view_probe(library, book_id, &view))
+                .unwrap_or_else(|error| {
+                    json!({
+                        "status": "render_error",
+                        "error": error.to_string(),
+                    })
+                })
+        })
+        .collect()
+}
+
+fn rendered_search_resource_scan(
+    library: &BookLibrary,
+    book_id: &BookId,
+    hits: &[SearchHit],
+    limit: usize,
+) -> serde_json::Value {
+    let targets = hits
+        .iter()
+        .map(|hit| NavigationTarget {
+            surface_id: "search".to_owned(),
+            source_id: hit.title_text.clone(),
+            label_html: hit.title_html.clone(),
+            label_text: hit.title_text.clone(),
+            target: hit.target.clone(),
+            diagnostics: hit.diagnostics.clone(),
+        })
+        .collect::<Vec<_>>();
+    rendered_resource_scan(library, book_id, &targets, limit)
+}
+
+fn rendered_resource_scan(
+    library: &BookLibrary,
+    book_id: &BookId,
+    targets: &[NavigationTarget],
+    limit: usize,
+) -> serde_json::Value {
+    let mut checked_target_count = 0usize;
+    for (index, target) in targets.iter().take(limit).enumerate() {
+        checked_target_count += 1;
+        let view = match library.render_target(book_id, &target.target, &RenderOptions::default()) {
+            Ok(view) => view,
+            Err(error) => {
+                return json!({
+                    "status": "render_error",
+                    "target_count": targets.len(),
+                    "checked_target_count": checked_target_count,
+                    "target_index": index,
+                    "source_id": target.source_id,
+                    "label": target.label_text,
+                    "error": error.to_string(),
+                });
+            }
+        };
+        let Some(first_resource) = first_readable_resource_probe(library, book_id, &view) else {
+            continue;
+        };
+        let status = if first_resource
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|status| status.ends_with("_error"))
+        {
+            "resource_error"
+        } else {
+            "ok"
+        };
+        return json!({
+            "status": status,
+            "target_count": targets.len(),
+            "checked_target_count": checked_target_count,
+            "target_index": index,
+            "source_id": target.source_id,
+            "label": target.label_text,
+            "view_kind": view.kind,
+            "diagnostic_count": view.diagnostics.len(),
+            "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+            "resource_count": view.resources.len(),
+            "first_resource": first_resource,
+        });
+    }
+
+    json!({
+        "status": "no_resource",
+        "target_count": targets.len(),
+        "checked_target_count": checked_target_count,
+    })
+}
+
+fn resource_scan_limit_for(format_family: FormatFamily) -> usize {
+    match format_family {
+        FormatFamily::Ssed => 1,
+        FormatFamily::LvedSqlite3 | FormatFamily::LvlMultiView | FormatFamily::Hourei => {
+            VALIDATE_RESOURCE_TARGET_SCAN_LIMIT
+        }
+        FormatFamily::Unknown => 1,
+    }
 }
 
 fn first_readable_resource_probe(
@@ -253,10 +381,10 @@ fn first_readable_resource_probe(
     book_id: &BookId,
     view: &ResolvedTargetView,
 ) -> Option<serde_json::Value> {
-    let resource = view
-        .resources
-        .iter()
-        .find(|resource| resource.href.is_some())?;
+    let resource = view.resources.iter().find(|resource| {
+        resource.href.is_some()
+            && !matches!(resource.kind, ResourceKind::Css | ResourceKind::Javascript)
+    })?;
     match library.read_resource(book_id, &resource.token) {
         Ok(bytes) => Some(json!({
             "status": "ok",
@@ -271,14 +399,6 @@ fn first_readable_resource_probe(
             "error": error.to_string(),
         })),
     }
-}
-
-fn first_surface_target(surface: &NavigationSurface) -> Option<(TargetToken, String)> {
-    surface
-        .actionable_targets()
-        .into_iter()
-        .next()
-        .map(|target| (target.target, target.label_text))
 }
 
 fn navigation_surface_kind_name(surface: &NavigationSurface) -> &'static str {

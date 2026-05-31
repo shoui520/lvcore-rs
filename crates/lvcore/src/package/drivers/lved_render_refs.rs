@@ -219,6 +219,7 @@ impl ReaderBookPackage {
             || value.starts_with("http://")
             || value.starts_with("https://")
             || value.starts_with("data:")
+            || value.starts_with("file:")
             || value.starts_with("javascript:")
             || value.starts_with("lvcore://")
             || value.starts_with("lved.")
@@ -227,6 +228,14 @@ impl ReaderBookPackage {
         }
         let relative = value.split(['#', '?']).next().unwrap_or("").trim();
         if relative.is_empty() {
+            return Ok(None);
+        }
+        let lower_relative = relative.to_ascii_lowercase();
+        if lower_relative == "mathjax/mathjax.js"
+            || lower_relative == "./mathjax/mathjax.js"
+            || lower_relative.starts_with("mathjax/")
+            || lower_relative.starts_with("./mathjax/")
+        {
             return Ok(None);
         }
         let candidates = [relative.to_owned(), format!("res/{relative}")];

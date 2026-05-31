@@ -223,6 +223,52 @@ fn searches_lved_list_rows_and_preserves_content_html() {
 }
 
 #[test]
+fn media_blob_resolves_observed_lved_media_aliases() {
+    let dir = tempdir().unwrap();
+    let payload = dir.path().join("main.data");
+    let key = "test-key";
+    {
+        let connection = Connection::open(&payload).unwrap();
+        apply_sqlcipher_key(&connection, key).unwrap();
+        connection
+            .execute_batch(
+                "
+                create table media (id integer primary key, name text, type integer, main blob);
+                create table sound (id integer primary key, name text, type integer, main blob);
+                insert into media values (1, 'a15f', 2, X'89504E47');
+                insert into media values (265, '05e1bb8803a200c0', 2, X'FFD8FF');
+                insert into media values (809, '000010', 5, X'49443303');
+                insert into sound values (1, '10000010_example', 5, X'FFF384C4');
+                ",
+            )
+            .unwrap();
+    }
+    fs::write(dir.path().join("main.key"), key).unwrap();
+
+    let store = LvedSqliteStore::discover(dir.path()).unwrap().unwrap();
+    assert_eq!(
+        store.media_blob("lved.media", "a15f_C.png").unwrap(),
+        Some(b"\x89PNG".to_vec())
+    );
+    assert_eq!(
+        store
+            .media_blob("lved.media", "../../image/FULL/zA265.jpg")
+            .unwrap(),
+        Some(b"\xff\xd8\xff".to_vec())
+    );
+    assert_eq!(
+        store.media_blob("lved.mediasub", "000010.mp3").unwrap(),
+        Some(b"ID3\x03".to_vec())
+    );
+    assert_eq!(
+        store
+            .media_blob("lved.mediasub", "10000010_example.mp3")
+            .unwrap(),
+        Some(b"\xff\xf3\x84\xc4".to_vec())
+    );
+}
+
+#[test]
 fn title_probe_rejects_common_false_positive_shapes() {
     assert!(normalize_title_candidate("外国語は片仮名で表記した．").is_none());
     assert!(title_score("和英小辞典") < 100);

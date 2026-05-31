@@ -570,29 +570,50 @@ impl LvedSqliteStore {
 
     pub fn media_blob(&self, store: &str, key: &str) -> Result<Option<Vec<u8>>> {
         self.with_connection(|connection| {
-            let table = match store {
-                "lved.media" | "media" => "media",
-                "lved.mediasub" | "mediasub" => "mediasub",
+            let tables: &[&str] = match store {
+                "lved.media" | "media" => &["media"],
+                "lved.mediasub" | "mediasub" => &["mediasub", "sound", "media"],
+                "lved.sound" | "sound" => &["sound", "mediasub", "media"],
                 _ => return Ok(None),
             };
             let schema = self.schema(connection)?;
-            if !schema.table_has_columns(table, &["name", "main"]) {
-                return Ok(None);
+            let names = lved_media_lookup_names(key);
+            let ids = lved_media_lookup_ids(key);
+            for table in tables {
+                if !schema.table_has_columns(table, &["name", "main"]) {
+                    continue;
+                }
+                let sql = format!(
+                    "select main from {} where name = ? limit 1",
+                    quote_identifier(table)
+                );
+                let mut statement = connection.prepare(&sql)?;
+                for name in &names {
+                    if let Some(bytes) = statement
+                        .query_row([name], |row| sqlite_value_to_bytes(row.get_ref(0)?))
+                        .optional()?
+                    {
+                        return Ok(Some(bytes));
+                    }
+                }
+                if !has_column(schema.columns(table), "id") {
+                    continue;
+                }
+                let sql = format!(
+                    "select main from {} where id = ? limit 1",
+                    quote_identifier(table)
+                );
+                let mut statement = connection.prepare(&sql)?;
+                for id in &ids {
+                    if let Some(bytes) = statement
+                        .query_row([id], |row| sqlite_value_to_bytes(row.get_ref(0)?))
+                        .optional()?
+                    {
+                        return Ok(Some(bytes));
+                    }
+                }
             }
-            let stem = Path::new(key)
-                .file_stem()
-                .map(|value| value.to_string_lossy().to_string())
-                .unwrap_or_else(|| key.to_owned());
-            let sql = format!(
-                "select main from {} where name = ? or name = ? limit 1",
-                quote_identifier(table)
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let mut rows = statement.query((key, stem))?;
-            let Some(row) = rows.next()? else {
-                return Ok(None);
-            };
-            Ok(Some(sqlite_value_to_bytes(row.get_ref(0)?)?))
+            Ok(None)
         })
     }
 
@@ -727,6 +748,79 @@ fn sqlite_value_to_bytes(value: ValueRef<'_>) -> rusqlite::Result<Vec<u8>> {
         ValueRef::Integer(value) => Ok(value.to_string().into_bytes()),
         ValueRef::Real(value) => Ok(value.to_string().into_bytes()),
         ValueRef::Text(bytes) | ValueRef::Blob(bytes) => Ok(bytes.to_vec()),
+    }
+}
+
+fn lved_media_lookup_names(key: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let normalized = key.trim().replace('\\', "/");
+    push_unique_string(&mut names, key.trim());
+    push_unique_string(&mut names, &normalized);
+
+    let path = Path::new(&normalized);
+    if let Some(file_name) = path.file_name().and_then(|value| value.to_str()) {
+        push_unique_string(&mut names, file_name);
+        if let Some(stem) = Path::new(file_name)
+            .file_stem()
+            .and_then(|value| value.to_str())
+        {
+            push_unique_string(&mut names, stem);
+            push_common_lved_media_stem_variants(&mut names, stem);
+        }
+    }
+    if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
+        push_unique_string(&mut names, stem);
+        push_common_lved_media_stem_variants(&mut names, stem);
+    }
+
+    let originals = names.clone();
+    for value in originals {
+        push_unique_string(&mut names, &value.to_ascii_lowercase());
+    }
+    names
+}
+
+fn push_common_lved_media_stem_variants(names: &mut Vec<String>, stem: &str) {
+    for suffix in ["_C", "_c", "_W", "_w"] {
+        if let Some(base) = stem.strip_suffix(suffix) {
+            push_unique_string(names, base);
+        }
+    }
+}
+
+fn lved_media_lookup_ids(key: &str) -> Vec<i64> {
+    let normalized = key.trim().replace('\\', "/");
+    let mut ids = Vec::new();
+    let Some(stem) = Path::new(&normalized)
+        .file_stem()
+        .and_then(|value| value.to_str())
+    else {
+        return ids;
+    };
+
+    if let Some((_, tail)) = stem.rsplit_once('_')
+        && tail.bytes().all(|byte| byte.is_ascii_digit())
+        && let Ok(id) = tail.parse::<i64>()
+    {
+        ids.push(id);
+    }
+
+    let bytes = stem.as_bytes();
+    if bytes.len() > 2
+        && matches!(bytes[0], b'z' | b'Z')
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2..].iter().all(u8::is_ascii_digit)
+        && let Ok(id) = stem[2..].parse::<i64>()
+        && !ids.contains(&id)
+    {
+        ids.push(id);
+    }
+    ids
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: &str) {
+    if !value.is_empty() && !values.iter().any(|existing| existing == value) {
+        values.push(value.to_owned());
     }
 }
 

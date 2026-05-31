@@ -355,6 +355,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
                     <a href="lved.bookmark:C001">bookmark</a>
                     <img src="lved.image:fig01.png">
                     <a href="lved.pdf:manual.pdf">pdf</a>
+                    <script src="./MathJax/MathJax.js"></script>
                   </article>',
                   ''
                 );

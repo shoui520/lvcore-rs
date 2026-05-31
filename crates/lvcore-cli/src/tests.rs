@@ -170,6 +170,45 @@ fn validate_deep_exercises_first_rendered_resource() {
 }
 
 #[test]
+fn validate_deep_scans_beyond_first_target_for_rendered_resources() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        apply_sqlcipher_key(&connection, "test-key").unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><p>body</p></article>' where id = 100",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><object data=\"AC6E.svg\"></object><p>next body</p></article>' where id = 101",
+                [],
+            )
+            .unwrap();
+    }
+
+    let output = validate_package_json(&DriverRegistry::default(), dir.path(), true);
+    let exercises = output["exercises"].as_array().unwrap();
+    let resource_scan = exercises
+        .iter()
+        .filter_map(|exercise| exercise.get("resource_scan"))
+        .find(|scan| scan["status"] == "ok")
+        .expect("deep validation should scan past a resource-free first target");
+
+    assert_eq!(resource_scan["target_index"].as_u64(), Some(1));
+    assert_eq!(resource_scan["checked_target_count"].as_u64(), Some(2));
+    assert_eq!(resource_scan["first_resource"]["status"], "ok");
+    assert_eq!(
+        resource_scan["first_resource"]["byte_len"].as_u64(),
+        Some(6)
+    );
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
 fn home_command_reports_metadata_and_surfaces() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
