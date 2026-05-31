@@ -597,6 +597,24 @@ impl LvedSqliteStore {
                 if !schema.table_has_columns(table, &["name", "main"]) {
                     continue;
                 }
+                let name_uses_index =
+                    sqlite_equality_lookup_uses_search(connection, table, "name")?;
+                if name_uses_index
+                    && let Some(bytes) = media_blob_by_indexed_name(connection, table, &names)?
+                {
+                    return Ok(Some(bytes));
+                }
+                let has_id = has_column(schema.columns(table), "id");
+                let id_uses_index =
+                    has_id && sqlite_equality_lookup_uses_search(connection, table, "id")?;
+                if id_uses_index
+                    && let Some(bytes) = media_blob_by_indexed_id(connection, table, &ids)?
+                {
+                    return Ok(Some(bytes));
+                }
+                if name_uses_index && (!has_id || id_uses_index || ids.is_empty()) {
+                    continue;
+                }
                 if let Some(bytes) =
                     self.media_blob_from_index(connection, &schema, table, &names, &ids)?
                 {
@@ -802,6 +820,73 @@ fn sqlite_value_to_bytes(value: ValueRef<'_>) -> rusqlite::Result<Vec<u8>> {
         ValueRef::Real(value) => Ok(value.to_string().into_bytes()),
         ValueRef::Text(bytes) | ValueRef::Blob(bytes) => Ok(bytes.to_vec()),
     }
+}
+
+fn sqlite_equality_lookup_uses_search(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool> {
+    let sql = format!(
+        "explain query plan select main from {} where {} = ? limit 1",
+        quote_identifier(table),
+        quote_identifier(column)
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let details = statement.query_map(rusqlite::params![rusqlite::types::Null], |row| {
+        row.get::<_, String>(3)
+    })?;
+    for detail in details {
+        let detail = detail?.to_ascii_lowercase();
+        if detail.contains("search") && !detail.contains("scan") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn media_blob_by_indexed_name(
+    connection: &Connection,
+    table: &str,
+    names: &[String],
+) -> Result<Option<Vec<u8>>> {
+    let sql = format!(
+        "select main from {} where {} = ? limit 1",
+        quote_identifier(table),
+        quote_identifier("name")
+    );
+    let mut statement = connection.prepare(&sql)?;
+    for name in names {
+        if let Some(bytes) = statement
+            .query_row([name], |row| sqlite_value_to_bytes(row.get_ref(0)?))
+            .optional()?
+        {
+            return Ok(Some(bytes));
+        }
+    }
+    Ok(None)
+}
+
+fn media_blob_by_indexed_id(
+    connection: &Connection,
+    table: &str,
+    ids: &[i64],
+) -> Result<Option<Vec<u8>>> {
+    let sql = format!(
+        "select main from {} where {} = ? limit 1",
+        quote_identifier(table),
+        quote_identifier("id")
+    );
+    let mut statement = connection.prepare(&sql)?;
+    for id in ids {
+        if let Some(bytes) = statement
+            .query_row([id], |row| sqlite_value_to_bytes(row.get_ref(0)?))
+            .optional()?
+        {
+            return Ok(Some(bytes));
+        }
+    }
+    Ok(None)
 }
 
 fn sqlite_value_to_optional_i64(value: ValueRef<'_>) -> rusqlite::Result<Option<i64>> {
