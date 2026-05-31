@@ -1,5 +1,7 @@
 use super::*;
 
+const SSED_MARKER_VARIANT_BOUNDARY_SCAN_LIMIT: usize = 256 * 1024;
+
 impl ReaderBookPackage {
     pub(super) fn visual_body_for_ssed_address(
         &self,
@@ -125,52 +127,20 @@ impl ReaderBookPackage {
             .map(|next| next.saturating_sub(start) as u64)
             .or_else(|| Some((reader.header().expanded_size() - start) as u64));
         }
-        if ssed_reader_index_boundary_marker_variant_len(&mut reader, start)
+        if let Some(marker_len) = ssed_reader_index_boundary_marker_variant_len(&mut reader, start)
             .ok()
             .flatten()
-            .is_some()
         {
-            return self
-                .infer_next_ssed_index_body_offset(component, component_offset)
-                .filter(|next_offset| *next_offset > component_offset)
-                .map(|next_offset| next_offset - component_offset);
+            return ssed_find_next_marker_variant_offset(
+                &mut reader,
+                start.saturating_add(marker_len),
+                &[0x1f, 0x09, 0x00, 0x02],
+            )
+            .ok()
+            .flatten()
+            .map(|next| next.saturating_sub(start) as u64);
         }
         None
-    }
-
-    fn infer_next_ssed_index_body_offset(
-        &self,
-        component: &SsedComponent,
-        component_offset: u64,
-    ) -> Option<u64> {
-        let mut next_offset: Option<u64> = None;
-        self.scan_ssed_simple_index_rows(None, |row| {
-            let Some(row_component) = self
-                .ssed_catalog
-                .as_ref()
-                .and_then(|catalog| catalog.component_for_address(row.body.block))
-            else {
-                return Ok(true);
-            };
-            if !row_component
-                .filename
-                .eq_ignore_ascii_case(&component.filename)
-            {
-                return Ok(true);
-            }
-            let Some(row_offset) = row_component.relative_offset(row.body.block, row.body.offset)
-            else {
-                return Ok(true);
-            };
-            if row_offset > component_offset
-                && next_offset.is_none_or(|current| row_offset < current)
-            {
-                next_offset = Some(row_offset);
-            }
-            Ok(true)
-        })
-        .ok()?;
-        next_offset
     }
 
     pub(super) fn visual_body_for_ssed_dense_anchor(
@@ -263,4 +233,21 @@ fn ssed_reader_index_boundary_marker_variant_len(
     } else {
         Ok(None)
     }
+}
+
+fn ssed_find_next_marker_variant_offset(
+    reader: &mut SsedDataFile,
+    offset: usize,
+    marker: &[u8],
+) -> Result<Option<usize>> {
+    if marker.is_empty() {
+        return Ok(None);
+    }
+    let available = reader.header().expanded_size().saturating_sub(offset);
+    let size = available.min(SSED_MARKER_VARIANT_BOUNDARY_SCAN_LIMIT);
+    let data = reader.read_range(offset, size)?;
+    Ok(data
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .map(|relative| offset.saturating_add(relative)))
 }
