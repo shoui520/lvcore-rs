@@ -9,6 +9,9 @@ use super::{AndroidDictInfo, LvedKeyFile, files_with_suffix, normalize_lved_dict
 use crate::error::{Error, Result};
 use crate::storage::regular_file_inside_root;
 
+const ANDROID_DICTINFO_SCAN_MAX_DEPTH: usize = 32;
+const ANDROID_DICTINFO_SCAN_MAX_ENTRIES: usize = 20_000;
+
 pub fn lved_payload_path(root: &Path) -> Result<Option<PathBuf>> {
     if root
         .parent()
@@ -373,18 +376,33 @@ fn discover_android_dictinfo_files(path: &Path) -> Vec<PathBuf> {
 }
 
 fn collect_dictinfo_recursive(root: &Path, out: &mut Vec<PathBuf>, seen: &mut Vec<PathBuf>) {
+    let Ok(canonical_root) = fs::canonicalize(root) else {
+        return;
+    };
     let mut seen_dirs = std::collections::BTreeSet::new();
-    collect_dictinfo_recursive_inner(root, out, seen, &mut seen_dirs, 0);
+    let mut entries_seen = 0usize;
+    collect_dictinfo_recursive_inner(
+        root,
+        &canonical_root,
+        out,
+        seen,
+        &mut seen_dirs,
+        &mut entries_seen,
+        0,
+    );
 }
 
 fn collect_dictinfo_recursive_inner(
     root: &Path,
+    canonical_root: &Path,
     out: &mut Vec<PathBuf>,
     seen: &mut Vec<PathBuf>,
     seen_dirs: &mut std::collections::BTreeSet<PathBuf>,
+    entries_seen: &mut usize,
     depth: usize,
 ) {
-    if depth > 32 {
+    if depth > ANDROID_DICTINFO_SCAN_MAX_DEPTH || *entries_seen > ANDROID_DICTINFO_SCAN_MAX_ENTRIES
+    {
         return;
     }
     let Ok(metadata) = fs::symlink_metadata(root) else {
@@ -396,6 +414,9 @@ fn collect_dictinfo_recursive_inner(
     let Ok(canonical) = fs::canonicalize(root) else {
         return;
     };
+    if !canonical.starts_with(canonical_root) {
+        return;
+    }
     if !seen_dirs.insert(canonical) {
         return;
     }
@@ -403,6 +424,10 @@ fn collect_dictinfo_recursive_inner(
         return;
     };
     for entry in entries.flatten() {
+        *entries_seen += 1;
+        if *entries_seen > ANDROID_DICTINFO_SCAN_MAX_ENTRIES {
+            return;
+        }
         let path = entry.path();
         let Ok(file_type) = entry.file_type() else {
             continue;
@@ -411,7 +436,15 @@ fn collect_dictinfo_recursive_inner(
             continue;
         }
         if file_type.is_dir() {
-            collect_dictinfo_recursive_inner(&path, out, seen, seen_dirs, depth + 1);
+            collect_dictinfo_recursive_inner(
+                &path,
+                canonical_root,
+                out,
+                seen,
+                seen_dirs,
+                entries_seen,
+                depth + 1,
+            );
         } else if file_type.is_file()
             && path
                 .file_name()
@@ -497,4 +530,46 @@ pub fn discover_lved_key_file(payload_path: &Path) -> Result<Option<LvedKeyFile>
 
 pub fn read_lved_key_file(path: &Path) -> Result<String> {
     Ok(fs::read_to_string(path)?.trim().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    #[test]
+    fn dictinfo_recursive_scan_skips_symlinked_directory_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("dictinfo.xml"), "<dicts/>").unwrap();
+        symlink(outside.path(), root.path().join("resources")).unwrap();
+
+        let mut out = Vec::new();
+        let mut seen = Vec::new();
+        collect_dictinfo_recursive(&root.path().join("resources"), &mut out, &mut seen);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn dictinfo_recursive_scan_tracks_real_directories_once() {
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join("resources/nested")).unwrap();
+        fs::write(root.path().join("resources/dictinfo.xml"), "<dicts/>").unwrap();
+        fs::write(
+            root.path().join("resources/nested/dictinfo.xml"),
+            "<dicts/>",
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        let mut seen = Vec::new();
+        collect_dictinfo_recursive(&root.path().join("resources"), &mut out, &mut seen);
+        out.sort();
+        assert_eq!(out.len(), 2);
+        assert!(out[0].ends_with("dictinfo.xml"));
+        assert!(out[1].ends_with("dictinfo.xml"));
+    }
 }
