@@ -137,6 +137,47 @@ impl ReaderBookPackage {
                 mut diagnostics,
             } => {
                 let scroll_anchor = scroll_anchor_for_token(&target)?;
+                if options.mode == RenderMode::BasicText {
+                    let data = self.read_ssed_stream_render_slice(&component, offset, length)?;
+                    let rendered = decode_hc_stream_basic_text(&data);
+                    let title = self
+                        .title_for_body_target(&target)?
+                        .unwrap_or_else(|| "SSED entry stream".to_owned());
+                    diagnostics.extend(rendered.diagnostics);
+                    diagnostics.push(Diagnostic::info(
+                        "hc_basic_text_visual_incomplete",
+                        "BasicText decoded the SSED stream with common HC control lengths; visual HC/profile rendering remains separate",
+                    ));
+                    return Ok(ResolvedTargetView {
+                        kind: crate::render::ResolvedTargetKind::EntryBody,
+                        target,
+                        title: Some(title),
+                        display_html: None,
+                        basic_text: Some(rendered.text),
+                        scroll_anchor,
+                        surface: None,
+                        resources: Vec::new(),
+                        links: Vec::new(),
+                        capabilities: vec![crate::render::RenderCapability::HcRenderInput],
+                        diagnostics,
+                        debug_trace: (options.include_debug_trace
+                            || options.mode == RenderMode::Debug)
+                            .then(|| {
+                                json!({
+                                    "body": {
+                                        "kind": "ssed_stream_basic_text",
+                                        "component": component,
+                                        "offset": offset,
+                                        "length": length,
+                                        "profile_hint": profile_hint,
+                                        "hc_profile": hc_profile,
+                                        "stats": rendered.stats,
+                                    }
+                                })
+                                .to_string()
+                            }),
+                    });
+                }
                 Ok(ResolvedTargetView {
                     kind: crate::render::ResolvedTargetKind::Deferred,
                     target,
@@ -243,6 +284,40 @@ impl ReaderBookPackage {
             return Ok(None);
         }
         Ok(Some(generic_html_data_url(mime_type, &bytes)))
+    }
+
+    fn read_ssed_stream_render_slice(
+        &self,
+        component_name: &str,
+        offset: u64,
+        length: Option<u64>,
+    ) -> Result<Vec<u8>> {
+        const HC_BASIC_TEXT_FALLBACK_LIMIT: usize = 256 * 1024;
+
+        let Some(component) = self.ssed_component_by_name(component_name) else {
+            return Err(Error::Driver(format!(
+                "{component_name} is not declared in the SSED catalog"
+            )));
+        };
+        if let Err(diagnostic) = self.validate_plain_component(component) {
+            return Err(Error::Driver(diagnostic.message));
+        }
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Err(Error::Driver(format!(
+                "{} was not found in the package",
+                component.filename
+            )));
+        };
+        let mut reader = SsedDataFile::open(path)?;
+        let start = usize::try_from(offset)
+            .map_err(|_| Error::Driver("SSED stream offset is too large".to_owned()))?;
+        let available = reader.header().expanded_size().saturating_sub(start);
+        let size = length
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(HC_BASIC_TEXT_FALLBACK_LIMIT)
+            .min(available)
+            .min(HC_BASIC_TEXT_FALLBACK_LIMIT);
+        reader.read_range(start, size)
     }
 
     pub(super) fn validate_plain_component(

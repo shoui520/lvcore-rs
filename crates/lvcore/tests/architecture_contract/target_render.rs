@@ -177,6 +177,56 @@ fn render_target_uses_resolved_visual_body_contract() {
 }
 
 #[test]
+fn basic_text_mode_decodes_hc_ssed_stream_instead_of_returning_empty_deferred_view() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    let mut honmon = body_jis("見出し");
+    honmon.extend_from_slice(&[0x1f, 0x0a]);
+    honmon.extend_from_slice(&[0x1f, 0x04]);
+    honmon.extend_from_slice(&body_jis("ＡＢＣ"));
+    honmon.extend_from_slice(&[0x1f, 0x05]);
+    honmon.extend_from_slice(&body_jis("本文"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(&honmon),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 0,
+    })
+    .unwrap();
+    let options = RenderOptions {
+        mode: RenderMode::BasicText,
+        include_debug_trace: true,
+        ..RenderOptions::default()
+    };
+
+    let view = package.render_target(&token, &options).unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(view.display_html, None);
+    assert_eq!(view.basic_text.as_deref(), Some("見出し\nABC本文"));
+    assert!(
+        view.capabilities
+            .contains(&lvcore::RenderCapability::HcRenderInput)
+    );
+    assert!(
+        view.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "hc_basic_text_visual_incomplete")
+    );
+    assert!(
+        view.debug_trace
+            .as_deref()
+            .unwrap_or_default()
+            .contains("ssed_stream_basic_text")
+    );
+}
+
+#[test]
 fn ssed_honmon_targets_accept_mac_extensionless_payload_alias() {
     let dir = tempdir().unwrap();
     fs::write(

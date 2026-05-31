@@ -27,6 +27,7 @@ pub mod ssed_color_sample;
 pub mod ssed_encyclopedia;
 pub mod ssed_figure;
 pub mod ssed_ga16;
+pub mod ssed_hc;
 pub mod ssed_index;
 pub mod ssed_loose_media;
 pub mod ssed_menu;
@@ -87,6 +88,7 @@ pub use ssed_encyclopedia::{
     ENCYCLOPEDIA_HEADER, SsedEncyclopediaIndex, SsedEncyclopediaRow, SsedEncyclopediaSection,
     parse_encyclopedia_index, parse_encyclopedia_index_bytes,
 };
+pub use ssed_hc::{HcTextRender, HcTextStats, decode_hc_stream_basic_text};
 pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
 pub use ssed_loose_media::{
     BritannicaLooseResourcePath, BritannicaMediaRoot, BritannicaTopDat, BritannicaTopRecord,

@@ -830,3 +830,50 @@ pub(crate) fn jis_fullwidth_ascii_key(text: &str) -> Vec<u8> {
     }
     out
 }
+
+pub(crate) fn body_jis(text: &str) -> Vec<u8> {
+    text.chars()
+        .flat_map(|ch| {
+            let body_ch = if (0x20..=0x7e).contains(&(ch as u32)) {
+                if ch == ' ' {
+                    '\u{3000}'
+                } else {
+                    char::from_u32(ch as u32 + 0xfee0).unwrap_or(ch)
+                }
+            } else {
+                ch
+            };
+            let body_text = body_ch.to_string();
+            let (encoded, _encoding, _had_errors) = encoding_rs::SHIFT_JIS.encode(&body_text);
+            encoded
+                .chunks(2)
+                .next()
+                .and_then(sjis_pair_to_jis_pair)
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+fn sjis_pair_to_jis_pair(sjis: &[u8]) -> Option<Vec<u8>> {
+    if sjis.len() != 2 {
+        return None;
+    }
+    let lead = sjis[0];
+    let trail = sjis[1];
+    let row_base = if (0x81..=0x9f).contains(&lead) {
+        (lead - 0x81) * 2
+    } else if (0xe0..=0xef).contains(&lead) {
+        (lead - 0xc1) * 2
+    } else {
+        return None;
+    };
+    let (row, cell) = if (0x9f..=0xfc).contains(&trail) {
+        (row_base + 1, trail - 0x9f)
+    } else if (0x40..=0xfc).contains(&trail) && trail != 0x7f {
+        let adjusted = if trail >= 0x80 { trail - 1 } else { trail };
+        (row_base, adjusted - 0x40)
+    } else {
+        return None;
+    };
+    Some(vec![row + 0x21, cell + 0x21])
+}
