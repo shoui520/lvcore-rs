@@ -22,8 +22,8 @@ mod scope;
 
 use scope::{
     parse_scoped_resource_href, scope_home_surfaces_resource_hrefs,
-    scope_navigation_surface_resource_hrefs, scope_resource_ref_href,
-    scope_search_page_resource_hrefs, scope_target_window_resource_hrefs,
+    scope_navigation_surface_resource_hrefs, scope_renderer_input_resource_hrefs,
+    scope_resource_ref_href, scope_search_page_resource_hrefs, scope_target_window_resource_hrefs,
     scope_view_resource_hrefs,
 };
 
@@ -316,8 +316,11 @@ impl BookLibrary {
         book_id: &BookId,
         target: &TargetToken,
     ) -> Result<RendererInput> {
-        self.required_book(book_id)?
-            .renderer_input_for_target(target)
+        let mut input = self
+            .required_book(book_id)?
+            .renderer_input_for_target(target)?;
+        scope_renderer_input_resource_hrefs(book_id, &mut input);
+        Ok(input)
     }
 
     pub fn resolve_target_window(

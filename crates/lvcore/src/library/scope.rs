@@ -4,7 +4,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use crate::error::{Error, Result};
 use crate::navigation::{HomeSurface, NavigationNode, NavigationSurface};
 use crate::package::BookId;
-use crate::render::ResolvedTargetView;
+use crate::render::{RendererInput, ResolvedTargetView};
 use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::SearchPage;
 use crate::sequence::TargetWindow;
@@ -85,6 +85,14 @@ pub(super) fn scope_view_resource_hrefs(book_id: &BookId, view: &mut ResolvedTar
         scope_resource_ref_href(book_id, resource);
     }
     *display_html = scope_resource_hrefs_in_html(book_id, display_html);
+}
+
+pub(super) fn scope_renderer_input_resource_hrefs(book_id: &BookId, input: &mut RendererInput) {
+    if let RendererInput::HcSsedStream { resources, .. } = input {
+        for resource in resources {
+            scope_resource_ref_href(book_id, resource);
+        }
+    }
 }
 
 pub(super) fn scope_resource_ref_href(book_id: &BookId, resource: &mut ResourceRef) {
@@ -169,6 +177,7 @@ pub(super) fn parse_scoped_resource_href(href: &str) -> Result<(BookId, Resource
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resources::ResourceKind;
 
     #[test]
     fn scopes_resource_href_without_swallowing_query_or_fragment() {
@@ -191,5 +200,44 @@ mod tests {
             parse_scoped_resource_href("lvcore://resource/REFJSklSTjQ/token123#fig1").unwrap();
         assert_eq!(book_id, BookId("DAIJIRN4".to_owned()));
         assert_eq!(token, ResourceToken::from_opaque("token123"));
+    }
+
+    #[test]
+    fn scopes_hc_renderer_input_resource_refs_without_touching_target() {
+        let target = crate::target::TargetToken::from_opaque("target-token");
+        let resource = ResourceToken::from_opaque("resource-token");
+        let mut input = RendererInput::HcSsedStream {
+            target: target.clone(),
+            component: "HONMON.DIC".to_owned(),
+            offset: 0,
+            length: Some(16),
+            profile_hint: Some("HC0158".to_owned()),
+            hc_profile: None,
+            resources: vec![ResourceRef {
+                token: resource,
+                kind: ResourceKind::Image,
+                label: None,
+                href: Some("lvcore://resource/resource-token".to_owned()),
+                mime_type: Some("image/svg+xml".to_owned()),
+                diagnostics: Vec::new(),
+            }],
+            diagnostics: Vec::new(),
+        };
+
+        scope_renderer_input_resource_hrefs(&BookId("SSED:ARCHSIC4".to_owned()), &mut input);
+
+        let RendererInput::HcSsedStream {
+            target: scoped_target,
+            resources,
+            ..
+        } = input
+        else {
+            panic!("input kind should not change");
+        };
+        assert_eq!(scoped_target, target);
+        assert_eq!(
+            resources[0].href.as_deref(),
+            Some("lvcore://resource/U1NFRDpBUkNIU0lDNA/resource-token")
+        );
     }
 }
