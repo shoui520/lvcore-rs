@@ -13,6 +13,7 @@ use crate::resources::ResourceToken;
 pub enum TargetKind {
     SsedAddress,
     SsedDenseAnchor,
+    SsedAuxRecord,
     LvedRow,
     LvedInfoPage,
     LvedNamedPage,
@@ -40,6 +41,12 @@ pub enum InternalTarget {
         anchor: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resolver_hint: Option<String>,
+    },
+    SsedAuxRecord {
+        source: String,
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
     },
     LvedRow {
         table: String,
@@ -113,6 +120,7 @@ impl InternalTarget {
         match self {
             Self::SsedAddress { .. } => TargetKind::SsedAddress,
             Self::SsedDenseAnchor { .. } => TargetKind::SsedDenseAnchor,
+            Self::SsedAuxRecord { .. } => TargetKind::SsedAuxRecord,
             Self::LvedRow { .. } => TargetKind::LvedRow,
             Self::LvedInfoPage { .. } => TargetKind::LvedInfoPage,
             Self::LvedNamedPage { .. } => TargetKind::LvedNamedPage,

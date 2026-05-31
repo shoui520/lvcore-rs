@@ -10,6 +10,7 @@ pub enum BodySourceKind {
     HonmonStream,
     HonmonAnchorDereference,
     SidecarHtml,
+    BritannicaChronologySqlite,
     RendererDatabase,
     LvedSqlite,
     LvlMultiViewSqlite,

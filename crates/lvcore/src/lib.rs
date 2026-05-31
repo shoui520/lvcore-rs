@@ -91,9 +91,9 @@ pub use ssed_encyclopedia::{
 pub use ssed_hc::{HcTextRender, HcTextStats, decode_hc_stream_basic_text};
 pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
 pub use ssed_loose_media::{
-    BritannicaLooseResourcePath, BritannicaMediaRoot, BritannicaTopDat, BritannicaTopRecord,
-    BritannicaWhatdayFile, BritannicaWhatdayKind, BritannicaWhatdayPath, LooseAddress, PcmuIndex,
-    PcmuMapRecord,
+    BRITANNICA_CHRONOLOGY_SOURCE_ID, BritannicaChronologyRecord, BritannicaLooseResourcePath,
+    BritannicaMediaRoot, BritannicaTopDat, BritannicaTopRecord, BritannicaWhatdayFile,
+    BritannicaWhatdayKind, BritannicaWhatdayPath, LooseAddress, PcmuIndex, PcmuMapRecord,
 };
 pub use ssed_menu::{
     SsedMenuDestination, SsedMenuDestinationEncoding, SsedMenuLink, SsedMenuParse, SsedMenuRecord,

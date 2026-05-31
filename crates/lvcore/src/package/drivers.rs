@@ -164,10 +164,12 @@ use crate::ssed_index::{
     parse_simple_leaf_page, parse_supported_leaf_page,
 };
 use crate::ssed_loose_media::{
-    discover_britannica_top_dat_files, discover_britannica_whatday_paths, find_loose_media_root,
-    find_movie_file, has_britannica_top_dat_files, has_britannica_whatday_files,
-    parse_lved_address, read_pcmu_record, render_britannica_html_fragment,
-    resolve_loose_media_file, resolve_pcmu_record,
+    BRITANNICA_CHRONOLOGY_SOURCE_ID, discover_britannica_top_dat_files,
+    discover_britannica_whatday_paths, find_loose_media_root, find_movie_file,
+    has_britannica_top_dat_files, has_britannica_whatday_files,
+    lookup_britannica_chronology_record, parse_lved_address, read_pcmu_record,
+    render_britannica_html_fragment, resolve_loose_media_file, resolve_pcmu_record,
+    search_britannica_chronology_records,
 };
 use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream, parse_menu_stream_page};
 use crate::ssed_multi::{
@@ -187,7 +189,7 @@ use crate::ssed_screen_menu::{
     SsedScreenMenuHotspot, SsedScreenMenuParse, parse_screen_menu_stream,
 };
 use crate::ssed_sidecar::{
-    SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
+    SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup, SsedSidecarSearchPage,
     discover_ssed_sidecar_body_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
     search_ssed_dense_sidecar_bodies_with_resolvers,
 };
@@ -471,6 +473,7 @@ fn scroll_anchor_for_token(target: &TargetToken) -> Result<Option<String>> {
     Ok(match target.decode()? {
         InternalTarget::LvedRow { anchor, .. }
         | InternalTarget::LvedInfoPage { anchor, .. }
+        | InternalTarget::SsedAuxRecord { anchor, .. }
         | InternalTarget::HoureiLaw { anchor, .. }
         | InternalTarget::MultiviewHref { anchor, .. }
         | InternalTarget::Resource { anchor, .. } => anchor,

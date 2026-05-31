@@ -177,6 +177,25 @@ impl ReaderBookPackage {
         }
     }
 
+    pub(super) fn visual_body_for_britannica_chronology_record(
+        &self,
+        inc_code: &str,
+    ) -> Result<VisualBody> {
+        match lookup_britannica_chronology_record(&self.root, inc_code)? {
+            Some(record) => Ok(VisualBody::PreservedHtml {
+                html: record.html,
+                source: BodySourceKind::BritannicaChronologySqlite,
+            }),
+            None => Ok(VisualBody::Unsupported {
+                reason: "Britannica chronology row is unavailable".to_owned(),
+                diagnostics: vec![Diagnostic::warning(
+                    "ssed_britannica_chronology_row_missing",
+                    format!("Britannica chronology row {inc_code} was not found"),
+                )],
+            }),
+        }
+    }
+
     pub(super) fn ssed_sidecar_body_resolvers(&self) -> Result<&[SsedSidecarBodyResolver]> {
         let resolvers = self.ssed_sidecar_body_resolvers.get_or_init(|| {
             discover_ssed_sidecar_body_resolvers(

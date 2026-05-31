@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::storage::path_stays_inside_root;
+use rusqlite::{Connection, OptionalExtension, params};
 
 mod britannica_html;
 mod pcmu;
@@ -12,6 +13,8 @@ pub use britannica_html::render_britannica_html_fragment;
 pub use pcmu::{PcmuIndex, PcmuMapRecord, load_pcmu_index, read_pcmu_record, resolve_pcmu_record};
 
 use britannica_html::plain_text_from_html;
+
+pub const BRITANNICA_CHRONOLOGY_SOURCE_ID: &str = "britannica_chronology";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LooseAddress {
@@ -87,6 +90,47 @@ pub struct BritannicaLooseResourcePath {
     pub relative_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BritannicaChronologyRecord {
+    pub inc_code: String,
+    pub type_code: String,
+    pub type_name: String,
+    pub year: Option<i64>,
+    pub month: Option<i64>,
+    pub day: Option<i64>,
+    pub sub_display_order: Option<i64>,
+    pub japanese_year: String,
+    pub html: String,
+    pub text: String,
+}
+
+impl BritannicaChronologyRecord {
+    pub fn title(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(year) = self.year {
+            parts.push(year.to_string());
+        }
+        if let Some(month) = self.month
+            && month > 0
+        {
+            parts.push(format!("{month}月"));
+        }
+        if let Some(day) = self.day
+            && day > 0
+        {
+            parts.push(format!("{day}日"));
+        }
+        if !self.type_name.is_empty() {
+            parts.push(self.type_name.clone());
+        }
+        if parts.is_empty() {
+            self.inc_code.clone()
+        } else {
+            parts.join(" ")
+        }
+    }
+}
+
 pub fn find_movie_file(package_root: &Path, movie_id: &str) -> Result<Option<PathBuf>> {
     if movie_id.len() != 8 || !movie_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Ok(None);
@@ -132,6 +176,177 @@ pub fn discover_britannica_media_roots(package_root: &Path) -> Result<Vec<Britan
     }
     roots.sort_by(|a, b| a.root_name.cmp(&b.root_name));
     Ok(roots)
+}
+
+pub fn discover_britannica_chronology_db(package_root: &Path) -> Result<Option<PathBuf>> {
+    for entry in fs::read_dir(package_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let lower = name.to_ascii_lowercase();
+        if !lower.starts_with("bri") || !lower.ends_with(".db") {
+            continue;
+        }
+        if !path_stays_inside_root(package_root, &path)? {
+            continue;
+        }
+        let Ok(connection) =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        else {
+            continue;
+        };
+        if sqlite_table_exists(&connection, "D_InternationalChronology")? {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+pub fn lookup_britannica_chronology_record(
+    package_root: &Path,
+    inc_code: &str,
+) -> Result<Option<BritannicaChronologyRecord>> {
+    let Some(path) = discover_britannica_chronology_db(package_root)? else {
+        return Ok(None);
+    };
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection
+        .query_row(
+            r#"
+            SELECT INC_Code, INC_Type_Code, INC_Type_Name, Year, Month, Day,
+                   Sub_Disp_Order, Jpn_Year, Value
+            FROM D_InternationalChronology
+            WHERE INC_Code = ?1
+            "#,
+            params![inc_code],
+            britannica_chronology_record_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn search_britannica_chronology_records(
+    package_root: &Path,
+    query: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<BritannicaChronologyRecord>> {
+    if query.trim().is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(path) = discover_britannica_chronology_db(package_root)? else {
+        return Ok(Vec::new());
+    };
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let like = format!("%{}%", escape_sql_like(query.trim()));
+    let mut statement = connection.prepare(
+        r#"
+        SELECT INC_Code, INC_Type_Code, INC_Type_Name, Year, Month, Day,
+               Sub_Disp_Order, Jpn_Year, Value
+        FROM D_InternationalChronology
+        WHERE Value LIKE ?1 ESCAPE '\'
+           OR INC_Type_Name LIKE ?1 ESCAPE '\'
+           OR Jpn_Year LIKE ?1 ESCAPE '\'
+        ORDER BY Year, Month, Day, Sub_Disp_Order, INC_Code
+        LIMIT ?2 OFFSET ?3
+        "#,
+    )?;
+    let rows = statement.query_map(
+        params![
+            like,
+            i64::try_from(limit).unwrap_or(i64::MAX),
+            i64::try_from(offset).unwrap_or(i64::MAX)
+        ],
+        britannica_chronology_record_from_row,
+    )?;
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row?);
+    }
+    Ok(records)
+}
+
+fn sqlite_table_exists(connection: &Connection, table: &str) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+            params![table],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(Into::into)
+}
+
+fn britannica_chronology_record_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<BritannicaChronologyRecord> {
+    let value: String = row.get::<_, Option<String>>(8)?.unwrap_or_default();
+    let html = render_britannica_html_fragment(&value);
+    let text = plain_text_from_html(&strip_britannica_inline_address_markers(&html));
+    Ok(BritannicaChronologyRecord {
+        inc_code: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+        type_code: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+        type_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        year: row.get::<_, Option<i64>>(3)?,
+        month: row.get::<_, Option<i64>>(4)?,
+        day: row.get::<_, Option<i64>>(5)?,
+        sub_display_order: row.get::<_, Option<i64>>(6)?,
+        japanese_year: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        html,
+        text,
+    })
+}
+
+fn escape_sql_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn strip_britannica_inline_address_markers(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut cursor = 0usize;
+    while let Some((start, marker_start, marker_end)) =
+        next_britannica_inline_marker_for_plain_text(value, cursor)
+    {
+        output.push_str(&value[cursor..start]);
+        let spec_start = start + marker_start.len();
+        let label_start = spec_start.saturating_add(13);
+        if label_start > value.len() {
+            output.push_str(&value[start..]);
+            return output;
+        }
+        let Some(end_relative) = value[label_start..].find(marker_end) else {
+            output.push_str(&value[start..]);
+            return output;
+        };
+        let label_end = label_start + end_relative;
+        output.push_str(&value[label_start..label_end]);
+        cursor = label_end + marker_end.len();
+    }
+    output.push_str(&value[cursor..]);
+    output
+}
+
+fn next_britannica_inline_marker_for_plain_text(
+    value: &str,
+    cursor: usize,
+) -> Option<(usize, &'static str, &'static str)> {
+    [("##S", "E##"), ("＃＃Ｓ", "Ｅ＃＃")]
+        .into_iter()
+        .filter_map(|(start, end)| {
+            value[cursor..]
+                .find(start)
+                .map(|offset| (cursor + offset, start, end))
+        })
+        .min_by_key(|(offset, _, _)| *offset)
 }
 
 pub fn find_loose_media_root(package_root: &Path, root_name: &str) -> Result<Option<PathBuf>> {

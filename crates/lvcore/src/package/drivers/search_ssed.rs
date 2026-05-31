@@ -92,6 +92,7 @@ impl ReaderBookPackage {
 
         let page_limit = query.limit.saturating_add(1);
         let title_cursor = decode_ssed_fulltext_title_cursor(query.cursor.as_deref());
+        let chronology_cursor = decode_ssed_fulltext_chronology_cursor(query.cursor.as_deref());
         let offset = decode_ssed_fulltext_body_cursor(query.cursor.as_deref());
         let mut diagnostics = Vec::new();
         if (query.cursor.is_none() || title_cursor.is_some())
@@ -111,12 +112,25 @@ impl ReaderBookPackage {
         } else {
             page_limit
         };
-        let sidecar_page = search_ssed_dense_sidecar_bodies_with_resolvers(
-            self.ssed_sidecar_body_resolvers()?,
-            &query.query,
-            offset,
-            sidecar_limit,
-        )?;
+        let body_cursor_explicit = query
+            .cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("body:"));
+        let run_sidecar = chronology_cursor.is_none() && !body_cursor_explicit;
+        let sidecar_page = if run_sidecar {
+            search_ssed_dense_sidecar_bodies_with_resolvers(
+                self.ssed_sidecar_body_resolvers()?,
+                &query.query,
+                offset,
+                sidecar_limit,
+            )?
+        } else {
+            SsedSidecarSearchPage {
+                hits: Vec::new(),
+                matched_count: 0,
+                exhausted: true,
+            }
+        };
         if !sidecar_page.hits.is_empty() || sidecar_page.matched_count > 0 {
             diagnostics.push(Diagnostic::info(
                 "ssed_fulltext_sidecar_scan",
@@ -168,6 +182,73 @@ impl ReaderBookPackage {
                 next_cursor: Some((offset + query.limit).to_string()),
                 diagnostics,
             });
+        }
+        if (query.cursor.is_none() || title_cursor.is_some() || chronology_cursor.is_some())
+            && hits.len() < page_limit
+        {
+            let chronology_offset = chronology_cursor.unwrap_or(0);
+            let remaining = page_limit.saturating_sub(hits.len());
+            let records = search_britannica_chronology_records(
+                &self.root,
+                &query.query,
+                chronology_offset,
+                remaining,
+            )?;
+            let chronology_exhausted = records.len() < remaining;
+            if !records.is_empty() {
+                diagnostics.push(Diagnostic::info(
+                    "ssed_fulltext_britannica_chronology_scan",
+                    "SSED full-text search included the Britannica chronology SQLite helper database",
+                ));
+            }
+            let mut chronology_hits = 0usize;
+            for record in records {
+                let title = record.title();
+                let label = self.ssed_rich_label(&title);
+                let target = TargetToken::new(&InternalTarget::SsedAuxRecord {
+                    source: BRITANNICA_CHRONOLOGY_SOURCE_ID.to_owned(),
+                    key: record.inc_code.clone(),
+                    anchor: None,
+                })?;
+                hits.push(SearchHit {
+                    book_id: self.metadata.book_id.clone(),
+                    target,
+                    title_html: label.html,
+                    title_text: label.text,
+                    snippet_html: ssed_fulltext_snippet_html(&record.text, &query.query),
+                    diagnostics: label.diagnostics,
+                });
+                chronology_hits = chronology_hits.saturating_add(1);
+                if hits.len() >= page_limit {
+                    break;
+                }
+            }
+            if hits.len() >= page_limit {
+                hits.truncate(query.limit);
+                return Ok(SearchPage {
+                    hits,
+                    next_cursor: Some(format!(
+                        "chronology:{}",
+                        chronology_offset.saturating_add(query.limit)
+                    )),
+                    diagnostics,
+                });
+            }
+            if hits.len() >= query.limit {
+                hits.truncate(query.limit);
+                return Ok(SearchPage {
+                    hits,
+                    next_cursor: chronology_exhausted.then_some("body:0".to_owned()).or_else(
+                        || {
+                            Some(format!(
+                                "chronology:{}",
+                                chronology_offset.saturating_add(chronology_hits)
+                            ))
+                        },
+                    ),
+                    diagnostics,
+                });
+            }
         }
         diagnostics.push(Diagnostic::info(
             "ssed_fulltext_body_window_scan",
@@ -544,9 +625,16 @@ fn decode_ssed_fulltext_title_cursor(cursor: Option<&str>) -> Option<usize> {
 fn decode_ssed_fulltext_body_cursor(cursor: Option<&str>) -> usize {
     match cursor {
         Some(value) if value.starts_with("title:") => 0,
+        Some(value) if value.starts_with("chronology:") => 0,
         Some(value) if let Some(body) = value.strip_prefix("body:") => {
             body.parse::<usize>().unwrap_or(0)
         }
         value => decode_offset_cursor(value),
     }
+}
+
+fn decode_ssed_fulltext_chronology_cursor(cursor: Option<&str>) -> Option<usize> {
+    cursor?
+        .strip_prefix("chronology:")
+        .and_then(|value| value.parse::<usize>().ok())
 }

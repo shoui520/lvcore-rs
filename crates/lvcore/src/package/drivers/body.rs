@@ -11,6 +11,7 @@ impl ReaderBookPackage {
             }
             InternalTarget::LvedInfoPage { .. } => Ok(ResolvedTargetKind::InfoPage),
             InternalTarget::LvedNamedPage { .. } => Ok(ResolvedTargetKind::InfoPage),
+            InternalTarget::SsedAuxRecord { .. } => Ok(ResolvedTargetKind::InfoPage),
             InternalTarget::HoureiLaw { .. } => Ok(ResolvedTargetKind::LawArticle),
             _ => Ok(ResolvedTargetKind::EntryBody),
         }
@@ -25,6 +26,12 @@ impl ReaderBookPackage {
                 Ok(store
                     .law_entry(&hore_id)?
                     .map(|entry| hourei_law_node_label(&entry)))
+            }
+            InternalTarget::SsedAuxRecord { source, key, .. }
+                if source == BRITANNICA_CHRONOLOGY_SOURCE_ID =>
+            {
+                Ok(lookup_britannica_chronology_record(&self.root, &key)?
+                    .map(|record| record.title()))
             }
             _ => Ok(None),
         }
@@ -43,6 +50,11 @@ impl BodyProvider for ReaderBookPackage {
                 block,
                 offset,
             } => self.visual_body_for_ssed_address(&component, block, offset),
+            InternalTarget::SsedAuxRecord { source, key, .. }
+                if source == BRITANNICA_CHRONOLOGY_SOURCE_ID =>
+            {
+                self.visual_body_for_britannica_chronology_record(&key)
+            }
             InternalTarget::LvedRow {
                 table,
                 row_id,

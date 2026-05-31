@@ -104,6 +104,9 @@ impl ReaderBookPackage {
                         self.normalize_multiview_html_refs(&html)?
                     }
                     BodySourceKind::HoureiSqlite => self.normalize_hourei_html_refs(&html)?,
+                    BodySourceKind::BritannicaChronologySqlite => {
+                        self.normalize_britannica_loose_html_refs(&html)?
+                    }
                     _ => NormalizedHtmlRefs {
                         html,
                         resources: Vec::new(),

@@ -111,6 +111,97 @@ fn ssed_fulltext_matches_fullwidth_ascii_body_text() {
 }
 
 #[test]
+fn ssed_fulltext_searches_britannica_chronology_before_honmon_scan() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_fixture(dir.path());
+    let connection = rusqlite::Connection::open(dir.path().join("BriSynthetic.db")).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE D_InternationalChronology (
+                INC_Code VARCHAR(20) NOT NULL UNIQUE,
+                INC_Type_Code VARCHAR(100),
+                INC_Type_Name VARCHAR(200),
+                Year INTEGER,
+                Month INTEGER,
+                Day INTEGER,
+                Sub_Disp_Order INTEGER,
+                Jpn_Year VARCHAR(20),
+                Value TEXT,
+                PRIMARY KEY(INC_Code)
+            );
+            INSERT INTO D_InternationalChronology
+                (INC_Code, INC_Type_Code, INC_Type_Name, Year, Month, Day, Sub_Disp_Order, Jpn_Year, Value)
+            VALUES
+                ('166', 'WOR', '世界史', 43, 0, 0, 10, '',
+                 '＃＃Ｓ00000064:0000ブリタニアＥ＃＃，ローマの属州となる');
+            "#,
+        )
+        .unwrap();
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic Britannica".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "ブリ".to_owned(),
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "43 世界史");
+    assert!(
+        page.hits[0]
+            .snippet_html
+            .as_deref()
+            .is_some_and(|snippet| snippet.contains("ブリタニア"))
+    );
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAuxRecord { source, key, .. }
+            if source == BRITANNICA_CHRONOLOGY_SOURCE_ID && key == "166"
+    ));
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_britannica_chronology_scan")
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
+    );
+
+    let view = package
+        .render_target(&page.hits[0].target, &RenderOptions::default())
+        .unwrap();
+    let html = view.display_html.unwrap();
+    assert!(html.contains("lvcore://target/"));
+    assert!(!html.contains("＃＃Ｓ"));
+}
+
+#[test]
 fn ssed_fulltext_metadata_requires_supported_honmon_payload() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
