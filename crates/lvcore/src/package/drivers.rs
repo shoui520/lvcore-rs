@@ -191,7 +191,10 @@ use crate::ssed_sidecar::{
     search_ssed_dense_sidecar_bodies_with_resolvers,
 };
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
-use crate::storage::{DirectoryStorage, StorageBackend, path_stays_inside_root, private_cache_dir};
+use crate::storage::{
+    DirectoryStorage, StorageBackend, path_stays_inside_root, private_cache_dir,
+    regular_file_inside_root,
+};
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
 use self::hourei_labels::hourei_law_node_label;

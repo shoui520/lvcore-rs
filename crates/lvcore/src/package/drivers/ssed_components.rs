@@ -47,12 +47,14 @@ impl ReaderBookPackage {
         if let Some(path) = self
             .storage
             .resolve_casefolded(Path::new(&component.filename))?
+            && regular_file_inside_root(&self.root, &path)?
         {
             seen.insert(path.clone());
             paths.push(path);
         }
         for alias in ssed_component_filename_aliases(component) {
             if let Some(path) = self.storage.resolve_casefolded(Path::new(&alias))?
+                && regular_file_inside_root(&self.root, &path)?
                 && seen.insert(path.clone())
             {
                 paths.push(path);

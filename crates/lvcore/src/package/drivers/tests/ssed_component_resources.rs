@@ -2,6 +2,68 @@ use std::fs;
 
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn ssed_component_resolution_ignores_symlinked_payload_escape() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::write(
+        outside.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[b"outside body"], 100, 100),
+    )
+    .unwrap();
+    symlink(
+        outside.path().join("HONMON.DIC"),
+        root.path().join("HONMON.DIC"),
+    )
+    .unwrap();
+    let component = SsedComponent {
+        index: 0,
+        multi: 0,
+        component_type: 0x00,
+        start_block: 100,
+        end_block: 100,
+        data: [0; 4],
+        filename: "HONMON.DIC".to_owned(),
+        role: SsedComponentRole::Honmon,
+    };
+    let catalog = SsedCatalog {
+        title: "Symlink".to_owned(),
+        components: vec![component.clone()],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        root.path(),
+        DetectedPackage {
+            root: root.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Symlink".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, root.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    assert!(
+        package
+            .resolve_readable_ssed_component_path(&component)
+            .unwrap()
+            .is_none()
+    );
+}
+
 #[test]
 fn ssed_pcmdata_address_uses_loose_pcmu_audio_when_component_is_absent() {
     let dir = tempdir().unwrap();
