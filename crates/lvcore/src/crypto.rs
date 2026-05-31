@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 
 const LOGOFONT_CIPHER_PASSPHRASE: &[u8] = b"LogoFontCipher";
 const BLOCK_SIZE: usize = 16;
-const STREAM_DECRYPT_BUFFER_SIZE: usize = 64 * 1024 * BLOCK_SIZE;
+const STREAM_DECRYPT_BUFFER_SIZE: usize = 256 * 1024 * BLOCK_SIZE;
 const ANDROID_DIW_PREFIX: &[u8] = b"LV_";
 const SSEDDATA_MAGIC: &[u8] = b"SSEDDATA";
 const ANDROID_DIW_PASSWORD: &str = "resworbncidnatsivogol--emulator";
@@ -24,6 +24,10 @@ const ANDROID_DIW_SALT: [u8; 20] = [
     0xe1, 0x34, 0xac, 0x6d,
 ];
 static ANDROID_DIW_AES_KEY: LazyLock<[u8; 32]> = LazyLock::new(derive_android_diw_aes_key_uncached);
+static LOGOFONT_WINDOWS_KEY_IV: LazyLock<([u8; BLOCK_SIZE], [u8; BLOCK_SIZE])> =
+    LazyLock::new(|| derive_logofont_cipher_key_iv(LogoFontCipherVariant::Windows));
+static LOGOFONT_MACOS_KEY_IV: LazyLock<([u8; BLOCK_SIZE], [u8; BLOCK_SIZE])> =
+    LazyLock::new(|| derive_logofont_cipher_key_iv(LogoFontCipherVariant::MacOs));
 
 pub fn decrypt_logofont_cipher_prefix(data: &[u8], size: usize) -> Result<Vec<u8>> {
     decrypt_logofont_cipher_prefix_with_variant(data, size, LogoFontCipherVariant::Windows)
@@ -300,6 +304,15 @@ enum LogoFontCipherVariant {
 }
 
 fn logofont_cipher_key_iv(variant: LogoFontCipherVariant) -> ([u8; BLOCK_SIZE], [u8; BLOCK_SIZE]) {
+    match variant {
+        LogoFontCipherVariant::Windows => *LOGOFONT_WINDOWS_KEY_IV,
+        LogoFontCipherVariant::MacOs => *LOGOFONT_MACOS_KEY_IV,
+    }
+}
+
+fn derive_logofont_cipher_key_iv(
+    variant: LogoFontCipherVariant,
+) -> ([u8; BLOCK_SIZE], [u8; BLOCK_SIZE]) {
     let digest = Sha256::digest(LOGOFONT_CIPHER_PASSPHRASE);
     let mut key = [0_u8; BLOCK_SIZE];
     let mut iv = [0_u8; BLOCK_SIZE];
@@ -338,10 +351,17 @@ where
         .collect();
     cipher.decrypt_blocks(&mut blocks);
 
-    let mut plaintext = Vec::with_capacity(encrypted.len());
-    for (block, encrypted_block) in blocks.iter().zip(encrypted.chunks_exact(BLOCK_SIZE)) {
+    let mut plaintext = vec![0_u8; encrypted.len()];
+    for (index, block) in blocks.iter().enumerate() {
+        let start = index * BLOCK_SIZE;
+        plaintext[start..start + BLOCK_SIZE].copy_from_slice(block);
+    }
+    for (out_block, encrypted_block) in plaintext
+        .chunks_exact_mut(BLOCK_SIZE)
+        .zip(encrypted.chunks_exact(BLOCK_SIZE))
+    {
         for index in 0..BLOCK_SIZE {
-            plaintext.push(block[index] ^ previous_cipher[index]);
+            out_block[index] ^= previous_cipher[index];
         }
         previous_cipher.copy_from_slice(encrypted_block);
     }
