@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::search::SearchMode;
+use crate::storage::path_stays_inside_root;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HoureiStore {
@@ -215,6 +216,9 @@ impl HoureiStore {
     }
 
     pub fn law_entry(&self, hore_id: &str) -> Result<Option<HoureiLawEntry>> {
+        if !is_valid_hourei_law_id(hore_id) {
+            return Ok(None);
+        }
         let connection = self.open_core_db("hore_base.db")?;
         connection
             .query_row(
@@ -228,10 +232,13 @@ impl HoureiStore {
     }
 
     pub fn law_html(&self, hore_id: &str) -> Result<Option<String>> {
-        if let Some(path) = self.cached_law_html_path(hore_id) {
+        if !is_valid_hourei_law_id(hore_id) {
+            return Ok(None);
+        }
+        if let Some(path) = self.cached_law_html_path(hore_id)? {
             return Ok(Some(decode_hourei_text(&fs::read(path)?)?));
         }
-        let Some(path) = self.law_db_path(hore_id) else {
+        let Some(path) = self.law_db_path(hore_id)? else {
             return Ok(None);
         };
         let connection = open_readonly_sqlite(&path)?;
@@ -254,6 +261,9 @@ impl HoureiStore {
         before: usize,
         after: usize,
     ) -> Result<Option<HoureiLawWindow>> {
+        if !is_valid_hourei_law_id(hore_id) {
+            return Ok(None);
+        }
         let connection = self.open_core_db("hore_base.db")?;
         let center_order = connection
             .query_row(
@@ -334,39 +344,47 @@ impl HoureiStore {
         open_readonly_sqlite(&self.root.join("_DataBase").join(name))
     }
 
-    fn cached_law_html_path(&self, hore_id: &str) -> Option<PathBuf> {
+    fn cached_law_html_path(&self, hore_id: &str) -> Result<Option<PathBuf>> {
         let path = self
             .root
             .join("_DataBase")
             .join("HTMLs")
             .join("H")
             .join(format!("{hore_id}_H.html"));
-        path.is_file().then_some(path)
+        if path.is_file() && path_stays_inside_root(&self.root, &path)? {
+            Ok(Some(path))
+        } else {
+            Ok(None)
+        }
     }
 
-    fn law_db_path(&self, hore_id: &str) -> Option<PathBuf> {
+    fn law_db_path(&self, hore_id: &str) -> Result<Option<PathBuf>> {
         let bytes = hore_id.as_bytes();
         if bytes.len() < 3
             || !bytes[0].is_ascii_digit()
             || !bytes[1].is_ascii_digit()
             || !bytes[2].is_ascii_digit()
         {
-            return None;
+            return Ok(None);
         }
         let prefix = match bytes[0] {
             b'1' => "M",
             b'2' => "T",
             b'3' => "S",
             b'4' => "H",
-            _ => return None,
+            _ => return Ok(None),
         };
-        let year = std::str::from_utf8(&bytes[1..3]).ok()?.parse::<u8>().ok()?;
+        let year = (bytes[1] - b'0') * 10 + (bytes[2] - b'0');
         let path = self
             .root
             .join("_DataBase")
             .join(format!("{prefix}{year:02}"))
             .join(format!("{hore_id}.db"));
-        path.is_file().then_some(path)
+        if path.is_file() && path_stays_inside_root(&self.root, &path)? {
+            Ok(Some(path))
+        } else {
+            Ok(None)
+        }
     }
 
     fn laws_by_order_clause(
@@ -389,6 +407,10 @@ impl HoureiStore {
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Error::from)
     }
+}
+
+fn is_valid_hourei_law_id(hore_id: &str) -> bool {
+    !hore_id.is_empty() && hore_id.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn hourei_law_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HoureiLawEntry> {
@@ -547,20 +569,41 @@ pub fn escape_sql_like(value: &str) -> String {
 }
 
 fn find_file_by_name(root: &Path, filename: &str) -> Result<Option<PathBuf>> {
-    if !root.is_dir() {
+    let Ok(metadata) = fs::symlink_metadata(root) else {
+        return Ok(None);
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Ok(None);
     }
+    let canonical_root = fs::canonicalize(root)?;
     let needle = filename.to_lowercase();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    let mut visited = std::collections::BTreeSet::new();
+    visited.insert(canonical_root.clone());
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut entries_seen = 0usize;
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > 32 || entries_seen > 20_000 {
+            continue;
+        }
         for entry in fs::read_dir(&dir)? {
+            entries_seen += 1;
             let entry = entry?;
             let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().to_lowercase() == needle)
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                let Ok(canonical) = fs::canonicalize(&path) else {
+                    continue;
+                };
+                if canonical.starts_with(&canonical_root) && visited.insert(canonical) {
+                    stack.push((path, depth + 1));
+                }
+            } else if file_type.is_file()
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().to_lowercase() == needle)
             {
                 return Ok(Some(path));
             }

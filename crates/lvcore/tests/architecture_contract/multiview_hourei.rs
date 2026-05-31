@@ -403,3 +403,111 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
             .all(|diagnostic| diagnostic.code != "sequence_deferred")
     );
 }
+
+#[test]
+fn hourei_rejects_traversal_law_target_ids_before_body_lookup() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("book");
+    fs::create_dir_all(&package_root).unwrap();
+    write_minimal_hourei_fixture(&package_root);
+    fs::write(root.path().join("escape_H.html"), "<div>outside</div>").unwrap();
+    fs::write(root.path().join("escape.db"), b"not a package db").unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    for hore_id in ["../../../../escape", "401/../../../../escape"] {
+        let token = TargetToken::new(&InternalTarget::HoureiLaw {
+            hore_id: hore_id.to_owned(),
+            anchor: None,
+        })
+        .unwrap();
+        let view = package
+            .render_target(&token, &RenderOptions::default())
+            .unwrap();
+        assert_eq!(view.kind, ResolvedTargetKind::Unsupported);
+        assert!(view.display_html.is_none());
+        assert!(!view.display_html.unwrap_or_default().contains("outside"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn hourei_rejects_cached_law_html_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("book");
+    fs::create_dir_all(&package_root).unwrap();
+    write_minimal_hourei_fixture(&package_root);
+    let outside = root.path().join("outside.html");
+    fs::write(&outside, "<div>outside</div>").unwrap();
+    fs::remove_file(
+        package_root
+            .join("_DataBase")
+            .join("HTMLs/H/401000000000000001_H.html"),
+    )
+    .unwrap();
+    symlink(
+        &outside,
+        package_root
+            .join("_DataBase")
+            .join("HTMLs/H/401000000000000001_H.html"),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let token = TargetToken::new(&InternalTarget::HoureiLaw {
+        hore_id: "401000000000000001".to_owned(),
+        anchor: None,
+    })
+    .unwrap();
+    let view = package
+        .render_target(&token, &RenderOptions::default())
+        .unwrap();
+    assert!(view.display_html.is_none());
+    assert!(
+        view.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "hourei_law_missing")
+    );
+    assert!(!view.display_html.unwrap_or_default().contains("outside"));
+}
+
+#[cfg(unix)]
+#[test]
+fn hourei_resource_search_skips_symlinked_directories() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("book");
+    fs::create_dir_all(&package_root).unwrap();
+    write_minimal_hourei_fixture(&package_root);
+    let outside = root.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("law.png"), b"outside").unwrap();
+    fs::remove_file(package_root.join("_DataBase/image/law.png")).unwrap();
+    symlink(&outside, package_root.join("_DataBase/image/linked")).unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let token = TargetToken::new(&InternalTarget::HoureiLaw {
+        hore_id: "401000000000000001".to_owned(),
+        anchor: None,
+    })
+    .unwrap();
+    let view = package
+        .render_target(&token, &RenderOptions::default())
+        .unwrap();
+    assert!(
+        view.display_html
+            .as_deref()
+            .unwrap()
+            .contains("lvcore://resource/")
+    );
+    assert_eq!(view.resources.len(), 1);
+    assert!(view.resources[0].href.is_none());
+    assert!(
+        view.resources[0]
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "resource_missing")
+    );
+}
