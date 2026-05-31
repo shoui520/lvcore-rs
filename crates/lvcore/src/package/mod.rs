@@ -33,6 +33,7 @@ use crate::render::{RendererInputProvider, RendererProvider};
 use crate::resources::ResourceProvider;
 use crate::search::SearchProvider;
 use crate::sequence::SequenceProvider;
+use crate::storage::regular_file_inside_root;
 
 pub use drivers::{
     HoureiDriver, LvedSqliteDriver, LvlMultiViewDriver, ReaderBookPackage, SsedDriver,
@@ -352,13 +353,13 @@ fn is_package_file_candidate(path: &Path) -> bool {
 }
 
 fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
-    if path.is_file() {
+    if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()) {
         return Ok(is_package_file_candidate(path));
     }
-    if !path.is_dir() {
+    if !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()) {
         return Ok(false);
     }
-    if path.join("main.data").is_file()
+    if regular_file_inside_root(path, &path.join("main.data"))?
         || directory_has_file_suffix(path, ".dbc")?
         || directory_has_lved_payload(path)?
     {
@@ -367,7 +368,9 @@ fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
     if directory_has_file_suffix(path, ".idx")? {
         return Ok(true);
     }
-    if path.join("menuData.xml").is_file() && directory_has_multiview_payload(path)? {
+    if regular_file_inside_root(path, &path.join("menuData.xml"))?
+        && directory_has_multiview_payload(path)?
+    {
         return Ok(true);
     }
     let hourei_required = [
@@ -377,17 +380,17 @@ fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
     ];
     Ok(hourei_required
         .iter()
-        .all(|relative| path.join(relative).is_file()))
+        .all(|relative| regular_file_inside_root(path, &path.join(relative)).unwrap_or(false)))
 }
 
 fn directory_has_lved_payload(path: &Path) -> Result<bool> {
-    if !path.is_dir() {
+    if !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()) {
         return Ok(false);
     }
     for entry in fs::read_dir(path)? {
         let entry = entry?;
         let entry_path = entry.path();
-        if entry_path.is_file() && is_lved_payload_name(&entry_path) {
+        if regular_file_inside_root(path, &entry_path)? && is_lved_payload_name(&entry_path) {
             return Ok(true);
         }
     }
@@ -413,13 +416,14 @@ fn is_obvious_resource_only_dir(path: &Path) -> bool {
 }
 
 fn directory_has_file_suffix(path: &Path, suffix: &str) -> Result<bool> {
-    if !path.is_dir() {
+    if !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()) {
         return Ok(false);
     }
     let suffix = suffix.to_lowercase();
     for entry in fs::read_dir(path)? {
         let entry = entry?;
-        if entry.path().is_file()
+        let entry_path = entry.path();
+        if regular_file_inside_root(path, &entry_path)?
             && entry
                 .file_name()
                 .to_string_lossy()
@@ -433,12 +437,12 @@ fn directory_has_file_suffix(path: &Path, suffix: &str) -> Result<bool> {
 }
 
 fn directory_has_multiview_payload(path: &Path) -> Result<bool> {
-    if !path.is_dir() {
+    if !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()) {
         return Ok(false);
     }
     for entry in fs::read_dir(path)? {
         let entry = entry?;
-        if !entry.path().is_file() {
+        if !regular_file_inside_root(path, &entry.path())? {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_lowercase();

@@ -46,3 +46,24 @@ fn detects_hourei_by_core_databases() {
     let detected = HoureiDriver.detect(dir.path()).unwrap().unwrap();
     assert_eq!(detected.format_family, FormatFamily::Hourei);
 }
+
+#[cfg(unix)]
+#[test]
+fn hourei_detection_ignores_symlinked_core_database_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("_DataBase")).unwrap();
+    fs::create_dir_all(outside.path().join("_DataBase")).unwrap();
+    for name in ["hore_base.db", "hore_search_a.db", "horejo_base.db"] {
+        fs::write(outside.path().join("_DataBase").join(name), b"").unwrap();
+        symlink(
+            outside.path().join("_DataBase").join(name),
+            dir.path().join("_DataBase").join(name),
+        )
+        .unwrap();
+    }
+
+    assert!(HoureiDriver.detect(dir.path()).unwrap().is_none());
+}

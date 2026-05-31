@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::search::SearchMode;
-use crate::storage::path_stays_inside_root;
+use crate::storage::{path_stays_inside_root, regular_file_inside_root};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HoureiStore {
@@ -55,7 +55,10 @@ impl HoureiStore {
             "_DataBase/hore_search_a.db",
             "_DataBase/horejo_base.db",
         ];
-        if required.iter().all(|path| root.join(path).is_file()) {
+        if required
+            .iter()
+            .all(|path| regular_file_inside_root(root, &root.join(path)).unwrap_or(false))
+        {
             Ok(Some(Self {
                 root: root.to_path_buf(),
             }))
