@@ -42,9 +42,9 @@ impl ReaderBookPackage {
         resource_kind: ResourceKind,
     ) -> Result<ResourceRef> {
         let chm_relative = Path::new(chm_path);
-        let resolved = self.storage.resolve_casefolded(chm_relative)?;
+        let exists = self.storage.exists(chm_relative)?;
         let mut diagnostics = Vec::new();
-        let href = if resolved.is_some() {
+        let href = if exists {
             Some(format!("lvcore://resource/{}", token.as_str()))
         } else {
             diagnostics.push(Diagnostic::warning(

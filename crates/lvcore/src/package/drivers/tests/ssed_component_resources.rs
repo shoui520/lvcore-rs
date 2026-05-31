@@ -64,6 +64,49 @@ fn ssed_component_resolution_ignores_symlinked_payload_escape() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn chm_resource_resolution_does_not_advertise_symlinked_escape() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::write(outside.path().join("HANREI.chm"), b"outside chm").unwrap();
+    symlink(
+        outside.path().join("HANREI.chm"),
+        root.path().join("HANREI.chm"),
+    )
+    .unwrap();
+    let package = ReaderBookPackage::new(
+        root.path(),
+        DetectedPackage {
+            root: root.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("CHM".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+    let token = ResourceToken::new(&InternalResource::ChmFile {
+        chm_path: "HANREI.chm".to_owned(),
+        entry_path: "/index.html".to_owned(),
+        resource_kind: ResourceKind::Html,
+    })
+    .unwrap();
+
+    let resource = package.resolve_resource(&token).unwrap();
+
+    assert!(resource.href.is_none());
+    assert!(
+        resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "resource_missing")
+    );
+}
+
 #[test]
 fn ssed_pcmdata_address_uses_loose_pcmu_audio_when_component_is_absent() {
     let dir = tempdir().unwrap();

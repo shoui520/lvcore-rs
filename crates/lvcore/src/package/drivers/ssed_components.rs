@@ -239,7 +239,7 @@ impl ReaderBookPackage {
     pub(super) fn mac_honmon_zip_passwords(&self) -> Result<Vec<Option<Vec<u8>>>> {
         let mut passwords = vec![None];
         for path in self.storage.list_dir(Path::new(""))? {
-            if !path.is_file() {
+            if !regular_file_inside_root(&self.root, &path)? {
                 continue;
             }
             let Some(stem) = path.file_stem().map(|value| value.to_string_lossy()) else {
@@ -314,6 +314,9 @@ impl ReaderBookPackage {
                 continue;
             }
             if excluded_infos.contains(&name.to_ascii_lowercase()) {
+                continue;
+            }
+            if !regular_file_inside_root(&self.root, &path)? {
                 continue;
             }
             if file_starts_with_ssedinfo_magic(&path)? {

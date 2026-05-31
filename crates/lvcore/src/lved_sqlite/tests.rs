@@ -1,6 +1,21 @@
 use super::*;
 use tempfile::tempdir;
 
+#[cfg(unix)]
+#[test]
+fn tree_index_candidates_skip_symlinked_res_directory_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::write(outside.path().join("tree.idx"), b"100\t0\tOutside\n").unwrap();
+    symlink(outside.path(), dir.path().join("res")).unwrap();
+
+    let paths = super::tree::lved_tree_index_candidate_paths(dir.path()).unwrap();
+
+    assert!(paths.is_empty());
+}
+
 #[test]
 fn discovers_dict_code_key_file_for_main_data() {
     let dir = tempdir().unwrap();

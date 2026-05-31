@@ -19,7 +19,7 @@ use crate::multiview::parse_menu_data;
 use crate::ssed::{ANDROID_LVEDINFO_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponentRole};
 use crate::ssed_aux_index::{is_numeric_aux_index_filename, parse_aux_index_specs_from_exinfo};
 use crate::ssed_menu::parse_menu_stream;
-use crate::storage::{DirectoryStorage, StorageBackend};
+use crate::storage::{DirectoryStorage, StorageBackend, regular_file_inside_root};
 
 pub(super) const SSED_NAVIGATION_DETECTION_MAX_BYTES: usize = 1024 * 1024;
 
@@ -91,7 +91,7 @@ pub(super) fn files_with_suffix(root: &Path, suffix: &str) -> Result<Vec<PathBuf
     let suffix = suffix.to_lowercase();
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
-        if path.is_file()
+        if regular_file_inside_root(root, &path)?
             && path
                 .file_name()
                 .map(|v| v.to_string_lossy().to_lowercase().ends_with(&suffix))
@@ -135,7 +135,7 @@ pub(super) fn inferred_folder_title(root: &Path) -> Option<String> {
 
 pub(super) fn multiview_menu_title(root: &Path) -> Result<Option<String>> {
     let path = root.join("menuData.xml");
-    if !path.is_file() {
+    if !regular_file_inside_root(root, &path)? {
         return Ok(None);
     }
     let xml = fs::read_to_string(path)?;
@@ -333,6 +333,7 @@ fn has_numeric_aux_index_casefolded(storage: &DirectoryStorage) -> bool {
             return false;
         };
         is_numeric_aux_index_filename(&name)
+            && regular_file_inside_root(storage.root(), &path).unwrap_or(false)
             && !file_starts_with_ssedinfo_magic(&path).unwrap_or(true)
     })
 }

@@ -10,8 +10,8 @@ use crate::storage::regular_file_inside_root;
 
 pub(super) fn lved_tree_index_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
-    push_lved_tree_index_path(&mut paths, root.join("res/tree.idx"));
-    push_lved_tree_index_path(&mut paths, root.join("tree.idx"));
+    push_lved_tree_index_path(&mut paths, root, root.join("res/tree.idx"));
+    push_lved_tree_index_path(&mut paths, root, root.join("tree.idx"));
     for entry in fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()? {
         let path = entry.path();
         if regular_file_inside_root(root, &path)?
@@ -19,11 +19,13 @@ pub(super) fn lved_tree_index_candidate_paths(root: &Path) -> Result<Vec<PathBuf
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
         {
-            push_lved_tree_index_path(&mut paths, path);
+            push_lved_tree_index_path(&mut paths, root, path);
         }
     }
     let res_dir = root.join("res");
-    if res_dir.is_dir() {
+    if fs::symlink_metadata(&res_dir)
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    {
         for entry in fs::read_dir(&res_dir)?.collect::<std::io::Result<Vec<_>>>()? {
             let path = entry.path();
             if regular_file_inside_root(root, &path)?
@@ -31,7 +33,7 @@ pub(super) fn lved_tree_index_candidate_paths(root: &Path) -> Result<Vec<PathBuf
                     .extension()
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
             {
-                push_lved_tree_index_path(&mut paths, path);
+                push_lved_tree_index_path(&mut paths, root, path);
             }
         }
     }
@@ -125,9 +127,8 @@ fn is_eight_digit_hex(value: &str) -> bool {
     value.len() == 8 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn push_lved_tree_index_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    let root = path.parent().unwrap_or_else(|| Path::new("."));
-    if regular_file_inside_root(root, &path).unwrap_or(false)
+fn push_lved_tree_index_path(paths: &mut Vec<PathBuf>, package_root: &Path, path: PathBuf) {
+    if regular_file_inside_root(package_root, &path).unwrap_or(false)
         && !paths.iter().any(|existing| existing == &path)
     {
         paths.push(path);

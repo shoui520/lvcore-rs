@@ -445,3 +445,74 @@ fn ssed_numeric_auxiliary_index_opens_without_exinfo() {
         } if component == "HONMON.DIC"
     ));
 }
+
+#[cfg(unix)]
+#[test]
+fn ssed_numeric_auxiliary_index_ignores_symlinked_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::write(
+        outside.path().join("00000160.idx"),
+        cp932(
+            "00000000\t00000000\tOutside\n\
+                 00005221\t00000722\t\tEscaped\n",
+        ),
+    )
+    .unwrap();
+    symlink(
+        outside.path().join("00000160.idx"),
+        dir.path().join("00000160.idx"),
+    )
+    .unwrap();
+    let catalog = SsedCatalog {
+        title: "Numeric".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 0x5221,
+            end_block: 0x5230,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Numeric".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    assert!(
+        !package
+            .metadata()
+            .capabilities
+            .contains(&Capability::AuxiliaryIndex)
+    );
+    assert!(
+        !package
+            .home_surfaces()
+            .unwrap()
+            .iter()
+            .any(|surface| surface.surface_id == "numeric-aux:00000160.idx")
+    );
+}
