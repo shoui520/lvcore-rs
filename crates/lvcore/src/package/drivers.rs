@@ -168,7 +168,7 @@ use crate::ssed_loose_media::{
     parse_lved_address, read_pcmu_record, render_britannica_html_fragment,
     resolve_loose_media_file, resolve_pcmu_record,
 };
-use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream};
+use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream, parse_menu_stream_page};
 use crate::ssed_multi::{
     SsedMultiComponentRef, SsedMultiDescriptor, SsedMultiRecord, parse_multi_descriptor,
 };
@@ -201,7 +201,7 @@ use self::ssed_multi_ids::{
 };
 use self::ssed_navigation::{
     SsedHanreiPage, read_path_inside_loose_root, read_path_inside_resolved_parent,
-    ssed_aux_index_rows_to_nodes, ssed_encyclopedia_rows_to_nodes, ssed_menu_records_to_nodes,
+    ssed_aux_index_rows_to_nodes, ssed_encyclopedia_rows_to_nodes, ssed_menu_records_to_nodes_from,
     ssed_multi_selector_records_to_nodes,
 };
 use self::ssed_panel_navigation::{

@@ -54,6 +54,8 @@ pub enum NavigationSurface {
     SimpleMenu {
         surface_id: String,
         nodes: Vec<NavigationNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_cursor: Option<String>,
     },
     ScreenMenu {
         surface_id: String,
@@ -202,7 +204,9 @@ impl NavigationSurface {
 
     pub fn actionable_targets(&self) -> Vec<NavigationTarget> {
         match self {
-            Self::SimpleMenu { surface_id, nodes }
+            Self::SimpleMenu {
+                surface_id, nodes, ..
+            }
             | Self::HierarchicalTree { surface_id, nodes } => {
                 let mut targets = Vec::new();
                 collect_node_targets(surface_id, nodes, &mut targets);

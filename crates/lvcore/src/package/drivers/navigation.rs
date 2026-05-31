@@ -343,12 +343,20 @@ impl NavigationProvider for ReaderBookPackage {
             (FormatFamily::Ssed, "title-index") => {
                 self.open_ssed_title_index_surface(surface_id, cursor, limit)
             }
-            (FormatFamily::Ssed, "menu") => {
-                self.open_ssed_menu_surface(surface_id, SsedComponentRole::Menu, "MENU.DIC")
-            }
-            (FormatFamily::Ssed, "toc") => {
-                self.open_ssed_menu_surface(surface_id, SsedComponentRole::Toc, "TOC.DIC")
-            }
+            (FormatFamily::Ssed, "menu") => self.open_ssed_menu_surface(
+                surface_id,
+                SsedComponentRole::Menu,
+                "MENU.DIC",
+                cursor,
+                limit,
+            ),
+            (FormatFamily::Ssed, "toc") => self.open_ssed_menu_surface(
+                surface_id,
+                SsedComponentRole::Toc,
+                "TOC.DIC",
+                cursor,
+                limit,
+            ),
             (FormatFamily::Ssed, id) if id.starts_with("multi:") => {
                 self.open_ssed_multi_selector_surface(surface_id, cursor, limit)
             }

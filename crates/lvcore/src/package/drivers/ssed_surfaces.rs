@@ -135,7 +135,16 @@ impl ReaderBookPackage {
         surface_id: &str,
         _role: SsedComponentRole,
         fallback_name: &str,
+        cursor: Option<&str>,
+        limit: usize,
     ) -> Result<NavigationSurface> {
+        if limit == 0 {
+            return Ok(NavigationSurface::SimpleMenu {
+                surface_id: surface_id.to_owned(),
+                nodes: Vec::new(),
+                next_cursor: None,
+            });
+        }
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(deferred_surface_error(
                 surface_id,
@@ -190,8 +199,16 @@ impl ReaderBookPackage {
             }
         };
         let data = reader.read_range(0, reader.header().expanded_size())?;
-        let parsed = parse_menu_stream(&data);
+        let offset = decode_offset_cursor(cursor);
+        let parsed = parse_menu_stream_page(&data, offset, limit);
         if parsed.records.is_empty() {
+            if !parsed.empty_sentinel && offset > 0 {
+                return Ok(NavigationSurface::SimpleMenu {
+                    surface_id: surface_id.to_owned(),
+                    nodes: Vec::new(),
+                    next_cursor: None,
+                });
+            }
             let (code, message) = if parsed.empty_sentinel {
                 (
                     "ssed_navigation_empty_sentinel",
@@ -211,13 +228,15 @@ impl ReaderBookPackage {
             ));
         }
         let mut diagnostics = Vec::new();
-        let nodes = ssed_menu_records_to_nodes(self, &parsed.records, &mut diagnostics)?;
+        let nodes =
+            ssed_menu_records_to_nodes_from(self, &parsed.records, offset, &mut diagnostics)?;
         if nodes.is_empty() {
             return Ok(deferred_surface(surface_id, diagnostics));
         }
         Ok(NavigationSurface::SimpleMenu {
             surface_id: surface_id.to_owned(),
             nodes,
+            next_cursor: parsed.next_cursor,
         })
     }
 

@@ -137,6 +137,53 @@ fn ssed_home_surfaces_are_capability_based() {
 }
 
 #[test]
+fn ssed_menu_surfaces_are_pageable() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        sseddata_literal_fixture(&menu_stream_fixture_rows(&[
+            ([0x24, 0x22], 10, 0),
+            ([0x24, 0x24], 10, 2),
+            ([0x24, 0x26], 10, 4),
+        ])),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let first = package.open_surface_page("menu", None, 2).unwrap();
+    let NavigationSurface::SimpleMenu {
+        nodes, next_cursor, ..
+    } = first
+    else {
+        panic!("SSED MENU should decode to a pageable simple menu surface");
+    };
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0].node_id, "ssed-menu:0");
+    assert_eq!(nodes[1].node_id, "ssed-menu:1");
+    assert_eq!(next_cursor.as_deref(), Some("2"));
+
+    let second = package
+        .open_surface_page("menu", next_cursor.as_deref(), 2)
+        .unwrap();
+    let NavigationSurface::SimpleMenu {
+        nodes, next_cursor, ..
+    } = second
+    else {
+        panic!("second SSED MENU page should decode to a simple menu surface");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].node_id, "ssed-menu:2");
+    assert_eq!(nodes[0].label_text, "う");
+    assert!(next_cursor.is_none());
+}
+
+#[test]
 fn ssed_missing_declared_indexes_do_not_advertise_search_or_title_browse() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

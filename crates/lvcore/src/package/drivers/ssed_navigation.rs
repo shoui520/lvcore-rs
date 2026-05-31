@@ -41,15 +41,17 @@ pub(super) fn read_path_inside_resolved_parent(resolved: &Path, label: &str) -> 
     Ok(fs::read(resolved)?)
 }
 
-pub(super) fn ssed_menu_records_to_nodes(
+pub(super) fn ssed_menu_records_to_nodes_from(
     package: &ReaderBookPackage,
     records: &[SsedMenuRecord],
+    base_index: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<NavigationNode>> {
     let mut roots = Vec::new();
     let mut path = Vec::<usize>::new();
 
     for (index, record) in records.iter().enumerate() {
+        let global_index = base_index + index;
         let label = record.label();
         if label.is_empty() {
             continue;
@@ -57,7 +59,7 @@ pub(super) fn ssed_menu_records_to_nodes(
         let target = ssed_menu_record_target(package, record, diagnostics)?;
         let rich_label = package.ssed_rich_label(label);
         let node = NavigationNode {
-            node_id: format!("ssed-menu:{index}"),
+            node_id: format!("ssed-menu:{global_index}"),
             label_html: rich_label.html,
             label_text: rich_label.text,
             target,
@@ -77,7 +79,7 @@ pub(super) fn ssed_menu_records_to_nodes(
         } else {
             diagnostics.push(Diagnostic::warning(
                 "ssed_navigation_tree_depth_invalid",
-                format!("could not attach MENU/TOC row {index} at depth {depth}"),
+                format!("could not attach MENU/TOC row {global_index} at depth {depth}"),
             ));
             roots.push(node);
             path.clear();

@@ -63,6 +63,14 @@ pub struct SsedMenuParse {
     pub empty_sentinel: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SsedMenuPageParse {
+    pub records: Vec<SsedMenuRecord>,
+    pub unknown_controls: usize,
+    pub empty_sentinel: bool,
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Debug)]
 struct ActiveLink {
     control: String,
@@ -100,12 +108,40 @@ impl LineBuilder {
 }
 
 pub fn parse_menu_stream(data: &[u8]) -> SsedMenuParse {
+    parse_menu_stream_inner(data, None).0
+}
+
+pub fn parse_menu_stream_page(data: &[u8], offset: usize, limit: usize) -> SsedMenuPageParse {
+    if limit == 0 {
+        return SsedMenuPageParse {
+            records: Vec::new(),
+            unknown_controls: 0,
+            empty_sentinel: false,
+            next_cursor: None,
+        };
+    }
+    let (parsed, next_record_index) = parse_menu_stream_inner(data, Some((offset, limit)));
+    SsedMenuPageParse {
+        records: parsed.records,
+        unknown_controls: parsed.unknown_controls,
+        empty_sentinel: parsed.empty_sentinel,
+        next_cursor: next_record_index.map(|index| index.to_string()),
+    }
+}
+
+fn parse_menu_stream_inner(
+    data: &[u8],
+    page: Option<(usize, usize)>,
+) -> (SsedMenuParse, Option<usize>) {
     let mut records = Vec::new();
     let mut line = LineBuilder::new(1);
     let mut i = 0usize;
     let mut halfwidth_depth = 0usize;
     let mut private_depth = 0usize;
     let mut unknown_controls = 0usize;
+    let mut record_count = 0usize;
+    let mut next_record_index = None;
+    let mut stopped = false;
 
     while i < data.len() {
         let b = data[i];
@@ -126,8 +162,17 @@ pub fn parse_menu_stream(data: &[u8]) -> SsedMenuParse {
                 }
                 0x0a => {
                     if private_depth == 0 {
-                        flush_line(&mut records, line);
-                        line = LineBuilder::new(records.len() + 1);
+                        stopped = finish_parsed_line(
+                            &mut records,
+                            line,
+                            &mut record_count,
+                            page,
+                            &mut next_record_index,
+                        );
+                        line = LineBuilder::new(record_count + 1);
+                        if stopped {
+                            break;
+                        }
                     }
                     i += 2;
                     continue;
@@ -251,14 +296,25 @@ pub fn parse_menu_stream(data: &[u8]) -> SsedMenuParse {
         i += 1;
     }
 
-    flush_line(&mut records, line);
-    let empty_sentinel = records.is_empty() && is_empty_menu_sentinel(data);
-    annotate_depths(&mut records);
-    SsedMenuParse {
-        records,
-        unknown_controls,
-        empty_sentinel,
+    if !stopped {
+        let _ = finish_parsed_line(
+            &mut records,
+            line,
+            &mut record_count,
+            page,
+            &mut next_record_index,
+        );
     }
+    let empty_sentinel = record_count == 0 && is_empty_menu_sentinel(data);
+    annotate_depths(&mut records);
+    (
+        SsedMenuParse {
+            records,
+            unknown_controls,
+            empty_sentinel,
+        },
+        next_record_index,
+    )
 }
 
 pub fn is_empty_menu_sentinel(data: &[u8]) -> bool {
@@ -277,21 +333,49 @@ fn finish_active_link(line: &mut LineBuilder, destination: Option<SsedMenuDestin
     });
 }
 
-fn flush_line(records: &mut Vec<SsedMenuRecord>, mut line: LineBuilder) {
+fn finish_line_record(mut line: LineBuilder) -> Option<SsedMenuRecord> {
     if line.active_link.is_some() {
         finish_active_link(&mut line, None);
     }
     let text = clean_text(&line.parts.join(""));
     if text.is_empty() && line.section_codes.is_empty() && line.links.is_empty() {
-        return;
+        return None;
     }
-    records.push(SsedMenuRecord {
+    Some(SsedMenuRecord {
         line_index: line.line_index,
         section_codes: line.section_codes,
         text,
         links: line.links,
         depth: 1,
-    });
+    })
+}
+
+fn finish_parsed_line(
+    records: &mut Vec<SsedMenuRecord>,
+    line: LineBuilder,
+    record_count: &mut usize,
+    page: Option<(usize, usize)>,
+    next_record_index: &mut Option<usize>,
+) -> bool {
+    let Some(record) = finish_line_record(line) else {
+        return false;
+    };
+    let index = *record_count;
+    *record_count += 1;
+    let Some((offset, limit)) = page else {
+        records.push(record);
+        return false;
+    };
+    let page_end = offset.saturating_add(limit);
+    if index < offset {
+        return false;
+    }
+    if index >= page_end {
+        *next_record_index = Some(page_end);
+        return true;
+    }
+    records.push(record);
+    false
 }
 
 fn annotate_depths(records: &mut [SsedMenuRecord]) {
@@ -493,6 +577,25 @@ mod tests {
         assert!(parsed.records.is_empty());
         assert!(parsed.empty_sentinel);
         assert!(is_empty_menu_sentinel(data));
+    }
+
+    #[test]
+    fn parses_menu_stream_pages_without_materializing_all_records() {
+        let data = concat!(
+            "\x1f\x09\x00\x01\x1f\x42\x24\x22\x1f\x62\x00\x00\x00\x10\x00\x01\x1f\x0a",
+            "\x1f\x09\x00\x01\x1f\x42\x24\x24\x1f\x62\x00\x00\x00\x10\x00\x02\x1f\x0a",
+            "\x1f\x09\x00\x01\x1f\x42\x24\x26\x1f\x62\x00\x00\x00\x10\x00\x03\x1f\x0a",
+        );
+        let first = parse_menu_stream_page(data.as_bytes(), 0, 2);
+        assert_eq!(first.records.len(), 2);
+        assert_eq!(first.records[0].label(), "あ");
+        assert_eq!(first.records[1].label(), "い");
+        assert_eq!(first.next_cursor.as_deref(), Some("2"));
+
+        let second = parse_menu_stream_page(data.as_bytes(), 2, 2);
+        assert_eq!(second.records.len(), 1);
+        assert_eq!(second.records[0].label(), "う");
+        assert!(second.next_cursor.is_none());
     }
 
     #[test]
