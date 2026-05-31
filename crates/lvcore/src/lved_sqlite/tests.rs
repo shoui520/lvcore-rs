@@ -162,6 +162,10 @@ fn searches_lved_list_rows_and_preserves_content_html() {
                     insert into list values (3, 102, 1, '', '<b>gamma</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', 'topic marker', '', '∥alpha∥');
+                    insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                      values (2, 'a, a', 'a ,a', 'a, a', 'letter article', '', '', '∥a, a∥');
+                    insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                      values (3, '(gamma)', ')ammag(', '(gamma)', 'gamma article', '', '', '∥(gamma)∥');
                     ",
                 )
                 .unwrap();
@@ -185,6 +189,15 @@ fn searches_lved_list_rows_and_preserves_content_html() {
 
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].content_id, 100);
+    let exact_hits = store.search("alpha", &SearchMode::Exact, 10).unwrap();
+    assert_eq!(exact_hits.len(), 1);
+    assert_eq!(exact_hits[0].content_id, 100);
+    let punctuation_exact_hits = store.search("a, a", &SearchMode::Exact, 10).unwrap();
+    assert_eq!(punctuation_exact_hits.len(), 1);
+    assert_eq!(punctuation_exact_hits[0].content_id, 101);
+    let fallback_exact_hits = store.search("(gamma)", &SearchMode::Exact, 10).unwrap();
+    assert_eq!(fallback_exact_hits.len(), 1);
+    assert_eq!(fallback_exact_hits[0].content_id, 102);
     let advanced_hits = store
         .search("topic", &SearchMode::Advanced("advanced1".to_owned()), 10)
         .unwrap();

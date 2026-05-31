@@ -25,7 +25,7 @@ pub(super) fn search_lved_sqlite_connection(
     if normalized.is_empty() {
         return Ok(Vec::new());
     }
-    let Some((where_clause, parameter)) = lved_search_where(&normalized, mode, search_columns)
+    let Some((where_clause, parameters)) = lved_search_where(&normalized, mode, search_columns)
     else {
         return Ok(Vec::new());
     };
@@ -37,12 +37,25 @@ pub(super) fn search_lved_sqlite_connection(
         projection.anchor, projection.title, projection.subtitle, projection.kind
     );
     let mut statement = connection.prepare(&sql)?;
-    let rows = statement.query_map(
-        (parameter, limit as i64, offset as i64),
-        lved_search_hit_from_row,
-    )?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(Error::from)
+    match parameters.as_slice() {
+        [parameter] => {
+            let rows = statement.query_map(
+                (parameter.as_str(), limit as i64, offset as i64),
+                lved_search_hit_from_row,
+            )?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::from)
+        }
+        [first, second] => {
+            let rows = statement.query_map(
+                (first.as_str(), second.as_str(), limit as i64, offset as i64),
+                lved_search_hit_from_row,
+            )?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::from)
+        }
+        _ => Ok(Vec::new()),
+    }
 }
 
 pub(super) fn lved_list_hits_by_id_clause(
@@ -105,40 +118,58 @@ fn lved_search_where(
     normalized: &str,
     mode: &SearchMode,
     search_columns: &[String],
-) -> Option<(String, String)> {
+) -> Option<(String, Vec<String>)> {
     match mode {
         SearchMode::Exact => {
             if has_column(search_columns, "filter") {
-                Some((
-                    "s.filter like ? escape '\\'".to_owned(),
-                    format!("%∥{}∥%", escape_sql_like(normalized)),
-                ))
+                let like_parameter = format!("%∥{}∥%", escape_sql_like(normalized));
+                if let Some(match_parameter) = exact_filter_match_parameter(normalized) {
+                    Some((
+                        "s.rowid in (select rowid from search where search match ?) \
+                         and s.filter like ? escape '\\'"
+                            .to_owned(),
+                        vec![match_parameter, like_parameter],
+                    ))
+                } else {
+                    Some((
+                        "s.filter like ? escape '\\'".to_owned(),
+                        vec![like_parameter],
+                    ))
+                }
             } else if has_column(search_columns, "forward") {
-                Some(("s.forward = ?".to_owned(), normalized.to_owned()))
+                Some(("s.forward = ?".to_owned(), vec![normalized.to_owned()]))
             } else {
                 None
             }
         }
-        SearchMode::Forward => fts_match("forward", normalized, search_columns, true, false),
+        SearchMode::Forward => one_parameter_where(fts_match(
+            "forward",
+            normalized,
+            search_columns,
+            true,
+            false,
+        )),
         SearchMode::Backward => {
             let reversed = normalized.chars().rev().collect::<String>();
-            fts_match("back", &reversed, search_columns, true, false)
+            one_parameter_where(fts_match("back", &reversed, search_columns, true, false))
         }
-        SearchMode::Partial => fts_match("part", normalized, search_columns, false, true),
-        SearchMode::FullText => fts_match(
+        SearchMode::Partial => {
+            one_parameter_where(fts_match("part", normalized, search_columns, false, true))
+        }
+        SearchMode::FullText => one_parameter_where(fts_match(
             "fts",
             normalized,
             search_columns,
             false,
             should_split_chars(normalized),
-        ),
-        SearchMode::Advanced(column) => fts_match(
+        )),
+        SearchMode::Advanced(column) => one_parameter_where(fts_match(
             column,
             normalized,
             search_columns,
             false,
             should_split_chars(normalized),
-        ),
+        )),
     }
 }
 
@@ -202,6 +233,21 @@ fn fts_match(
             terms.join(" "),
         )
     })
+}
+
+fn exact_filter_match_parameter(normalized: &str) -> Option<String> {
+    if normalized.is_empty()
+        || normalized
+            .chars()
+            .any(|ch| matches!(ch, '"' | '\'' | ':' | '*' | '(' | ')'))
+    {
+        return None;
+    }
+    Some(format!("filter:∥{normalized}∥"))
+}
+
+fn one_parameter_where(value: Option<(String, String)>) -> Option<(String, Vec<String>)> {
+    value.map(|(where_clause, parameter)| (where_clause, vec![parameter]))
 }
 
 fn normalize_lved_query(query: &str) -> String {
