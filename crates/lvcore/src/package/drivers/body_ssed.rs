@@ -125,17 +125,17 @@ impl ReaderBookPackage {
             .map(|next| next.saturating_sub(start) as u64)
             .or_else(|| Some((reader.header().expanded_size() - start) as u64));
         }
-        if let Some(next_offset) =
-            self.infer_next_ssed_index_body_offset(component, component_offset)
-            && next_offset > component_offset
-        {
-            return Some(next_offset - component_offset);
-        }
-        ssed_find_next_entry_marker_offset(&mut reader, start.saturating_add(1))
+        if ssed_reader_index_boundary_marker_variant_len(&mut reader, start)
             .ok()
             .flatten()
-            .filter(|next| *next > start)
-            .map(|next| (next - start) as u64)
+            .is_some()
+        {
+            return self
+                .infer_next_ssed_index_body_offset(component, component_offset)
+                .filter(|next_offset| *next_offset > component_offset)
+                .map(|next_offset| next_offset - component_offset);
+        }
+        None
     }
 
     fn infer_next_ssed_index_body_offset(
@@ -250,5 +250,17 @@ impl ReaderBookPackage {
         } else {
             Ok(None)
         }
+    }
+}
+
+fn ssed_reader_index_boundary_marker_variant_len(
+    reader: &mut SsedDataFile,
+    offset: usize,
+) -> Result<Option<usize>> {
+    let data = reader.read_range(offset, SSED_ENTRY_MARKER.len())?;
+    if data == [0x1f, 0x09, 0x00, 0x02] {
+        Ok(Some(SSED_ENTRY_MARKER.len()))
+    } else {
+        Ok(None)
     }
 }

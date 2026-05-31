@@ -8,6 +8,7 @@ impl ReaderBookPackage {
         length: Option<u64>,
     ) -> Result<(Vec<ResourceRef>, Vec<Diagnostic>)> {
         const RESOURCE_SCAN_LIMIT: usize = 256 * 1024;
+        const UNKNOWN_LENGTH_ANCHOR_SCAN_LIMIT: usize = 128;
 
         let Some(component) = self.ssed_component_by_name(component_name) else {
             return Ok((
@@ -35,7 +36,22 @@ impl ReaderBookPackage {
         let start = usize::try_from(offset)
             .map_err(|_| Error::Driver("SSED stream offset is too large".to_owned()))?;
         let available = reader.header().expanded_size().saturating_sub(start);
-        let explicit_length = length.and_then(|length| usize::try_from(length).ok());
+        let Some(length) = length else {
+            let size = available.min(UNKNOWN_LENGTH_ANCHOR_SCAN_LIMIT);
+            let data = reader.read_range(start, size)?;
+            let mut candidates = Vec::new();
+            if let Some(pdfspread) = self.ssed_pdfspread_resource_candidate(&data)? {
+                candidates.push(pdfspread);
+            }
+            let (resources, mut diagnostics) =
+                self.resolve_ssed_renderer_resource_candidates(candidates);
+            diagnostics.push(Diagnostic::info(
+                "ssed_renderer_resource_scan_deferred",
+                "SSED stream length is unknown; broad media resource extraction is deferred to the HC renderer",
+            ));
+            return Ok((resources, diagnostics));
+        };
+        let explicit_length = usize::try_from(length).ok();
         let requested = explicit_length.unwrap_or(RESOURCE_SCAN_LIMIT);
         let size = available.min(requested).min(RESOURCE_SCAN_LIMIT);
         let data = reader.read_range(start, size)?;
@@ -43,12 +59,35 @@ impl ReaderBookPackage {
         if let Some(pdfspread) = self.ssed_pdfspread_resource_candidate(&data)? {
             candidates.push(pdfspread);
         }
+        let (resources, mut diagnostics) =
+            self.resolve_ssed_renderer_resource_candidates(candidates);
+        if explicit_length.is_none() && available > size {
+            diagnostics.push(Diagnostic::info(
+                "ssed_renderer_resource_scan_bounded",
+                format!(
+                    "scanned {size} of {available} available SSED stream bytes for media resources"
+                ),
+            ));
+        }
+        Ok((resources, diagnostics))
+    }
+
+    fn resolve_ssed_renderer_resource_candidates(
+        &self,
+        candidates: Vec<InternalResource>,
+    ) -> (Vec<ResourceRef>, Vec<Diagnostic>) {
         let mut seen = BTreeSet::new();
         let mut resources = Vec::new();
         let mut diagnostics = Vec::new();
 
         for resource in candidates {
-            let token = ResourceToken::new(&resource)?;
+            let Ok(token) = ResourceToken::new(&resource) else {
+                diagnostics.push(Diagnostic::warning(
+                    "ssed_renderer_resource_unresolved",
+                    "resource candidate could not be tokenized",
+                ));
+                continue;
+            };
             if !seen.insert(token.as_str().to_owned()) {
                 continue;
             }
@@ -60,15 +99,7 @@ impl ReaderBookPackage {
                 )),
             }
         }
-        if explicit_length.is_none() && available > size {
-            diagnostics.push(Diagnostic::info(
-                "ssed_renderer_resource_scan_bounded",
-                format!(
-                    "scanned {size} of {available} available SSED stream bytes for media resources"
-                ),
-            ));
-        }
-        Ok((resources, diagnostics))
+        (resources, diagnostics)
     }
 
     pub(super) fn ssed_renderer_resource_candidates(&self, data: &[u8]) -> Vec<InternalResource> {
