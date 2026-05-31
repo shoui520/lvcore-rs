@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -25,6 +25,7 @@ pub struct MultiviewStore {
     temp_dir: Mutex<Option<TempDir>>,
     decrypted_paths: Mutex<BTreeMap<PathBuf, PathBuf>>,
     roles: Mutex<BTreeMap<PathBuf, MultiviewPayloadRole>>,
+    schemas: Mutex<BTreeMap<PathBuf, Arc<MultiviewSqliteSchema>>>,
 }
 
 impl std::fmt::Debug for MultiviewStore {
@@ -118,6 +119,7 @@ impl MultiviewStore {
             temp_dir: Mutex::new(None),
             decrypted_paths: Mutex::new(BTreeMap::new()),
             roles: Mutex::new(BTreeMap::new()),
+            schemas: Mutex::new(BTreeMap::new()),
         }))
     }
 
@@ -146,11 +148,9 @@ impl MultiviewStore {
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
         self.with_connection(&sqlite_path, |connection| {
-            if !sqlite_table_has_columns(
-                connection,
-                "t_search",
-                &["f_ID", "f_KeyWord", "f_TitleMain", "f_All"],
-            )? {
+            let schema = self.schema(&sqlite_path, connection)?;
+            if !schema.table_has_columns("t_search", &["f_ID", "f_KeyWord", "f_TitleMain", "f_All"])
+            {
                 return Ok(Vec::new());
             }
             let (column, pattern) = match mode {
@@ -217,8 +217,8 @@ impl MultiviewStore {
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
         self.with_connection(&sqlite_path, |connection| {
-            if !sqlite_table_has_columns(
-                connection,
+            let schema = self.schema(&sqlite_path, connection)?;
+            if !schema.table_has_columns(
                 "t_hore",
                 &[
                     "f_hore_code",
@@ -227,7 +227,7 @@ impl MultiviewStore {
                     "f_kana_ini",
                     "f_kana_order",
                 ],
-            )? {
+            ) {
                 return Ok(None);
             }
             let mut statement = connection.prepare(
@@ -266,8 +266,8 @@ impl MultiviewStore {
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
         self.with_connection(&sqlite_path, |connection| {
-            if !sqlite_table_has_columns(connection, "t_contents", &["f_ID", "f_Title", "f_Body"])?
-            {
+            let schema = self.schema(&sqlite_path, connection)?;
+            if !schema.table_has_columns("t_contents", &["f_ID", "f_Title", "f_Body"]) {
                 return Ok(None);
             }
             let row = connection
@@ -300,25 +300,27 @@ impl MultiviewStore {
         }
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
         self.with_connection(&sqlite_path, |connection| {
-            let table = if sqlite_table_exists(connection, &format!("t_{table_hint}"))? {
-                Some(format!("t_{table_hint}"))
+            let schema = self.schema(&sqlite_path, connection)?;
+            let hinted_table = format!("t_{table_hint}");
+            let table = if let Some(table) = schema.canonical_table(&hinted_table) {
+                Some(table.to_owned())
             } else {
-                table_with_anchor(connection, href)?
+                table_with_anchor(connection, &schema, href)?
             };
             let Some(table) = table else {
                 return Ok(None);
             };
-            if !sqlite_table_has_columns(connection, &table, &["f_text"])? {
+            if !schema.table_has_columns(&table, &["f_text"]) {
                 return Ok(None);
             }
 
-            let rows = if sqlite_table_has_columns(connection, &table, &["f_anchor"])? {
+            let rows = if schema.table_has_columns(&table, &["f_anchor"]) {
                 query_law_rows_by_anchor(connection, &table, href)?
             } else {
                 Vec::new()
             };
             let rows = if rows.is_empty() {
-                query_law_rows_by_hore_code(connection, &table, table_hint)?
+                query_law_rows_by_hore_code(connection, &schema, &table, table_hint)?
             } else {
                 rows
             };
@@ -356,11 +358,11 @@ impl MultiviewStore {
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
         self.with_connection(&sqlite_path, |connection| {
-            if !sqlite_table_has_columns(
-                connection,
+            let schema = self.schema(&sqlite_path, connection)?;
+            if !schema.table_has_columns(
                 "t_index",
                 &["f_hore_code", "f_title_no", "f_title_sub", "f_text"],
-            )? {
+            ) {
                 return Ok(None);
             }
             let rows = query_index_rows(connection, code)?;
@@ -458,6 +460,30 @@ impl MultiviewStore {
         read(connection)
     }
 
+    fn schema(
+        &self,
+        sqlite_path: &Path,
+        connection: &Connection,
+    ) -> Result<Arc<MultiviewSqliteSchema>> {
+        {
+            let schemas = self
+                .schemas
+                .lock()
+                .map_err(|_| Error::Driver("multiview schema cache was poisoned".to_owned()))?;
+            if let Some(schema) = schemas.get(sqlite_path) {
+                return Ok(Arc::clone(schema));
+            }
+        }
+        let schema = Arc::new(MultiviewSqliteSchema::load(connection)?);
+        let mut schemas = self
+            .schemas
+            .lock()
+            .map_err(|_| Error::Driver("multiview schema cache was poisoned".to_owned()))?;
+        Ok(Arc::clone(
+            schemas.entry(sqlite_path.to_path_buf()).or_insert(schema),
+        ))
+    }
+
     fn decrypted_sqlite_path(&self, path: &Path) -> Result<PathBuf> {
         if let Some(existing) = self
             .decrypted_paths
@@ -550,6 +576,50 @@ struct LawRow {
     title_no: String,
     title_sub: String,
     text: String,
+}
+
+#[derive(Debug)]
+struct MultiviewSqliteSchema {
+    tables: BTreeMap<String, String>,
+    columns: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl MultiviewSqliteSchema {
+    fn load(connection: &Connection) -> Result<Self> {
+        let mut tables = BTreeMap::new();
+        let mut columns = BTreeMap::new();
+        for table in sqlite_table_names(connection)? {
+            let table_key = table.to_ascii_lowercase();
+            tables.insert(table_key.clone(), table.clone());
+            columns.insert(
+                table_key,
+                sqlite_columns(connection, &table)?
+                    .into_iter()
+                    .map(|column| column.to_ascii_lowercase())
+                    .collect(),
+            );
+        }
+        Ok(Self { tables, columns })
+    }
+
+    fn canonical_table(&self, table: &str) -> Option<&str> {
+        self.tables
+            .get(&table.to_ascii_lowercase())
+            .map(String::as_str)
+    }
+
+    fn table_has_columns(&self, table: &str, required: &[&str]) -> bool {
+        let Some(columns) = self.columns.get(&table.to_ascii_lowercase()) else {
+            return false;
+        };
+        required
+            .iter()
+            .all(|column| columns.contains(&column.to_ascii_lowercase()))
+    }
+
+    fn table_names(&self) -> impl Iterator<Item = &str> {
+        self.tables.values().map(String::as_str)
+    }
 }
 
 fn multiview_payload_paths(root: &Path) -> Result<Vec<PathBuf>> {
@@ -705,21 +775,33 @@ fn sqlite_table_has_columns(
         .all(|column| present.contains(&column.to_lowercase())))
 }
 
-fn table_with_anchor(connection: &Connection, href: &str) -> Result<Option<String>> {
-    for table in sqlite_table_names(connection)? {
-        if !sqlite_table_has_columns(connection, &table, &["f_anchor"])? {
+fn sqlite_columns(connection: &Connection, table: &str) -> Result<Vec<String>> {
+    let mut statement =
+        connection.prepare(&format!("pragma table_info({})", quote_identifier(table)))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
+fn table_with_anchor(
+    connection: &Connection,
+    schema: &MultiviewSqliteSchema,
+    href: &str,
+) -> Result<Option<String>> {
+    for table in schema.table_names() {
+        if !schema.table_has_columns(table, &["f_anchor"]) {
             continue;
         }
         let sql = format!(
             "select 1 from {} where f_anchor = ? limit 1",
-            quote_identifier(&table)
+            quote_identifier(table)
         );
         let found = connection
             .query_row(&sql, [href], |_| Ok(()))
             .optional()?
             .is_some();
         if found {
-            return Ok(Some(table));
+            return Ok(Some(table.to_owned()));
         }
     }
     Ok(None)
@@ -739,10 +821,11 @@ fn query_law_rows_by_anchor(
 
 fn query_law_rows_by_hore_code(
     connection: &Connection,
+    schema: &MultiviewSqliteSchema,
     table: &str,
     hore_code: &str,
 ) -> Result<Vec<LawRow>> {
-    if !sqlite_table_has_columns(connection, table, &["f_hore_code"])? {
+    if !schema.table_has_columns(table, &["f_hore_code"]) {
         return Ok(Vec::new());
     }
     let sql = format!(

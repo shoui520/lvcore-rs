@@ -24,3 +24,12 @@ sha2 = "0.10"
 tempfile = "3.13"
 thiserror = "2.0"
 zip = { version = "5.1.1", default-features = false, features = ["deflate-flate2-zlib-rs", "legacy-zip"] }
+
+[profile.dev.package.aes]
+opt-level = 3
+
+[profile.dev.package.cipher]
+opt-level = 3
+
+[profile.dev.package.lvcore]
+opt-level = 2
