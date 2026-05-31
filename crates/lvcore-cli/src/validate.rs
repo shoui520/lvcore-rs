@@ -2,7 +2,8 @@ use std::path::Path;
 
 use lvcore::{
     BookId, BookLibrary, DriverRegistry, HomeSurface, NavigationStatus, NavigationSurface,
-    RenderOptions, SearchMode, SearchQuery, SearchScope, TargetToken,
+    NavigationSurfaceKind, RenderOptions, ResolvedTargetView, SearchMode, SearchQuery, SearchScope,
+    TargetToken,
 };
 use serde_json::json;
 
@@ -71,9 +72,17 @@ pub(crate) fn validate_row_has_failure(row: &serde_json::Value) -> bool {
 }
 
 fn validate_exercise_has_failure(row: &serde_json::Value) -> bool {
-    row.get("status")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|status| status.ends_with("_error"))
+    match row {
+        serde_json::Value::Object(object) => {
+            object
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|status| status.ends_with("_error"))
+                || object.values().any(validate_exercise_has_failure)
+        }
+        serde_json::Value::Array(values) => values.iter().any(validate_exercise_has_failure),
+        _ => false,
+    }
 }
 
 fn exercise_reader_paths(
@@ -105,17 +114,15 @@ fn exercise_reader_paths(
                         Some(target) => {
                             match library.render_target(book_id, &target, &RenderOptions::default())
                             {
-                                Ok(view) => json!({
-                                    "kind": "surface_first_target",
-                                    "surface_id": surface.surface_id,
-                                    "surface_kind": surface.kind,
-                                    "opened_kind": navigation_surface_kind_name(&opened),
-                                    "status": "ok",
-                                    "label": label,
-                                    "view_kind": view.kind,
-                                    "diagnostic_count": view.diagnostics.len(),
-                                    "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
-                                }),
+                                Ok(view) => surface_rendered_view_probe(
+                                    library,
+                                    book_id,
+                                    &view,
+                                    &surface.surface_id,
+                                    &surface.kind,
+                                    navigation_surface_kind_name(&opened),
+                                    label,
+                                ),
                                 Err(error) => json!({
                                     "kind": "surface_first_target",
                                     "surface_id": surface.surface_id,
@@ -167,14 +174,7 @@ fn exercise_reader_paths(
             let rendered_first = page.hits.first().map(|hit| {
                 library
                     .render_target(book_id, &hit.target, &RenderOptions::default())
-                    .map(|view| {
-                        json!({
-                            "status": "ok",
-                            "view_kind": view.kind,
-                            "diagnostic_count": view.diagnostics.len(),
-                            "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
-                        })
-                    })
+                    .map(|view| rendered_view_probe(library, book_id, &view))
                     .unwrap_or_else(|error| {
                         json!({
                             "status": "render_error",
@@ -200,6 +200,77 @@ fn exercise_reader_paths(
     };
     rows.push(search_row);
     rows
+}
+
+fn rendered_view_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    view: &ResolvedTargetView,
+) -> serde_json::Value {
+    let resource_probe = first_readable_resource_probe(library, book_id, view);
+    let status = if resource_probe
+        .as_ref()
+        .and_then(|probe| probe.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|status| status.ends_with("_error"))
+    {
+        "resource_error"
+    } else {
+        "ok"
+    };
+    json!({
+        "status": status,
+        "view_kind": view.kind,
+        "diagnostic_count": view.diagnostics.len(),
+        "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+        "resource_count": view.resources.len(),
+        "first_resource": resource_probe,
+    })
+}
+
+fn surface_rendered_view_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    view: &ResolvedTargetView,
+    surface_id: &str,
+    surface_kind: &NavigationSurfaceKind,
+    opened_kind: &str,
+    label: String,
+) -> serde_json::Value {
+    let mut row = rendered_view_probe(library, book_id, view);
+    if let Some(object) = row.as_object_mut() {
+        object.insert("kind".to_owned(), json!("surface_first_target"));
+        object.insert("surface_id".to_owned(), json!(surface_id));
+        object.insert("surface_kind".to_owned(), json!(surface_kind));
+        object.insert("opened_kind".to_owned(), json!(opened_kind));
+        object.insert("label".to_owned(), json!(label));
+    }
+    row
+}
+
+fn first_readable_resource_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    view: &ResolvedTargetView,
+) -> Option<serde_json::Value> {
+    let resource = view
+        .resources
+        .iter()
+        .find(|resource| resource.href.is_some())?;
+    match library.read_resource(book_id, &resource.token) {
+        Ok(bytes) => Some(json!({
+            "status": "ok",
+            "kind": resource.kind,
+            "mime_type": resource.mime_type,
+            "byte_len": bytes.len(),
+        })),
+        Err(error) => Some(json!({
+            "status": "resource_read_error",
+            "kind": resource.kind,
+            "mime_type": resource.mime_type,
+            "error": error.to_string(),
+        })),
+    }
 }
 
 fn first_surface_target(surface: &NavigationSurface) -> Option<(TargetToken, String)> {

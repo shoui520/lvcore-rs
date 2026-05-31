@@ -127,6 +127,18 @@ fn validate_failure_detector_flags_open_and_deep_exercise_errors() {
             { "status": "render_error", "error": "broken" }
         ],
     })));
+    assert!(validate_row_has_failure(&serde_json::json!({
+        "status": "ok",
+        "exercises": [
+            {
+                "status": "ok",
+                "rendered_first": {
+                    "status": "resource_read_error",
+                    "error": "broken"
+                }
+            }
+        ],
+    })));
     assert!(!validate_row_has_failure(&serde_json::json!({
         "status": "ok",
         "exercises": [
@@ -135,6 +147,26 @@ fn validate_failure_detector_flags_open_and_deep_exercise_errors() {
             { "status": "no_target" }
         ],
     })));
+}
+
+#[test]
+fn validate_deep_exercises_first_rendered_resource() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+
+    let output = validate_package_json(&DriverRegistry::default(), dir.path(), true);
+    let exercises = output["exercises"].as_array().unwrap();
+    let resource_probe = exercises
+        .iter()
+        .filter_map(|exercise| exercise.get("first_resource"))
+        .find(|probe| !probe.is_null())
+        .expect("deep validation should read at least one rendered resource");
+
+    assert_eq!(resource_probe["status"], "ok");
+    assert_eq!(resource_probe["kind"], "image");
+    assert_eq!(resource_probe["mime_type"], "image/svg+xml");
+    assert_eq!(resource_probe["byte_len"].as_u64(), Some(6));
+    assert!(!validate_row_has_failure(&output));
 }
 
 #[test]
