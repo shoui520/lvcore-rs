@@ -111,6 +111,61 @@ fn ssed_fulltext_matches_fullwidth_ascii_body_text() {
 }
 
 #[test]
+fn ssed_fulltext_prefetches_first_page_from_index_rows_for_non_ascii_body_query() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic fulltext".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "検索語".to_owned(),
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "本文見出し");
+    assert!(
+        page.hits[0]
+            .snippet_html
+            .as_deref()
+            .is_some_and(|snippet| snippet.contains("検索語"))
+    );
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
+    );
+}
+
+#[test]
 fn ssed_fulltext_searches_britannica_chronology_before_honmon_scan() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
@@ -219,7 +274,7 @@ fn write_ssed_fulltext_fixture(root: &Path) -> SsedCatalog {
     let mut body = Vec::new();
     body.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01, 0x1f, 0x41]);
     body.extend_from_slice(&body_jis(
-        "この本文 has a window needle and ＦＵＬＬＷＩＤＴＨ text.",
+        "この本文 has a window needle and ＦＵＬＬＷＩＤＴＨ text. 検索語もあります。",
     ));
     body.extend_from_slice(&[0x1f, 0x61, 0x1f, 0x0a]);
     fs::write(

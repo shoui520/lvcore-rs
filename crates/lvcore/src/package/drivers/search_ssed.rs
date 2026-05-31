@@ -93,6 +93,7 @@ impl ReaderBookPackage {
         let page_limit = query.limit.saturating_add(1);
         let title_cursor = decode_ssed_fulltext_title_cursor(query.cursor.as_deref());
         let chronology_cursor = decode_ssed_fulltext_chronology_cursor(query.cursor.as_deref());
+        let row_cursor = decode_ssed_fulltext_row_cursor(query.cursor.as_deref());
         let offset = decode_ssed_fulltext_body_cursor(query.cursor.as_deref());
         let mut diagnostics = Vec::new();
         if (query.cursor.is_none() || title_cursor.is_some())
@@ -116,7 +117,9 @@ impl ReaderBookPackage {
             .cursor
             .as_deref()
             .is_some_and(|cursor| cursor.starts_with("body:"));
-        let run_sidecar = chronology_cursor.is_none() && !body_cursor_explicit;
+        let row_cursor_explicit = row_cursor.is_some();
+        let run_sidecar =
+            chronology_cursor.is_none() && !body_cursor_explicit && !row_cursor_explicit;
         let sidecar_page = if run_sidecar {
             search_ssed_dense_sidecar_bodies_with_resolvers(
                 self.ssed_sidecar_body_resolvers()?,
@@ -250,6 +253,62 @@ impl ReaderBookPackage {
                 });
             }
         }
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(SearchPage {
+                hits,
+                next_cursor: None,
+                diagnostics: vec![Diagnostic::error(
+                    "ssed_catalog_missing",
+                    "SSED full-text search requires a parsed SSEDINFO catalog",
+                )],
+            });
+        };
+        let byte_candidates = ssed_body_search_byte_candidates(&query.query);
+        let row_driven_search_allowed = row_cursor.is_some() || !byte_candidates.is_empty();
+        if row_driven_search_allowed
+            && (query.cursor.is_none() || row_cursor.is_some())
+            && hits.len() < page_limit
+        {
+            let previous_hits = hits.len();
+            let row_offset = row_cursor.unwrap_or(0);
+            let remaining_limit = page_limit.saturating_sub(previous_hits);
+            let max_checked_rows = if row_cursor.is_some() {
+                None
+            } else {
+                Some(SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS)
+            };
+            let row_page =
+                self.ssed_fulltext_row_driven_body_page(SsedRowDrivenFulltextRequest {
+                    catalog,
+                    raw_query: &query.query,
+                    needle: &needle,
+                    byte_candidates: &byte_candidates,
+                    offset: row_offset,
+                    page_limit: remaining_limit,
+                    max_checked_rows,
+                })?;
+            if row_page.exhausted || previous_hits + row_page.hits.len() >= query.limit {
+                diagnostics.extend(row_page.diagnostics);
+                let row_hit_count = row_page.hits.len();
+                hits.extend(row_page.hits);
+                let returned_row_hits =
+                    query.limit.saturating_sub(previous_hits).min(row_hit_count);
+                let next_cursor = if row_page.exhausted && row_hit_count <= returned_row_hits {
+                    None
+                } else {
+                    Some(format!(
+                        "row:{}",
+                        row_offset.saturating_add(returned_row_hits)
+                    ))
+                };
+                hits.truncate(query.limit);
+                return Ok(SearchPage {
+                    hits,
+                    next_cursor,
+                    diagnostics,
+                });
+            }
+        }
         diagnostics.push(Diagnostic::info(
             "ssed_fulltext_body_window_scan",
             format!(
@@ -263,17 +322,6 @@ impl ReaderBookPackage {
         } else {
             offset
         };
-        let Some(catalog) = &self.ssed_catalog else {
-            return Ok(SearchPage {
-                hits,
-                next_cursor: None,
-                diagnostics: vec![Diagnostic::error(
-                    "ssed_catalog_missing",
-                    "SSED full-text search requires a parsed SSEDINFO catalog",
-                )],
-            });
-        };
-        let byte_candidates = ssed_body_search_byte_candidates(&query.query);
         let body_hit_ranges_by_component = self.ssed_fulltext_body_hit_ranges(
             catalog,
             &needle,
@@ -448,6 +496,191 @@ impl ReaderBookPackage {
         })
     }
 
+    fn ssed_fulltext_row_driven_body_page(
+        &self,
+        request: SsedRowDrivenFulltextRequest<'_>,
+    ) -> Result<SsedRowDrivenFulltextPage> {
+        let SsedRowDrivenFulltextRequest {
+            catalog,
+            raw_query,
+            needle,
+            byte_candidates,
+            offset,
+            page_limit,
+            max_checked_rows,
+        } = request;
+        if page_limit == 0 {
+            return Ok(SsedRowDrivenFulltextPage {
+                hits: Vec::new(),
+                exhausted: true,
+                diagnostics: Vec::new(),
+            });
+        }
+        let mut hits = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut readers: BTreeMap<String, SsedDataFile> = BTreeMap::new();
+        let mut seen_offsets: BTreeSet<(String, u64)> = BTreeSet::new();
+        let mut matched_count = 0usize;
+        let mut checked_rows = 0usize;
+        let mut byte_candidate_rows = 0usize;
+        let mut decoded_candidate_rows = 0usize;
+        let mut stopped_early = false;
+        let scan_diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
+            if max_checked_rows.is_some_and(|limit| checked_rows >= limit) {
+                stopped_early = true;
+                return Ok(false);
+            }
+            if looks_like_raw_anchor_label(&row.key) {
+                return Ok(true);
+            }
+            let Some(component) = catalog.component_for_address(row.body.block) else {
+                diagnostics.push(Diagnostic::warning(
+                    "ssed_fulltext_body_component_missing",
+                    format!(
+                        "no component contains body pointer block {} offset {}",
+                        row.body.block, row.body.offset
+                    ),
+                ));
+                return Ok(true);
+            };
+            if component.role != SsedComponentRole::Honmon {
+                return Ok(true);
+            }
+            let Some(component_offset) = component.relative_offset(row.body.block, row.body.offset)
+            else {
+                diagnostics.push(
+                    Diagnostic::warning(
+                        "ssed_fulltext_body_pointer_invalid",
+                        format!(
+                            "{} does not contain body pointer block {} offset {}",
+                            component.filename, row.body.block, row.body.offset
+                        ),
+                    )
+                    .with_context("component", &component.filename),
+                );
+                return Ok(true);
+            };
+            if !seen_offsets.insert((component.filename.clone(), component_offset)) {
+                return Ok(true);
+            }
+            checked_rows = checked_rows.saturating_add(1);
+            let reader = match readers.get_mut(&component.filename) {
+                Some(reader) => reader,
+                None => {
+                    let path = match self.resolve_readable_ssed_component_path(component) {
+                        Ok(Some(path)) => path,
+                        Ok(None) => {
+                            diagnostics.push(
+                                Diagnostic::warning(
+                                    "ssed_fulltext_body_component_missing",
+                                    format!(
+                                        "{} is declared but not present on disk",
+                                        component.filename
+                                    ),
+                                )
+                                .with_context("component", &component.filename),
+                            );
+                            return Ok(true);
+                        }
+                        Err(error) => {
+                            diagnostics.push(
+                                Diagnostic::warning(
+                                    "ssed_fulltext_body_component_decode_failed",
+                                    format!(
+                                        "{} is not readable as SSEDDATA: {error}",
+                                        component.filename
+                                    ),
+                                )
+                                .with_context("component", &component.filename),
+                            );
+                            return Ok(true);
+                        }
+                    };
+                    let reader = match SsedDataFile::open(&path) {
+                        Ok(reader) => reader,
+                        Err(error) => {
+                            diagnostics.push(
+                                Diagnostic::warning(
+                                    "ssed_fulltext_body_component_decode_failed",
+                                    format!(
+                                        "{} is not readable as SSEDDATA: {error}",
+                                        component.filename
+                                    ),
+                                )
+                                .with_context("component", &component.filename),
+                            );
+                            return Ok(true);
+                        }
+                    };
+                    readers.insert(component.filename.clone(), reader);
+                    readers
+                        .get_mut(&component.filename)
+                        .expect("reader was inserted")
+                }
+            };
+            let body_data = reader.read_range(
+                usize::try_from(component_offset).map_err(|_| {
+                    Error::Driver("SSED body offset does not fit in usize".to_owned())
+                })?,
+                SSED_FULLTEXT_BODY_WINDOW_BYTES,
+            )?;
+            if !ssed_body_window_may_contain_query(&body_data, byte_candidates) {
+                return Ok(true);
+            }
+            byte_candidate_rows = byte_candidate_rows.saturating_add(1);
+            let body_text = decode_ssed_body_search_text(&body_data);
+            if !normalize_search_match_text(&body_text).contains(needle) {
+                return Ok(true);
+            }
+            decoded_candidate_rows = decoded_candidate_rows.saturating_add(1);
+            if matched_count < offset {
+                matched_count = matched_count.saturating_add(1);
+                return Ok(true);
+            }
+            let target = match self.ssed_target_for_index_pointer(row.body)? {
+                Ok(target) => target,
+                Err(diagnostic) => {
+                    diagnostics.push(diagnostic);
+                    return Ok(true);
+                }
+            };
+            let title = self.ssed_display_text_for_index_title_or_key(row.title, &row.key);
+            if looks_like_raw_anchor_label(&title) {
+                return Ok(true);
+            }
+            let label = self.ssed_rich_label(&title);
+            hits.push(SearchHit {
+                book_id: self.metadata.book_id.clone(),
+                target,
+                title_html: label.html,
+                title_text: label.text,
+                snippet_html: ssed_fulltext_snippet_html(&body_text, raw_query),
+                diagnostics: label.diagnostics,
+            });
+            matched_count = matched_count.saturating_add(1);
+            if hits.len() >= page_limit {
+                stopped_early = true;
+                return Ok(false);
+            }
+            Ok(true)
+        })?;
+        diagnostics.extend(scan_diagnostics);
+        diagnostics.push(
+            Diagnostic::info(
+                "ssed_fulltext_row_driven_body_prefetch",
+                "SSED full-text search checked native index targets before falling back to a sequential HONMON scan",
+            )
+            .with_context("checked_rows", checked_rows.to_string())
+            .with_context("byte_candidate_rows", byte_candidate_rows.to_string())
+            .with_context("decoded_candidate_rows", decoded_candidate_rows.to_string()),
+        );
+        Ok(SsedRowDrivenFulltextPage {
+            hits,
+            exhausted: !stopped_early,
+            diagnostics,
+        })
+    }
+
     fn ssed_fulltext_body_hit_ranges(
         &self,
         catalog: &SsedCatalog,
@@ -592,6 +825,24 @@ impl ReaderBookPackage {
     }
 }
 
+const SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS: usize = 4096;
+
+struct SsedRowDrivenFulltextRequest<'a> {
+    catalog: &'a SsedCatalog,
+    raw_query: &'a str,
+    needle: &'a str,
+    byte_candidates: &'a [Vec<u8>],
+    offset: usize,
+    page_limit: usize,
+    max_checked_rows: Option<usize>,
+}
+
+struct SsedRowDrivenFulltextPage {
+    hits: Vec<SearchHit>,
+    exhausted: bool,
+    diagnostics: Vec<Diagnostic>,
+}
+
 fn push_ssed_fulltext_range(ranges: &mut Vec<(u64, u64)>, lower: u64, upper: u64) {
     if let Some(last) = ranges.last_mut()
         && lower <= last.1
@@ -636,5 +887,11 @@ fn decode_ssed_fulltext_body_cursor(cursor: Option<&str>) -> usize {
 fn decode_ssed_fulltext_chronology_cursor(cursor: Option<&str>) -> Option<usize> {
     cursor?
         .strip_prefix("chronology:")
+        .and_then(|value| value.parse::<usize>().ok())
+}
+
+fn decode_ssed_fulltext_row_cursor(cursor: Option<&str>) -> Option<usize> {
+    cursor?
+        .strip_prefix("row:")
         .and_then(|value| value.parse::<usize>().ok())
 }
