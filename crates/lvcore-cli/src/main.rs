@@ -40,6 +40,9 @@ enum Command {
         /// Also open available surfaces, render their first target, and run a small search.
         #[arg(long)]
         deep: bool,
+        /// Also probe expensive linear/fulltext search paths during --deep validation.
+        #[arg(long)]
+        include_expensive_search: bool,
         /// Stream one JSON object per package as soon as it is validated.
         #[arg(long)]
         jsonl: bool,
@@ -311,6 +314,7 @@ fn main() -> Result<()> {
             paths,
             max,
             deep,
+            include_expensive_search,
             jsonl,
             fail_on_error,
         } => {
@@ -332,7 +336,14 @@ fn main() -> Result<()> {
             for path in package_paths {
                 eprintln!("lvcore: validating {}", path.display());
                 let started = Instant::now();
-                let mut row = validate_package_json(&registry, &path, deep);
+                let mut row = validate_package_json(
+                    &registry,
+                    &path,
+                    validate::ValidateOptions {
+                        deep,
+                        include_expensive_search,
+                    },
+                );
                 if let Some(object) = row.as_object_mut() {
                     object.insert(
                         "elapsed_ms".to_owned(),

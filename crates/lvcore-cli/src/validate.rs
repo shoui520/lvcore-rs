@@ -13,6 +13,12 @@ use super::{metadata_for, open_single_book_library};
 const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 32;
 const VALIDATE_SEARCH_HIT_RENDER_LIMIT: usize = 3;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ValidateOptions {
+    pub(crate) deep: bool,
+    pub(crate) include_expensive_search: bool,
+}
+
 struct SurfaceRenderedProbeContext<'a> {
     surface_id: &'a str,
     surface_kind: &'a NavigationSurfaceKind,
@@ -24,19 +30,20 @@ struct SurfaceRenderedProbeContext<'a> {
 pub(crate) fn validate_package_json(
     registry: &DriverRegistry,
     path: &Path,
-    deep: bool,
+    options: ValidateOptions,
 ) -> serde_json::Value {
     match open_single_book_library(registry, path) {
         Ok((library, book_id)) => {
             let metadata = metadata_for(&library, &book_id);
             match library.home_surfaces(&book_id) {
                 Ok(surfaces) => {
-                    let exercises = if deep {
+                    let exercises = if options.deep {
                         Some(exercise_reader_paths(
                             &library,
                             &book_id,
                             &surfaces,
                             metadata.format_family,
+                            options.include_expensive_search,
                         ))
                     } else {
                         None
@@ -107,6 +114,7 @@ fn exercise_reader_paths(
     book_id: &BookId,
     surfaces: &[HomeSurface],
     format_family: FormatFamily,
+    include_expensive_search: bool,
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
     let resource_scan_limit = resource_scan_limit_for(format_family);
@@ -190,6 +198,7 @@ fn exercise_reader_paths(
         book_id,
         &metadata,
         resource_scan_limit,
+        include_expensive_search,
     ));
     rows
 }
@@ -199,9 +208,14 @@ fn search_mode_exercises(
     book_id: &BookId,
     metadata: &BookMetadata,
     resource_scan_limit: usize,
+    include_expensive_search: bool,
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
     for mode in validate_search_modes_to_probe(metadata) {
+        if should_skip_search_mode_probe(metadata, &mode, include_expensive_search) {
+            rows.push(skipped_search_mode_exercise(mode));
+            continue;
+        }
         let query = search_probe_query(metadata.title.as_deref(), &mode);
         let render_hits = mode == SearchMode::Forward;
         rows.push(search_mode_exercise(
@@ -217,15 +231,26 @@ fn search_mode_exercises(
 }
 
 fn validate_search_modes_to_probe(metadata: &BookMetadata) -> Vec<SearchMode> {
-    if metadata.format_family == FormatFamily::Ssed {
-        return metadata
-            .search_modes
-            .contains(&SearchMode::Forward)
-            .then_some(SearchMode::Forward)
-            .into_iter()
-            .collect();
-    }
     metadata.search_modes.to_vec()
+}
+
+fn should_skip_search_mode_probe(
+    metadata: &BookMetadata,
+    mode: &SearchMode,
+    include_expensive_search: bool,
+) -> bool {
+    !include_expensive_search
+        && metadata.format_family == FormatFamily::Ssed
+        && matches!(mode, SearchMode::Partial | SearchMode::FullText)
+}
+
+fn skipped_search_mode_exercise(mode: SearchMode) -> serde_json::Value {
+    json!({
+        "kind": format!("search_{}", search_mode_key(&mode)),
+        "status": "skipped_expensive",
+        "mode": mode,
+        "reason": "ssed_linear_or_fulltext_validation_requires_explicit_include_expensive_search",
+    })
 }
 
 fn search_mode_exercise(

@@ -1,4 +1,5 @@
 use super::*;
+use crate::validate::ValidateOptions;
 use lvcore::lved_sqlite::apply_sqlcipher_key;
 use rusqlite::Connection;
 use std::fs;
@@ -96,7 +97,14 @@ fn validate_command_reports_advertised_search_modes() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
 
-    let output = validate_package_json(&DriverRegistry::default(), dir.path(), false);
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: false,
+            include_expensive_search: false,
+        },
+    );
 
     assert_eq!(output["status"], "ok");
     assert_eq!(
@@ -154,7 +162,14 @@ fn validate_deep_exercises_first_rendered_resource() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
 
-    let output = validate_package_json(&DriverRegistry::default(), dir.path(), true);
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: false,
+        },
+    );
     let exercises = output["exercises"].as_array().unwrap();
     let resource_probe = exercises
         .iter()
@@ -190,7 +205,14 @@ fn validate_deep_scans_beyond_first_target_for_rendered_resources() {
             .unwrap();
     }
 
-    let output = validate_package_json(&DriverRegistry::default(), dir.path(), true);
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: false,
+        },
+    );
     let exercises = output["exercises"].as_array().unwrap();
     let resource_scan = exercises
         .iter()
@@ -213,7 +235,14 @@ fn validate_deep_exercises_advertised_search_modes() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
 
-    let output = validate_package_json(&DriverRegistry::default(), dir.path(), true);
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: false,
+        },
+    );
     let exercises = output["exercises"].as_array().unwrap();
     let kinds = exercises
         .iter()
@@ -231,6 +260,75 @@ fn validate_deep_exercises_advertised_search_modes() {
     ] {
         assert!(kinds.contains(expected), "missing {expected}");
     }
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
+fn validate_deep_exercises_ssed_advertised_search_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    write_ssed_cli_fixture(dir.path());
+
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: false,
+        },
+    );
+    let exercises = output["exercises"].as_array().unwrap();
+    let kinds = exercises
+        .iter()
+        .filter_map(|exercise| exercise["kind"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    for expected in [
+        "search_exact",
+        "search_forward",
+        "search_backward",
+        "search_partial",
+        "search_full_text",
+    ] {
+        assert!(kinds.contains(expected), "missing {expected}");
+    }
+    let partial = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_partial")
+        .expect("missing partial validation row");
+    assert_eq!(partial["status"], "skipped_expensive");
+    let fulltext = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_full_text")
+        .expect("missing fulltext validation row");
+    assert_eq!(fulltext["status"], "skipped_expensive");
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
+fn validate_deep_can_explicitly_exercise_expensive_ssed_search_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    write_ssed_cli_fixture(dir.path());
+
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: true,
+        },
+    );
+    let exercises = output["exercises"].as_array().unwrap();
+    let partial = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_partial")
+        .expect("missing partial validation row");
+    let fulltext = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_full_text")
+        .expect("missing fulltext validation row");
+
+    assert_eq!(partial["status"], "ok");
+    assert_eq!(fulltext["status"], "ok");
     assert!(!validate_row_has_failure(&output));
 }
 
@@ -476,4 +574,128 @@ fn write_lved_cli_fixture(root: &Path) {
             .unwrap();
     }
     fs::write(root.join("main.key"), key).unwrap();
+}
+
+fn write_ssed_cli_fixture(root: &Path) {
+    fs::write(root.join("DICT.IDX"), ssedinfo_cli_fixture()).unwrap();
+    fs::write(
+        root.join("HONMON.DIC"),
+        sseddata_literal_fixture(&body_jis("alpha body")),
+    )
+    .unwrap();
+    fs::write(
+        root.join("FHTITLE.DIC"),
+        sseddata_literal_fixture(&body_jis("alpha")),
+    )
+    .unwrap();
+    fs::write(
+        root.join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_page("alpha", 1, 0, 13, 0)),
+    )
+    .unwrap();
+}
+
+fn ssedinfo_cli_fixture() -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 4 * 0x30];
+    data[..8].copy_from_slice(lvcore::SSEDINFO_MAGIC);
+    let title = b"SSED Fixture";
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 4;
+    write_ssedinfo_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_ssedinfo_record(
+        &mut data[record_start + 0x30..record_start + 0x60],
+        0x05,
+        13,
+        14,
+        "FHTITLE.DIC",
+    );
+    write_ssedinfo_record(
+        &mut data[record_start + 0x60..record_start + 0x90],
+        0x91,
+        15,
+        15,
+        "FHINDEX.DIC",
+    );
+    write_ssedinfo_record(
+        &mut data[record_start + 0x90..record_start + 0xc0],
+        0xf2,
+        17,
+        18,
+        "GA16HALF",
+    );
+    data
+}
+
+fn write_ssedinfo_record(rec: &mut [u8], component_type: u8, start: u32, end: u32, filename: &str) {
+    rec[3] = component_type;
+    rec[4..8].copy_from_slice(&start.to_be_bytes());
+    rec[8..12].copy_from_slice(&end.to_be_bytes());
+    rec[0x10] = filename.len() as u8;
+    rec[0x11..0x11 + filename.len()].copy_from_slice(filename.as_bytes());
+}
+
+fn simple_index_page(
+    key: &str,
+    body_block: u32,
+    body_offset: u16,
+    title_block: u32,
+    title_offset: u16,
+) -> Vec<u8> {
+    let mut page = vec![0u8; 2048];
+    let key = jis_fullwidth_ascii_key(key);
+    page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    page[4] = key.len() as u8;
+    page[5..5 + key.len()].copy_from_slice(&key);
+    let pos = 5 + key.len();
+    page[pos..pos + 4].copy_from_slice(&body_block.to_be_bytes());
+    page[pos + 4..pos + 6].copy_from_slice(&body_offset.to_be_bytes());
+    page[pos + 6..pos + 10].copy_from_slice(&title_block.to_be_bytes());
+    page[pos + 10..pos + 12].copy_from_slice(&title_offset.to_be_bytes());
+    page
+}
+
+fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
+    let chunk_offset = 0x44usize;
+    let block_count = literals.len().div_ceil(2048).max(1);
+    let mut data = vec![0u8; chunk_offset];
+    data[..8].copy_from_slice(lvcore::SSEDDATA_MAGIC);
+    data[0x0f] = 1;
+    data[0x16..0x18].copy_from_slice(&1u16.to_be_bytes());
+    data[0x18..0x1c].copy_from_slice(&1u32.to_be_bytes());
+    data[0x1c..0x20].copy_from_slice(&(block_count as u32).to_be_bytes());
+    data[0x40..0x44].copy_from_slice(&(chunk_offset as u32).to_be_bytes());
+    data.extend_from_slice(&[0, 0]);
+    data.extend_from_slice(&(literals.len() as u16).to_be_bytes());
+    data.push(0);
+    for literal in literals {
+        data.extend_from_slice(&[0, 0, *literal]);
+    }
+    data
+}
+
+fn body_jis(text: &str) -> Vec<u8> {
+    jis_fullwidth_ascii_key(text)
+}
+
+fn jis_fullwidth_ascii_key(text: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for byte in text.bytes() {
+        if (0x21..=0x7e).contains(&byte) {
+            out.extend_from_slice(&[0x23, byte]);
+        } else if byte == b' ' {
+            out.extend_from_slice(&[0x21, 0x21]);
+        } else {
+            out.push(byte);
+        }
+    }
+    out
 }
