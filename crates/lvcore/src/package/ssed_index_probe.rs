@@ -20,7 +20,9 @@ use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexScanState, is_leaf_page, is_supported_index_type,
     parse_supported_leaf_page,
 };
-use crate::storage::{DirectoryStorage, StorageBackend, private_cache_dir};
+use crate::storage::{
+    DirectoryStorage, StorageBackend, private_cache_dir, regular_file_inside_root,
+};
 
 type PrefixDecryptFn = fn(&[u8], usize) -> Result<Vec<u8>>;
 type FileDecryptFn = fn(&Path, &Path) -> Result<()>;
@@ -98,12 +100,15 @@ fn component_candidate_paths_casefolded(
 ) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     let mut seen = BTreeSet::new();
-    if let Some(path) = storage.resolve_casefolded(Path::new(&component.filename))? {
+    if let Some(path) = storage.resolve_casefolded(Path::new(&component.filename))?
+        && regular_file_inside_root(storage.root(), &path)?
+    {
         seen.insert(path.clone());
         paths.push(path);
     }
     for alias in ssed_component_filename_aliases(component) {
         if let Some(path) = storage.resolve_casefolded(Path::new(&alias))?
+            && regular_file_inside_root(storage.root(), &path)?
             && seen.insert(path.clone())
         {
             paths.push(path);
@@ -218,4 +223,129 @@ fn file_starts_with_android_wrapped_sseddata(path: &Path) -> Result<bool> {
     let mut prefix = [0_u8; 11];
     let read = file.read(&mut prefix)?;
     Ok(read == prefix.len() && &prefix == b"LV_SSEDDATA")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use crate::ssed::BLOCK_SIZE;
+
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn index_probe_ignores_symlinked_component_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let page = simple_leaf_index_page_for_test(b"alpha", 100, 0);
+        fs::write(
+            outside.path().join("FHINDEX.DIC"),
+            fixture_sseddata_literal_chunks(&[&page], 200, 200),
+        )
+        .unwrap();
+        symlink(
+            outside.path().join("FHINDEX.DIC"),
+            root.path().join("FHINDEX.DIC"),
+        )
+        .unwrap();
+        let catalog = SsedCatalog {
+            title: "Symlink".to_owned(),
+            components: vec![
+                SsedComponent {
+                    index: 0,
+                    multi: 0,
+                    component_type: 0x00,
+                    start_block: 100,
+                    end_block: 100,
+                    data: [0; 4],
+                    filename: "HONMON.DIC".to_owned(),
+                    role: SsedComponentRole::Honmon,
+                },
+                SsedComponent {
+                    index: 1,
+                    multi: 0,
+                    component_type: 0x91,
+                    start_block: 200,
+                    end_block: 200,
+                    data: [0; 4],
+                    filename: "FHINDEX.DIC".to_owned(),
+                    role: SsedComponentRole::Index,
+                },
+            ],
+            layout: crate::ssed::SsedInfoLayout {
+                component_count_offset: 0,
+                record_start: 0,
+                record_size: 0x30,
+                component_count: 2,
+                trailing_bytes: 0,
+            },
+        };
+        let storage = DirectoryStorage::new(root.path());
+
+        assert!(!has_decodable_ssed_index_rows(&catalog, &storage));
+    }
+
+    fn simple_leaf_index_page_for_test(key: &[u8], body_block: u32, body_offset: u16) -> Vec<u8> {
+        let mut page = vec![0_u8; BLOCK_SIZE as usize];
+        page[0..2].copy_from_slice(&0xc000_u16.to_be_bytes());
+        page[2..4].copy_from_slice(&1_u16.to_be_bytes());
+        let mut pos = 4usize;
+        page[pos] = key.len() as u8;
+        pos += 1;
+        page[pos..pos + key.len()].copy_from_slice(key);
+        pos += key.len();
+        page[pos..pos + 4].copy_from_slice(&body_block.to_be_bytes());
+        pos += 4;
+        page[pos..pos + 2].copy_from_slice(&body_offset.to_be_bytes());
+        pos += 2;
+        page[pos..pos + 4].copy_from_slice(&0_u32.to_be_bytes());
+        pos += 4;
+        page[pos..pos + 2].copy_from_slice(&0_u16.to_be_bytes());
+        page
+    }
+
+    fn fixture_sseddata_literal_chunks(
+        chunks: &[&[u8]],
+        start_block: u32,
+        end_block: u32,
+    ) -> Vec<u8> {
+        let chunk_count = chunks.len();
+        let first_chunk_offset = 0x40 + chunk_count * 4;
+        let mut data = vec![0u8; first_chunk_offset];
+        data[..8].copy_from_slice(SSEDDATA_MAGIC);
+        data[0x0f] = 1;
+        data[0x16..0x18].copy_from_slice(&(chunk_count as u16).to_be_bytes());
+        data[0x18..0x1c].copy_from_slice(&start_block.to_be_bytes());
+        data[0x1c..0x20].copy_from_slice(&end_block.to_be_bytes());
+
+        let mut compressed_chunks = Vec::with_capacity(chunk_count);
+        let mut next_offset = first_chunk_offset;
+        for (index, chunk) in chunks.iter().enumerate() {
+            data[0x40 + index * 4..0x44 + index * 4]
+                .copy_from_slice(&(next_offset as u32).to_be_bytes());
+            let compressed = fixture_sseddata_literal_chunk(chunk);
+            next_offset += compressed.len();
+            compressed_chunks.push(compressed);
+        }
+        for compressed in compressed_chunks {
+            data.extend_from_slice(&compressed);
+        }
+        data
+    }
+
+    fn fixture_sseddata_literal_chunk(literals: &[u8]) -> Vec<u8> {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&[0, 0]);
+        chunk.extend_from_slice(&(literals.len() as u16).to_be_bytes());
+        chunk.push(0);
+        for literal in literals {
+            chunk.extend_from_slice(&[0, 0, *literal]);
+        }
+        chunk
+    }
 }
