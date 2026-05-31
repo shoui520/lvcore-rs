@@ -62,6 +62,30 @@ pub(super) fn decode_ssed_body_search_text(data: &[u8]) -> String {
     collapse_search_whitespace(&narrow_fullwidth_ascii_text(&out))
 }
 
+pub(super) fn ssed_body_search_byte_candidates(query: &str) -> Vec<Vec<u8>> {
+    let query = query.trim();
+    if query.is_empty()
+        || query.chars().any(char::is_whitespace)
+        || query.bytes().any(|byte| byte.is_ascii_alphabetic())
+    {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    push_unique_search_key(&mut candidates, encode_ssed_index_search_key(query));
+    let (encoded, _encoding, had_errors) = SHIFT_JIS.encode(query);
+    if !had_errors {
+        push_unique_search_key(&mut candidates, encoded.into_owned());
+    }
+    candidates
+}
+
+pub(super) fn ssed_body_window_may_contain_query(data: &[u8], candidates: &[Vec<u8>]) -> bool {
+    candidates.is_empty()
+        || candidates
+            .iter()
+            .any(|candidate| contains_subslice(data, candidate))
+}
+
 pub(super) fn ssed_fulltext_snippet_html(body_text: &str, query: &str) -> Option<String> {
     let body_text = collapse_search_whitespace(body_text);
     if body_text.is_empty() {
@@ -113,6 +137,28 @@ fn push_unique_search_key(candidates: &mut Vec<Vec<u8>>, key: Vec<u8>) {
     if !key.is_empty() && !candidates.iter().any(|candidate| candidate == &key) {
         candidates.push(key);
     }
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return false;
+    }
+    let first = needle[0];
+    let mut start = 0usize;
+    while start + needle.len() <= haystack.len() {
+        let Some(relative) = haystack[start..].iter().position(|byte| *byte == first) else {
+            return false;
+        };
+        let index = start + relative;
+        if index + needle.len() > haystack.len() {
+            return false;
+        }
+        if &haystack[index..index + needle.len()] == needle {
+            return true;
+        }
+        start = index.saturating_add(1);
+    }
+    false
 }
 
 pub(super) fn ssed_index_row_order_key(row: &SsedIndexRow) -> Vec<u8> {
@@ -210,6 +256,37 @@ mod tests {
         assert_eq!(encode_ssed_index_search_key(".c"), body_jis(".c"));
         assert_eq!(encode_ssed_index_search_key("30"), body_jis("30"));
         assert_eq!(encode_ssed_index_search_key("３０"), body_jis("30"));
+    }
+
+    #[test]
+    fn body_byte_prefilter_uses_jis_and_cp932_candidates_for_japanese_queries() {
+        let candidates = ssed_body_search_byte_candidates("新和");
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("新和"))
+        );
+        let (cp932, _encoding, had_errors) = SHIFT_JIS.encode("新和");
+        assert!(!had_errors);
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == cp932.as_ref())
+        );
+        assert!(ssed_body_window_may_contain_query(
+            &body_jis("これは新和です"),
+            &candidates
+        ));
+        assert!(!ssed_body_window_may_contain_query(
+            &body_jis("これは別の語です"),
+            &candidates
+        ));
+    }
+
+    #[test]
+    fn body_byte_prefilter_disables_for_ascii_words() {
+        assert!(ssed_body_search_byte_candidates("fulltext").is_empty());
+        assert!(ssed_body_search_byte_candidates("two words").is_empty());
     }
 
     fn body_jis(value: &str) -> Vec<u8> {

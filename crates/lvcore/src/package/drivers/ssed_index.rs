@@ -513,10 +513,18 @@ impl ReaderBookPackage {
     }
 
     pub(in crate::package) fn ssed_display_text_for_index_row(&self, row: &SsedIndexRow) -> String {
-        let title = self.ssed_title_text(row.title);
+        self.ssed_display_text_for_index_title_or_key(row.title, &row.key)
+    }
+
+    pub(in crate::package) fn ssed_display_text_for_index_title_or_key(
+        &self,
+        title_pointer: SsedIndexPointer,
+        fallback_key: &str,
+    ) -> String {
+        let title = self.ssed_title_text(title_pointer);
         match title {
             Some(title) if !looks_like_raw_anchor_label(&title) => title,
-            _ => row.key.clone(),
+            _ => fallback_key.to_owned(),
         }
     }
 

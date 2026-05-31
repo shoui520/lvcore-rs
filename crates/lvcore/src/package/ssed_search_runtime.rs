@@ -5,7 +5,7 @@ use super::ssed_search::{normalize_search_match_text, reverse_search_match_text}
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
 use crate::search::{SearchHit, SearchMode, SearchPage};
-use crate::ssed_index::SsedIndexRow;
+use crate::ssed_index::{SsedIndexPointer, SsedIndexRow};
 
 pub(super) const SSED_FULLTEXT_BODY_WINDOW_BYTES: usize = 16 * 1024;
 pub(super) const SSED_FULLTEXT_SCAN_WINDOW_BYTES: usize = 256 * 1024;
@@ -14,7 +14,9 @@ pub(super) const SSED_FULLTEXT_SCAN_OVERLAP_BYTES: usize = 512;
 #[derive(Debug, Clone)]
 pub(super) struct SsedFulltextRow {
     pub(super) offset: u64,
-    pub(super) row: SsedIndexRow,
+    pub(super) body: SsedIndexPointer,
+    pub(super) title: SsedIndexPointer,
+    pub(super) key: String,
 }
 
 #[derive(Debug, Default)]

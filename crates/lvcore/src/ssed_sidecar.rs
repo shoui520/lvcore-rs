@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::storage::{private_cache_dir, regular_file_inside_root};
 use encoding_rs::SHIFT_JIS;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params_from_iter};
 
 const SQLITE_MAGIC: &[u8] = b"SQLite format 3\x00";
 
@@ -205,6 +205,14 @@ pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
         });
     }
 
+    if offset == 0 {
+        let prefiltered =
+            search_ssed_dense_sidecar_bodies_prefiltered(resolvers, query, &needle, limit)?;
+        if prefiltered.hits.len() >= limit {
+            return Ok(prefiltered);
+        }
+    }
+
     let mut hits = Vec::new();
     let mut matched = 0usize;
     for resolver in resolvers {
@@ -222,6 +230,57 @@ pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
             }
             if matched < offset {
                 matched = matched.saturating_add(1);
+                continue;
+            }
+            hits.push(hit);
+            matched = matched.saturating_add(1);
+            if hits.len() >= limit {
+                return Ok(SsedSidecarSearchPage {
+                    hits,
+                    matched_count: matched,
+                    exhausted: false,
+                });
+            }
+        }
+    }
+    Ok(SsedSidecarSearchPage {
+        hits,
+        matched_count: matched,
+        exhausted: true,
+    })
+}
+
+fn search_ssed_dense_sidecar_bodies_prefiltered(
+    resolvers: &[SsedSidecarBodyResolver],
+    query: &str,
+    needle: &str,
+    limit: usize,
+) -> Result<SsedSidecarSearchPage> {
+    let pattern = sqlite_like_contains_pattern(query);
+    if pattern == "%%" {
+        return Ok(SsedSidecarSearchPage {
+            hits: Vec::new(),
+            matched_count: 0,
+            exhausted: true,
+        });
+    }
+    let mut hits = Vec::new();
+    let mut matched = 0usize;
+    for resolver in resolvers {
+        let Some(sql) = search_prefilter_sql_for_resolver(resolver) else {
+            continue;
+        };
+        let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
+        let parameters = vec![pattern.as_str(); sidecar_search_column_count(resolver)];
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(parameters), |row| {
+            let anchor_id = anchor_id_from_search_row(resolver, row)?;
+            let body = sidecar_body_from_row(resolver, row)?;
+            Ok(SsedSidecarSearchHit { anchor_id, body })
+        })?;
+        for row in rows {
+            let hit = row?;
+            if !sidecar_search_hit_matches(&hit, needle) {
                 continue;
             }
             hits.push(hit);
@@ -268,6 +327,27 @@ pub fn discover_ssed_sidecar_body_resolvers(
 }
 
 fn search_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> String {
+    search_select_sql_for_resolver(resolver, None)
+}
+
+fn search_prefilter_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> Option<String> {
+    let clauses = sidecar_search_columns(resolver)
+        .into_iter()
+        .map(|column| format!("{} like ? escape '\\'", quote_sql_identifier(column)))
+        .collect::<Vec<_>>();
+    if clauses.is_empty() {
+        return None;
+    }
+    Some(search_select_sql_for_resolver(
+        resolver,
+        Some(&format!(" where {}", clauses.join(" or "))),
+    ))
+}
+
+fn search_select_sql_for_resolver(
+    resolver: &SsedSidecarBodyResolver,
+    where_sql: Option<&str>,
+) -> String {
     let mut select_columns = vec![resolver.id_column.clone()];
     let mut select_expressions = match resolver.id_rule {
         SsedSidecarIdRule::DirectColumn => vec![quote_sql_identifier(&resolver.id_column)],
@@ -291,10 +371,42 @@ fn search_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> String {
     }
     let select_sql = select_expressions.join(", ");
     let order_sql = resolver.id_rule.sql_where_identifier(&resolver.id_column);
+    let where_sql = where_sql.unwrap_or_default();
     format!(
-        "select {select_sql} from {} order by {order_sql}",
+        "select {select_sql} from {}{where_sql} order by {order_sql}",
         quote_sql_identifier(&resolver.table)
     )
+}
+
+fn sidecar_search_columns(resolver: &SsedSidecarBodyResolver) -> Vec<&str> {
+    [
+        resolver.title_column.as_deref(),
+        resolver.html_column.as_deref(),
+        resolver.plain_column.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+fn sidecar_search_column_count(resolver: &SsedSidecarBodyResolver) -> usize {
+    sidecar_search_columns(resolver).len()
+}
+
+fn sqlite_like_contains_pattern(query: &str) -> String {
+    let mut out = String::with_capacity(query.len().saturating_add(2));
+    out.push('%');
+    for ch in query.trim().chars() {
+        match ch {
+            '%' | '_' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out.push('%');
+    out
 }
 
 fn candidate_resolvers<'a>(
