@@ -209,6 +209,34 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
     assert_eq!(window.after.len(), 2);
     assert_eq!(window.after[0].title.as_deref(), Some("beta"));
     assert_eq!(window.after[1].title.as_deref(), Some("gamma"));
+
+    let search_result_sequence = SearchResultSequence::new(
+        list_items
+            .into_iter()
+            .map(|item| crate::sequence::SearchResultSequenceTarget {
+                target: item.target,
+                title: Some(item.label_text),
+            })
+            .collect(),
+    )
+    .unwrap()
+    .encode()
+    .unwrap();
+    let search_window = package
+        .resolve_target_window(
+            &window.after[0].target,
+            Some(&SequenceHint::SearchResults {
+                value: search_result_sequence,
+            }),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(search_window.before.len(), 1);
+    assert_eq!(search_window.center.title.as_deref(), Some("beta"));
+    assert_eq!(search_window.after.len(), 1);
+    assert_eq!(search_window.after[0].title.as_deref(), Some("gamma"));
 }
 
 #[test]

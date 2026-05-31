@@ -9,6 +9,12 @@ impl SequenceProvider for ReaderBookPackage {
         after: usize,
         options: &RenderOptions,
     ) -> Result<TargetWindow> {
+        if let Some(SequenceHint::SearchResults { value }) = sequence_hint
+            && let Some(window) =
+                self.resolve_search_results_window(target, value, before, after, options)?
+        {
+            return Ok(window);
+        }
         if self.metadata.format_family == FormatFamily::Ssed
             && sequence_hint.is_none_or(|hint| {
                 matches!(
@@ -81,5 +87,107 @@ impl SequenceProvider for ReaderBookPackage {
                 "sequence provider is not implemented yet",
             )],
         })
+    }
+}
+
+impl ReaderBookPackage {
+    pub(super) fn resolve_search_results_window(
+        &self,
+        target: &TargetToken,
+        value: &str,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        let sequence = match SearchResultSequence::decode(value) {
+            Ok(sequence) => sequence,
+            Err(error) => {
+                return Ok(Some(TargetWindow {
+                    center: self.render_target(target, options)?,
+                    before: Vec::new(),
+                    after: Vec::new(),
+                    diagnostics: vec![Diagnostic::warning(
+                        "search_results_sequence_invalid",
+                        error.to_string(),
+                    )],
+                }));
+            }
+        };
+        let ordered = sequence
+            .targets
+            .into_iter()
+            .map(|item| OrderedSequenceTarget {
+                target: item.target,
+                title: item.title,
+            })
+            .collect::<Vec<_>>();
+        Ok(Some(self.resolve_ordered_target_window(
+            target,
+            &ordered,
+            before,
+            after,
+            options,
+            Diagnostic::info(
+                "sequence_target_not_in_search_results",
+                "target is not present in the provided search-result order",
+            ),
+        )?))
+    }
+
+    pub(super) fn resolve_ordered_target_window(
+        &self,
+        target: &TargetToken,
+        ordered: &[OrderedSequenceTarget],
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+        not_found_diagnostic: Diagnostic,
+    ) -> Result<TargetWindow> {
+        let Some(center_index) = ordered
+            .iter()
+            .position(|candidate| &candidate.target == target)
+        else {
+            return Ok(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![not_found_diagnostic],
+            });
+        };
+
+        let mut center = self.render_target(target, options)?;
+        if let Some(title) = &ordered[center_index].title {
+            center.title = Some(title.clone());
+        }
+
+        let before_start = center_index.saturating_sub(before);
+        let before_views = ordered[before_start..center_index]
+            .iter()
+            .map(|item| self.render_ordered_sequence_target(item, options))
+            .collect::<Result<Vec<_>>>()?;
+        let after_end = (center_index + 1 + after).min(ordered.len());
+        let after_views = ordered[center_index + 1..after_end]
+            .iter()
+            .map(|item| self.render_ordered_sequence_target(item, options))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(TargetWindow {
+            center,
+            before: before_views,
+            after: after_views,
+            diagnostics: Vec::new(),
+        })
+    }
+
+    fn render_ordered_sequence_target(
+        &self,
+        item: &OrderedSequenceTarget,
+        options: &RenderOptions,
+    ) -> Result<ResolvedTargetView> {
+        let mut view = self.render_target(&item.target, options)?;
+        if let Some(title) = &item.title {
+            view.title = Some(title.clone());
+        }
+        Ok(view)
     }
 }

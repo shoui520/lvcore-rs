@@ -144,7 +144,7 @@ use crate::resources::{
     InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken,
 };
 use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery};
-use crate::sequence::{SequenceHint, SequenceProvider, TargetWindow};
+use crate::sequence::{SearchResultSequence, SequenceHint, SequenceProvider, TargetWindow};
 use crate::ssed::{
     BLOCK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
     SsedDataHeader,

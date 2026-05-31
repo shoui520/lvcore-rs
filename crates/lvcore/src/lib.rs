@@ -71,7 +71,9 @@ pub use render::{
 };
 pub use resources::{InternalResource, ResourceKind, ResourceProvider, ResourceRef, ResourceToken};
 pub use search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery, SearchScope};
-pub use sequence::{SequenceHint, SequenceProvider, TargetWindow};
+pub use sequence::{
+    SearchResultSequence, SearchResultSequenceTarget, SequenceHint, SequenceProvider, TargetWindow,
+};
 pub use ssed::{
     ANDROID_LVEDINFO_MAGIC, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent,
     SsedComponentRole, SsedDataFile, SsedDataHeader, SsedDataReader, SsedInfoLayout,
