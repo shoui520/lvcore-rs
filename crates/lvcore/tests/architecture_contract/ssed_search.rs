@@ -1,0 +1,749 @@
+use super::common::*;
+
+#[test]
+fn ssed_simple_index_search_returns_title_backed_hits() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert_eq!(
+        package.metadata().search_modes,
+        vec![
+            SearchMode::Exact,
+            SearchMode::Forward,
+            SearchMode::Backward,
+            SearchMode::Partial,
+        ]
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "alp".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+        }
+    );
+}
+
+#[test]
+fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
+    fs::write(dir.path().join("GA16HALF"), ga16_fixture(0xA121, 8)).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"0123456789"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha <zB123> zA128 zB999\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "alp".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    let hit = &page.hits[0];
+    assert_eq!(hit.title_text, "alpha 一 〓 〓");
+    assert!(hit.title_html.contains("alpha 一 "));
+    assert!(hit.title_html.contains("lvcore://resource/"));
+    assert!(hit.title_html.contains(r#"data-gaiji="B999""#));
+    assert!(!hit.title_html.contains("<zB123>"));
+    assert!(!hit.title_html.contains("zA128"));
+    assert!(
+        hit.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "gaiji_unresolved")
+    );
+
+    let surface = package.open_surface("title-index").unwrap();
+    let lvcore::NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("title-index should open as a title/index browse surface");
+    };
+    assert_eq!(items[0].label_text, "alpha 一 〓 〓");
+    assert!(items[0].label_html.contains("lvcore://resource/"));
+    assert!(items[0].label_html.contains(r#"data-gaiji="B999""#));
+    assert!(
+        items[0]
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "gaiji_unresolved")
+    );
+
+    let window = package
+        .resolve_target_window(
+            &hit.target,
+            Some(&lvcore::SequenceHint::TitleIndexOrder {
+                value: "title-index".to_owned(),
+            }),
+            0,
+            0,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.center.title.as_deref(), Some("alpha 一 〓 〓"));
+}
+
+#[test]
+fn ssed_simple_index_search_supports_backward_matching() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0agamma\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("beta", 1, 4, 13, 7),
+            ("gamma", 1, 6, 13, 12),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "ta".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "beta");
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 4,
+        }
+    );
+}
+
+#[test]
+fn ssed_reversed_backward_index_supports_suffix_search() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_backward_index(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("ahpla", 1, 2, 13, 0),
+            ("ateb", 1, 4, 13, 7),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let backward = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "ha".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(backward.hits.len(), 1);
+    assert_eq!(backward.hits[0].title_text, "alpha");
+
+    let exact = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(exact.hits.len(), 1);
+    assert_eq!(exact.hits[0].title_text, "alpha");
+
+    assert_eq!(
+        backward.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+        }
+    );
+}
+
+#[test]
+fn ssed_tagged_index_search_supports_grouped_rows_across_pages() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_index_type(0x90),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"child title\x1f\x0a"),
+    )
+    .unwrap();
+    let index = [
+        leaf_page_fixture(&[tagged_group_record("parent", 2)]),
+        leaf_page_fixture(&[tagged_target_record("child", 1, 2, 13, 0)]),
+    ]
+    .concat();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&index),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "parent".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "child title");
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+        }
+    );
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_index_variant_deferred")
+    );
+}
+
+#[test]
+fn ssed_keyword_and_cross_reference_indexes_resolve_grouped_body_targets() {
+    for (component_type, target_tag) in [(0x80, 0xb0), (0x81, 0xc0)] {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("DICT.IDX"),
+            ssedinfo_fixture_with_index_type(component_type),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("FHTITLE.DIC"),
+            sseddata_literal_fixture(b"group title\x1f\x0a"),
+        )
+        .unwrap();
+        let index = leaf_page_fixture(&[
+            title_group_record("group", 13, 0, 1),
+            compact_body_target_record(target_tag, 1, 6),
+        ]);
+        fs::write(
+            dir.path().join("FHINDEX.DIC"),
+            sseddata_literal_fixture(&index),
+        )
+        .unwrap();
+        let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+        let page = package
+            .search(&SearchQuery {
+                scope: SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
+                mode: SearchMode::Exact,
+                query: "group".to_owned(),
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(page.hits.len(), 1, "component type {component_type:02x}");
+        assert_eq!(page.hits[0].title_text, "group title");
+        assert_eq!(
+            page.hits[0].target.decode().unwrap(),
+            InternalTarget::SsedAddress {
+                component: "HONMON.DIC".to_owned(),
+                block: 1,
+                offset: 6,
+            }
+        );
+    }
+}
+
+#[test]
+fn ssed_body_only_and_multi_selector_indexes_resolve_targets() {
+    for (component_type, index) in [
+        (
+            0x60,
+            leaf_page_fixture(&[body_only_simple_record("body", 1, 8)]),
+        ),
+        (
+            0x30,
+            leaf_page_fixture(&[
+                tagged_group_record("bodytag", 1),
+                tagged_target_body_only_record("child", 1, 10),
+            ]),
+        ),
+        (
+            0xa1,
+            leaf_page_fixture(&[
+                multi_group_record("multi", 1),
+                multi_target_record(1, 12, 13, 0),
+            ]),
+        ),
+    ] {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("DICT.IDX"),
+            ssedinfo_fixture_with_index_type(component_type),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("FHTITLE.DIC"),
+            sseddata_literal_fixture(b"multi title\x1f\x0a"),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("FHINDEX.DIC"),
+            sseddata_literal_fixture(&index),
+        )
+        .unwrap();
+        let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+        let query = if component_type == 0x30 {
+            "bodytag"
+        } else if component_type == 0xa1 {
+            "multi"
+        } else {
+            "body"
+        };
+
+        let page = package
+            .search(&SearchQuery {
+                scope: SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
+                mode: SearchMode::Exact,
+                query: query.to_owned(),
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(page.hits.len(), 1, "component type {component_type:02x}");
+        let (_, expected_offset) = match component_type {
+            0x60 => ("body", 8),
+            0x30 => ("bodytag", 10),
+            0xa1 => ("multi", 12),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            page.hits[0].target.decode().unwrap(),
+            InternalTarget::SsedAddress {
+                component: "HONMON.DIC".to_owned(),
+                block: 1,
+                offset: expected_offset,
+            }
+        );
+    }
+}
+
+#[test]
+fn ssed_keyless_pointer_table_simple_leaf_is_supported() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"keyless\x1f\x0a"),
+    )
+    .unwrap();
+    let mut page = vec![0u8; 2048];
+    page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    page[4..8].copy_from_slice(&1u32.to_be_bytes());
+    page[8..10].copy_from_slice(&14u16.to_be_bytes());
+    page[11..15].copy_from_slice(&13u32.to_be_bytes());
+    page[15..17].copy_from_slice(&0u16.to_be_bytes());
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&page),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("title-index should open as a title/index browse surface");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "keyless");
+    assert_eq!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 14,
+        }
+    );
+}
+
+#[test]
+fn ssed_exact_search_uses_internal_page_tree_for_simple_indexes() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_index_type_and_blocks(0x91, 3),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0azeta\x1f\x0a"),
+    )
+    .unwrap();
+    let index = [
+        internal_page_fixture(&[("m", 16), ("\u{10ffff}", 17)]),
+        simple_index_fixture_rows(&[("alpha", 1, 2, 13, 0)]),
+        simple_index_fixture_rows(&[("zeta", 1, 4, 13, 7)]),
+    ]
+    .concat();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&index),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "zeta".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "zeta");
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_index_internal_page_deferred")
+    );
+}
+
+#[test]
+fn ssed_simple_index_search_handles_raw_ascii_key_order() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"2020\x1f\x0aDOG\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_raw_ascii_fixture_rows(&[
+            ("2020", 1, 2, 13, 0),
+            ("DOG", 1, 4, 13, 6),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "dog".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "DOG");
+}
+
+#[test]
+fn ssed_simple_index_search_uses_cursor_pagination() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0agamma\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("beta", 1, 4, 13, 7),
+            ("gamma", 1, 6, 13, 12),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let first = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "a".to_owned(),
+            cursor: None,
+            limit: 2,
+        })
+        .unwrap();
+    assert_eq!(
+        first
+            .hits
+            .iter()
+            .map(|hit| hit.title_text.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "beta"]
+    );
+    assert_eq!(first.next_cursor.as_deref(), Some("2"));
+
+    let second = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "a".to_owned(),
+            cursor: first.next_cursor,
+            limit: 2,
+        })
+        .unwrap();
+    assert_eq!(second.hits[0].title_text, "gamma");
+    assert!(second.next_cursor.is_none());
+}
+
+#[test]
+fn ssed_simple_index_search_does_not_limit_candidates_before_filtering() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"beta\x1f\x0aalpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("beta", 1, 2, 13, 0),
+            ("alpha", 1, 4, 13, 6),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 4,
+        }
+    );
+}
+
+#[test]
+fn ssed_simple_index_targets_preserve_declared_honmon_component_name() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_honmon("HONMON.DIN"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIN".to_owned(),
+            block: 1,
+            offset: 2,
+        }
+    );
+}
+
+#[test]
+fn ssed_title_index_sequence_returns_before_and_after_views() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"0123456789"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0agamma\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 0, 13, 0),
+            ("beta", 1, 2, 13, 7),
+            ("gamma", 1, 4, 13, 13),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 2,
+    })
+    .unwrap();
+
+    let window = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::TitleIndexOrder {
+                value: "title-index".to_owned(),
+            }),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(window.center.title.as_deref(), Some("beta"));
+    assert_eq!(window.before.len(), 1);
+    assert_eq!(window.before[0].title.as_deref(), Some("alpha"));
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].title.as_deref(), Some("gamma"));
+    assert!(
+        !window
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "sequence_deferred")
+    );
+
+    let body_order = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::BodyOrder),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(body_order.center.title.as_deref(), Some("beta"));
+    assert_eq!(body_order.before[0].title.as_deref(), Some("alpha"));
+    assert_eq!(body_order.after[0].title.as_deref(), Some("gamma"));
+    assert!(
+        body_order
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
+}
