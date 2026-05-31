@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 
 use crate::error::Result;
+use crate::storage::regular_file_inside_root;
 
 const FULLWIDTH_DIGITS: [char; 10] = ['０', '１', '２', '３', '４', '５', '６', '７', '８', '９'];
 const SPECIAL_RIGHT_PAGES: [u32; 7] = [17, 69, 177, 241, 295, 305, 369];
@@ -60,7 +61,10 @@ pub fn pdfspread_lookup_side(page_id: &str) -> Option<PdfSpreadSide> {
 }
 
 pub fn find_pdfspread_database(root: &Path) -> Result<Option<PathBuf>> {
-    let package = if root.is_file() {
+    let package = if root
+        .parent()
+        .is_some_and(|parent| regular_file_inside_root(parent, root).unwrap_or(false))
+    {
         root.parent().unwrap_or(root)
     } else {
         root
@@ -73,7 +77,7 @@ pub fn find_pdfspread_database(root: &Path) -> Result<Option<PathBuf>> {
     candidates.sort_by_key(|entry| entry.path());
     for candidate in candidates {
         let path = candidate.path();
-        if !path.is_file() || is_metadata_noise_path(&path) {
+        if !regular_file_inside_root(package, &path)? || is_metadata_noise_path(&path) {
             continue;
         }
         let suffix = path
@@ -183,6 +187,9 @@ fn is_metadata_noise_path(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -212,5 +219,22 @@ mod tests {
             pdfspread_lookup_side("００００００１７"),
             Some(PdfSpreadSide::Right)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdfspread_discovery_ignores_symlinked_database_escape() {
+        let package = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let database = outside.path().join("pdf.db");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(
+                "create table PDFSpread (IDRight text primary key, IDLeft text, PDF blob);",
+            )
+            .unwrap();
+        std::os::unix::fs::symlink(&database, package.path().join("pdf.db")).unwrap();
+
+        assert!(find_pdfspread_database(package.path()).unwrap().is_none());
     }
 }

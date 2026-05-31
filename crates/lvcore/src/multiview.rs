@@ -11,6 +11,7 @@ use tempfile::TempDir;
 use crate::crypto::{decrypt_logofont_cipher_file_to_path, decrypt_logofont_cipher_prefix};
 use crate::error::{Error, Result};
 use crate::search::SearchMode;
+use crate::storage::regular_file_inside_root;
 
 const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
 
@@ -555,7 +556,7 @@ fn multiview_payload_paths(root: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
-        if path.is_file()
+        if regular_file_inside_root(root, &path)?
             && path
                 .file_name()
                 .and_then(|name| name.to_str())

@@ -7,16 +7,21 @@ use quick_xml::events::{BytesStart, Event};
 
 use super::{AndroidDictInfo, LvedKeyFile, files_with_suffix, normalize_lved_dict_code};
 use crate::error::{Error, Result};
+use crate::storage::regular_file_inside_root;
 
 pub fn lved_payload_path(root: &Path) -> Result<Option<PathBuf>> {
-    if root.is_file() && is_lved_payload_name(root) {
+    if root
+        .parent()
+        .is_some_and(|parent| regular_file_inside_root(parent, root).unwrap_or(false))
+        && is_lved_payload_name(root)
+    {
         return Ok(Some(root.to_path_buf()));
     }
     if !root.is_dir() {
         return Ok(None);
     }
     let main_data = root.join("main.data");
-    if main_data.is_file() {
+    if regular_file_inside_root(root, &main_data)? {
         return Ok(Some(main_data));
     }
     let mut dbc_files = files_with_suffix(root, ".dbc")?;
@@ -28,7 +33,9 @@ pub fn lved_payload_path(root: &Path) -> Result<Option<PathBuf>> {
         .collect::<std::io::Result<Vec<_>>>()?
         .into_iter()
         .map(|entry| entry.path())
-        .filter(|path| path.is_file() && is_lved_payload_name(path))
+        .filter(|path| {
+            regular_file_inside_root(root, path).unwrap_or(false) && is_lved_payload_name(path)
+        })
         .collect::<Vec<_>>();
     db_files.sort();
     Ok(db_files.into_iter().next())
@@ -71,10 +78,14 @@ pub fn is_android_lved_sqlcipher_payload(path: &Path) -> bool {
     if stem.is_empty() || stem != parent {
         return false;
     }
-    let Ok(metadata) = path.metadata() else {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
         return false;
     };
-    if metadata.len() == 0 || metadata.len() % 4096 != 0 {
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() % 4096 != 0
+    {
         return false;
     }
     let Ok(mut file) = fs::File::open(path) else {
@@ -90,7 +101,8 @@ pub fn is_android_lved_sqlcipher_payload(path: &Path) -> bool {
     let Some(root) = path.parent() else {
         return false;
     };
-    root.join("resource/conf.ini").is_file() || root.join("resource/property.data").is_file()
+    regular_file_inside_root(root, &root.join("resource/conf.ini")).unwrap_or(false)
+        || regular_file_inside_root(root, &root.join("resource/property.data")).unwrap_or(false)
 }
 
 pub fn infer_lved_dict_code(payload_path: &Path) -> Option<String> {
@@ -310,7 +322,10 @@ fn decode_xml_reference(value: &[u8]) -> Option<String> {
 fn discover_android_dictinfo_files(path: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut seen = Vec::<PathBuf>::new();
-    let mut current = if path.is_dir() {
+    let mut current = if path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    {
         path.to_path_buf()
     } else {
         path.parent().unwrap_or(path).to_path_buf()
@@ -320,7 +335,10 @@ fn discover_android_dictinfo_files(path: &Path) -> Vec<PathBuf> {
         push_android_dictinfo_candidate(&current.join("dictinfo.xml"), &mut out, &mut seen);
         for child_name in ["android viewer", "resources", "res", "xml"] {
             let child = current.join(child_name);
-            if child.is_dir() {
+            if child
+                .symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+            {
                 collect_dictinfo_recursive(&child, &mut out, &mut seen);
             }
         }
@@ -355,16 +373,49 @@ fn discover_android_dictinfo_files(path: &Path) -> Vec<PathBuf> {
 }
 
 fn collect_dictinfo_recursive(root: &Path, out: &mut Vec<PathBuf>, seen: &mut Vec<PathBuf>) {
+    let mut seen_dirs = std::collections::BTreeSet::new();
+    collect_dictinfo_recursive_inner(root, out, seen, &mut seen_dirs, 0);
+}
+
+fn collect_dictinfo_recursive_inner(
+    root: &Path,
+    out: &mut Vec<PathBuf>,
+    seen: &mut Vec<PathBuf>,
+    seen_dirs: &mut std::collections::BTreeSet<PathBuf>,
+    depth: usize,
+) {
+    if depth > 32 {
+        return;
+    }
+    let Ok(metadata) = fs::symlink_metadata(root) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return;
+    }
+    let Ok(canonical) = fs::canonicalize(root) else {
+        return;
+    };
+    if !seen_dirs.insert(canonical) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(root) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            collect_dictinfo_recursive(&path, out, seen);
-        } else if path
-            .file_name()
-            .is_some_and(|name| name.eq_ignore_ascii_case("dictinfo.xml"))
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_dictinfo_recursive_inner(&path, out, seen, seen_dirs, depth + 1);
+        } else if file_type.is_file()
+            && path
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case("dictinfo.xml"))
         {
             push_android_dictinfo_candidate(&path, out, seen);
         }
@@ -372,7 +423,10 @@ fn collect_dictinfo_recursive(root: &Path, out: &mut Vec<PathBuf>, seen: &mut Ve
 }
 
 fn push_android_dictinfo_candidate(path: &Path, out: &mut Vec<PathBuf>, seen: &mut Vec<PathBuf>) {
-    if !path.is_file() {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
         return;
     }
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -422,7 +476,7 @@ pub fn discover_lved_key_file(payload_path: &Path) -> Result<Option<LvedKeyFile>
             continue;
         }
         seen.push(resolved);
-        if path.is_file() {
+        if regular_file_inside_root(parent, &path)? {
             return Ok(Some(LvedKeyFile {
                 path,
                 match_kind: match_kind.to_owned(),

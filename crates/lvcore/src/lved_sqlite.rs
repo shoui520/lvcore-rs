@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::search::SearchMode;
+use crate::storage::regular_file_inside_root;
 
 mod discovery;
 mod schema;
@@ -779,10 +780,11 @@ fn files_with_suffix(root: &Path, suffix: &str) -> Result<Vec<PathBuf>> {
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
-        if path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_lowercase().ends_with(&suffix))
-            .unwrap_or(false)
+        if regular_file_inside_root(root, &path)?
+            && path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_lowercase().ends_with(&suffix))
+                .unwrap_or(false)
         {
             out.push(path);
         }

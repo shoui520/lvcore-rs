@@ -6,6 +6,7 @@ use encoding_rs::SHIFT_JIS;
 use super::title::html_to_text;
 use super::{LvedTreeIndexItem, decode_sqlite_text};
 use crate::error::Result;
+use crate::storage::regular_file_inside_root;
 
 pub(super) fn lved_tree_index_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
@@ -13,7 +14,7 @@ pub(super) fn lved_tree_index_candidate_paths(root: &Path) -> Result<Vec<PathBuf
     push_lved_tree_index_path(&mut paths, root.join("tree.idx"));
     for entry in fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()? {
         let path = entry.path();
-        if path.is_file()
+        if regular_file_inside_root(root, &path)?
             && path
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
@@ -25,7 +26,7 @@ pub(super) fn lved_tree_index_candidate_paths(root: &Path) -> Result<Vec<PathBuf
     if res_dir.is_dir() {
         for entry in fs::read_dir(&res_dir)?.collect::<std::io::Result<Vec<_>>>()? {
             let path = entry.path();
-            if path.is_file()
+            if regular_file_inside_root(root, &path)?
                 && path
                     .extension()
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
@@ -125,7 +126,10 @@ fn is_eight_digit_hex(value: &str) -> bool {
 }
 
 fn push_lved_tree_index_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if path.is_file() && !paths.iter().any(|existing| existing == &path) {
+    let root = path.parent().unwrap_or_else(|| Path::new("."));
+    if regular_file_inside_root(root, &path).unwrap_or(false)
+        && !paths.iter().any(|existing| existing == &path)
+    {
         paths.push(path);
     }
 }

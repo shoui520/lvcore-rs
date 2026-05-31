@@ -15,6 +15,43 @@ fn detects_lved_sqlite3_by_main_data_and_key() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn lved_detection_ignores_symlinked_payload_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    write_lved_search_fixture(outside.path());
+    symlink(
+        outside.path().join("main.data"),
+        dir.path().join("main.data"),
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.key"), "test-key").unwrap();
+
+    assert!(LvedSqliteDriver.detect(dir.path()).unwrap().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn lved_key_discovery_ignores_symlinked_key_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let payload = dir.path().join("main.data");
+    fs::write(&payload, b"payload").unwrap();
+    fs::write(outside.path().join("main.key"), "outside-key").unwrap();
+    symlink(outside.path().join("main.key"), dir.path().join("main.key")).unwrap();
+
+    assert!(
+        crate::lved_sqlite::discover_lved_key_file(&payload)
+            .unwrap()
+            .is_none()
+    );
+}
+
 #[test]
 fn lved_search_hits_resolve_to_preserved_content_html() {
     let dir = tempdir().unwrap();

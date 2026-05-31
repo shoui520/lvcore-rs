@@ -17,6 +17,24 @@ fn detects_multiview_by_menu_and_payload() {
     assert_eq!(detected.title.as_deref(), Some("Visible Title"));
 }
 
+#[cfg(unix)]
+#[test]
+fn multiview_detection_ignores_symlinked_payload_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        br#"<list><item label="Visible Title" /></list>"#,
+    )
+    .unwrap();
+    fs::write(outside.path().join("blvdat"), b"payload").unwrap();
+    symlink(outside.path().join("blvdat"), dir.path().join("blvdat")).unwrap();
+
+    assert!(LvlMultiViewDriver.detect(dir.path()).unwrap().is_none());
+}
+
 #[test]
 fn detects_hourei_by_core_databases() {
     let dir = tempdir().unwrap();

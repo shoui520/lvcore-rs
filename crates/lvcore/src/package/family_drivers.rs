@@ -19,7 +19,7 @@ use crate::hourei::HoureiStore;
 use crate::lved_sqlite::LvedSqliteStore;
 use crate::multiview::MultiviewStore;
 use crate::ssed::SsedCatalog;
-use crate::storage::{DirectoryStorage, StorageBackend};
+use crate::storage::{DirectoryStorage, StorageBackend, regular_file_inside_root};
 
 impl PackageDriver for SsedDriver {
     fn family(&self) -> FormatFamily {
@@ -179,6 +179,10 @@ impl PackageDriver for LvlMultiViewDriver {
         let payloads = fs::read_dir(root)?
             .filter_map(std::result::Result::ok)
             .filter(|entry| {
+                let path = entry.path();
+                if !regular_file_inside_root(root, &path).unwrap_or(false) {
+                    return false;
+                }
                 let name = entry.file_name().to_string_lossy().to_lowercase();
                 name.len() == 6
                     && name.as_bytes()[1] == b'l'

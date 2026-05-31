@@ -386,3 +386,44 @@ fn dense_sidecar_missing_row_is_unsupported_without_anchor_leak() {
     assert!(!json.contains("00000002"));
     assert!(json.contains("ssed_dense_sidecar_row_missing"));
 }
+
+#[cfg(unix)]
+#[test]
+fn dense_sidecar_discovery_ignores_symlinked_sqlite_escape() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let catalog =
+        write_ssed_dense_sidecar_fixture(root.path(), DenseSidecarFixture::MissingBetaRow);
+    write_dense_body_db(outside.path().join("body.db"), true, true, false);
+    fs::remove_file(root.path().join("body.db")).unwrap();
+    symlink(outside.path().join("body.db"), root.path().join("body.db")).unwrap();
+
+    let package = ReaderBookPackage::new(
+        root.path(),
+        DetectedPackage {
+            root: root.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, root.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 32,
+    })
+    .unwrap();
+
+    let body = package.visual_body_for_target(&target).unwrap();
+    let json = serde_json::to_string(&body).unwrap();
+    assert!(!json.contains("beta sidecar html"));
+    assert!(!matches!(body, VisualBody::PreservedHtml { .. }));
+}

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::crypto::{decrypt_logofont_cipher_file_to_path, decrypt_logofont_cipher_prefix};
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
-use crate::storage::private_cache_dir;
+use crate::storage::{private_cache_dir, regular_file_inside_root};
 use encoding_rs::SHIFT_JIS;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -579,7 +579,7 @@ fn sidecar_file_candidates(root: &Path, dict_id_hint: Option<&str>) -> Result<Ve
     let dict_id = dict_id_hint.map(str::casefold);
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
-        if !path.is_file() || is_metadata_noise_path(&path) {
+        if !regular_file_inside_root(root, &path)? || is_metadata_noise_path(&path) {
             continue;
         }
         let Some(name) = path.file_name().map(|name| name.to_string_lossy()) else {

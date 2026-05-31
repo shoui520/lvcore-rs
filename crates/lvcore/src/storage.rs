@@ -237,6 +237,16 @@ pub(crate) fn path_stays_inside_root(root: &Path, path: &Path) -> Result<bool> {
     path_stays_inside_root_canonical(&fs::canonicalize(root)?, path)
 }
 
+pub(crate) fn regular_file_inside_root(root: &Path, path: &Path) -> Result<bool> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(false);
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Ok(false);
+    }
+    path_stays_inside_root(root, path)
+}
+
 fn path_stays_inside_root_canonical(canonical_root: &Path, path: &Path) -> Result<bool> {
     let path = fs::canonicalize(path)?;
     Ok(path.starts_with(canonical_root))
