@@ -269,6 +269,39 @@ fn media_blob_resolves_observed_lved_media_aliases() {
 }
 
 #[test]
+fn media_blob_uses_rowid_index_for_indexless_media_tables() {
+    let dir = tempdir().unwrap();
+    let payload = dir.path().join("main.data");
+    let key = "test-key";
+    {
+        let connection = Connection::open(&payload).unwrap();
+        apply_sqlcipher_key(&connection, key).unwrap();
+        connection
+            .execute_batch(
+                "
+                create table media (id integer, name text, type integer, main blob);
+                insert into media values (265, '05e1bb8803a200c0', 2, X'FFD8FF');
+                insert into media values (809, '000010', 5, X'49443303');
+                ",
+            )
+            .unwrap();
+    }
+    fs::write(dir.path().join("main.key"), key).unwrap();
+
+    let store = LvedSqliteStore::discover(dir.path()).unwrap().unwrap();
+    assert_eq!(
+        store
+            .media_blob("lved.media", "../../image/FULL/zA265.jpg")
+            .unwrap(),
+        Some(b"\xff\xd8\xff".to_vec())
+    );
+    assert_eq!(
+        store.media_blob("lved.media", "000010.mp3").unwrap(),
+        Some(b"ID3\x03".to_vec())
+    );
+}
+
+#[test]
 fn title_probe_rejects_common_false_positive_shapes() {
     assert!(normalize_title_candidate("外国語は片仮名で表記した．").is_none());
     assert!(title_score("和英小辞典") < 100);

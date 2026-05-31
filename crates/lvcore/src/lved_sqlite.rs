@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -61,6 +62,8 @@ pub struct LvedSqliteStore {
     title_cache: Arc<Mutex<Option<Option<String>>>>,
     #[serde(skip, default = "default_lved_schema_cache")]
     schema_cache: Arc<Mutex<Option<Arc<LvedSqliteSchema>>>>,
+    #[serde(skip, default = "default_lved_media_index_cache")]
+    media_index_cache: Arc<Mutex<BTreeMap<String, Arc<LvedMediaIndex>>>>,
 }
 
 fn default_lved_connection_cache() -> Arc<Mutex<Option<Connection>>> {
@@ -81,6 +84,16 @@ fn default_lved_title_cache() -> Arc<Mutex<Option<Option<String>>>> {
 
 fn default_lved_schema_cache() -> Arc<Mutex<Option<Arc<LvedSqliteSchema>>>> {
     Arc::new(Mutex::new(None))
+}
+
+fn default_lved_media_index_cache() -> Arc<Mutex<BTreeMap<String, Arc<LvedMediaIndex>>>> {
+    Arc::new(Mutex::new(BTreeMap::new()))
+}
+
+#[derive(Debug, Clone, Default)]
+struct LvedMediaIndex {
+    by_name: BTreeMap<String, i64>,
+    by_id: BTreeMap<i64, i64>,
 }
 
 impl std::fmt::Debug for LvedSqliteStore {
@@ -193,6 +206,7 @@ impl LvedSqliteStore {
             tree_index_items_cache: default_lved_tree_index_items_cache(),
             title_cache: default_lved_title_cache(),
             schema_cache: default_lved_schema_cache(),
+            media_index_cache: default_lved_media_index_cache(),
         }))
     }
 
@@ -583,38 +597,77 @@ impl LvedSqliteStore {
                 if !schema.table_has_columns(table, &["name", "main"]) {
                     continue;
                 }
-                let sql = format!(
-                    "select main from {} where name = ? limit 1",
-                    quote_identifier(table)
-                );
-                let mut statement = connection.prepare(&sql)?;
-                for name in &names {
-                    if let Some(bytes) = statement
-                        .query_row([name], |row| sqlite_value_to_bytes(row.get_ref(0)?))
-                        .optional()?
-                    {
-                        return Ok(Some(bytes));
-                    }
-                }
-                if !has_column(schema.columns(table), "id") {
-                    continue;
-                }
-                let sql = format!(
-                    "select main from {} where id = ? limit 1",
-                    quote_identifier(table)
-                );
-                let mut statement = connection.prepare(&sql)?;
-                for id in &ids {
-                    if let Some(bytes) = statement
-                        .query_row([id], |row| sqlite_value_to_bytes(row.get_ref(0)?))
-                        .optional()?
-                    {
-                        return Ok(Some(bytes));
-                    }
+                if let Some(bytes) =
+                    self.media_blob_from_index(connection, &schema, table, &names, &ids)?
+                {
+                    return Ok(Some(bytes));
                 }
             }
             Ok(None)
         })
+    }
+
+    fn media_blob_from_index(
+        &self,
+        connection: &Connection,
+        schema: &LvedSqliteSchema,
+        table: &str,
+        names: &[String],
+        ids: &[i64],
+    ) -> Result<Option<Vec<u8>>> {
+        let index = self.media_index(connection, schema, table)?;
+        let mut rowids = Vec::new();
+        for name in names {
+            if let Some(rowid) = index.by_name.get(name) {
+                push_unique_i64(&mut rowids, *rowid);
+            }
+        }
+        for id in ids {
+            if let Some(rowid) = index.by_id.get(id) {
+                push_unique_i64(&mut rowids, *rowid);
+            }
+        }
+        if rowids.is_empty() {
+            return Ok(None);
+        }
+        let sql = format!(
+            "select main from {} where rowid = ? limit 1",
+            quote_identifier(table)
+        );
+        let mut statement = connection.prepare(&sql)?;
+        for rowid in rowids {
+            if let Some(bytes) = statement
+                .query_row([rowid], |row| sqlite_value_to_bytes(row.get_ref(0)?))
+                .optional()?
+            {
+                return Ok(Some(bytes));
+            }
+        }
+        Ok(None)
+    }
+
+    fn media_index(
+        &self,
+        connection: &Connection,
+        schema: &LvedSqliteSchema,
+        table: &str,
+    ) -> Result<Arc<LvedMediaIndex>> {
+        let cache_key = table.to_lowercase();
+        if let Some(index) = self
+            .media_index_cache
+            .lock()
+            .map_err(|_| Error::Driver("LVED_SQLITE3 media index cache is poisoned".to_owned()))?
+            .get(&cache_key)
+            .cloned()
+        {
+            return Ok(index);
+        }
+        let index = Arc::new(load_lved_media_index(connection, schema, table)?);
+        self.media_index_cache
+            .lock()
+            .map_err(|_| Error::Driver("LVED_SQLITE3 media index cache is poisoned".to_owned()))?
+            .insert(cache_key, index.clone());
+        Ok(index)
     }
 
     pub fn list_window_for_content(
@@ -751,6 +804,65 @@ fn sqlite_value_to_bytes(value: ValueRef<'_>) -> rusqlite::Result<Vec<u8>> {
     }
 }
 
+fn sqlite_value_to_optional_i64(value: ValueRef<'_>) -> rusqlite::Result<Option<i64>> {
+    match value {
+        ValueRef::Null => Ok(None),
+        ValueRef::Integer(value) => Ok(Some(value)),
+        ValueRef::Real(_) => Ok(None),
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => {
+            let text = decode_sqlite_text(bytes);
+            Ok(text.trim().parse::<i64>().ok())
+        }
+    }
+}
+
+fn load_lved_media_index(
+    connection: &Connection,
+    schema: &LvedSqliteSchema,
+    table: &str,
+) -> Result<LvedMediaIndex> {
+    let has_id = has_column(schema.columns(table), "id");
+    let id_column = if has_id {
+        quote_identifier("id")
+    } else {
+        "null".to_owned()
+    };
+    let sql = format!(
+        "select rowid, {}, {} from {}",
+        id_column,
+        quote_identifier("name"),
+        quote_identifier(table)
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map([], |row| {
+        let rowid = row.get::<_, i64>(0)?;
+        let id = sqlite_value_to_optional_i64(row.get_ref(1)?)?;
+        let name = sqlite_value_to_string(row.get_ref(2)?)?;
+        Ok((rowid, id, name))
+    })?;
+    let mut index = LvedMediaIndex::default();
+    for row in rows {
+        let (rowid, id, name) = row?;
+        if let Some(id) = id {
+            index.by_id.entry(id).or_insert(rowid);
+        }
+        insert_lved_media_name(&mut index, &name, rowid);
+    }
+    Ok(index)
+}
+
+fn insert_lved_media_name(index: &mut LvedMediaIndex, name: &str, rowid: i64) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    index.by_name.entry(name.to_owned()).or_insert(rowid);
+    let lowercase = name.to_ascii_lowercase();
+    if lowercase != name {
+        index.by_name.entry(lowercase).or_insert(rowid);
+    }
+}
+
 fn lved_media_lookup_names(key: &str) -> Vec<String> {
     let mut names = Vec::new();
     let normalized = key.trim().replace('\\', "/");
@@ -821,6 +933,12 @@ fn lved_media_lookup_ids(key: &str) -> Vec<i64> {
 fn push_unique_string(values: &mut Vec<String>, value: &str) {
     if !value.is_empty() && !values.iter().any(|existing| existing == value) {
         values.push(value.to_owned());
+    }
+}
+
+fn push_unique_i64(values: &mut Vec<i64>, value: i64) {
+    if !values.contains(&value) {
+        values.push(value);
     }
 }
 
