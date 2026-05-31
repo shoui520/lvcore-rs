@@ -155,7 +155,10 @@ impl ReaderBookPackage {
         })
     }
 
-    fn normalize_britannica_loose_html_refs(&self, html: &str) -> Result<NormalizedHtmlRefs> {
+    pub(super) fn normalize_britannica_loose_html_refs(
+        &self,
+        html: &str,
+    ) -> Result<NormalizedHtmlRefs> {
         let inline = self.expand_britannica_inline_address_markers(html)?;
         let mut output = String::with_capacity(inline.html.len());
         let mut links = inline.links;
