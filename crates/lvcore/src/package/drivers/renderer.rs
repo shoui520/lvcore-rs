@@ -137,7 +137,7 @@ impl ReaderBookPackage {
                 mut diagnostics,
             } => {
                 let scroll_anchor = scroll_anchor_for_token(&target)?;
-                if options.mode == RenderMode::BasicText {
+                if matches!(options.mode, RenderMode::BasicText | RenderMode::Debug) {
                     let data = self.read_ssed_stream_render_slice(&component, offset, length)?;
                     let rendered = decode_hc_stream_basic_text_with_gaiji(&data, |code| {
                         let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
@@ -153,19 +153,34 @@ impl ReaderBookPackage {
                         .title_for_body_target(&target)?
                         .unwrap_or_else(|| "SSED entry stream".to_owned());
                     diagnostics.extend(rendered.diagnostics);
-                    diagnostics.push(Diagnostic::info(
-                        "hc_basic_text_visual_incomplete",
-                        "BasicText decoded the SSED stream with common HC control lengths; visual HC/profile rendering remains separate",
-                    ));
+                    if options.mode == RenderMode::Debug {
+                        diagnostics.push(Diagnostic::info(
+                            "hc_debug_visual_incomplete",
+                            "Debug decoded the SSED stream with common HC control lengths; visual HC/profile rendering remains deferred",
+                        ));
+                    } else {
+                        diagnostics.push(Diagnostic::info(
+                            "hc_basic_text_visual_incomplete",
+                            "BasicText decoded the SSED stream with common HC control lengths; visual HC/profile rendering remains separate",
+                        ));
+                    }
                     return Ok(ResolvedTargetView {
-                        kind: crate::render::ResolvedTargetKind::EntryBody,
+                        kind: if options.mode == RenderMode::Debug {
+                            crate::render::ResolvedTargetKind::Deferred
+                        } else {
+                            crate::render::ResolvedTargetKind::EntryBody
+                        },
                         target,
                         title: Some(title),
                         display_html: None,
                         basic_text: Some(rendered.text),
                         scroll_anchor,
                         surface: None,
-                        resources: Vec::new(),
+                        resources: if options.mode == RenderMode::Debug {
+                            resources
+                        } else {
+                            Vec::new()
+                        },
                         links: Vec::new(),
                         capabilities: vec![crate::render::RenderCapability::HcRenderInput],
                         diagnostics,
@@ -174,7 +189,11 @@ impl ReaderBookPackage {
                             .then(|| {
                                 json!({
                                     "body": {
-                                        "kind": "ssed_stream_basic_text",
+                                        "kind": if options.mode == RenderMode::Debug {
+                                            "ssed_stream_debug_basic_text"
+                                        } else {
+                                            "ssed_stream_basic_text"
+                                        },
                                         "component": component,
                                         "offset": offset,
                                         "length": length,

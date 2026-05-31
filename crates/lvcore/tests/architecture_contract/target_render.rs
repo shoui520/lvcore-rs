@@ -230,6 +230,58 @@ fn basic_text_mode_decodes_hc_ssed_stream_instead_of_returning_empty_deferred_vi
 }
 
 #[test]
+fn debug_mode_decodes_hc_ssed_stream_without_claiming_visual_rendering() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
+    let mut honmon = body_jis("見出し");
+    honmon.extend_from_slice(&[0x1f, 0x0a]);
+    honmon.extend_from_slice(&body_jis("本文"));
+    honmon.extend_from_slice(&[0xb1, 0x23]);
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(&honmon),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(
+            &token,
+            &RenderOptions {
+                mode: RenderMode::Debug,
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::Deferred);
+    assert_eq!(view.display_html, None);
+    assert_eq!(view.basic_text.as_deref(), Some("見出し\n本文一"));
+    assert!(
+        view.capabilities
+            .contains(&lvcore::RenderCapability::HcRenderInput)
+    );
+    assert!(
+        view.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "hc_debug_visual_incomplete")
+    );
+    assert!(
+        view.debug_trace
+            .as_deref()
+            .unwrap_or_default()
+            .contains("ssed_stream_debug_basic_text")
+    );
+}
+
+#[test]
 fn ssed_honmon_targets_accept_mac_extensionless_payload_alias() {
     let dir = tempdir().unwrap();
     fs::write(
