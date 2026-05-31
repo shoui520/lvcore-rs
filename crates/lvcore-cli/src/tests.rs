@@ -209,6 +209,32 @@ fn validate_deep_scans_beyond_first_target_for_rendered_resources() {
 }
 
 #[test]
+fn validate_deep_exercises_advertised_search_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+
+    let output = validate_package_json(&DriverRegistry::default(), dir.path(), true);
+    let exercises = output["exercises"].as_array().unwrap();
+    let kinds = exercises
+        .iter()
+        .filter_map(|exercise| exercise["kind"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    for expected in [
+        "search_exact",
+        "search_forward",
+        "search_backward",
+        "search_partial",
+        "search_full_text",
+        "search_advanced_advanced1",
+        "search_advanced_advanced2",
+    ] {
+        assert!(kinds.contains(expected), "missing {expected}");
+    }
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
 fn home_command_reports_metadata_and_surfaces() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());

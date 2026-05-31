@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use lvcore::{
-    BookId, BookLibrary, DriverRegistry, FormatFamily, HomeSurface, NavigationStatus,
+    BookId, BookLibrary, BookMetadata, DriverRegistry, FormatFamily, HomeSurface, NavigationStatus,
     NavigationSurface, NavigationSurfaceKind, NavigationTarget, RenderOptions, ResolvedTargetView,
     ResourceKind, SearchHit, SearchMode, SearchQuery, SearchScope,
 };
@@ -182,46 +182,102 @@ fn exercise_reader_paths(
     }
 
     let metadata = metadata_for(library, book_id);
-    let query = metadata
-        .title
-        .as_deref()
-        .and_then(search_probe_prefix)
-        .unwrap_or("a")
-        .to_owned();
-    let search_row = match library.search(&SearchQuery {
+    rows.extend(search_mode_exercises(
+        library,
+        book_id,
+        &metadata,
+        resource_scan_limit,
+    ));
+    rows
+}
+
+fn search_mode_exercises(
+    library: &BookLibrary,
+    book_id: &BookId,
+    metadata: &BookMetadata,
+    resource_scan_limit: usize,
+) -> Vec<serde_json::Value> {
+    let mut rows = Vec::new();
+    for mode in validate_search_modes_to_probe(metadata) {
+        let query = search_probe_query(metadata.title.as_deref(), &mode);
+        let render_hits = mode == SearchMode::Forward;
+        rows.push(search_mode_exercise(
+            library,
+            book_id,
+            mode,
+            query,
+            resource_scan_limit,
+            render_hits,
+        ));
+    }
+    rows
+}
+
+fn validate_search_modes_to_probe(metadata: &BookMetadata) -> Vec<SearchMode> {
+    if metadata.format_family == FormatFamily::Ssed {
+        return metadata
+            .search_modes
+            .contains(&SearchMode::Forward)
+            .then_some(SearchMode::Forward)
+            .into_iter()
+            .collect();
+    }
+    metadata.search_modes.to_vec()
+}
+
+fn search_mode_exercise(
+    library: &BookLibrary,
+    book_id: &BookId,
+    mode: SearchMode,
+    query: String,
+    resource_scan_limit: usize,
+    render_hits: bool,
+) -> serde_json::Value {
+    let kind = format!("search_{}", search_mode_key(&mode));
+    let limit = if render_hits { 3 } else { 1 };
+    match library.search(&SearchQuery {
         scope: SearchScope::CurrentBook {
             book_id: book_id.clone(),
         },
-        mode: SearchMode::Forward,
+        mode: mode.clone(),
         query: query.clone(),
         cursor: None,
-        limit: 3,
+        limit,
     }) {
         Ok(page) => {
-            let rendered_hits = rendered_search_hit_probes(library, book_id, &page.hits);
-            let rendered_first = rendered_hits.first().cloned();
-            let resource_scan =
-                rendered_search_resource_scan(library, book_id, &page.hits, resource_scan_limit);
-            json!({
-                "kind": "search_forward",
+            let mut row = json!({
+                "kind": kind,
                 "status": "ok",
+                "mode": mode,
                 "query": query,
                 "hit_count": page.hits.len(),
                 "diagnostic_count": page.diagnostics.len(),
-                "rendered_first": rendered_first,
-                "rendered_hit_count": rendered_hits.len(),
-                "resource_scan": resource_scan,
-            })
+            });
+            if render_hits {
+                let rendered_hits = rendered_search_hit_probes(library, book_id, &page.hits);
+                let rendered_first = rendered_hits.first().cloned();
+                let resource_scan = rendered_search_resource_scan(
+                    library,
+                    book_id,
+                    &page.hits,
+                    resource_scan_limit,
+                );
+                if let Some(object) = row.as_object_mut() {
+                    object.insert("rendered_first".to_owned(), json!(rendered_first));
+                    object.insert("rendered_hit_count".to_owned(), json!(rendered_hits.len()));
+                    object.insert("resource_scan".to_owned(), resource_scan);
+                }
+            }
+            row
         }
         Err(error) => json!({
-            "kind": "search_forward",
+            "kind": kind,
             "status": "search_error",
+            "mode": mode,
             "query": query,
             "error": error.to_string(),
         }),
-    };
-    rows.push(search_row);
-    rows
+    }
 }
 
 fn rendered_view_probe(
@@ -435,4 +491,53 @@ fn search_probe_prefix(title: &str) -> Option<&str> {
         }
     }
     (end > 0).then_some(&trimmed[..end])
+}
+
+fn search_probe_suffix(title: &str) -> Option<String> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let chars = trimmed.chars().rev().take(2).collect::<Vec<_>>();
+    if chars.is_empty() {
+        None
+    } else {
+        Some(chars.into_iter().rev().collect())
+    }
+}
+
+fn search_probe_query(title: Option<&str>, mode: &SearchMode) -> String {
+    let title = title.unwrap_or_default();
+    match mode {
+        SearchMode::Exact => {
+            let trimmed = title.trim();
+            if trimmed.is_empty() {
+                "a".to_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        }
+        SearchMode::Backward => search_probe_suffix(title).unwrap_or_else(|| "a".to_owned()),
+        SearchMode::Forward
+        | SearchMode::Partial
+        | SearchMode::FullText
+        | SearchMode::Advanced(_) => search_probe_prefix(title).unwrap_or("a").to_owned(),
+    }
+}
+
+fn search_mode_key(mode: &SearchMode) -> String {
+    match mode {
+        SearchMode::Exact => "exact".to_owned(),
+        SearchMode::Forward => "forward".to_owned(),
+        SearchMode::Backward => "backward".to_owned(),
+        SearchMode::Partial => "partial".to_owned(),
+        SearchMode::FullText => "full_text".to_owned(),
+        SearchMode::Advanced(column) => format!(
+            "advanced_{}",
+            column
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                .collect::<String>()
+        ),
+    }
 }
