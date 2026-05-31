@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use std::collections::BTreeSet;
 
 use super::LvedSqliteSchema;
 
@@ -9,39 +10,109 @@ pub(crate) fn lved_sqlite_title_from_connection(
     if !schema.table_has_columns("info", &["name", "body"]) {
         return None;
     }
-    let mut statement = connection
-        .prepare(
-            "
-            select name, body from info
-            where body is not null and body != ''
-            order by
-              case
-                when lower(name) = 'index.html' then 0
-                when lower(name) like '%index%' then 1
-                when lower(name) like '%about%' then 2
-                when lower(name) like '%hanrei%' then 3
-                when lower(name) like '%copyright%' then 4
-                when lower(name) like '%license%' then 5
-                else 6
-              end,
-              rowid
-            limit 1024
-            ",
-        )
-        .ok()?;
-    let rows = statement
+    let mut seen = BTreeSet::new();
+    for sql in title_probe_queries() {
+        let rows = title_probe_rows(connection, &mut seen, sql)?;
+        if let Some(title) = best_title_candidate(rows) {
+            return Some(title);
+        }
+    }
+    None
+}
+
+fn title_probe_queries() -> [&'static str; 4] {
+    [
+        "
+        select rowid, name, body from info
+        where body is not null and body != ''
+          and lower(name) in (
+            'index.html', 'index.htm',
+            'about.html', 'about.htm',
+            'hanrei.html', 'hanrei.htm', 'hanrei_toc.html', 'hanrei_toc.htm',
+            'copyright.html', 'copyright.htm',
+            'license.html', 'license.htm'
+          )
+        order by
+          case
+            when lower(name) = 'index.html' then 0
+            when lower(name) = 'index.htm' then 1
+            when lower(name) like 'about.%' then 2
+            when lower(name) like 'hanrei%' then 3
+            when lower(name) like 'copyright.%' then 4
+            when lower(name) like 'license.%' then 5
+            else 6
+          end,
+          rowid
+        limit 32
+        ",
+        "
+        select rowid, name, body from info
+        where body is not null and body != ''
+          and (
+            lower(name) like '%index%'
+            or lower(name) like '%about%'
+            or lower(name) like '%hanrei%'
+            or lower(name) like '%copyright%'
+            or lower(name) like '%license%'
+          )
+        order by
+          case
+            when lower(name) like '%index%' then 0
+            when lower(name) like '%about%' then 1
+            when lower(name) like '%hanrei%' then 2
+            when lower(name) like '%copyright%' then 3
+            when lower(name) like '%license%' then 4
+            else 5
+          end,
+          rowid
+        limit 64
+        ",
+        "
+        select rowid, name, body from info
+        where body is not null and body != ''
+          and length(body) <= 65536
+        order by rowid
+        limit 1024
+        ",
+        "
+        select rowid, name, body from info
+        where body is not null and body != ''
+        order by rowid
+        limit 64
+        ",
+    ]
+}
+
+fn title_probe_rows(
+    connection: &Connection,
+    seen: &mut BTreeSet<i64>,
+    sql: &str,
+) -> Option<Vec<(i64, String, String)>> {
+    let mut statement = connection.prepare(sql).ok()?;
+    let mapped = statement
         .query_map([], |row| {
             Ok((
-                row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                row.get::<_, i64>(0)?,
                 row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             ))
         })
         .ok()?;
-    let mut candidates = Vec::<(i32, usize, String)>::new();
-    for (index, row) in rows.enumerate() {
-        let Ok((name, body)) = row else {
+    let mut rows = Vec::new();
+    for row in mapped {
+        let Ok((rowid, name, body)) = row else {
             continue;
         };
+        if seen.insert(rowid) {
+            rows.push((rowid, name, body));
+        }
+    }
+    Some(rows)
+}
+
+fn best_title_candidate(rows: Vec<(i64, String, String)>) -> Option<String> {
+    let mut candidates = Vec::<(i32, usize, String)>::new();
+    for (index, (_rowid, name, body)) in rows.into_iter().enumerate() {
         let lower_name = name.to_lowercase();
         let Some(candidate) = (if lower_name.contains("copyright") || lower_name.contains("license")
         {

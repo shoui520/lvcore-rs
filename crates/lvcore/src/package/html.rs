@@ -275,42 +275,16 @@ pub(super) fn next_html_href_or_src_attr(
     lower: &str,
     cursor: usize,
 ) -> Option<HtmlAttrRange> {
-    let attributes = [
-        ("href", HtmlAttrName::Href),
-        ("src", HtmlAttrName::Src),
-        ("data", HtmlAttrName::Data),
-    ];
-    let (name, value_start, value_end) = attributes
-        .iter()
-        .filter_map(|(attr_name, name)| {
-            next_quoted_html_attr_value(html, lower, cursor, attr_name).map(
-                |(attr_start, value_start, value_end)| (attr_start, *name, value_start, value_end),
-            )
-        })
-        .min_by_key(|(attr_start, _, _, _)| *attr_start)
-        .map(|(_, name, value_start, value_end)| (name, value_start, value_end))?;
-    Some(HtmlAttrRange {
-        name,
-        value_start,
-        value_end,
-    })
-}
-
-fn next_quoted_html_attr_value(
-    html: &str,
-    lower: &str,
-    cursor: usize,
-    attr_name: &str,
-) -> Option<(usize, usize, usize)> {
-    let mut search = cursor;
+    let mut search = cursor.min(lower.len());
     while search < lower.len() {
-        let attr_start = lower[search..]
-            .find(attr_name)
-            .map(|offset| search + offset)?;
-        if !is_html_attr_name_boundary(lower, attr_start, attr_name.len()) {
-            search = attr_start + attr_name.len();
+        let relative = lower[search..]
+            .bytes()
+            .position(|byte| matches!(byte, b'd' | b'h' | b's'))?;
+        let attr_start = search + relative;
+        let Some((attr_name, name)) = html_ref_attr_at(lower, attr_start) else {
+            search = attr_start + 1;
             continue;
-        }
+        };
 
         let mut index = attr_start + attr_name.len();
         index = skip_ascii_whitespace(lower, index)?;
@@ -330,9 +304,26 @@ fn next_quoted_html_attr_value(
             .iter()
             .position(|byte| *byte == quote)
             .map(|offset| value_start + offset)?;
-        return Some((attr_start, value_start, value_end));
+        return Some(HtmlAttrRange {
+            name,
+            value_start,
+            value_end,
+        });
     }
     None
+}
+
+fn html_ref_attr_at(lower: &str, attr_start: usize) -> Option<(&'static str, HtmlAttrName)> {
+    [
+        ("href", HtmlAttrName::Href),
+        ("src", HtmlAttrName::Src),
+        ("data", HtmlAttrName::Data),
+    ]
+    .into_iter()
+    .find(|(attr_name, _)| {
+        lower[attr_start..].starts_with(attr_name)
+            && is_html_attr_name_boundary(lower, attr_start, attr_name.len())
+    })
 }
 
 fn is_html_attr_name_boundary(lower: &str, attr_start: usize, attr_len: usize) -> bool {
@@ -389,6 +380,18 @@ mod tests {
         let third = next_html_href_or_src_attr(html, &lower, second.value_end).unwrap();
         assert_eq!(third.name, HtmlAttrName::Data);
         assert_eq!(&html[third.value_start..third.value_end], "three.bin");
+    }
+
+    #[test]
+    fn scans_uppercase_attrs_with_multiline_whitespace() {
+        let html = "<A HREF\n=\n\"one.html\"><OBJECT DATA\t=\t'two.bin'></OBJECT></A>";
+        let lower = html.to_ascii_lowercase();
+        let first = next_html_href_or_src_attr(html, &lower, 0).unwrap();
+        assert_eq!(first.name, HtmlAttrName::Href);
+        assert_eq!(&html[first.value_start..first.value_end], "one.html");
+        let second = next_html_href_or_src_attr(html, &lower, first.value_end).unwrap();
+        assert_eq!(second.name, HtmlAttrName::Data);
+        assert_eq!(&html[second.value_start..second.value_end], "two.bin");
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Instant;
 
 use lvcore::{
     BookId, BookLibrary, BookMetadata, DriverRegistry, FormatFamily, HomeSurface, NavigationStatus,
@@ -113,7 +114,8 @@ fn exercise_reader_paths(
         if surface.status != NavigationStatus::Available || surface.surface_id == "search" {
             continue;
         }
-        let row = match library.open_surface(book_id, &surface.surface_id) {
+        let started = Instant::now();
+        let mut row = match library.open_surface(book_id, &surface.surface_id) {
             Ok(opened) => {
                 if let NavigationSurface::Deferred { diagnostics, .. } = &opened {
                     json!({
@@ -178,6 +180,7 @@ fn exercise_reader_paths(
                 "error": error.to_string(),
             }),
         };
+        insert_elapsed_ms(&mut row, started);
         rows.push(row);
     }
 
@@ -235,7 +238,8 @@ fn search_mode_exercise(
 ) -> serde_json::Value {
     let kind = format!("search_{}", search_mode_key(&mode));
     let limit = if render_hits { 3 } else { 1 };
-    match library.search(&SearchQuery {
+    let started = Instant::now();
+    let mut row = match library.search(&SearchQuery {
         scope: SearchScope::CurrentBook {
             book_id: book_id.clone(),
         },
@@ -277,6 +281,17 @@ fn search_mode_exercise(
             "query": query,
             "error": error.to_string(),
         }),
+    };
+    insert_elapsed_ms(&mut row, started);
+    row
+}
+
+fn insert_elapsed_ms(row: &mut serde_json::Value, started: Instant) {
+    if let Some(object) = row.as_object_mut() {
+        object.insert(
+            "elapsed_ms".to_owned(),
+            json!(started.elapsed().as_millis()),
+        );
     }
 }
 
@@ -371,9 +386,13 @@ fn rendered_resource_scan(
     targets: &[NavigationTarget],
     limit: usize,
 ) -> serde_json::Value {
+    let started = Instant::now();
     let mut checked_target_count = 0usize;
+    let mut slowest_target_ms = 0u128;
+    let mut slowest_target_index = None;
     for (index, target) in targets.iter().take(limit).enumerate() {
         checked_target_count += 1;
+        let target_started = Instant::now();
         let view = match library.render_target(book_id, &target.target, &RenderOptions::default()) {
             Ok(view) => view,
             Err(error) => {
@@ -388,6 +407,11 @@ fn rendered_resource_scan(
                 });
             }
         };
+        let target_elapsed_ms = target_started.elapsed().as_millis();
+        if target_elapsed_ms > slowest_target_ms {
+            slowest_target_ms = target_elapsed_ms;
+            slowest_target_index = Some(index);
+        }
         let Some(first_resource) = first_readable_resource_probe(library, book_id, &view) else {
             continue;
         };
@@ -405,6 +429,9 @@ fn rendered_resource_scan(
             "target_count": targets.len(),
             "checked_target_count": checked_target_count,
             "target_index": index,
+            "elapsed_ms": started.elapsed().as_millis(),
+            "slowest_target_ms": slowest_target_ms,
+            "slowest_target_index": slowest_target_index,
             "source_id": target.source_id,
             "label": target.label_text,
             "view_kind": view.kind,
@@ -419,6 +446,9 @@ fn rendered_resource_scan(
         "status": "no_resource",
         "target_count": targets.len(),
         "checked_target_count": checked_target_count,
+        "elapsed_ms": started.elapsed().as_millis(),
+        "slowest_target_ms": slowest_target_ms,
+        "slowest_target_index": slowest_target_index,
     })
 }
 
