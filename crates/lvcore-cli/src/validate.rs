@@ -1,16 +1,20 @@
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use lvcore::{
-    BookId, BookLibrary, BookMetadata, Diagnostic, DiagnosticSeverity, DriverRegistry,
-    FormatFamily, HomeSurface, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
-    NavigationTarget, RenderOptions, ResolvedTargetView, ResourceKind, SearchHit, SearchMode,
-    SearchQuery, SearchResultSequence, SearchScope, SequenceHint,
+    BookId, BookLibrary, BookMetadata, DetectedPackage, Diagnostic, DiagnosticSeverity,
+    DriverRegistry, FormatFamily, HomeSurface, NavigationStatus, NavigationSurface,
+    NavigationSurfaceKind, NavigationTarget, RenderOptions, ResolvedTargetView, ResourceKind,
+    SearchHit, SearchMode, SearchQuery, SearchResultSequence, SearchScope, SequenceHint,
 };
 use serde_json::json;
 
-use super::{metadata_for, open_single_book_library};
+use super::metadata_for;
+#[cfg(test)]
+use super::open_single_book_library;
 
 const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 32;
 const VALIDATE_SEARCH_HIT_RENDER_LIMIT: usize = 3;
@@ -32,6 +36,7 @@ struct SurfaceRenderedProbeContext<'a> {
     resource_scan: serde_json::Value,
 }
 
+#[cfg(test)]
 pub(crate) fn validate_package_json(
     registry: &DriverRegistry,
     path: &Path,
@@ -39,50 +44,76 @@ pub(crate) fn validate_package_json(
 ) -> serde_json::Value {
     match open_single_book_library(registry, path) {
         Ok((library, book_id)) => {
-            let metadata = metadata_for(&library, &book_id);
-            match library.home_surfaces(&book_id) {
-                Ok(surfaces) => {
-                    let exercises = if options.deep {
-                        Some(exercise_reader_paths(
-                            &library,
-                            &book_id,
-                            &surfaces,
-                            metadata.format_family,
-                            options.include_expensive_search,
-                        ))
-                    } else {
-                        None
-                    };
-                    json!({
-                        "path": path,
-                        "status": "ok",
-                        "book_id": metadata.book_id,
-                        "format_family": metadata.format_family,
-                        "format_label": metadata.format_label,
-                        "title": metadata.title,
-                        "capabilities": metadata.capabilities,
-                        "search_modes": metadata.search_modes,
-                        "surface_count": surfaces.len(),
-                        "surfaces": surfaces,
-                        "exercises": exercises,
-                    })
-                }
-                Err(error) => json!({
-                    "path": path,
-                    "status": "surface_error",
-                    "book_id": metadata.book_id,
-                    "format_family": metadata.format_family,
-                    "format_label": metadata.format_label,
-                    "title": metadata.title,
-                    "capabilities": metadata.capabilities,
-                    "search_modes": metadata.search_modes,
-                    "error": error.to_string(),
-                }),
-            }
+            validate_opened_package_json(path.to_path_buf(), library, book_id, options)
         }
         Err(error) => json!({
             "path": path,
             "status": "open_error",
+            "error": error.to_string(),
+        }),
+    }
+}
+
+pub(crate) fn validate_detected_package_json(
+    registry: &DriverRegistry,
+    detected: DetectedPackage,
+    options: ValidateOptions,
+) -> serde_json::Value {
+    let path = detected.root.clone();
+    let mut library = BookLibrary::new();
+    match library.open_detected_package(detected, registry) {
+        Ok(book_id) => validate_opened_package_json(path, library, book_id, options),
+        Err(error) => json!({
+            "path": path,
+            "status": "open_error",
+            "error": error.to_string(),
+        }),
+    }
+}
+
+fn validate_opened_package_json(
+    path: PathBuf,
+    library: BookLibrary,
+    book_id: BookId,
+    options: ValidateOptions,
+) -> serde_json::Value {
+    let metadata = metadata_for(&library, &book_id);
+    match library.home_surfaces(&book_id) {
+        Ok(surfaces) => {
+            let exercises = if options.deep {
+                Some(exercise_reader_paths(
+                    &library,
+                    &book_id,
+                    &surfaces,
+                    metadata.format_family,
+                    options.include_expensive_search,
+                ))
+            } else {
+                None
+            };
+            json!({
+                "path": path,
+                "status": "ok",
+                "book_id": metadata.book_id,
+                "format_family": metadata.format_family,
+                "format_label": metadata.format_label,
+                "title": metadata.title,
+                "capabilities": metadata.capabilities,
+                "search_modes": metadata.search_modes,
+                "surface_count": surfaces.len(),
+                "surfaces": surfaces,
+                "exercises": exercises,
+            })
+        }
+        Err(error) => json!({
+            "path": path,
+            "status": "surface_error",
+            "book_id": metadata.book_id,
+            "format_family": metadata.format_family,
+            "format_label": metadata.format_label,
+            "title": metadata.title,
+            "capabilities": metadata.capabilities,
+            "search_modes": metadata.search_modes,
             "error": error.to_string(),
         }),
     }

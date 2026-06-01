@@ -241,9 +241,32 @@ impl DriverRegistry {
         options: PackageDiscoveryOptions,
     ) -> Result<Vec<DetectedPackage>> {
         let mut rows = Vec::new();
-        let mut visited = BTreeSet::new();
-        self.discover_best_packages_into(root, options.max, &mut rows, 0, &mut visited)?;
+        self.for_each_best_package(root, options, |detected| {
+            rows.push(detected);
+            Ok(())
+        })?;
         Ok(rows)
+    }
+
+    pub fn for_each_best_package<F>(
+        &self,
+        root: &Path,
+        options: PackageDiscoveryOptions,
+        mut on_package: F,
+    ) -> Result<()>
+    where
+        F: FnMut(DetectedPackage) -> Result<()>,
+    {
+        let mut visited = BTreeSet::new();
+        let mut found = 0usize;
+        self.discover_best_packages_with(
+            root,
+            options.max,
+            &mut found,
+            0,
+            &mut visited,
+            &mut on_package,
+        )
     }
 
     pub fn open_best(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
@@ -273,15 +296,19 @@ impl DriverRegistry {
         ))
     }
 
-    fn discover_best_packages_into(
+    fn discover_best_packages_with<F>(
         &self,
         path: &Path,
         max: Option<usize>,
-        out: &mut Vec<DetectedPackage>,
+        found: &mut usize,
         depth: usize,
         visited: &mut BTreeSet<PathBuf>,
-    ) -> Result<()> {
-        if max.is_some_and(|max| out.len() >= max) {
+        on_package: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(DetectedPackage) -> Result<()>,
+    {
+        if max.is_some_and(|max| *found >= max) {
             return Ok(());
         }
         if depth > MAX_PACKAGE_DISCOVERY_DEPTH {
@@ -309,7 +336,8 @@ impl DriverRegistry {
         if is_obvious_package_candidate(path)?
             && let Some(detected) = self.detect(path)?.into_iter().next()
         {
-            out.push(detected);
+            *found += 1;
+            (*on_package)(detected)?;
             return Ok(());
         }
         if !metadata.is_dir() {
@@ -325,8 +353,15 @@ impl DriverRegistry {
             {
                 continue;
             }
-            self.discover_best_packages_into(&entry.path(), max, out, depth + 1, visited)?;
-            if max.is_some_and(|max| out.len() >= max) {
+            self.discover_best_packages_with(
+                &entry.path(),
+                max,
+                found,
+                depth + 1,
+                visited,
+                on_package,
+            )?;
+            if max.is_some_and(|max| *found >= max) {
                 break;
             }
         }

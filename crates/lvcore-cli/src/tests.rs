@@ -1,5 +1,5 @@
 use super::*;
-use crate::validate::ValidateOptions;
+use crate::validate::{ValidateOptions, validate_detected_package_json, validate_package_json};
 use lvcore::lved_sqlite::apply_sqlcipher_key;
 use rusqlite::Connection;
 use std::fs;
@@ -35,6 +35,53 @@ fn detect_command_recurses_when_root_is_not_a_package() {
         lvcore::FormatFamily::LvedSqlite3
     );
     assert_eq!(detections[0].root, package);
+}
+
+#[test]
+fn registry_can_stream_discovered_packages_without_precollecting() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("FirstDictionary");
+    let second = dir.path().join("SecondDictionary");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    write_lved_cli_fixture(&first);
+    write_lved_cli_fixture(&second);
+
+    let mut seen = Vec::new();
+    DriverRegistry::default()
+        .for_each_best_package(dir.path(), PackageDiscoveryOptions::default(), |detected| {
+            seen.push(detected.root);
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(seen, vec![first, second]);
+}
+
+#[test]
+fn validate_can_open_a_previously_detected_package() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+    let registry = DriverRegistry::default();
+    let detected = registry
+        .discover_best_packages(dir.path(), PackageDiscoveryOptions::default())
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    let output = validate_detected_package_json(
+        &registry,
+        detected,
+        ValidateOptions {
+            deep: false,
+            include_expensive_search: false,
+        },
+    );
+
+    assert_eq!(output["status"], "ok");
+    assert_eq!(output["title"], "Example Dictionary");
+    assert!(!validate_row_has_failure(&output));
 }
 
 #[test]

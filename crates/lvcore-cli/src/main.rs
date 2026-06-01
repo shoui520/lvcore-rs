@@ -13,7 +13,7 @@ use serde_json::json;
 
 mod validate;
 
-use validate::{validate_package_json, validate_row_has_failure};
+use validate::{validate_detected_package_json, validate_row_has_failure};
 
 #[derive(Debug, Parser)]
 #[command(name = "lvcore")]
@@ -319,45 +319,52 @@ fn main() -> Result<()> {
             fail_on_error,
         } => {
             let registry = DriverRegistry::default();
-            let mut package_paths = Vec::new();
             let mut failures = Vec::new();
+            let mut rows = Vec::new();
+            let mut seen = 0usize;
             for path in paths {
-                package_paths
-                    .extend(registry.discover_roots(&path, PackageDiscoveryOptions { max })?);
-                if let Some(limit) = max
-                    && package_paths.len() >= limit
-                {
-                    package_paths.truncate(limit);
+                let remaining = max.map(|limit| limit.saturating_sub(seen));
+                if remaining == Some(0) {
                     break;
                 }
-            }
-
-            let mut rows = Vec::new();
-            for path in package_paths {
-                eprintln!("lvcore: validating {}", path.display());
-                let started = Instant::now();
-                let mut row = validate_package_json(
-                    &registry,
+                registry.for_each_best_package(
                     &path,
-                    validate::ValidateOptions {
-                        deep,
-                        include_expensive_search,
+                    PackageDiscoveryOptions { max: remaining },
+                    |detected| {
+                        seen += 1;
+                        eprintln!("lvcore: validating {}", detected.root.display());
+                        let started = Instant::now();
+                        let failure_path = detected.root.display().to_string();
+                        let mut row = validate_detected_package_json(
+                            &registry,
+                            detected,
+                            validate::ValidateOptions {
+                                deep,
+                                include_expensive_search,
+                            },
+                        );
+                        if let Some(object) = row.as_object_mut() {
+                            object.insert(
+                                "elapsed_ms".to_owned(),
+                                json!(started.elapsed().as_millis()),
+                            );
+                        }
+                        if jsonl {
+                            write_stdout_line(&serde_json::to_string(&row)?)?;
+                            flush_stdout()?;
+                        } else {
+                            rows.push(row.clone());
+                        }
+                        if fail_on_error && validate_row_has_failure(&row) {
+                            failures.push(failure_path);
+                        }
+                        Ok(())
                     },
-                );
-                if let Some(object) = row.as_object_mut() {
-                    object.insert(
-                        "elapsed_ms".to_owned(),
-                        json!(started.elapsed().as_millis()),
-                    );
-                }
-                if jsonl {
-                    write_stdout_line(&serde_json::to_string(&row)?)?;
-                    flush_stdout()?;
-                } else {
-                    rows.push(row.clone());
-                }
-                if fail_on_error && validate_row_has_failure(&row) {
-                    failures.push(path.display().to_string());
+                )?;
+                if let Some(limit) = max
+                    && seen >= limit
+                {
+                    break;
                 }
             }
             if !jsonl {
