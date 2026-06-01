@@ -166,7 +166,7 @@ pub(crate) fn html_text_lines(fragment: &str) -> Vec<String> {
                     .split_whitespace()
                     .next()
                     .unwrap_or("");
-                if matches!(tag_name, "style" | "script") {
+                if matches!(tag_name, "style" | "script" | "rt" | "rp") {
                     if normalized_tag.starts_with('/') {
                         skipping_element = None;
                     } else {

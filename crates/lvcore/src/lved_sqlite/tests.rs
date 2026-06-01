@@ -509,6 +509,12 @@ fn title_probe_ignores_style_blocks_and_staff_affiliations() {
         html_text_lines("<div>A&nbsp;&amp;&lt;B&gt;&quot;C&quot;</div>"),
         vec!["A &<B>\"C\"".to_owned()]
     );
+    assert_eq!(
+        html_text_lines(
+            "<div>ジーニアス<ruby>英和辞典<rt>えいわじてん</rt></ruby> <ruby>第6版<rt>だいろっぱん</rt></ruby></div>"
+        ),
+        vec!["ジーニアス英和辞典 第6版".to_owned()]
+    );
     assert!(
         normalize_title_candidate("浅井　昌弘　慶應義塾大学医学部　精神神経科　教授").is_none()
     );
