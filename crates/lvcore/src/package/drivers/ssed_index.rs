@@ -467,6 +467,7 @@ impl ReaderBookPackage {
     ) -> Result<std::result::Result<TargetToken, Diagnostic>> {
         let end = next_row
             .filter(|next| next.body != row.body)
+            .filter(|next| (next.body.block, next.body.offset) > (row.body.block, row.body.offset))
             .map(|next| next.body);
         self.ssed_target_for_index_pointer_with_bound(row.body, end)
     }

@@ -708,7 +708,7 @@ fn ssed_title_index_sequence_returns_before_and_after_views() {
     .unwrap();
     fs::write(
         dir.path().join("FHTITLE.DIC"),
-        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0agamma\x1f\x0a"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0ainvalid\x1f\x0agamma\x1f\x0a"),
     )
     .unwrap();
     fs::write(
@@ -716,7 +716,8 @@ fn ssed_title_index_sequence_returns_before_and_after_views() {
         sseddata_literal_fixture(&simple_index_fixture_rows(&[
             ("alpha", 1, 0, 13, 0),
             ("beta", 1, 2, 13, 7),
-            ("gamma", 1, 4, 13, 13),
+            ("invalid", 0x20_0000, 0, 13, 13),
+            ("gamma", 1, 4, 13, 22),
         ])),
     )
     .unwrap();
@@ -750,6 +751,12 @@ fn ssed_title_index_sequence_returns_before_and_after_views() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "sequence_deferred")
+    );
+    assert!(
+        !window
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_index_body_component_missing")
     );
 
     let body_order = package

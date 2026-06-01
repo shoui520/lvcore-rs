@@ -47,11 +47,12 @@ impl ReaderBookPackage {
             |_, _| true,
             |row| {
                 scanned_any = true;
+                let Some(row_component) = self.ssed_component_for_index_pointer(row.body) else {
+                    return Ok(true);
+                };
                 let row_matches = row.body.block == block
                     && row.body.offset == offset
-                    && self.ssed_component_for_index_pointer(row.body).is_some_and(
-                        |row_component| row_component.eq_ignore_ascii_case(&component),
-                    );
+                    && row_component.eq_ignore_ascii_case(&component);
                 if center_row.is_some() {
                     tail_rows.push(row);
                     return Ok(tail_rows.len() <= after);

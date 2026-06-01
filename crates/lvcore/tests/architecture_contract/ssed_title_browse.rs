@@ -93,6 +93,51 @@ fn title_index_surfaces_are_cursor_paged_by_backend() {
 }
 
 #[test]
+fn title_index_browse_does_not_apply_backward_body_bounds() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0agamma\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("beta", 1, 8, 13, 7),
+            ("gamma", 1, 4, 13, 12),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("expected SSED title/index browse");
+    };
+
+    assert_eq!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+            end_block: 1,
+            end_offset: 8,
+        }
+    );
+    assert_eq!(
+        items[1].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 8,
+        }
+    );
+}
+
+#[test]
 fn title_index_browse_prefers_forward_rows_over_backward_search_rows() {
     let dir = tempdir().unwrap();
     fs::write(
