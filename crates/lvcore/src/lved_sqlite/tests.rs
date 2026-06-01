@@ -472,6 +472,32 @@ fn title_probe_prefers_lved_index_book_title_over_info_section_heading() {
 }
 
 #[test]
+fn title_probe_does_not_stop_at_lved_index_menu_when_copyright_has_book_title() {
+    let connection = Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch(
+            "
+                create table info (id integer, type integer, name text primary key, body text);
+                insert into info values (
+                  1, 1, 'index.html',
+                  '<div class=\"索引\"><span class=\"title\">索引</span><a>和英小辞典</a><a>和英小辞典あ</a></div>'
+                );
+                insert into info values (
+                  1040, 104, 'h04.html',
+                  '<div class=\"Copyright\"><div class=\"凡例章見出\">著作権表示</div><div class=\"凡例書籍名\">エースクラウン英和辞典 第4版</div></div>'
+                );
+                ",
+        )
+        .unwrap();
+
+    let schema = LvedSqliteSchema::load(&connection).unwrap();
+    assert_eq!(
+        lved_sqlite_title_from_connection(&connection, &schema).as_deref(),
+        Some("エースクラウン英和辞典 第4版")
+    );
+}
+
+#[test]
 fn title_probe_ignores_style_blocks_and_staff_affiliations() {
     assert_eq!(
         html_text_lines(

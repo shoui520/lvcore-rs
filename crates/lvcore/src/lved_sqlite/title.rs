@@ -11,13 +11,11 @@ pub(crate) fn lved_sqlite_title_from_connection(
         return None;
     }
     let mut seen = BTreeSet::new();
+    let mut rows = Vec::new();
     for sql in title_probe_queries() {
-        let rows = title_probe_rows(connection, &mut seen, sql)?;
-        if let Some(title) = best_title_candidate(rows) {
-            return Some(title);
-        }
+        rows.extend(title_probe_rows(connection, &mut seen, sql)?);
     }
-    None
+    best_title_candidate(rows)
 }
 
 fn title_probe_queries() -> [&'static str; 4] {
