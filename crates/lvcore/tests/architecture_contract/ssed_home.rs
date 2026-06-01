@@ -67,6 +67,16 @@ fn ssed_home_surfaces_are_capability_based() {
     assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::Menu && surface.status == NavigationStatus::Available
     }));
+    let search_home_surface = surfaces
+        .iter()
+        .find(|surface| surface.kind == NavigationSurfaceKind::SearchFallback)
+        .unwrap();
+    assert_eq!(search_home_surface.status, NavigationStatus::Available);
+    assert!(search_home_surface.target.is_none());
+    assert!(matches!(
+        package.open_surface("search").unwrap(),
+        NavigationSurface::FallbackSearch { .. }
+    ));
     let menu_home_target = surfaces
         .iter()
         .find(|surface| surface.kind == NavigationSurfaceKind::Menu)

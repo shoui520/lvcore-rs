@@ -346,6 +346,11 @@ impl NavigationProvider for ReaderBookPackage {
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<NavigationSurface> {
+        if surface_id == "search" {
+            return Ok(NavigationSurface::FallbackSearch {
+                surface_id: surface_id.to_owned(),
+            });
+        }
         match (self.metadata.format_family, surface_id) {
             (FormatFamily::Ssed, "title-index") => {
                 self.open_ssed_title_index_surface(surface_id, cursor, limit)
