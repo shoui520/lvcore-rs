@@ -32,6 +32,7 @@ enum DenseSidecarFixture {
     ShardedTContentsBodyRows,
     BlobBodyRows,
     MissingBetaRow,
+    OrderedHonbunRows,
 }
 
 fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -> SsedCatalog {
@@ -40,8 +41,22 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
         DenseSidecarFixture::AndroidRowidTimesFiveBodyRows => ("00000005", "00000010"),
         _ => ("00000001", "00000002"),
     };
-    body.extend_from_slice(&dense_anchor_record(alpha_anchor));
-    body.extend_from_slice(&dense_anchor_record(beta_anchor));
+    let beta_body_offset;
+    match fixture {
+        DenseSidecarFixture::OrderedHonbunRows => {
+            body.extend_from_slice(&ordered_honbun_entry_record("alpha", &["alpha yomi"]));
+            beta_body_offset = u16::try_from(body.len()).unwrap();
+            body.extend_from_slice(&ordered_honbun_entry_record(
+                "beta",
+                &["beta yomi", "beta alternate"],
+            ));
+        }
+        _ => {
+            body.extend_from_slice(&dense_anchor_record(alpha_anchor));
+            beta_body_offset = u16::try_from(body.len()).unwrap();
+            body.extend_from_slice(&dense_anchor_record(beta_anchor));
+        }
+    }
     fs::write(
         root.join("HONMON.DIC"),
         fixture_sseddata_literal_chunks(&[&body], 100, 100),
@@ -77,7 +92,7 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
         &mut pos,
         &body_jis("い"),
         100,
-        32,
+        beta_body_offset,
         300,
         beta_title_offset,
     );
@@ -114,6 +129,9 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
         }
         DenseSidecarFixture::MissingBetaRow => {
             write_dense_body_db(root.join("body.db"), true, false, false);
+        }
+        DenseSidecarFixture::OrderedHonbunRows => {
+            write_ordered_honbun_db(root.join("vlpljblF"));
         }
     }
 
@@ -167,6 +185,20 @@ fn dense_anchor_record(anchor: &str) -> Vec<u8> {
     record.extend_from_slice(&body_jis(anchor));
     record.extend_from_slice(&[0x1f, 0x61, 0x1f, 0x0a]);
     record.resize(32, 0);
+    record
+}
+
+fn ordered_honbun_entry_record(label: &str, lines: &[&str]) -> Vec<u8> {
+    let mut record = Vec::new();
+    record.extend_from_slice(&SSED_ENTRY_MARKER);
+    record.extend_from_slice(&[0x1f, 0x41, 0x01, 0x60, 0x1f, 0x04]);
+    record.extend_from_slice(&body_jis(label));
+    record.extend_from_slice(&[0x1f, 0x05, 0x1f, 0x61, 0x1f, 0x0a]);
+    for line in lines {
+        record.extend_from_slice(&[0x1f, 0x09, 0x00, 0x02]);
+        record.extend_from_slice(&body_jis(line));
+        record.extend_from_slice(&[0x1f, 0x0a]);
+    }
     record
 }
 
@@ -270,6 +302,23 @@ fn write_android_body_db(path: PathBuf, table: &str) {
                 "<div>android alpha html</div>",
                 "<div>android beta html</div>",
             ),
+        )
+        .unwrap();
+}
+
+fn write_ordered_honbun_db(path: PathBuf) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table HONBUN (
+              ID text primary key,
+              Title_UTF8 text,
+              Contents_HTML_box text
+            );
+            insert into HONBUN values ('00000000', 'alpha', '<div>ordered alpha html</div>');
+            insert into HONBUN values ('00000001', 'beta', '<div>ordered beta html</div>');
+            ",
         )
         .unwrap();
 }

@@ -57,6 +57,13 @@ impl ReaderBookPackage {
         {
             return self.visual_body_for_ssed_dense_anchor(&anchor_id, None);
         }
+        if component.role == SsedComponentRole::Honmon
+            && self.ssed_pdfspread_database()?.is_none()
+            && let Some(body) =
+                self.visual_body_for_ssed_ordered_honbun_entry(component, component_offset)?
+        {
+            return Ok(body);
+        }
         let stream_offset = self.ssed_stream_start_offset(component, component_offset);
         let length = self.infer_ssed_stream_length(component, stream_offset);
         Ok(VisualBody::SsedStream {
@@ -64,6 +71,104 @@ impl ReaderBookPackage {
             offset: stream_offset,
             length,
         })
+    }
+
+    fn visual_body_for_ssed_ordered_honbun_entry(
+        &self,
+        component: &SsedComponent,
+        component_offset: u64,
+    ) -> Result<Option<VisualBody>> {
+        if !self
+            .ssed_sidecar_body_resolvers()?
+            .iter()
+            .any(SsedSidecarBodyResolver::is_ordered_honbun_renderer_body)
+        {
+            return Ok(None);
+        }
+        let Some(row_index) =
+            self.ssed_entry_slice_row_index_at_component_offset(component, component_offset)?
+        else {
+            return Ok(None);
+        };
+        match lookup_ssed_ordered_honbun_body_by_row(
+            self.ssed_sidecar_body_resolvers()?,
+            row_index,
+        )? {
+            SsedSidecarLookup::Resolved(body) => Ok(Some(VisualBody::PreservedHtml {
+                html: body.html.unwrap_or(body.text),
+                source: BodySourceKind::RendererDatabase,
+            })),
+            SsedSidecarLookup::MissingRow { .. } | SsedSidecarLookup::NoResolver { .. } => Ok(None),
+        }
+    }
+
+    fn ssed_entry_slice_row_index_at_component_offset(
+        &self,
+        component: &SsedComponent,
+        component_offset: u64,
+    ) -> Result<Option<usize>> {
+        const ENTRY_MARKER_SCAN_CHUNK_BYTES: usize = 64 * 1024;
+
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Ok(None);
+        };
+        let mut reader = SsedDataFile::open(path)?;
+        let target_offset = usize::try_from(component_offset)
+            .map_err(|_| Error::Driver("SSED component offset is too large".to_owned()))?;
+        if target_offset >= reader.header().expanded_size() {
+            return Ok(None);
+        }
+
+        let scan_end = target_offset
+            .saturating_add(SSED_ENTRY_MARKER.len())
+            .min(reader.header().expanded_size());
+        let tail_size = SSED_ENTRY_MARKER.len() + 1;
+        let mut carry = Vec::new();
+        let mut carry_base = 0usize;
+        let mut emitted_start: Option<usize> = None;
+        let mut row_index = 0usize;
+        let mut containing_row_index = None;
+        let mut offset = 0usize;
+
+        while offset < scan_end {
+            let read_len = (scan_end - offset).min(ENTRY_MARKER_SCAN_CHUNK_BYTES);
+            let chunk = reader.read_range(offset, read_len)?;
+            let base = carry_base;
+            let mut buffer = Vec::with_capacity(carry.len() + chunk.len());
+            buffer.extend_from_slice(&carry);
+            buffer.extend_from_slice(&chunk);
+
+            let mut pos = find_marker(&buffer, &SSED_ENTRY_MARKER, 0);
+            while let Some(marker_pos) = pos {
+                let absolute_marker = base.saturating_add(marker_pos);
+                let start = if marker_pos >= 2 && buffer[marker_pos - 2..marker_pos] == [0x1f, 0x02]
+                {
+                    absolute_marker.saturating_sub(2)
+                } else {
+                    absolute_marker
+                };
+                if emitted_start != Some(start) {
+                    emitted_start = Some(start);
+                    if start > target_offset {
+                        return Ok(containing_row_index);
+                    }
+                    containing_row_index = Some(row_index);
+                    row_index = row_index.saturating_add(1);
+                }
+                pos = find_marker(&buffer, &SSED_ENTRY_MARKER, marker_pos.saturating_add(1));
+            }
+
+            if buffer.len() >= tail_size {
+                carry = buffer[buffer.len() - tail_size..].to_vec();
+                carry_base = base + buffer.len() - tail_size;
+            } else {
+                carry = buffer;
+                carry_base = base;
+            }
+            offset = offset.saturating_add(read_len);
+        }
+
+        Ok(containing_row_index)
     }
 
     fn ssed_stream_start_offset(&self, component: &SsedComponent, component_offset: u64) -> u64 {
@@ -170,7 +275,9 @@ impl ReaderBookPackage {
                     Ok(VisualBody::PreservedHtml {
                         html,
                         source: match body.resolver.kind {
-                            SsedSidecarKind::TContents => BodySourceKind::RendererDatabase,
+                            SsedSidecarKind::TContents | SsedSidecarKind::Honbun => {
+                                BodySourceKind::RendererDatabase
+                            }
                             _ => BodySourceKind::SidecarHtml,
                         },
                     })
@@ -309,4 +416,14 @@ fn ssed_find_next_metadata_record_boundary_offset(
         .windows(RECORD_CLOSE_BEFORE_NEXT_METADATA.len())
         .position(|window| window == RECORD_CLOSE_BEFORE_NEXT_METADATA)
         .map(|relative| offset.saturating_add(relative).saturating_add(4)))
+}
+
+fn find_marker(data: &[u8], marker: &[u8], from: usize) -> Option<usize> {
+    if marker.is_empty() || from >= data.len() {
+        return None;
+    }
+    data[from..]
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .map(|relative| from + relative)
 }

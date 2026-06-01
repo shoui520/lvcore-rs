@@ -194,7 +194,7 @@ use crate::ssed_screen_menu::{
 use crate::ssed_sidecar::{
     SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup, SsedSidecarSearchPage,
     discover_ssed_sidecar_body_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
-    search_ssed_dense_sidecar_bodies_with_resolvers,
+    lookup_ssed_ordered_honbun_body_by_row, search_ssed_dense_sidecar_bodies_with_resolvers,
 };
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
 use crate::storage::{

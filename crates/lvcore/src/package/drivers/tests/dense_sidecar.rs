@@ -136,6 +136,50 @@ fn dense_honmon_address_target_resolves_sidecar_html() {
 }
 
 #[test]
+fn dense_honmon_ordered_honbun_sidecar_resolves_by_entry_slice_order() {
+    let dir = tempdir().unwrap();
+    let catalog =
+        write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::OrderedHonbunRows);
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Ordered Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let beta_offset = u32::try_from(
+        ordered_honbun_entry_record("alpha", &["alpha yomi"])
+            .len()
+            .saturating_add(8),
+    )
+    .unwrap();
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: beta_offset,
+    })
+    .unwrap();
+
+    let body = package.visual_body_for_target(&target).unwrap();
+
+    assert_eq!(
+        body,
+        VisualBody::PreservedHtml {
+            html: "<div>ordered beta html</div>".to_owned(),
+            source: BodySourceKind::RendererDatabase,
+        }
+    );
+}
+
+#[test]
 fn dense_honmon_search_hit_target_resolves_sidecar_html() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);

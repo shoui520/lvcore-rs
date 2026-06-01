@@ -102,6 +102,17 @@ impl SsedSidecarBodyResolver {
             SsedSidecarStorage::LogoFontCipher => "logofont_cipher",
         }
     }
+
+    pub fn is_ordered_honbun_renderer_body(&self) -> bool {
+        self.kind == SsedSidecarKind::Honbun
+            && self.id_rule == SsedSidecarIdRule::DirectColumn
+            && self.table.eq_ignore_ascii_case("HONBUN")
+            && self.id_column.eq_ignore_ascii_case("ID")
+            && self
+                .html_column
+                .as_deref()
+                .is_some_and(|column| column.eq_ignore_ascii_case("Contents_HTML_box"))
+    }
 }
 
 impl SsedSidecarIdRule {
@@ -188,6 +199,25 @@ pub fn lookup_ssed_dense_sidecar_body_with_resolvers(
             "dense HONMON anchor was found, but no renderable SQLite sidecar body table was identified",
         )],
     })
+}
+
+pub fn lookup_ssed_ordered_honbun_body_by_row(
+    resolvers: &[SsedSidecarBodyResolver],
+    row_index: usize,
+) -> Result<SsedSidecarLookup> {
+    let Some(resolver) = resolvers
+        .iter()
+        .filter(|resolver| resolver.is_ordered_honbun_renderer_body())
+        .min_by_key(|resolver| resolver_priority(resolver))
+    else {
+        return Ok(SsedSidecarLookup::NoResolver {
+            diagnostics: vec![Diagnostic::warning(
+                "ssed_ordered_honbun_sidecar_not_found",
+                "raw HONMON slot could not be mapped because no ordered HONBUN renderer body table was identified",
+            )],
+        });
+    };
+    lookup_ordered_honbun_resolver_body(resolver, row_index)
 }
 
 pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
@@ -527,6 +557,71 @@ fn lookup_resolver_body(
             )
             .with_context("anchor_hash", short_anchor_hash(anchor_id))
             .with_context("query_value_count", values.len().to_string())
+            .with_context("sidecar", display_name(&resolver.path))
+            .with_context("table", &resolver.table)
+            .with_context("id_column", &resolver.id_column),
+        ],
+    })
+}
+
+fn lookup_ordered_honbun_resolver_body(
+    resolver: &SsedSidecarBodyResolver,
+    row_index: usize,
+) -> Result<SsedSidecarLookup> {
+    let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
+    let mut select_columns = vec![resolver.id_column.clone()];
+    let mut select_expressions = vec![quote_sql_identifier(&resolver.id_column)];
+    for column in [
+        resolver.title_column.as_ref(),
+        resolver.html_column.as_ref(),
+        resolver.plain_column.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !select_columns.iter().any(|existing| existing == column) {
+            select_columns.push(column.clone());
+            select_expressions.push(quote_sql_identifier(column));
+        }
+    }
+    let Ok(row_offset) = i64::try_from(row_index) else {
+        return Ok(SsedSidecarLookup::MissingRow {
+            resolver: resolver.clone(),
+            query_values: vec![row_index.to_string()],
+            diagnostics: vec![
+                Diagnostic::warning(
+                    "ssed_ordered_honbun_row_index_too_large",
+                    "raw HONMON slot index is too large for SQLite offset lookup",
+                )
+                .with_context("row_index", row_index.to_string())
+                .with_context("sidecar", display_name(&resolver.path))
+                .with_context("table", &resolver.table),
+            ],
+        });
+    };
+    let select_sql = select_expressions.join(", ");
+    let sql = format!(
+        "select {select_sql} from {} order by {} limit 1 offset ?",
+        quote_sql_identifier(&resolver.table),
+        quote_sql_identifier(&resolver.id_column),
+    );
+    let row = connection
+        .query_row(&sql, [row_offset], |row| {
+            sidecar_body_from_row(resolver, row)
+        })
+        .optional()?;
+    if let Some(body) = row {
+        return Ok(SsedSidecarLookup::Resolved(body));
+    }
+    Ok(SsedSidecarLookup::MissingRow {
+        resolver: resolver.clone(),
+        query_values: vec![row_index.to_string()],
+        diagnostics: vec![
+            Diagnostic::warning(
+                "ssed_ordered_honbun_row_missing",
+                "ordered HONBUN renderer sidecar did not contain a row for the raw HONMON slot",
+            )
+            .with_context("row_index", row_index.to_string())
             .with_context("sidecar", display_name(&resolver.path))
             .with_context("table", &resolver.table)
             .with_context("id_column", &resolver.id_column),
