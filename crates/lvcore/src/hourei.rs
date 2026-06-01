@@ -664,3 +664,73 @@ fn find_file_by_name(root: &Path, filename: &str) -> Result<Option<PathBuf>> {
     }
     Ok(None)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn law_html_rejects_non_canonical_law_ids() {
+        let root = tempdir().unwrap();
+        let store = HoureiStore {
+            root: root.path().to_path_buf(),
+        };
+
+        for id in ["", "../outside", "123/../../outside", "123.db", "１２３"] {
+            assert!(store.law_html(id).unwrap().is_none(), "{id}");
+            assert!(store.law_entry(id).unwrap().is_none(), "{id}");
+            assert!(store.law_window(id, 1, 1).unwrap().is_none(), "{id}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_law_html_symlink_escape_is_not_read() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let html_dir = root.path().join("_DataBase/HTMLs/H");
+        fs::create_dir_all(&html_dir).unwrap();
+        fs::write(outside.path().join("123_H.html"), b"outside").unwrap();
+        symlink(
+            outside.path().join("123_H.html"),
+            html_dir.join("123_H.html"),
+        )
+        .unwrap();
+        let store = HoureiStore {
+            root: root.path().to_path_buf(),
+        };
+
+        assert!(store.law_html("123").unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn law_shard_db_symlink_escape_is_not_opened() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let shard_dir = root.path().join("_DataBase/M23");
+        fs::create_dir_all(&shard_dir).unwrap();
+        let outside_db = outside.path().join("123.db");
+        let connection = Connection::open(&outside_db).unwrap();
+        connection
+            .execute_batch(
+                "create table t_page (f_rec_id integer primary key, f_text text);
+                 insert into t_page values (1, 'outside');",
+            )
+            .unwrap();
+        symlink(outside_db, shard_dir.join("123.db")).unwrap();
+        let store = HoureiStore {
+            root: root.path().to_path_buf(),
+        };
+
+        assert!(store.law_html("123").unwrap().is_none());
+    }
+}
