@@ -232,12 +232,15 @@ pub(super) fn ssed_aux_index_rows_to_nodes(
     for (index, row) in rows.iter().enumerate() {
         let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
         let next_target_row = nearest_higher_aux_target_row(rows, row);
+        let mut node_diagnostics = rich_label.diagnostics;
+        let target =
+            ssed_aux_index_row_target(package, row, next_target_row, &mut node_diagnostics)?;
         let node = NavigationNode {
             node_id: format!("aux-index:{}:{index}", row.line_number),
             label_html: rich_label.html,
             label_text: rich_label.text,
-            target: ssed_aux_index_row_target(package, row, next_target_row, diagnostics)?,
-            diagnostics: rich_label.diagnostics,
+            target,
+            diagnostics: node_diagnostics,
             children: Vec::new(),
         };
         let depth = row.depth.max(1) as usize;
@@ -267,7 +270,7 @@ pub(super) fn ssed_aux_index_rows_to_nodes(
 pub(super) fn ssed_aux_index_rows_to_flat_nodes(
     package: &ReaderBookPackage,
     rows: &[SsedAuxIndexRow],
-    diagnostics: &mut Vec<Diagnostic>,
+    _diagnostics: &mut Vec<Diagnostic>,
     gaiji_policy: &GaijiPolicy,
 ) -> Result<Vec<NavigationNode>> {
     rows.iter()
@@ -275,12 +278,15 @@ pub(super) fn ssed_aux_index_rows_to_flat_nodes(
         .map(|(index, row)| {
             let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
             let next_target_row = nearest_higher_aux_target_row(rows, row);
+            let mut node_diagnostics = rich_label.diagnostics;
+            let target =
+                ssed_aux_index_row_target(package, row, next_target_row, &mut node_diagnostics)?;
             Ok(NavigationNode {
                 node_id: format!("aux-index:{}:{index}", row.line_number),
                 label_html: rich_label.html,
                 label_text: rich_label.text,
-                target: ssed_aux_index_row_target(package, row, next_target_row, diagnostics)?,
-                diagnostics: rich_label.diagnostics,
+                target,
+                diagnostics: node_diagnostics,
                 children: Vec::new(),
             })
         })
@@ -297,6 +303,19 @@ fn ssed_aux_index_row_target(
         return Ok(None);
     }
     if let Some(selector) = row.virtual_selector() {
+        if !package.storage.exists(Path::new("Panels.xml"))? {
+            diagnostics.push(
+                Diagnostic::info(
+                    "ssed_auxiliary_index_virtual_selector_without_panels",
+                    format!(
+                        "auxiliary index row {} points to virtual selector {selector}, but no Panels.xml is present",
+                        row.line_number
+                    ),
+                )
+                .with_context("panel_id", &selector),
+            );
+            return Ok(None);
+        }
         diagnostics.push(
             Diagnostic::info(
                 "ssed_auxiliary_index_virtual_selector",

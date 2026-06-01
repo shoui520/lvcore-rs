@@ -220,6 +220,11 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
         ),
     )
     .unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<?xml version="1.0"?><panels version="1.0"></panels>"#,
+    )
+    .unwrap();
     let catalog = SsedCatalog {
         title: "DAIJIRIN".to_owned(),
         components: vec![SsedComponent {
@@ -385,7 +390,8 @@ fn ssed_numeric_auxiliary_index_opens_without_exinfo() {
         dir.path().join("0000015f.idx"),
         cp932(
             "00000000\t00000000\tRoot\n\
-                 00005221\t00000722\t\tChild\n",
+                 00005221\t00000722\t\tChild\n\
+                 00000001\t0000ffff\t\tPanel selector without panel metadata\n",
         ),
     )
     .unwrap();
@@ -447,6 +453,7 @@ fn ssed_numeric_auxiliary_index_opens_without_exinfo() {
     let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
         panic!("expected numeric auxiliary navigation tree");
     };
+    assert_eq!(nodes[0].children.len(), 2);
     let target = nodes[0].children[0]
         .target
         .as_ref()
@@ -461,6 +468,10 @@ fn ssed_numeric_auxiliary_index_opens_without_exinfo() {
             offset: 0x0722
         } if component == "HONMON.DIC"
     ));
+    assert!(nodes[0].children[1].target.is_none());
+    assert!(nodes[0].children[1].diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_auxiliary_index_virtual_selector_without_panels"
+    }));
 }
 
 #[cfg(unix)]
