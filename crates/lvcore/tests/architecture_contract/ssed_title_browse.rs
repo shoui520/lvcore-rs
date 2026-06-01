@@ -67,6 +67,16 @@ fn title_index_surfaces_are_cursor_paged_by_backend() {
             .collect::<Vec<_>>(),
         ["alpha", "beta"]
     );
+    assert_eq!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+            end_block: 1,
+            end_offset: 4,
+        }
+    );
     assert_eq!(next_cursor.as_deref(), Some("2"));
 
     let second = package
@@ -143,4 +153,90 @@ fn title_index_browse_prefers_forward_rows_over_backward_search_rows() {
         .unwrap();
     assert_eq!(backward.hits.len(), 1);
     assert_eq!(backward.hits[0].title_text, "alpha");
+}
+
+#[test]
+fn title_index_browse_skips_backward_components_before_opening_them() {
+    let dir = tempdir().unwrap();
+    let record_start = 0x80;
+    let mut catalog = vec![0u8; record_start + 5 * 0x30];
+    catalog[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Backward First Fixture";
+    catalog[0x0c] = title.len() as u8;
+    catalog[0x0d..0x0d + title.len()].copy_from_slice(title);
+    catalog[0x4d] = 5;
+    write_record(
+        &mut catalog[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x30..record_start + 0x60],
+        0x07,
+        15,
+        16,
+        "BHTITLE.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x60..record_start + 0x90],
+        0x71,
+        18,
+        18,
+        "BHINDEX.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x90..record_start + 0xc0],
+        0x05,
+        13,
+        14,
+        "FHTITLE.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0xc0..record_start + 0xf0],
+        0x91,
+        17,
+        17,
+        "FHINDEX.DIC",
+    );
+
+    fs::write(dir.path().join("DICT.IDX"), catalog).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+    fs::write(dir.path().join("BHINDEX.DIC"), b"not an SSEDDATA stream").unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("expected SSED title/index browse");
+    };
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "alpha");
+    let window = package
+        .resolve_target_window(
+            &items[0].target,
+            Some(&lvcore::SequenceHint::TitleIndexOrder {
+                value: "title-index".to_owned(),
+            }),
+            0,
+            0,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert!(
+        !window
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_index_component_decode_failed")
+    );
 }

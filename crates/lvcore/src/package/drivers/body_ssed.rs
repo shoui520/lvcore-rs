@@ -9,6 +9,32 @@ impl ReaderBookPackage {
         block: u32,
         offset: u32,
     ) -> Result<VisualBody> {
+        self.visual_body_for_ssed_address_with_bound(requested_component, block, offset, None)
+    }
+
+    pub(super) fn visual_body_for_ssed_bounded_address(
+        &self,
+        requested_component: &str,
+        block: u32,
+        offset: u32,
+        end_block: u32,
+        end_offset: u32,
+    ) -> Result<VisualBody> {
+        self.visual_body_for_ssed_address_with_bound(
+            requested_component,
+            block,
+            offset,
+            Some((end_block, end_offset)),
+        )
+    }
+
+    fn visual_body_for_ssed_address_with_bound(
+        &self,
+        requested_component: &str,
+        block: u32,
+        offset: u32,
+        end: Option<(u32, u32)>,
+    ) -> Result<VisualBody> {
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(VisualBody::Unsupported {
                 reason: "SSED catalog is unavailable".to_owned(),
@@ -65,7 +91,16 @@ impl ReaderBookPackage {
             return Ok(body);
         }
         let stream_offset = self.ssed_stream_start_offset(component, component_offset);
-        let length = self.infer_ssed_stream_length(component, stream_offset);
+        let inferred_length = self.infer_ssed_stream_length(component, stream_offset);
+        let bounded_length = end.and_then(|(end_block, end_offset)| {
+            bounded_ssed_stream_length(catalog, component, stream_offset, end_block, end_offset)
+        });
+        let length = match (inferred_length, bounded_length) {
+            (Some(inferred), Some(bound)) => Some(inferred.min(bound)),
+            (Some(inferred), None) => Some(inferred),
+            (None, Some(bound)) => Some(bound),
+            (None, None) => None,
+        };
         Ok(VisualBody::SsedStream {
             component: component.filename.clone(),
             offset: stream_offset,
@@ -359,6 +394,26 @@ impl ReaderBookPackage {
             Ok(None)
         }
     }
+}
+
+fn bounded_ssed_stream_length(
+    catalog: &SsedCatalog,
+    start_component: &SsedComponent,
+    stream_offset: u64,
+    end_block: u32,
+    end_offset: u32,
+) -> Option<u64> {
+    let end_component = catalog.component_for_address(end_block)?;
+    if !end_component
+        .filename
+        .eq_ignore_ascii_case(&start_component.filename)
+    {
+        return None;
+    }
+    let end_component_offset = end_component.relative_offset(end_block, end_offset)?;
+    end_component_offset
+        .checked_sub(stream_offset)
+        .filter(|length| *length > 0)
 }
 
 fn ssed_reader_index_boundary_marker_variant_len(

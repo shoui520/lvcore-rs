@@ -37,6 +37,13 @@ pub enum InternalTarget {
         block: u32,
         offset: u32,
     },
+    SsedBoundedAddress {
+        component: String,
+        block: u32,
+        offset: u32,
+        end_block: u32,
+        end_offset: u32,
+    },
     SsedDenseAnchor {
         anchor: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,7 +125,7 @@ pub enum InternalTarget {
 impl InternalTarget {
     pub fn kind(&self) -> TargetKind {
         match self {
-            Self::SsedAddress { .. } => TargetKind::SsedAddress,
+            Self::SsedAddress { .. } | Self::SsedBoundedAddress { .. } => TargetKind::SsedAddress,
             Self::SsedDenseAnchor { .. } => TargetKind::SsedDenseAnchor,
             Self::SsedAuxRecord { .. } => TargetKind::SsedAuxRecord,
             Self::LvedRow { .. } => TargetKind::LvedRow,

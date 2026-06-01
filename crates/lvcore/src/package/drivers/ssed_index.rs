@@ -211,12 +211,22 @@ impl ReaderBookPackage {
         row_limit: Option<usize>,
         on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
     ) -> Result<Vec<Diagnostic>> {
-        self.scan_ssed_simple_index_rows_with_page_filter(row_limit, |_, _| true, on_row)
+        self.scan_ssed_simple_index_rows_with_filters(row_limit, |_| true, |_, _| true, on_row)
     }
 
     pub(super) fn scan_ssed_simple_index_rows_with_page_filter(
         &self,
         row_limit: Option<usize>,
+        page_may_match: impl FnMut(&SsedComponent, &[u8]) -> bool,
+        on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<Vec<Diagnostic>> {
+        self.scan_ssed_simple_index_rows_with_filters(row_limit, |_| true, page_may_match, on_row)
+    }
+
+    pub(super) fn scan_ssed_simple_index_rows_with_filters(
+        &self,
+        row_limit: Option<usize>,
+        mut component_may_match: impl FnMut(&SsedComponent) -> bool,
         mut page_may_match: impl FnMut(&SsedComponent, &[u8]) -> bool,
         mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
     ) -> Result<Vec<Diagnostic>> {
@@ -231,6 +241,9 @@ impl ReaderBookPackage {
         'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
             if row_limit.is_some_and(|limit| row_count >= limit) {
                 break;
+            }
+            if !component_may_match(component) {
+                continue;
             }
             if !is_supported_index_type(component.component_type) {
                 diagnostics.push(
@@ -441,6 +454,25 @@ impl ReaderBookPackage {
         &self,
         pointer: SsedIndexPointer,
     ) -> Result<std::result::Result<TargetToken, Diagnostic>> {
+        self.ssed_target_for_index_pointer_with_bound(pointer, None)
+    }
+
+    pub(in crate::package) fn ssed_target_for_index_row(
+        &self,
+        row: &SsedIndexRow,
+        next_row: Option<&SsedIndexRow>,
+    ) -> Result<std::result::Result<TargetToken, Diagnostic>> {
+        let end = next_row
+            .filter(|next| next.body != row.body)
+            .map(|next| next.body);
+        self.ssed_target_for_index_pointer_with_bound(row.body, end)
+    }
+
+    fn ssed_target_for_index_pointer_with_bound(
+        &self,
+        pointer: SsedIndexPointer,
+        end: Option<SsedIndexPointer>,
+    ) -> Result<std::result::Result<TargetToken, Diagnostic>> {
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(Err(Diagnostic::error(
                 "ssed_catalog_missing",
@@ -469,11 +501,22 @@ impl ReaderBookPackage {
             )
             .with_context("component", &component.filename)));
         }
-        Ok(Ok(TargetToken::new(&InternalTarget::SsedAddress {
-            component: component.filename.clone(),
-            block: pointer.block,
-            offset: pointer.offset,
-        })?))
+        let target = if let Some(end) = end {
+            InternalTarget::SsedBoundedAddress {
+                component: component.filename.clone(),
+                block: pointer.block,
+                offset: pointer.offset,
+                end_block: end.block,
+                end_offset: end.offset,
+            }
+        } else {
+            InternalTarget::SsedAddress {
+                component: component.filename.clone(),
+                block: pointer.block,
+                offset: pointer.offset,
+            }
+        };
+        Ok(Ok(TargetToken::new(&target)?))
     }
 
     pub(super) fn ssed_target_for_loose_address(

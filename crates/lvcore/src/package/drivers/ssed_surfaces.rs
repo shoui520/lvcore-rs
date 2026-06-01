@@ -103,12 +103,17 @@ impl ReaderBookPackage {
             });
         }
         let mut items = Vec::new();
-        for (index, row) in rows.into_iter().enumerate() {
+        for (index, row) in rows.iter().enumerate() {
             let label = self
                 .ssed_title_text(row.title)
                 .unwrap_or_else(|| row.key.clone());
             let label = self.ssed_rich_label(&label);
-            let target = match self.ssed_target_for_index_pointer(row.body)? {
+            let target = match self.ssed_target_for_index_row(
+                row,
+                rows.iter()
+                    .skip(index + 1)
+                    .find(|next| next.body != row.body),
+            )? {
                 Ok(target) => target,
                 Err(diagnostic) => {
                     diagnostics.push(diagnostic);
@@ -296,20 +301,24 @@ impl ReaderBookPackage {
         let mut rows = Vec::new();
         let mut seen = 0usize;
         let skip_backward_rows = self.ssed_has_forward_browse_index();
-        let diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
-            if skip_backward_rows && ssed_index_component_name_is_backward(&row.component) {
-                return Ok(true);
-            }
-            if seen >= offset {
-                rows.push(row);
-            }
-            seen = seen.saturating_add(1);
-            Ok(rows.len() < limit)
-        })?;
+        let diagnostics = self.scan_ssed_simple_index_rows_with_filters(
+            None,
+            |component| {
+                !(skip_backward_rows && ssed_index_component_name_is_backward(&component.filename))
+            },
+            |_, _| true,
+            |row| {
+                if seen >= offset {
+                    rows.push(row);
+                }
+                seen = seen.saturating_add(1);
+                Ok(rows.len() < limit)
+            },
+        )?;
         Ok((rows, diagnostics))
     }
 
-    fn ssed_has_forward_browse_index(&self) -> bool {
+    pub(super) fn ssed_has_forward_browse_index(&self) -> bool {
         self.ssed_catalog.as_ref().is_some_and(|catalog| {
             catalog
                 .components_by_role(SsedComponentRole::Index)

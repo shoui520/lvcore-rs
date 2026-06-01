@@ -50,6 +50,15 @@ impl BodyProvider for ReaderBookPackage {
                 block,
                 offset,
             } => self.visual_body_for_ssed_address(&component, block, offset),
+            InternalTarget::SsedBoundedAddress {
+                component,
+                block,
+                offset,
+                end_block,
+                end_offset,
+            } => self.visual_body_for_ssed_bounded_address(
+                &component, block, offset, end_block, end_offset,
+            ),
             InternalTarget::SsedAuxRecord { source, key, .. }
                 if source == BRITANNICA_CHRONOLOGY_SOURCE_ID =>
             {

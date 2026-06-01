@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::VecDeque;
 
 impl ReaderBookPackage {
     pub(super) fn resolve_ssed_title_index_window(
@@ -8,21 +9,57 @@ impl ReaderBookPackage {
         after: usize,
         options: &RenderOptions,
     ) -> Result<Option<TargetWindow>> {
-        let InternalTarget::SsedAddress {
-            component,
-            block,
-            offset,
-        } = target.decode()?
-        else {
-            return Ok(None);
+        let (component, block, offset) = match target.decode()? {
+            InternalTarget::SsedAddress {
+                component,
+                block,
+                offset,
+            }
+            | InternalTarget::SsedBoundedAddress {
+                component,
+                block,
+                offset,
+                ..
+            } => (component, block, offset),
+            _ => return Ok(None),
         };
 
-        let mut rows = Vec::new();
-        let mut diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
-            rows.push(row);
-            Ok(true)
-        })?;
-        if rows.is_empty() {
+        let skip_backward_rows = self.ssed_has_forward_browse_index();
+        let mut scanned_any = false;
+        let mut before_rows = VecDeque::<SsedIndexRow>::with_capacity(before);
+        let mut center_row = None::<SsedIndexRow>;
+        let mut tail_rows = Vec::<SsedIndexRow>::with_capacity(after.saturating_add(1));
+        let mut diagnostics = self.scan_ssed_simple_index_rows_with_filters(
+            None,
+            |component| {
+                !(skip_backward_rows && ssed_index_component_name_is_backward(&component.filename))
+            },
+            |_, _| true,
+            |row| {
+                scanned_any = true;
+                let row_matches = row.body.block == block
+                    && row.body.offset == offset
+                    && self.ssed_component_for_index_pointer(row.body).is_some_and(
+                        |row_component| row_component.eq_ignore_ascii_case(&component),
+                    );
+                if center_row.is_some() {
+                    tail_rows.push(row);
+                    return Ok(tail_rows.len() <= after);
+                }
+                if row_matches {
+                    center_row = Some(row);
+                    return Ok(true);
+                }
+                if before > 0 {
+                    if before_rows.len() >= before {
+                        before_rows.pop_front();
+                    }
+                    before_rows.push_back(row);
+                }
+                Ok(true)
+            },
+        )?;
+        if !scanned_any {
             diagnostics.push(Diagnostic::info(
                 "sequence_deferred",
                 "SSED title/index order is unavailable for this target",
@@ -35,14 +72,7 @@ impl ReaderBookPackage {
             }));
         }
 
-        let center_index = rows.iter().position(|row| {
-            row.body.block == block
-                && row.body.offset == offset
-                && self
-                    .ssed_component_for_index_pointer(row.body)
-                    .is_some_and(|row_component| row_component.eq_ignore_ascii_case(&component))
-        });
-        let Some(center_index) = center_index else {
+        let Some(center_row) = center_row else {
             diagnostics.push(Diagnostic::info(
                 "sequence_target_not_in_title_index",
                 "target is not present in the simple SSED title/index order",
@@ -55,24 +85,46 @@ impl ReaderBookPackage {
             }));
         };
 
-        let mut center = self.render_target(target, options)?;
-        let center_label = self.ssed_index_row_label(&rows[center_index]);
-        center.title = Some(center_label.text);
-        center.diagnostics.extend(center_label.diagnostics);
-        let before_start = center_index.saturating_sub(before);
-        let after_end = rows
-            .len()
-            .min(center_index.saturating_add(after).saturating_add(1));
+        let mut context_rows = Vec::with_capacity(
+            before_rows
+                .len()
+                .saturating_add(1)
+                .saturating_add(tail_rows.len()),
+        );
+        context_rows.extend(before_rows.iter().cloned());
+        let center_index = context_rows.len();
+        context_rows.push(center_row.clone());
+        context_rows.extend(tail_rows.iter().cloned());
+
+        let center = match self.render_ssed_index_row(
+            &center_row,
+            next_distinct_index_row(&context_rows, center_index),
+            options,
+            &mut diagnostics,
+        )? {
+            Some(view) => view,
+            None => self.render_target(target, options)?,
+        };
 
         let mut before_views = Vec::new();
-        for row in &rows[before_start..center_index] {
-            if let Some(view) = self.render_ssed_index_row(row, options, &mut diagnostics)? {
+        for index in 0..center_index {
+            if let Some(view) = self.render_ssed_index_row(
+                &context_rows[index],
+                next_distinct_index_row(&context_rows, index),
+                options,
+                &mut diagnostics,
+            )? {
                 before_views.push(view);
             }
         }
         let mut after_views = Vec::new();
-        for row in &rows[center_index + 1..after_end] {
-            if let Some(view) = self.render_ssed_index_row(row, options, &mut diagnostics)? {
+        for index in center_index + 1..context_rows.len().min(center_index + 1 + after) {
+            if let Some(view) = self.render_ssed_index_row(
+                &context_rows[index],
+                next_distinct_index_row(&context_rows, index),
+                options,
+                &mut diagnostics,
+            )? {
                 after_views.push(view);
             }
         }
@@ -88,10 +140,11 @@ impl ReaderBookPackage {
     fn render_ssed_index_row(
         &self,
         row: &SsedIndexRow,
+        next_row: Option<&SsedIndexRow>,
         options: &RenderOptions,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<Option<ResolvedTargetView>> {
-        let target = match self.ssed_target_for_index_pointer(row.body)? {
+        let target = match self.ssed_target_for_index_row(row, next_row)? {
             Ok(target) => target,
             Err(diagnostic) => {
                 diagnostics.push(diagnostic);
@@ -189,4 +242,11 @@ impl ReaderBookPackage {
             ),
         )?))
     }
+}
+
+fn next_distinct_index_row<'a>(rows: &'a [SsedIndexRow], index: usize) -> Option<&'a SsedIndexRow> {
+    let row = rows.get(index)?;
+    rows.iter()
+        .skip(index + 1)
+        .find(|next| next.body != row.body)
 }
