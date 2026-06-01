@@ -15,6 +15,15 @@ pub struct HcTextRender {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HcCommonHtmlRender {
+    pub html: String,
+    pub text: String,
+    pub stats: HcTextStats,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HcTextStats {
     pub controls: usize,
     pub line_breaks: usize,
@@ -79,8 +88,269 @@ enum HcTextStyle {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HcHtmlStyle {
+    start_op: u8,
+    tag: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HcHtmlInline {
+    Link,
+    Url,
+}
+
 pub fn decode_hc_stream_basic_text(data: &[u8]) -> HcTextRender {
     decode_hc_stream_basic_text_with_gaiji(data, |_code| None)
+}
+
+pub fn decode_hc_stream_common_html(data: &[u8]) -> HcCommonHtmlRender {
+    decode_hc_stream_common_html_with_gaiji(data, |_code| None)
+}
+
+pub fn decode_hc_stream_common_html_with_gaiji(
+    data: &[u8],
+    mut gaiji_text: impl FnMut(&str) -> Option<HcBasicTextGaiji>,
+) -> HcCommonHtmlRender {
+    let mut html = String::with_capacity(data.len().saturating_mul(2));
+    let mut text = String::with_capacity(data.len());
+    let mut stats = HcTextStats::default();
+    let mut unknown_ops = BTreeSet::new();
+    let mut style_stack: Vec<HcHtmlStyle> = Vec::new();
+    let mut inline_stack: Vec<HcHtmlInline> = Vec::new();
+    let mut halfwidth_depth = 0usize;
+    let mut offset = 0usize;
+
+    while offset < data.len() {
+        let byte = data[offset];
+        if byte == 0 {
+            offset += 1;
+            continue;
+        }
+
+        if byte == 0x1f {
+            if offset + 1 >= data.len() {
+                stats.truncated_controls += 1;
+                break;
+            }
+            stats.controls += 1;
+            let op = data[offset + 1];
+            let arg_len = hc_control_arg_length(data, offset);
+            let next = offset.saturating_add(2).saturating_add(arg_len);
+            if next > data.len() {
+                stats.truncated_controls += 1;
+                break;
+            }
+            let payload = &data[offset + 2..next];
+
+            if op == 0x0a {
+                push_html_line_break(&mut html, &mut text);
+                stats.line_breaks += 1;
+                offset = next;
+                continue;
+            }
+
+            if let Some((tag, attrs)) = html_style_start_spec(op) {
+                stats.style_controls += 1;
+                html.push('<');
+                html.push_str(tag);
+                html.push_str(attrs);
+                html.push('>');
+                style_stack.push(HcHtmlStyle { start_op: op, tag });
+                if op == 0x04 {
+                    halfwidth_depth = halfwidth_depth.saturating_add(1);
+                }
+                offset = next;
+                continue;
+            }
+
+            if let Some(start_op) = html_style_end_start_op(op) {
+                stats.style_controls += 1;
+                close_html_style(&mut html, &mut style_stack, start_op, &mut halfwidth_depth);
+                offset = next;
+                continue;
+            }
+
+            if op == 0x3b {
+                stats.link_controls += 1;
+                html.push_str("<span class=\"lv-hc-url\">");
+                inline_stack.push(HcHtmlInline::Url);
+                offset = next;
+                continue;
+            }
+
+            if op == 0x5b {
+                stats.link_controls += 1;
+                if let Some(position) = inline_stack
+                    .iter()
+                    .rposition(|inline| *inline == HcHtmlInline::Url)
+                {
+                    inline_stack.remove(position);
+                    html.push_str("</span>");
+                }
+                offset = next;
+                continue;
+            }
+
+            if LINK_START_OPS.contains(&op) {
+                stats.link_controls += 1;
+                let target_payload = if payload.len() >= 6 {
+                    &payload[payload.len() - 6..]
+                } else {
+                    payload
+                };
+                let target = decode_pointer_payload(target_payload);
+                append_link_start(&mut html, op, target);
+                inline_stack.push(HcHtmlInline::Link);
+                offset = next;
+                continue;
+            }
+
+            if LINK_END_OPS.contains(&op) {
+                stats.link_controls += 1;
+                if let Some(position) = inline_stack
+                    .iter()
+                    .rposition(|inline| *inline == HcHtmlInline::Link)
+                {
+                    inline_stack.remove(position);
+                    html.push_str("</a>");
+                }
+                offset = next;
+                continue;
+            }
+
+            if MEDIA_OPS.contains(&op) {
+                stats.media_controls += 1;
+                append_media_placeholder(&mut html, op, payload);
+                offset = next;
+                continue;
+            }
+
+            if PRIVATE_OPS.contains(&op)
+                || PRIVATE_RENDERER_DIRECTIVE_OPS.contains(&op)
+                || VERTICAL_HINT_OPS.contains(&op)
+                || COMMON_RENDERER_STATE_OPS.contains(&op)
+            {
+                stats.private_controls += 1;
+                offset = next;
+                continue;
+            }
+
+            if KNOWN_NONPRINTING_OPS.contains(&op) {
+                stats.nonprinting_controls += 1;
+                offset = next;
+                continue;
+            }
+
+            stats.unknown_controls += 1;
+            unknown_ops.insert(op);
+            offset = next;
+            continue;
+        }
+
+        if byte < 0x20 {
+            if byte == b'\n' {
+                push_html_line_break(&mut html, &mut text);
+                stats.line_breaks += 1;
+            } else if byte == b'\t' {
+                html.push('\t');
+                text.push('\t');
+            } else {
+                html.push(' ');
+                text.push(' ');
+            }
+            offset += 1;
+            continue;
+        }
+
+        if offset + 1 < data.len()
+            && (0x21..=0x7e).contains(&byte)
+            && (0x21..=0x7e).contains(&data[offset + 1])
+            && let Some(decoded) = decode_jis_pair(byte, data[offset + 1])
+        {
+            let visible = if halfwidth_depth > 0 {
+                narrow_fullwidth_ascii(&decoded.to_string())
+            } else {
+                decoded.to_string()
+            };
+            push_html_text(&mut html, &visible);
+            text.push_str(&visible);
+            stats.jis_pairs += 1;
+            offset += 2;
+            continue;
+        }
+
+        if offset + 1 < data.len()
+            && ((0x81..=0x9f).contains(&byte) || (0xe0..=0xfc).contains(&byte))
+        {
+            let (decoded, _encoding, had_errors) = SHIFT_JIS.decode(&data[offset..offset + 2]);
+            if !had_errors {
+                push_html_text(&mut html, decoded.as_ref());
+                text.push_str(decoded.as_ref());
+                stats.cp932_pairs += 1;
+                offset += 2;
+                continue;
+            }
+        }
+
+        if offset + 1 < data.len() && (0xa1..=0xfe).contains(&byte) {
+            let second = data[offset + 1];
+            let code = format!("{byte:02X}{second:02X}");
+            if let Some(resolved) = gaiji_text(&code) {
+                push_html_text(&mut html, &resolved.text);
+                text.push_str(&resolved.text);
+                if resolved.resolved {
+                    stats.resolved_gaiji_pairs += 1;
+                } else {
+                    stats.placeholder_gaiji_pairs += 1;
+                }
+            } else {
+                stats.skipped_gaiji_pairs += 1;
+            }
+            offset += 2;
+            continue;
+        }
+
+        if byte <= 0x7e {
+            let ch = byte as char;
+            push_html_char(&mut html, ch);
+            text.push(ch);
+            stats.ascii_bytes += 1;
+        }
+        offset += 1;
+    }
+
+    let closed_unbalanced_state =
+        !inline_stack.is_empty() || !style_stack.is_empty() || halfwidth_depth > 0;
+    while let Some(inline) = inline_stack.pop() {
+        match inline {
+            HcHtmlInline::Link => html.push_str("</a>"),
+            HcHtmlInline::Url => html.push_str("</span>"),
+        }
+    }
+    while let Some(style) = style_stack.pop() {
+        if style.start_op == 0x04 {
+            halfwidth_depth = halfwidth_depth.saturating_sub(1);
+        }
+        html.push_str("</");
+        html.push_str(style.tag);
+        html.push('>');
+    }
+
+    let mut diagnostics = hc_text_diagnostics(&stats, &unknown_ops);
+    if closed_unbalanced_state {
+        diagnostics.push(Diagnostic::warning(
+            "hc_common_html_unbalanced_state",
+            "common HC HTML fallback closed unbalanced style/link state at end of stream",
+        ));
+    }
+
+    HcCommonHtmlRender {
+        html: format!("<div class=\"lv-hc-common-html-fallback\">{html}</div>"),
+        text,
+        stats,
+        diagnostics,
+    }
 }
 
 pub fn decode_hc_stream_basic_text_with_gaiji(
@@ -237,6 +507,16 @@ pub fn decode_hc_stream_basic_text_with_gaiji(
         offset += 1;
     }
 
+    let diagnostics = hc_text_diagnostics(&stats, &unknown_ops);
+
+    HcTextRender {
+        text,
+        stats,
+        diagnostics,
+    }
+}
+
+fn hc_text_diagnostics(stats: &HcTextStats, unknown_ops: &BTreeSet<u8>) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     if !unknown_ops.is_empty() {
         diagnostics.push(Diagnostic::warning(
@@ -280,11 +560,7 @@ pub fn decode_hc_stream_basic_text_with_gaiji(
         ));
     }
 
-    HcTextRender {
-        text,
-        stats,
-        diagnostics,
-    }
+    diagnostics
 }
 
 fn style_start(op: u8) -> Option<HcTextStyle> {
@@ -303,6 +579,145 @@ fn push_line_break(text: &mut String) {
     if !text.ends_with('\n') {
         text.push('\n');
     }
+}
+
+fn push_html_line_break(html: &mut String, text: &mut String) {
+    if !html.ends_with("<br>") {
+        html.push_str("<br>");
+    }
+    push_line_break(text);
+}
+
+fn push_html_text(html: &mut String, value: &str) {
+    for ch in value.chars() {
+        push_html_char(html, ch);
+    }
+}
+
+fn push_html_char(html: &mut String, ch: char) {
+    match ch {
+        '&' => html.push_str("&amp;"),
+        '<' => html.push_str("&lt;"),
+        '>' => html.push_str("&gt;"),
+        '"' => html.push_str("&quot;"),
+        '\'' => html.push_str("&#39;"),
+        _ => html.push(ch),
+    }
+}
+
+fn push_html_attr(html: &mut String, value: &str) {
+    for ch in value.chars() {
+        push_html_char(html, ch);
+    }
+}
+
+fn html_style_start_spec(op: u8) -> Option<(&'static str, &'static str)> {
+    match op {
+        0x04 => Some(("span", " class=\"lv-hc-halfwidth\"")),
+        0x06 => Some(("sub", "")),
+        0x0b => Some(("span", " class=\"lv-hc-literal\"")),
+        0x0e => Some(("sup", "")),
+        0x10 => Some(("i", "")),
+        0x12 => Some(("em", "")),
+        0x41 => Some(("span", " class=\"lv-hc-heading\"")),
+        0xe0 => Some(("b", "")),
+        _ => None,
+    }
+}
+
+fn html_style_end_start_op(op: u8) -> Option<u8> {
+    match op {
+        0x05 => Some(0x04),
+        0x07 => Some(0x06),
+        0x0c => Some(0x0b),
+        0x0f => Some(0x0e),
+        0x11 => Some(0x10),
+        0x13 => Some(0x12),
+        0x61 => Some(0x41),
+        0xe1 => Some(0xe0),
+        _ => None,
+    }
+}
+
+fn close_html_style(
+    html: &mut String,
+    style_stack: &mut Vec<HcHtmlStyle>,
+    start_op: u8,
+    halfwidth_depth: &mut usize,
+) {
+    let Some(position) = style_stack
+        .iter()
+        .rposition(|style| style.start_op == start_op)
+    else {
+        return;
+    };
+    while style_stack.len() > position {
+        let style = style_stack.pop().expect("stack length checked");
+        if style.start_op == 0x04 {
+            *halfwidth_depth = halfwidth_depth.saturating_sub(1);
+        }
+        html.push_str("</");
+        html.push_str(style.tag);
+        html.push('>');
+        if style.start_op == start_op {
+            break;
+        }
+    }
+}
+
+fn decode_pointer_payload(payload: &[u8]) -> Option<(u32, u32)> {
+    if payload.len() < 6 {
+        return None;
+    }
+    let block = u32::from_be_bytes(payload.get(0..4)?.try_into().ok()?);
+    let offset = u16::from_be_bytes(payload.get(4..6)?.try_into().ok()?);
+    Some((block, u32::from(offset)))
+}
+
+fn append_link_start(html: &mut String, op: u8, target: Option<(u32, u32)>) {
+    html.push_str("<a class=\"lv-hc-link\"");
+    match target {
+        Some((block, offset)) => {
+            html.push_str(" href=\"lvaddr://");
+            push_html_attr(html, &format!("{block:08}/{offset:04}"));
+            html.push('"');
+            html.push_str(" data-lv-block=\"");
+            push_html_attr(html, &block.to_string());
+            html.push('"');
+            html.push_str(" data-lv-offset=\"");
+            push_html_attr(html, &offset.to_string());
+            html.push('"');
+            html.push_str(" data-lv-link-status=\"resolved_address\"");
+        }
+        None => {
+            html.push_str(
+                " href=\"lvaddr://unresolved\" data-lv-link-status=\"unresolved_target\"",
+            );
+        }
+    }
+    html.push_str(" data-lv-control=\"1f");
+    push_html_attr(html, &format!("{op:02x}"));
+    html.push_str("\">");
+}
+
+fn append_media_placeholder(html: &mut String, op: u8, payload: &[u8]) {
+    html.push_str("<span class=\"lv-hc-media-placeholder\" data-lv-control=\"1f");
+    push_html_attr(html, &format!("{op:02x}"));
+    html.push('"');
+    if !payload.is_empty() {
+        html.push_str(" data-lv-payload=\"");
+        push_html_attr(html, &hex_lower(payload));
+        html.push('"');
+    }
+    html.push_str("></span>");
+}
+
+fn hex_lower(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len() * 2);
+    for byte in data {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 fn narrow_fullwidth_ascii(text: &str) -> String {
@@ -362,6 +777,7 @@ mod tests {
 
     use super::{
         HcBasicTextGaiji, decode_hc_stream_basic_text, decode_hc_stream_basic_text_with_gaiji,
+        decode_hc_stream_common_html, decode_hc_stream_common_html_with_gaiji,
     };
 
     #[test]
@@ -428,6 +844,77 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code == "hc_basic_text_gaiji_placeholders")
         );
+    }
+
+    #[test]
+    fn common_html_renders_balanced_common_styles_and_halfwidth_text() {
+        let mut data = body_jis("見出し");
+        data.extend_from_slice(&[0x1f, 0x0a]);
+        data.extend_from_slice(&[0x1f, 0x04]);
+        data.extend_from_slice(&body_jis("ＡＢＣ"));
+        data.extend_from_slice(&[0x1f, 0x05]);
+        data.extend_from_slice(&[0x1f, 0x06]);
+        data.extend_from_slice(&body_jis("小"));
+        data.extend_from_slice(&[0x1f, 0x07]);
+        data.extend_from_slice(&[0x1f, 0xe0, 0x00, 0x00]);
+        data.extend_from_slice(&body_jis("太"));
+        data.extend_from_slice(&[0x1f, 0xe1]);
+
+        let rendered = decode_hc_stream_common_html(&data);
+
+        assert_eq!(rendered.text, "見出し\nABC小太");
+        assert_eq!(rendered.stats.line_breaks, 1);
+        assert_eq!(rendered.stats.style_controls, 6);
+        assert_eq!(
+            rendered.html,
+            "<div class=\"lv-hc-common-html-fallback\">見出し<br><span class=\"lv-hc-halfwidth\">ABC</span><sub>小</sub><b>太</b></div>"
+        );
+        assert!(rendered.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn common_html_renders_links_and_closes_unterminated_state() {
+        let mut data = body_jis("前");
+        data.extend_from_slice(&[
+            0x1f, 0x44, 0xaa, 0xbb, 0xcc, 0xdd, 0x00, 0x00, 0x00, 0x03, 0x12, 0x34,
+        ]);
+        data.extend_from_slice(&body_jis("リンク"));
+        data.extend_from_slice(&[0x1f, 0x64, 0, 0, 0, 0, 0, 0]);
+
+        let rendered = decode_hc_stream_common_html(&data);
+
+        assert_eq!(rendered.text, "前リンク");
+        assert!(
+            rendered.html.contains(
+                "<a class=\"lv-hc-link\" href=\"lvaddr://00000003/4660\" data-lv-block=\"3\" data-lv-offset=\"4660\" data-lv-link-status=\"resolved_address\" data-lv-control=\"1f44\">リンク</a>"
+            )
+        );
+        assert!(rendered.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn common_html_resolves_gaiji_without_python_bytes_repr_or_raw_codes() {
+        let mut data = body_jis("本文");
+        data.extend_from_slice(&[0xb1, 0x23]);
+        data.extend_from_slice(&[0xb9, 0x99]);
+
+        let rendered = decode_hc_stream_common_html_with_gaiji(&data, |code| match code {
+            "B123" => Some(HcBasicTextGaiji {
+                text: "<一>".to_owned(),
+                resolved: true,
+            }),
+            "B999" => Some(HcBasicTextGaiji {
+                text: "〓".to_owned(),
+                resolved: false,
+            }),
+            _ => None,
+        });
+
+        assert_eq!(rendered.text, "本文<一>〓");
+        assert!(rendered.html.contains("本文&lt;一&gt;〓"));
+        assert!(!rendered.html.contains("B123"));
+        assert_eq!(rendered.stats.resolved_gaiji_pairs, 1);
+        assert_eq!(rendered.stats.placeholder_gaiji_pairs, 1);
     }
 
     fn body_jis(value: &str) -> Vec<u8> {

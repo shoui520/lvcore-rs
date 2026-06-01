@@ -157,7 +157,10 @@ use crate::ssed_aux_index::{
 use crate::ssed_encyclopedia::{SsedEncyclopediaRow, parse_encyclopedia_index};
 use crate::ssed_figure::{FigureDimensions, figure_bitmap_to_png};
 use crate::ssed_ga16::{ga16_glyph_png, ga16_resource_covers_code};
-use crate::ssed_hc::{HcBasicTextGaiji, decode_hc_stream_basic_text_with_gaiji};
+use crate::ssed_hc::{
+    HcBasicTextGaiji, decode_hc_stream_basic_text_with_gaiji,
+    decode_hc_stream_common_html_with_gaiji,
+};
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_title_text,
     is_leaf_page, is_simple_leaf_index_type, is_supported_index_type, parse_internal_page,

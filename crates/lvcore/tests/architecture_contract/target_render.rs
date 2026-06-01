@@ -160,7 +160,7 @@ fn render_target_uses_resolved_visual_body_contract() {
     assert!(
         view.display_html
             .as_deref()
-            .is_some_and(|html| html.contains("lv-hc-basic-text-fallback"))
+            .is_some_and(|html| html.contains("lv-hc-common-html-fallback"))
     );
     assert!(
         view.basic_text
@@ -174,7 +174,7 @@ fn render_target_uses_resolved_visual_body_contract() {
     assert!(
         view.diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "hc_render_basic_text_fallback")
+            .any(|diagnostic| diagnostic.code == "hc_render_common_html_fallback")
     );
     let debug_trace = view.debug_trace.as_deref().unwrap_or_default();
     assert!(debug_trace.contains("HONMON.DIC"));

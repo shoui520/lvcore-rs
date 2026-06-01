@@ -184,10 +184,12 @@ provider slices:
   renderer/resource scans scoped to the focused entry where the boundary is
   known;
 - SSED plain HONMON targets in `Native` and `GenericHtml` render modes now
-  return a bounded basic-text HTML fallback instead of an empty deferred view.
-  The output keeps `HcRenderInput` capability metadata and emits an explicit
-  `hc_render_basic_text_fallback` diagnostic, so reader apps get something
-  displayable without mistaking it for product HC visual parity;
+  return a bounded common-HC HTML fallback instead of an empty deferred view.
+  The fallback handles shared controls such as line breaks, common style spans,
+  address links, URL spans, media placeholders, gaiji Unicode placeholders, and
+  balanced tag closure. The output keeps `HcRenderInput` capability metadata and
+  emits an explicit `hc_render_common_html_fallback` diagnostic, so reader apps
+  get something displayable without mistaking it for product HC visual parity;
 - SSED KOJIEN6-style `COLSMPL.DIC` records are parsed as typed color-sample
   metadata preserving exact Munsell notation and JIS labels;
 - explicit deferred/unsupported diagnostics instead of fake output.
@@ -200,7 +202,7 @@ known structures.
 ## Important Gaps
 
 - SSED HC renderer parity is not ported yet. Plain SSED body targets expose
-  structured HC renderer input and, for native/generic display, a basic-text HTML
+  structured HC renderer input and, for native/generic display, a common-HC HTML
   fallback with diagnostics. This is intentionally displayable but not a visual
   parity claim. Supported dense sidecar targets resolve to preserved HTML or
   exact sidecar text.

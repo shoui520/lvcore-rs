@@ -133,7 +133,7 @@ fn ssed_hc_renderer_input_carries_stream_resource_refs() {
     assert!(
         view.diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "hc_render_basic_text_fallback")
+            .any(|diagnostic| diagnostic.code == "hc_render_common_html_fallback")
     );
 }
 

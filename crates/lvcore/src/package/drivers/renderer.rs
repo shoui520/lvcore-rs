@@ -210,7 +210,7 @@ impl ReaderBookPackage {
                     });
                 }
                 let data = self.read_ssed_stream_render_slice(&component, offset, length)?;
-                let rendered = decode_hc_stream_basic_text_with_gaiji(&data, |code| {
+                let rendered = decode_hc_stream_common_html_with_gaiji(&data, |code| {
                     let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
                     let resolved = resolution.unicode.is_some();
                     let text = resolution
@@ -225,14 +225,14 @@ impl ReaderBookPackage {
                     .unwrap_or_else(|| "SSED entry stream".to_owned());
                 diagnostics.extend(rendered.diagnostics);
                 diagnostics.push(Diagnostic::warning(
-                    "hc_render_basic_text_fallback",
-                    "SSED stream was rendered through the HC basic-text fallback; product visual HC/profile rendering is not implemented yet",
+                    "hc_render_common_html_fallback",
+                    "SSED stream was rendered through common HC HTML fallback; product visual HC/profile rendering is not implemented yet",
                 ));
                 Ok(ResolvedTargetView {
                     kind: crate::render::ResolvedTargetKind::EntryBody,
                     target,
                     title: Some(title),
-                    display_html: Some(hc_basic_text_html(&rendered.text)),
+                    display_html: Some(rendered.html),
                     basic_text: Some(rendered.text),
                     scroll_anchor,
                     surface: None,
@@ -244,12 +244,13 @@ impl ReaderBookPackage {
                         .then(|| {
                             json!({
                                 "body": {
-                                    "kind": "ssed_stream",
+                                    "kind": "ssed_stream_common_html",
                                     "component": component,
                                     "offset": offset,
                                     "length": length,
                                     "profile_hint": profile_hint,
                                     "hc_profile": hc_profile,
+                                    "stats": rendered.stats,
                                 }
                             })
                             .to_string()
@@ -403,18 +404,6 @@ impl ReaderBookPackage {
         })?;
         Ok(())
     }
-}
-
-fn hc_basic_text_html(text: &str) -> String {
-    let mut html = String::from("<div class=\"lv-hc-basic-text-fallback\">");
-    for (index, line) in text.lines().enumerate() {
-        if index > 0 {
-            html.push_str("<br>");
-        }
-        html.push_str(&escape_plain_label_html(line));
-    }
-    html.push_str("</div>");
-    html
 }
 
 impl RendererProvider for ReaderBookPackage {
