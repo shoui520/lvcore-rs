@@ -280,10 +280,39 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     assert_eq!(package.metadata().format_family, FormatFamily::Hourei);
     let surfaces = package.home_surfaces().unwrap();
     assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "kana-panel"
+            && surface.kind == NavigationSurfaceKind::Panel
+            && surface.status == NavigationStatus::Available
+            && surface.target.is_some()
+    }));
+    assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::LawTree
             && surface.status == NavigationStatus::Available
             && surface.target.is_some()
     }));
+
+    let kana_surface = package.open_surface("kana-panel").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = kana_surface else {
+        panic!("Hourei kana panel should open as a panel surface");
+    };
+    assert_eq!(cells[0].label_text, "");
+    assert!(cells[0].target.is_none());
+    assert_eq!(cells[1].label_text, "み");
+    assert_eq!(
+        cells[1].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::MenuItem {
+            surface_id: "hourei-kana:み".to_owned(),
+            item_id: "root".to_owned(),
+        }
+    );
+    let kana_browse = package
+        .open_surface_page("hourei-kana:み", None, 10)
+        .unwrap();
+    let lvcore::NavigationSurface::TitleIndexBrowse { items, .. } = kana_browse else {
+        panic!("Hourei kana initial should open as a title/index browse surface");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "民法");
 
     let surface = package.open_surface("law-tree").unwrap();
     let lvcore::NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
@@ -359,7 +388,8 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     assert!(html.contains("lvcore://target/"));
     assert!(html.contains("lvcore://resource/"));
     assert!(!html.contains("lved_ref&1:"));
-    assert_eq!(view.links.len(), 1);
+    assert!(!html.contains("lved_ref:み"));
+    assert_eq!(view.links.len(), 2);
     assert_eq!(
         view.links[0].token.decode().unwrap(),
         InternalTarget::HoureiLaw {
@@ -367,6 +397,21 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
             anchor: Some("A2".to_owned()),
         }
     );
+    assert_eq!(
+        view.links[1].token.decode().unwrap(),
+        InternalTarget::MenuItem {
+            surface_id: "hourei-kana:み".to_owned(),
+            item_id: "root".to_owned(),
+        }
+    );
+    let linked_kana_view = package
+        .render_target(&view.links[1].token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(linked_kana_view.kind, ResolvedTargetKind::NavigationSurface);
+    assert!(matches!(
+        linked_kana_view.surface,
+        Some(lvcore::NavigationSurface::TitleIndexBrowse { .. })
+    ));
     assert_eq!(view.resources.len(), 1);
     assert_eq!(view.resources[0].kind, ResourceKind::Image);
     assert_eq!(

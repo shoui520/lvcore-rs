@@ -234,6 +234,56 @@ impl HoureiStore {
             .map_err(Error::from)
     }
 
+    pub fn laws_by_kana_initial(
+        &self,
+        kana_initial: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<HoureiLawEntry>> {
+        let kana_initial = kana_initial.trim();
+        if kana_initial.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let connection = self.open_core_db("hore_base.db")?;
+        let columns = sqlite_columns(&connection, "t_hore")?;
+        let Some(kana_column) = ["f_kana_ini", "f_temp_kana_ini"]
+            .into_iter()
+            .find(|column| has_column(&columns, column))
+        else {
+            return Ok(Vec::new());
+        };
+        let category_expr = if has_column(&columns, "f_category_id") {
+            quote_identifier("f_category_id")
+        } else {
+            "null".to_owned()
+        };
+        let kana_order_expr = if has_column(&columns, "f_kana_order") {
+            quote_identifier("f_kana_order")
+        } else {
+            "null".to_owned()
+        };
+        let order_expr = if has_column(&columns, "f_kana_order") {
+            format!("{}, f_hore_id", quote_identifier("f_kana_order"))
+        } else {
+            "f_hore_id".to_owned()
+        };
+        let sql = format!(
+            "select f_hore_id, f_name, f_name_sub, f_abbr1, {category_expr}, {kana_order_expr} \
+             from t_hore where {} = ? order by {order_expr} limit ? offset ?",
+            quote_identifier(kana_column)
+        );
+        let params = [
+            kana_initial.to_owned(),
+            limit.to_string(),
+            offset.to_string(),
+        ];
+        let mut statement = connection.prepare(&sql)?;
+        let rows =
+            statement.query_map(params_from_iter(params.iter()), hourei_law_entry_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::from)
+    }
+
     pub fn law_html(&self, hore_id: &str) -> Result<Option<String>> {
         if !is_valid_hourei_law_id(hore_id) {
             return Ok(None);

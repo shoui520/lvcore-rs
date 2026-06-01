@@ -303,7 +303,16 @@ pub(crate) fn write_minimal_hourei_fixture(root: &Path) {
     fs::create_dir_all(database.join("HTMLs/H")).unwrap();
     fs::create_dir_all(database.join("image")).unwrap();
     fs::create_dir_all(database.join("H01")).unwrap();
+    fs::create_dir_all(root.join("_Programs")).unwrap();
     fs::write(database.join("image/law.png"), b"png").unwrap();
+    fs::write(
+        root.join("_Programs/index_panel.html"),
+        r#"<html><body>
+        <p class="cell_line"><a class="cell_enable"></a><a class="cell" href="lved_ref:み">み</a></p>
+        <p class="cell_line"><a class="cell" href = "lved_ref:し">し</a></p>
+        </body></html>"#,
+    )
+    .unwrap();
 
     for name in ["hore_base.db", "hore_search_a.db"] {
         let connection = Connection::open(database.join(name)).unwrap();
@@ -323,13 +332,14 @@ pub(crate) fn write_minimal_hourei_fixture(root: &Path) {
                   f_abbr6 string,
                   f_abbr7 string,
                   f_category_id integer,
+                  f_kana_ini string,
                   f_kana_order integer,
                   f_text_plane text
                 );
                 insert into t_category values (10, '民事');
                 insert into t_hore values
-                  (401000000000000001, '民法', '', '', '', '', '', '', '', '', 10, 1, '民法本文'),
-                  (401000000000000002, '商法', '', '', '', '', '', '', '', '', 10, 2, '商法本文');
+                  (401000000000000001, '民法', '', '', '', '', '', '', '', '', 10, 'み', 1, '民法本文'),
+                  (401000000000000002, '商法', '', '', '', '', '', '', '', '', 10, 'し', 2, '商法本文');
                 "#,
             )
             .unwrap();
@@ -337,7 +347,7 @@ pub(crate) fn write_minimal_hourei_fixture(root: &Path) {
     Connection::open(database.join("horejo_base.db")).unwrap();
     fs::write(
         database.join("HTMLs/H/401000000000000001_H.html"),
-        r#"<div class="header">民法</div><a href="lved_mark&&A1">mark</a><a href="lved_ref&1:401000000000000002&A2">商法</a><img src="law.png">"#,
+        r#"<div class="header">民法</div><a href="lved_mark&&A1">mark</a><a href="lved_ref&1:401000000000000002&A2">商法</a><a href="lved_ref:み">み</a><img src="law.png">"#,
     )
     .unwrap();
     let shard = Connection::open(database.join("H01/401000000000000002.db")).unwrap();

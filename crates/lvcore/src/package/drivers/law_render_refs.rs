@@ -114,8 +114,13 @@ impl ReaderBookPackage {
             return Ok(Some(format!("#{anchor}")));
         }
         if let Some(query) = value.strip_prefix("lved_ref:") {
-            let target = InternalTarget::Unsupported {
-                reason: format!("Hourei kana-search link is not modeled yet: {query}"),
+            let query = query.trim();
+            if query.is_empty() {
+                return Ok(None);
+            }
+            let target = InternalTarget::MenuItem {
+                surface_id: super::hourei_navigation::hourei_kana_surface_id(query),
+                item_id: "root".to_owned(),
             };
             let token = TargetToken::new(&target)?;
             if seen_target_tokens.insert(token.as_str().to_owned()) {

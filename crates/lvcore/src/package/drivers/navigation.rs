@@ -287,6 +287,25 @@ impl NavigationProvider for ReaderBookPackage {
                 });
             }
             FormatFamily::Hourei => {
+                if self.has_hourei_kana_panel()? {
+                    let surface_id =
+                        super::hourei_navigation::hourei_kana_panel_surface_id().to_owned();
+                    surfaces.push(HomeSurface {
+                        surface_id: surface_id.clone(),
+                        kind: NavigationSurfaceKind::Panel,
+                        status: NavigationStatus::Available,
+                        title_html: "五十音".to_owned(),
+                        title_text: "五十音".to_owned(),
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id,
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "hourei_kana_panel",
+                            "Hourei kana panel is available as a first-class browse surface",
+                        )],
+                    });
+                }
                 surfaces.push(HomeSurface {
                     surface_id: "law-tree".to_owned(),
                     kind: NavigationSurfaceKind::LawTree,
@@ -423,6 +442,15 @@ impl NavigationProvider for ReaderBookPackage {
             (FormatFamily::LvedSqlite3, "lved-tree") => self.open_lved_tree_surface(surface_id),
             (FormatFamily::LvlMultiView, "menuData") => {
                 self.open_multiview_menu_surface(surface_id)
+            }
+            (FormatFamily::Hourei, "kana-panel") => self.open_hourei_kana_panel_surface(surface_id),
+            (FormatFamily::Hourei, id)
+                if super::hourei_navigation::hourei_kana_initial_from_surface_id(id).is_some() =>
+            {
+                let kana_initial =
+                    super::hourei_navigation::hourei_kana_initial_from_surface_id(id)
+                        .unwrap_or_default();
+                self.open_hourei_kana_initial_surface(surface_id, kana_initial, cursor, limit)
             }
             (FormatFamily::Hourei, "law-tree") => self.open_hourei_law_tree_surface(surface_id),
             (FormatFamily::Ssed, _) => Ok(NavigationSurface::Deferred {
