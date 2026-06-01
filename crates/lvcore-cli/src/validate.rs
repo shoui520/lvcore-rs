@@ -1,10 +1,12 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
 use lvcore::{
-    BookId, BookLibrary, BookMetadata, DriverRegistry, FormatFamily, HomeSurface, NavigationStatus,
-    NavigationSurface, NavigationSurfaceKind, NavigationTarget, RenderOptions, ResolvedTargetView,
-    ResourceKind, SearchHit, SearchMode, SearchQuery, SearchScope,
+    BookId, BookLibrary, BookMetadata, Diagnostic, DiagnosticSeverity, DriverRegistry,
+    FormatFamily, HomeSurface, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
+    NavigationTarget, RenderOptions, ResolvedTargetView, ResourceKind, SearchHit, SearchMode,
+    SearchQuery, SearchScope,
 };
 use serde_json::json;
 
@@ -12,6 +14,7 @@ use super::{metadata_for, open_single_book_library};
 
 const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 32;
 const VALIDATE_SEARCH_HIT_RENDER_LIMIT: usize = 3;
+const VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT: usize = 8;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValidateOptions {
@@ -126,14 +129,15 @@ fn exercise_reader_paths(
         let mut row = match library.open_surface(book_id, &surface.surface_id) {
             Ok(opened) => {
                 if let NavigationSurface::Deferred { diagnostics, .. } = &opened {
-                    json!({
+                    let mut row = json!({
                         "kind": "surface_first_target",
                         "surface_id": surface.surface_id,
                         "surface_kind": surface.kind,
                         "opened_kind": navigation_surface_kind_name(&opened),
                         "status": "deferred",
-                        "diagnostic_count": diagnostics.len(),
-                    })
+                    });
+                    insert_diagnostic_fields(&mut row, diagnostics);
+                    row
                 } else {
                     let targets = opened.actionable_targets();
                     let resource_scan =
@@ -280,8 +284,8 @@ fn search_mode_exercise(
                 "mode": mode,
                 "query": query,
                 "hit_count": page.hits.len(),
-                "diagnostic_count": page.diagnostics.len(),
             });
+            insert_diagnostic_fields(&mut row, &page.diagnostics);
             if render_hits {
                 let rendered_hits = rendered_search_hit_probes(library, book_id, &page.hits);
                 let rendered_first = rendered_hits.first().cloned();
@@ -320,6 +324,73 @@ fn insert_elapsed_ms(row: &mut serde_json::Value, started: Instant) {
     }
 }
 
+trait JsonDiagnosticFields {
+    fn with_diagnostics(self, diagnostics: &[Diagnostic]) -> serde_json::Value;
+}
+
+impl JsonDiagnosticFields for serde_json::Value {
+    fn with_diagnostics(mut self, diagnostics: &[Diagnostic]) -> serde_json::Value {
+        insert_diagnostic_fields(&mut self, diagnostics);
+        self
+    }
+}
+
+fn insert_diagnostic_fields(row: &mut serde_json::Value, diagnostics: &[Diagnostic]) {
+    let Some(object) = row.as_object_mut() else {
+        return;
+    };
+    object.insert("diagnostic_count".to_owned(), json!(diagnostics.len()));
+    if diagnostics.is_empty() {
+        return;
+    }
+    object.insert(
+        "diagnostic_codes".to_owned(),
+        diagnostic_code_counts(diagnostics),
+    );
+    object.insert(
+        "diagnostics".to_owned(),
+        json!(
+            diagnostics
+                .iter()
+                .take(VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT)
+                .cloned()
+                .collect::<Vec<_>>()
+        ),
+    );
+}
+
+fn diagnostic_code_counts(diagnostics: &[Diagnostic]) -> serde_json::Value {
+    let mut counts = BTreeMap::<(String, String), usize>::new();
+    for diagnostic in diagnostics {
+        *counts
+            .entry((
+                diagnostic_severity_key(diagnostic.severity).to_owned(),
+                diagnostic.code.clone(),
+            ))
+            .or_insert(0) += 1;
+    }
+    serde_json::Value::Array(
+        counts
+            .into_iter()
+            .map(|((severity, code), count)| {
+                json!({
+                    "severity": severity,
+                    "code": code,
+                    "count": count,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn diagnostic_severity_key(severity: DiagnosticSeverity) -> &'static str {
+    match severity {
+        DiagnosticSeverity::Info => "info",
+        DiagnosticSeverity::Warning => "warning",
+        DiagnosticSeverity::Error => "error",
+    }
+}
+
 fn rendered_view_probe(
     library: &BookLibrary,
     book_id: &BookId,
@@ -339,11 +410,45 @@ fn rendered_view_probe(
     json!({
         "status": status,
         "view_kind": view.kind,
-        "diagnostic_count": view.diagnostics.len(),
         "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
         "resource_count": view.resources.len(),
         "first_resource": resource_probe,
     })
+    .with_diagnostics(&view.diagnostics)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_fields_include_counts_and_bounded_samples() {
+        let diagnostics = (0..12)
+            .map(|index| {
+                Diagnostic::warning(
+                    if index % 2 == 0 {
+                        "even_code"
+                    } else {
+                        "odd_code"
+                    },
+                    format!("diagnostic {index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut row = json!({ "status": "ok" });
+
+        insert_diagnostic_fields(&mut row, &diagnostics);
+
+        assert_eq!(row["diagnostic_count"], 12);
+        assert_eq!(row["diagnostics"].as_array().unwrap().len(), 8);
+        let codes = row["diagnostic_codes"].as_array().unwrap();
+        assert!(codes.iter().any(|entry| {
+            entry["severity"] == "warning" && entry["code"] == "even_code" && entry["count"] == 6
+        }));
+        assert!(codes.iter().any(|entry| {
+            entry["severity"] == "warning" && entry["code"] == "odd_code" && entry["count"] == 6
+        }));
+    }
 }
 
 fn surface_rendered_view_probe(
@@ -460,11 +565,11 @@ fn rendered_resource_scan(
             "source_id": target.source_id,
             "label": target.label_text,
             "view_kind": view.kind,
-            "diagnostic_count": view.diagnostics.len(),
             "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
             "resource_count": view.resources.len(),
             "first_resource": first_resource,
-        });
+        })
+        .with_diagnostics(&view.diagnostics);
     }
 
     json!({
