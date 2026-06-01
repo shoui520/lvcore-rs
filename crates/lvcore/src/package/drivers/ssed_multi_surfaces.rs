@@ -148,6 +148,7 @@ impl ReaderBookPackage {
             };
             return self.open_ssed_multi_record_browse_surface(
                 surface_id,
+                component,
                 record,
                 parsed_surface.filter.as_deref(),
                 cursor,
@@ -159,6 +160,7 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let nodes = self.ssed_multi_descriptor_nodes(
             &parsed_surface.descriptor,
+            component,
             &descriptor,
             &mut diagnostics,
             options,
@@ -179,6 +181,7 @@ impl ReaderBookPackage {
     fn open_ssed_multi_record_browse_surface(
         &self,
         surface_id: &str,
+        descriptor_component: &SsedComponent,
         record: &SsedMultiRecord,
         filter: Option<&str>,
         cursor: Option<&str>,
@@ -204,7 +207,9 @@ impl ReaderBookPackage {
                 )],
             });
         };
-        let Some(index_component) = self.ssed_component_for_multi_ref(index_ref) else {
+        let Some(index_component) =
+            self.ssed_component_for_multi_ref(descriptor_component, index_ref)
+        else {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics: vec![Diagnostic::warning(
@@ -226,7 +231,7 @@ impl ReaderBookPackage {
         let mut seen = 0usize;
         let mut rows = Vec::new();
         let mut diagnostics =
-            self.scan_ssed_index_component_rows(index_component, None, |row| {
+            self.scan_ssed_index_component_rows(&index_component, None, |row| {
                 let row_matches = filter_normalized
                     .as_ref()
                     .is_none_or(|filter| normalize_search_match_text(&row.key) == *filter);
@@ -249,7 +254,8 @@ impl ReaderBookPackage {
         let mut items = Vec::new();
         for (index, row) in rows.into_iter().enumerate() {
             let label = self
-                .ssed_title_text(row.title)
+                .ssed_multi_title_text(descriptor_component, record, row.title)
+                .or_else(|| self.ssed_title_text(row.title))
                 .unwrap_or_else(|| row.target_key.clone());
             let label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
             let target = match self.ssed_target_for_index_pointer(row.body)? {
@@ -277,6 +283,7 @@ impl ReaderBookPackage {
     fn ssed_multi_descriptor_nodes(
         &self,
         descriptor_name: &str,
+        descriptor_component: &SsedComponent,
         descriptor: &SsedMultiDescriptor,
         diagnostics: &mut Vec<Diagnostic>,
         options: &LabelOptions,
@@ -291,6 +298,7 @@ impl ReaderBookPackage {
             let rich_label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
             let children = self.ssed_multi_record_selector_nodes(
                 descriptor_name,
+                descriptor_component,
                 record,
                 diagnostics,
                 options,
@@ -318,6 +326,7 @@ impl ReaderBookPackage {
     fn ssed_multi_record_selector_nodes(
         &self,
         descriptor_name: &str,
+        descriptor_component: &SsedComponent,
         record: &SsedMultiRecord,
         diagnostics: &mut Vec<Diagnostic>,
         options: &LabelOptions,
@@ -335,7 +344,9 @@ impl ReaderBookPackage {
         let Some(menu_ref) = ssed_multi_record_menu_ref(record) else {
             return Ok(Vec::new());
         };
-        let Some(menu_component) = self.ssed_component_for_multi_ref(menu_ref) else {
+        let Some(menu_component) =
+            self.ssed_component_for_multi_ref(descriptor_component, menu_ref)
+        else {
             diagnostics.push(Diagnostic::warning(
                 "ssed_multi_menu_component_missing",
                 format!(
@@ -345,7 +356,7 @@ impl ReaderBookPackage {
             ));
             return Ok(Vec::new());
         };
-        let data = match self.read_ssed_component_expanded_bytes(menu_component) {
+        let data = match self.read_ssed_component_expanded_bytes(&menu_component) {
             Ok(data) => data,
             Err(error) => {
                 diagnostics.push(
@@ -383,13 +394,37 @@ impl ReaderBookPackage {
 
     fn ssed_component_for_multi_ref(
         &self,
+        descriptor_component: &SsedComponent,
         reference: &SsedMultiComponentRef,
-    ) -> Option<&SsedComponent> {
+    ) -> Option<SsedComponent> {
         let catalog = self.ssed_catalog.as_ref()?;
-        catalog.components.iter().find(|component| {
+        if let Some(component) = catalog.components.iter().find(|component| {
             component.component_type == reference.component_type
                 && component.start_block == reference.start_block
                 && component.block_count() == reference.block_count
+        }) {
+            return Some(component.clone());
+        }
+
+        let end_block = reference
+            .start_block
+            .saturating_add(reference.block_count.saturating_sub(1));
+        if reference.block_count == 0
+            || reference.start_block < descriptor_component.start_block
+            || end_block > descriptor_component.end_block
+        {
+            return None;
+        }
+
+        Some(SsedComponent {
+            index: descriptor_component.index,
+            multi: descriptor_component.multi,
+            component_type: reference.component_type,
+            start_block: reference.start_block,
+            end_block,
+            data: descriptor_component.data,
+            filename: descriptor_component.filename.clone(),
+            role: ssed_multi_ref_component_role(reference.component_type),
         })
     }
 
@@ -401,6 +436,51 @@ impl ReaderBookPackage {
             )));
         };
         let mut reader = SsedDataFile::open(path)?;
-        reader.read_range(0, reader.header().expanded_size())
+        let size = usize::try_from(component.block_count())
+            .unwrap_or(usize::MAX)
+            .saturating_mul(BLOCK_SIZE as usize);
+        let offset = if component.start_block >= reader.header().start_block
+            && component.end_block <= reader.header().end_block
+        {
+            usize::try_from(component.start_block - reader.header().start_block)
+                .unwrap_or(usize::MAX)
+                .saturating_mul(BLOCK_SIZE as usize)
+        } else {
+            0
+        };
+        reader.read_range(offset, size)
+    }
+
+    fn ssed_multi_title_text(
+        &self,
+        descriptor_component: &SsedComponent,
+        record: &SsedMultiRecord,
+        pointer: SsedIndexPointer,
+    ) -> Option<String> {
+        for reference in &record.refs {
+            if ssed_multi_ref_component_role(reference.component_type) != SsedComponentRole::Title {
+                continue;
+            }
+            let component = self.ssed_component_for_multi_ref(descriptor_component, reference)?;
+            let component_offset =
+                usize::try_from(component.relative_offset(pointer.block, pointer.offset)?).ok()?;
+            let data = self.read_ssed_component_expanded_bytes(&component).ok()?;
+            let title = decode_title_text(data.get(component_offset..)?);
+            if !title.is_empty() {
+                return Some(title);
+            }
+        }
+        None
+    }
+}
+
+fn ssed_multi_ref_component_role(component_type: u8) -> SsedComponentRole {
+    match component_type {
+        0x01 => SsedComponentRole::Menu,
+        0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x09 | 0x0a | 0x0d => SsedComponentRole::Title,
+        0x30 | 0x60 | 0x70 | 0x71 | 0x72 | 0x80 | 0x81 | 0x90 | 0x91 | 0x92 | 0xa1 => {
+            SsedComponentRole::Index
+        }
+        _ => SsedComponentRole::Unknown,
     }
 }

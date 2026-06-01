@@ -524,14 +524,23 @@ pub(crate) fn write_record(
 }
 
 pub(crate) fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
+    sseddata_literal_fixture_at(1, literals)
+}
+
+pub(crate) fn sseddata_literal_fixture_at(start_block: u32, literals: &[u8]) -> Vec<u8> {
     let chunk_offset = 0x44usize;
     let block_count = literals.len().div_ceil(2048).max(1);
     let mut data = vec![0u8; chunk_offset];
     data[..8].copy_from_slice(SSEDDATA_MAGIC);
     data[0x0f] = 1;
     data[0x16..0x18].copy_from_slice(&1u16.to_be_bytes());
-    data[0x18..0x1c].copy_from_slice(&1u32.to_be_bytes());
-    data[0x1c..0x20].copy_from_slice(&(block_count as u32).to_be_bytes());
+    data[0x18..0x1c].copy_from_slice(&start_block.to_be_bytes());
+    data[0x1c..0x20].copy_from_slice(
+        &start_block
+            .saturating_add(block_count as u32)
+            .saturating_sub(1)
+            .to_be_bytes(),
+    );
     data[0x40..0x44].copy_from_slice(&(chunk_offset as u32).to_be_bytes());
     data.extend_from_slice(&[0, 0]);
     data.extend_from_slice(&(literals.len() as u16).to_be_bytes());

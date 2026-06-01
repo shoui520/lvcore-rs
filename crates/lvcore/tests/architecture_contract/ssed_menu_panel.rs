@@ -293,6 +293,73 @@ fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
 }
 
 #[test]
+fn ssed_multi_descriptor_resolves_embedded_selector_components() {
+    let dir = tempdir().unwrap();
+    let record_start = 0x80;
+    let mut info = vec![0u8; record_start + 2 * 0x30];
+    info[..8].copy_from_slice(SSEDINFO_MAGIC);
+    info[0x4d] = 2;
+    write_record(
+        &mut info[record_start..record_start + 0x30],
+        0x00,
+        1,
+        1,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut info[record_start + 0x30..record_start + 0x60],
+        0xff,
+        20,
+        23,
+        "MULTI1.DIC",
+    );
+    fs::write(dir.path().join("DICT.IDX"), info).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture_at(1, b"body"),
+    )
+    .unwrap();
+
+    let mut multi = vec![0u8; 4 * 2048];
+    let descriptor = multi_descriptor_fixture();
+    multi[..descriptor.len()].copy_from_slice(&descriptor);
+    let menu = selector_menu_fixture(&["CAT"]);
+    multi[2048..2048 + menu.len()].copy_from_slice(&menu);
+    let mut titles = b"alpha title\x1f\x0a".to_vec();
+    titles.resize(2048, 0);
+    multi[4096..4096 + titles.len()].copy_from_slice(&titles);
+    let index = simple_index_fixture_rows(&[("CAT", 1, 0, 22, 0)]);
+    multi[6144..6144 + index.len()].copy_from_slice(&index);
+    fs::write(
+        dir.path().join("MULTI1.DIC"),
+        sseddata_literal_fixture_at(20, &multi),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let root = package.open_surface("multi:MULTI1.DIC").unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = root else {
+        panic!("embedded MULTI root should open as selector tree");
+    };
+    assert_eq!(nodes[0].children.len(), 1);
+    assert_eq!(nodes[0].children[0].label_text, "CAT");
+
+    let target = nodes[0].children[0]
+        .target
+        .as_ref()
+        .expect("embedded selector child should open filtered title/index browse");
+    let InternalTarget::TitleIndexItem { surface_id, .. } = target.decode().unwrap() else {
+        panic!("selector child should target a title-index surface");
+    };
+    let filtered = package.open_surface_page(&surface_id, None, 10).unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = filtered else {
+        panic!("embedded selector child should resolve to title/index items");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "alpha title");
+}
+
+#[test]
 fn ssed_menu_and_panel_targets_support_continuous_view_windows() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

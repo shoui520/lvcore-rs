@@ -62,10 +62,12 @@ impl ReaderBookPackage {
                     }
                 };
                 let mut reader = SsedDataFile::open(&path)?;
+                let component_read_base = ssed_component_read_base(component, &reader);
                 let page_count = component.block_count() as usize;
                 let start_page = match self.ssed_simple_index_candidate_leaf_page(
                     component,
                     &mut reader,
+                    component_read_base,
                     &needle_key,
                 )? {
                     Some(page_index) => page_index,
@@ -74,7 +76,10 @@ impl ReaderBookPackage {
                 scanned_components = scanned_components.saturating_add(1);
                 let mut last_key = None::<Vec<u8>>;
                 'pages: for page_index in start_page..page_count {
-                    let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
+                    let page = reader.read_range(
+                        component_page_offset(component_read_base, page_index),
+                        INDEX_PAGE_SIZE,
+                    )?;
                     if page.len() < 4 {
                         break;
                     }
@@ -162,6 +167,7 @@ impl ReaderBookPackage {
         &self,
         component: &SsedComponent,
         reader: &mut SsedDataFile,
+        component_read_base: usize,
         needle_key: &[u8],
     ) -> Result<Option<usize>> {
         let page_count = component.block_count() as usize;
@@ -172,7 +178,10 @@ impl ReaderBookPackage {
         let mut guard = 0usize;
         while page_index < page_count && guard <= page_count {
             guard = guard.saturating_add(1);
-            let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
+            let page = reader.read_range(
+                component_page_offset(component_read_base, page_index),
+                INDEX_PAGE_SIZE,
+            )?;
             if page.len() < 4 {
                 return Ok(None);
             }
@@ -281,13 +290,17 @@ impl ReaderBookPackage {
                 }
             };
             let mut reader = SsedDataFile::open(&path)?;
+            let component_read_base = ssed_component_read_base(component, &reader);
             let page_count = component.block_count() as usize;
             let mut scan_state = SsedIndexScanState::default();
             for page_index in 0..page_count {
                 if row_limit.is_some_and(|limit| row_count >= limit) {
                     break;
                 }
-                let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
+                let page = reader.read_range(
+                    component_page_offset(component_read_base, page_index),
+                    INDEX_PAGE_SIZE,
+                )?;
                 if page.len() < 4 {
                     break;
                 }
@@ -377,6 +390,7 @@ impl ReaderBookPackage {
             }
         };
         let mut reader = SsedDataFile::open(&path)?;
+        let component_read_base = ssed_component_read_base(component, &reader);
         let page_count = component.block_count() as usize;
         let mut scan_state = SsedIndexScanState::default();
         let mut row_count = 0usize;
@@ -384,7 +398,10 @@ impl ReaderBookPackage {
             if row_limit.is_some_and(|limit| row_count >= limit) {
                 break;
             }
-            let page = reader.read_range(page_index * INDEX_PAGE_SIZE, INDEX_PAGE_SIZE)?;
+            let page = reader.read_range(
+                component_page_offset(component_read_base, page_index),
+                INDEX_PAGE_SIZE,
+            )?;
             if page.len() < 4 {
                 break;
             }
@@ -695,4 +712,19 @@ impl ReaderBookPackage {
             .and_then(|catalog| catalog.component_for_address(pointer.block))
             .map(|component| component.filename.as_str())
     }
+}
+
+fn ssed_component_read_base(component: &SsedComponent, reader: &SsedDataFile) -> usize {
+    if component.start_block >= reader.header().start_block
+        && component.end_block <= reader.header().end_block
+    {
+        return usize::try_from(component.start_block - reader.header().start_block).unwrap_or(0);
+    }
+    0
+}
+
+fn component_page_offset(component_read_base: usize, page_index: usize) -> usize {
+    component_read_base
+        .saturating_add(page_index)
+        .saturating_mul(INDEX_PAGE_SIZE)
 }
