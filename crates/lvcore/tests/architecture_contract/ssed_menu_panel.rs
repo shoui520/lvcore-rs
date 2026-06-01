@@ -375,3 +375,49 @@ fn ssed_menu_and_panel_targets_support_continuous_view_windows() {
     assert_eq!(ssed_view_offset(&panel_window.after[0]), Some((10, 4)));
     assert!(panel_window.diagnostics.is_empty());
 }
+
+#[test]
+fn ssed_menu_continuous_view_pages_through_large_menu_surfaces() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+    let rows = (0..180u16)
+        .map(|index| ([0x24, 0x22], 10u32, index * 2))
+        .collect::<Vec<_>>();
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        sseddata_literal_fixture(&menu_stream_fixture_rows(&rows)),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 10,
+        offset: 300,
+    })
+    .unwrap();
+
+    let menu_window = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::MenuOrder {
+                value: "menu".to_owned(),
+            }),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert!(menu_window.diagnostics.is_empty());
+    assert_eq!(ssed_view_offset(&menu_window.center), Some((10, 300)));
+    assert_eq!(menu_window.before.len(), 1);
+    assert_eq!(menu_window.after.len(), 1);
+    assert_eq!(ssed_view_offset(&menu_window.before[0]), Some((10, 298)));
+    assert_eq!(ssed_view_offset(&menu_window.after[0]), Some((10, 302)));
+}

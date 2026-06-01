@@ -192,7 +192,7 @@ impl ReaderBookPackage {
     }
 }
 
-fn sequence_targets_match(candidate: &TargetToken, target: &TargetToken) -> bool {
+pub(super) fn sequence_targets_match(candidate: &TargetToken, target: &TargetToken) -> bool {
     candidate == target
         || match (candidate.decode(), target.decode()) {
             (Ok(candidate), Ok(target)) => internal_sequence_targets_match(&candidate, &target),

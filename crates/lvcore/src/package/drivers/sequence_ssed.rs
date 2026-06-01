@@ -1,5 +1,9 @@
+use super::sequence::sequence_targets_match;
 use super::*;
 use std::collections::VecDeque;
+
+const SSED_SEQUENCE_SURFACE_PAGE_LIMIT: usize = 128;
+const SSED_SEQUENCE_SURFACE_MAX_PAGES: usize = 4096;
 
 impl ReaderBookPackage {
     pub(super) fn resolve_ssed_title_index_window(
@@ -175,30 +179,79 @@ impl ReaderBookPackage {
         let Some(SequenceHint::MenuOrder { value: surface_id }) = sequence_hint else {
             return Ok(None);
         };
-        let surface = self.open_surface_with_options(
-            surface_id,
-            &LabelOptions {
-                gaiji_policy: options.gaiji_policy.clone(),
-            },
-        )?;
-        let nodes = match surface {
-            NavigationSurface::SimpleMenu { nodes, .. }
-            | NavigationSurface::HierarchicalTree { nodes, .. } => nodes,
-            _ => {
-                return Ok(Some(TargetWindow {
-                    center: self.render_target(target, options)?,
-                    before: Vec::new(),
-                    after: Vec::new(),
-                    diagnostics: vec![Diagnostic::info(
-                        "sequence_surface_not_ordered",
-                        format!("{surface_id} is not an ordered SSED navigation surface"),
-                    )],
-                }));
-            }
+        let label_options = LabelOptions {
+            gaiji_policy: options.gaiji_policy.clone(),
         };
         let mut ordered = Vec::new();
-        collect_navigation_node_ordered_targets(&nodes, &mut ordered);
-        Ok(Some(self.resolve_ordered_target_window(
+        let mut diagnostics = Vec::new();
+        let mut cursor = None::<String>;
+        let mut reached_page_limit = false;
+        for page_index in 0..SSED_SEQUENCE_SURFACE_MAX_PAGES {
+            let surface = self.open_surface_page_with_options(
+                surface_id,
+                cursor.as_deref(),
+                SSED_SEQUENCE_SURFACE_PAGE_LIMIT,
+                &label_options,
+            )?;
+            let next_cursor = match surface {
+                NavigationSurface::SimpleMenu {
+                    nodes, next_cursor, ..
+                }
+                | NavigationSurface::HierarchicalTree {
+                    nodes, next_cursor, ..
+                } => {
+                    collect_navigation_node_ordered_targets(&nodes, &mut ordered);
+                    next_cursor
+                }
+                NavigationSurface::Deferred {
+                    diagnostics: surface_diagnostics,
+                    ..
+                } => {
+                    diagnostics.extend(surface_diagnostics);
+                    break;
+                }
+                _ => {
+                    return Ok(Some(TargetWindow {
+                        center: self.render_target(target, options)?,
+                        before: Vec::new(),
+                        after: Vec::new(),
+                        diagnostics: vec![Diagnostic::info(
+                            "sequence_surface_not_ordered",
+                            format!("{surface_id} is not an ordered SSED navigation surface"),
+                        )],
+                    }));
+                }
+            };
+            if ordered
+                .iter()
+                .position(|candidate| sequence_targets_match(&candidate.target, target))
+                .is_some_and(|center_index| ordered.len() > center_index.saturating_add(after))
+            {
+                break;
+            }
+            let Some(next_cursor) = next_cursor else {
+                break;
+            };
+            if page_index + 1 >= SSED_SEQUENCE_SURFACE_MAX_PAGES {
+                reached_page_limit = true;
+                break;
+            }
+            if cursor.as_deref() == Some(next_cursor.as_str()) {
+                diagnostics.push(Diagnostic::warning(
+                    "sequence_surface_cursor_stalled",
+                    format!("{surface_id} returned a repeated pagination cursor"),
+                ));
+                break;
+            }
+            cursor = Some(next_cursor);
+        }
+        if reached_page_limit {
+            diagnostics.push(Diagnostic::warning(
+                "sequence_surface_page_limit_reached",
+                format!("{surface_id} sequence lookup stopped at the page limit"),
+            ));
+        }
+        let mut window = self.resolve_ordered_target_window(
             target,
             &ordered,
             before,
@@ -208,7 +261,9 @@ impl ReaderBookPackage {
                 "sequence_target_not_in_ssed_menu",
                 "target is not present in the requested SSED MENU/TOC order",
             ),
-        )?))
+        )?;
+        window.diagnostics.extend(diagnostics);
+        Ok(Some(window))
     }
 
     pub(super) fn resolve_ssed_panel_window(
@@ -259,7 +314,6 @@ impl ReaderBookPackage {
         )?))
     }
 }
-
 fn next_distinct_index_row<'a>(rows: &'a [SsedIndexRow], index: usize) -> Option<&'a SsedIndexRow> {
     let row = rows.get(index)?;
     rows.iter()
