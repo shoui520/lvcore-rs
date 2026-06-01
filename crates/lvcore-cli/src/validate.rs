@@ -156,16 +156,19 @@ fn exercise_reader_paths(
                                     &RenderOptions::default(),
                                 ) {
                                     Ok(view) => {
-                                        let window_probe = continuous_window_probe(
-                                            library,
-                                            book_id,
-                                            &target.target,
-                                            surface_sequence_hint(
-                                                format_family,
-                                                &surface.kind,
-                                                &surface.surface_id,
-                                            ),
-                                        );
+                                        let window_probe = surface_sequence_hint(
+                                            format_family,
+                                            &surface.kind,
+                                            &surface.surface_id,
+                                        )
+                                        .map(|hint| {
+                                            continuous_window_probe(
+                                                library,
+                                                book_id,
+                                                &target.target,
+                                                hint,
+                                            )
+                                        });
                                         let mut row = surface_rendered_view_probe(
                                             library,
                                             book_id,
@@ -179,7 +182,9 @@ fn exercise_reader_paths(
                                             },
                                         );
                                         insert_surface_page_probe_fields(&mut row, &probe);
-                                        insert_named_value(&mut row, "window", window_probe);
+                                        if let Some(window_probe) = window_probe {
+                                            insert_named_value(&mut row, "window", window_probe);
+                                        }
                                         row
                                     }
                                     Err(error) => json!({
@@ -598,12 +603,12 @@ fn continuous_window_probe(
     library: &BookLibrary,
     book_id: &BookId,
     target: &lvcore::TargetToken,
-    sequence_hint: Option<SequenceHint>,
+    sequence_hint: SequenceHint,
 ) -> serde_json::Value {
     match library.resolve_target_window(
         book_id,
         target,
-        sequence_hint.as_ref(),
+        Some(&sequence_hint),
         1,
         1,
         &RenderOptions::default(),
