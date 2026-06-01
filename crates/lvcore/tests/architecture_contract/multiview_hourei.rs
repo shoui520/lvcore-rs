@@ -1,6 +1,34 @@
 use super::common::*;
 
 #[test]
+fn multiview_book_id_uses_package_code_without_windows_folder_wrapper() {
+    let dir = tempdir().unwrap();
+    let package_root = dir.path().join("_DCT_MOROKU26");
+    fs::create_dir_all(&package_root).unwrap();
+    fs::write(
+        package_root.join("menuData.xml"),
+        r#"<list><item label="模範六法" href=""/></list>"#,
+    )
+    .unwrap();
+    fs::write(package_root.join("blvdat"), b"payload").unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvlMultiView);
+    assert!(
+        metadata.book_id.0.starts_with("LVLMultiView:MOROKU26:"),
+        "{}",
+        metadata.book_id.0
+    );
+    assert!(
+        !metadata.book_id.0.contains("_DCT_"),
+        "{}",
+        metadata.book_id.0
+    );
+}
+
+#[test]
 fn multiview_menu_data_opens_as_hierarchical_tree() {
     let dir = tempdir().unwrap();
     fs::write(

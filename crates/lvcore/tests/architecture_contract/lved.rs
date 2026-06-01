@@ -1,6 +1,51 @@
 use super::common::*;
 
 #[test]
+fn lved_book_id_uses_package_code_without_windows_folder_wrapper() {
+    let dir = tempdir().unwrap();
+    let package_root = dir.path().join("_DCT_SAMPLELVED");
+    fs::create_dir_all(&package_root).unwrap();
+    write_minimal_lved_sqlite_fixture(&package_root);
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvedSqlite3);
+    assert!(
+        metadata.book_id.0.starts_with("LVED_SQLITE3:SAMPLELVED:"),
+        "{}",
+        metadata.book_id.0
+    );
+    assert!(
+        !metadata.book_id.0.contains("_DCT_"),
+        "{}",
+        metadata.book_id.0
+    );
+}
+
+#[test]
+fn lved_book_id_does_not_expose_arbitrary_folder_names() {
+    let dir = tempdir().unwrap();
+    let first_root = dir.path().join("FirstBook");
+    let second_root = dir.path().join("SecondBook");
+    fs::create_dir_all(&first_root).unwrap();
+    fs::create_dir_all(&second_root).unwrap();
+    write_minimal_lved_sqlite_fixture(&first_root);
+    write_minimal_lved_sqlite_fixture(&second_root);
+
+    let first = DriverRegistry::default().open_best(&first_root).unwrap();
+    let second = DriverRegistry::default().open_best(&second_root).unwrap();
+    let first_id = &first.metadata().book_id.0;
+    let second_id = &second.metadata().book_id.0;
+
+    assert!(first_id.starts_with("LVED_SQLITE3:LVED_SQLITE3_PACKAGE_"));
+    assert!(second_id.starts_with("LVED_SQLITE3:LVED_SQLITE3_PACKAGE_"));
+    assert_ne!(first_id, second_id);
+    assert!(!first_id.contains("FirstBook"), "{first_id}");
+    assert!(!second_id.contains("SecondBook"), "{second_id}");
+}
+
+#[test]
 fn lved_list_surface_is_cursor_paged_by_backend() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());

@@ -279,7 +279,7 @@ impl ReaderBookPackage {
         let fingerprint_short = root_fingerprint
             .get(..12)
             .unwrap_or(root_fingerprint.as_str());
-        let identity_hint = package_identity_hint(root, &detected);
+        let identity_hint = package_identity_hint(root, &detected, &stores);
         let book_id = BookId(format!(
             "{}:{}:{}",
             format_label, identity_hint, fingerprint_short,
@@ -321,29 +321,82 @@ impl ReaderBookPackage {
     }
 }
 
-fn package_identity_hint(root: &Path, detected: &DetectedPackage) -> String {
-    if detected.format_family == FormatFamily::Hourei {
-        return "LOGOVISTA_HOUREI_PROFESSIONAL".to_owned();
+fn package_identity_hint(
+    root: &Path,
+    detected: &DetectedPackage,
+    stores: &PackageStores,
+) -> String {
+    match detected.format_family {
+        FormatFamily::Ssed => ssed_identity_hint(root, detected),
+        FormatFamily::LvedSqlite3 => lved_identity_hint(root, stores),
+        FormatFamily::LvlMultiView => logovista_package_folder_code(root)
+            .unwrap_or_else(|| hashed_folder_identity(root, "LVLMULTIVIEW_PACKAGE")),
+        FormatFamily::Hourei => "LOGOVISTA_HOUREI_PROFESSIONAL".to_owned(),
+        FormatFamily::Unknown => "UNKNOWN_PACKAGE".to_owned(),
     }
+}
 
-    if detected.format_family == FormatFamily::Ssed
-        && let Some(catalog_name) = detected
-            .evidence
-            .iter()
-            .find_map(|value| value.strip_prefix("ssedinfo:"))
+fn ssed_identity_hint(root: &Path, detected: &DetectedPackage) -> String {
+    if let Some(stem) = detected
+        .evidence
+        .iter()
+        .find_map(|value| value.strip_prefix("ssedinfo:"))
+        .and_then(|catalog_name| {
+            Path::new(catalog_name)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+        })
     {
-        let stem = Path::new(catalog_name)
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty());
-        if let Some(stem) = stem {
-            return stem.to_owned();
-        }
+        return stem.to_owned();
     }
+    logovista_package_folder_code(root).unwrap_or_else(|| "SSED_PACKAGE".to_owned())
+}
 
-    root.file_name()
-        .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_else(|| root.as_os_str().to_string_lossy().to_string())
+fn lved_identity_hint(root: &Path, stores: &PackageStores) -> String {
+    if let Some(android_code) = stores
+        .lved_store
+        .as_ref()
+        .and_then(|store| store.android_info.as_ref())
+        .map(|info| info.dict_code.trim())
+        .filter(|value| !value.is_empty())
+    {
+        return android_code.to_ascii_uppercase();
+    }
+    if let Some(payload_code) = stores
+        .lved_store
+        .as_ref()
+        .and_then(|store| {
+            let payload_name = store.payload_path.file_name()?.to_string_lossy();
+            (!payload_name.eq_ignore_ascii_case("main.data"))
+                .then(|| infer_lved_dict_code(&store.payload_path))
+                .flatten()
+        })
+        .filter(|value| !value.is_empty())
+    {
+        return payload_code;
+    }
+    logovista_package_folder_code(root)
+        .unwrap_or_else(|| hashed_folder_identity(root, "LVED_SQLITE3_PACKAGE"))
+}
+
+fn logovista_package_folder_code(root: &Path) -> Option<String> {
+    let folder = root.file_name()?.to_string_lossy();
+    let trimmed = folder.trim();
+    let code = trimmed.strip_prefix("_DCT_")?.trim();
+    (!code.is_empty()).then(|| code.to_ascii_uppercase())
+}
+
+fn hashed_folder_identity(root: &Path, prefix: &str) -> String {
+    let folder = root
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_else(|| root.as_os_str().to_string_lossy());
+    let mut hasher = Sha256::new();
+    hasher.update(folder.as_bytes());
+    let digest = hex::encode(hasher.finalize());
+    let short = digest.get(..8).unwrap_or(digest.as_str());
+    format!("{prefix}_{short}")
 }
 
 impl BookPackage for ReaderBookPackage {
