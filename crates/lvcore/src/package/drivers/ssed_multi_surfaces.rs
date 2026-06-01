@@ -429,6 +429,18 @@ impl ReaderBookPackage {
     }
 
     fn read_ssed_component_expanded_bytes(&self, component: &SsedComponent) -> Result<Vec<u8>> {
+        let size = usize::try_from(component.block_count())
+            .unwrap_or(usize::MAX)
+            .saturating_mul(BLOCK_SIZE as usize);
+        self.read_ssed_component_expanded_range(component, 0, size)
+    }
+
+    fn read_ssed_component_expanded_range(
+        &self,
+        component: &SsedComponent,
+        component_offset: usize,
+        len: usize,
+    ) -> Result<Vec<u8>> {
         let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
             return Err(Error::Driver(format!(
                 "{} is declared but not present on disk",
@@ -439,6 +451,9 @@ impl ReaderBookPackage {
         let size = usize::try_from(component.block_count())
             .unwrap_or(usize::MAX)
             .saturating_mul(BLOCK_SIZE as usize);
+        if component_offset >= size {
+            return Ok(Vec::new());
+        }
         let offset = if component.start_block >= reader.header().start_block
             && component.end_block <= reader.header().end_block
         {
@@ -448,7 +463,11 @@ impl ReaderBookPackage {
         } else {
             0
         };
-        reader.read_range(offset, size)
+        let read_offset = offset
+            .checked_add(component_offset)
+            .ok_or_else(|| Error::Driver("SSED component read offset overflowed".to_owned()))?;
+        let read_len = len.min(size - component_offset);
+        reader.read_range(read_offset, read_len)
     }
 
     fn ssed_multi_title_text(
@@ -464,8 +483,10 @@ impl ReaderBookPackage {
             let component = self.ssed_component_for_multi_ref(descriptor_component, reference)?;
             let component_offset =
                 usize::try_from(component.relative_offset(pointer.block, pointer.offset)?).ok()?;
-            let data = self.read_ssed_component_expanded_bytes(&component).ok()?;
-            let title = decode_title_text(data.get(component_offset..)?);
+            let data = self
+                .read_ssed_component_expanded_range(&component, component_offset, 512)
+                .ok()?;
+            let title = decode_title_text(&data);
             if !title.is_empty() {
                 return Some(title);
             }
