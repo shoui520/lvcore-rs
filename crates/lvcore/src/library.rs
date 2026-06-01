@@ -4,6 +4,7 @@ use std::path::Path;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
@@ -74,6 +75,10 @@ pub struct LibraryImportResult {
 struct LibrarySearchCursor {
     version: u8,
     book_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    book_id: Option<BookId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    query_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     book_cursor: Option<String>,
 }
@@ -604,8 +609,16 @@ impl BookLibrary {
             });
         }
         let ordered_book_ids = book_ids.collect::<Vec<_>>();
-        let (start_index, mut inner_cursor, cursor_diagnostic) =
-            decode_library_search_cursor(query.cursor.as_deref());
+        let query_fingerprint = library_search_cursor_fingerprint(&ordered_book_ids, query);
+        let (
+            raw_start_index,
+            mut inner_cursor,
+            cursor_book_id,
+            cursor_query_fingerprint,
+            cursor_diagnostic,
+        ) = decode_library_search_cursor(query.cursor.as_deref());
+        let mut start_index = raw_start_index;
+        let mut cursor_scope_matches = true;
         let mut page = SearchPage {
             hits: Vec::new(),
             next_cursor: None,
@@ -614,10 +627,46 @@ impl BookLibrary {
         if let Some(diagnostic) = cursor_diagnostic {
             page.diagnostics.push(diagnostic);
         }
+        if let Some(cursor_query_fingerprint) = cursor_query_fingerprint
+            && cursor_query_fingerprint != query_fingerprint
+        {
+            start_index = 0;
+            inner_cursor = None;
+            cursor_scope_matches = false;
+            page.diagnostics.push(Diagnostic::warning(
+                "stale_search_cursor_scope_changed",
+                "library search cursor was created for a different query, mode, or book scope; search restarted",
+            ));
+        }
+        if cursor_scope_matches && let Some(cursor_book_id) = cursor_book_id {
+            if let Some(cursor_book_index) = ordered_book_ids
+                .iter()
+                .position(|book_id| **book_id == cursor_book_id)
+            {
+                start_index = cursor_book_index;
+            } else {
+                inner_cursor = None;
+                page.diagnostics.push(
+                    Diagnostic::warning(
+                        "stale_search_cursor_book_missing",
+                        format!(
+                            "library search cursor referenced {}, which is not in the current search scope",
+                            cursor_book_id.0
+                        ),
+                    )
+                    .with_context("book_id", &cursor_book_id.0),
+                );
+            }
+        }
 
         for (book_index, book_id) in ordered_book_ids.iter().enumerate().skip(start_index) {
             if page.hits.len() >= query.limit {
-                page.next_cursor = Some(encode_library_search_cursor(book_index, None));
+                page.next_cursor = Some(encode_library_search_cursor(
+                    book_index,
+                    Some(book_id),
+                    Some(&query_fingerprint),
+                    None,
+                ));
                 break;
             }
             let Some(book) = self.book(book_id) else {
@@ -649,8 +698,12 @@ impl BookLibrary {
             page.hits.extend(book_page.hits);
             page.diagnostics.extend(book_page.diagnostics);
             if let Some(book_cursor) = next_book_cursor {
-                page.next_cursor =
-                    Some(encode_library_search_cursor(book_index, Some(book_cursor)));
+                page.next_cursor = Some(encode_library_search_cursor(
+                    book_index,
+                    Some(book_id),
+                    Some(&query_fingerprint),
+                    Some(book_cursor),
+                ));
                 break;
             }
         }
@@ -662,10 +715,17 @@ impl BookLibrary {
     }
 }
 
-fn encode_library_search_cursor(book_index: usize, book_cursor: Option<String>) -> String {
+fn encode_library_search_cursor(
+    book_index: usize,
+    book_id: Option<&BookId>,
+    query_fingerprint: Option<&str>,
+    book_cursor: Option<String>,
+) -> String {
     let cursor = LibrarySearchCursor {
         version: 1,
         book_index,
+        book_id: book_id.cloned(),
+        query_fingerprint: query_fingerprint.map(str::to_owned),
         book_cursor,
     };
     let bytes = serde_json::to_vec(&cursor).unwrap_or_default();
@@ -674,18 +734,32 @@ fn encode_library_search_cursor(book_index: usize, book_cursor: Option<String>) 
 
 fn decode_library_search_cursor(
     cursor: Option<&str>,
-) -> (usize, Option<String>, Option<Diagnostic>) {
+) -> (
+    usize,
+    Option<String>,
+    Option<BookId>,
+    Option<String>,
+    Option<Diagnostic>,
+) {
     let Some(cursor) = cursor else {
-        return (0, None, None);
+        return (0, None, None, None, None);
     };
     let decoded = URL_SAFE_NO_PAD
         .decode(cursor)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<LibrarySearchCursor>(&bytes).ok());
     match decoded {
-        Some(cursor) if cursor.version == 1 => (cursor.book_index, cursor.book_cursor, None),
+        Some(cursor) if cursor.version == 1 => (
+            cursor.book_index,
+            cursor.book_cursor,
+            cursor.book_id,
+            cursor.query_fingerprint,
+            None,
+        ),
         _ => (
             0,
+            None,
+            None,
             None,
             Some(Diagnostic::warning(
                 "invalid_search_cursor",
@@ -693,4 +767,18 @@ fn decode_library_search_cursor(
             )),
         ),
     }
+}
+
+fn library_search_cursor_fingerprint(book_ids: &[&BookId], query: &SearchQuery) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"lvcore-library-search-cursor-v1\0");
+    hasher.update(serde_json::to_vec(&query.mode).unwrap_or_default());
+    hasher.update(b"\0");
+    hasher.update(query.query.as_bytes());
+    hasher.update(b"\0");
+    for book_id in book_ids {
+        hasher.update(book_id.0.as_bytes());
+        hasher.update(b"\0");
+    }
+    hex::encode(hasher.finalize())[..16].to_owned()
 }

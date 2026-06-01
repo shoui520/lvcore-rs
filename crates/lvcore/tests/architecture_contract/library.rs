@@ -474,6 +474,81 @@ fn library_selected_book_search_uses_backend_cursor_pagination() {
     assert_eq!(second_page.hits.len(), 1);
     assert_eq!(second_page.hits[0].title_text, "beta");
     assert!(second_page.next_cursor.is_none());
+    assert!(
+        second_page
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "stale_search_cursor_book_missing")
+    );
+}
+
+#[test]
+fn library_search_cursor_restarts_when_scope_order_changes() {
+    let first = tempdir().unwrap();
+    fs::write(first.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        first.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        first.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("shared", 1, 2, 13, 0)),
+    )
+    .unwrap();
+
+    let second = tempdir().unwrap();
+    fs::write(second.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        second.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"beta\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        second.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("shared", 1, 2, 13, 0)),
+    )
+    .unwrap();
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let first_id = library.open_path(first.path(), &registry).unwrap();
+    let second_id = library.open_path(second.path(), &registry).unwrap();
+
+    let first_page = library
+        .search(&SearchQuery {
+            scope: SearchScope::SelectedBooks {
+                book_ids: vec![first_id.clone(), second_id.clone()],
+            },
+            mode: SearchMode::Exact,
+            query: "shared".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(first_page.hits[0].title_text, "alpha");
+
+    let restarted_page = library
+        .search(&SearchQuery {
+            scope: SearchScope::SelectedBooks {
+                book_ids: vec![second_id, first_id],
+            },
+            mode: SearchMode::Exact,
+            query: "shared".to_owned(),
+            cursor: first_page.next_cursor,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(restarted_page.hits[0].title_text, "beta");
+    assert!(
+        restarted_page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "stale_search_cursor_scope_changed")
+    );
 }
 
 #[test]
