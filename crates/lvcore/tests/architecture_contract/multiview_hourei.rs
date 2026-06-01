@@ -272,6 +272,32 @@ fn multiview_law_list_targets_resolve_to_navigation_and_law_bodies() {
 }
 
 #[test]
+fn hourei_book_id_uses_stable_product_identity_not_folder_name() {
+    let dir = tempdir().unwrap();
+    let package_root = dir.path().join("user_named_hourei_folder");
+    fs::create_dir_all(&package_root).unwrap();
+    write_minimal_hourei_fixture(&package_root);
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::Hourei);
+    assert!(
+        metadata
+            .book_id
+            .0
+            .starts_with("Hourei:LOGOVISTA_HOUREI_PROFESSIONAL:"),
+        "{}",
+        metadata.book_id.0
+    );
+    assert!(
+        !metadata.book_id.0.contains("user_named_hourei_folder"),
+        "{}",
+        metadata.book_id.0
+    );
+}
+
+#[test]
 fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     let dir = tempdir().unwrap();
     write_minimal_hourei_fixture(dir.path());

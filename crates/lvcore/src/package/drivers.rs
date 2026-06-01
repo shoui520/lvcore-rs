@@ -322,6 +322,10 @@ impl ReaderBookPackage {
 }
 
 fn package_identity_hint(root: &Path, detected: &DetectedPackage) -> String {
+    if detected.format_family == FormatFamily::Hourei {
+        return "LOGOVISTA_HOUREI_PROFESSIONAL".to_owned();
+    }
+
     if detected.format_family == FormatFamily::Ssed
         && let Some(catalog_name) = detected
             .evidence
