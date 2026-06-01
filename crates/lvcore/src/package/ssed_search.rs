@@ -148,25 +148,9 @@ fn push_unique_search_key(candidates: &mut Vec<Vec<u8>>, key: Vec<u8>) {
 }
 
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return false;
-    }
-    let first = needle[0];
-    let mut start = 0usize;
-    while start + needle.len() <= haystack.len() {
-        let Some(relative) = haystack[start..].iter().position(|byte| *byte == first) else {
-            return false;
-        };
-        let index = start + relative;
-        if index + needle.len() > haystack.len() {
-            return false;
-        }
-        if &haystack[index..index + needle.len()] == needle {
-            return true;
-        }
-        start = index.saturating_add(1);
-    }
-    false
+    !needle.is_empty()
+        && needle.len() <= haystack.len()
+        && memchr::memmem::find(haystack, needle).is_some()
 }
 
 pub(super) fn ssed_index_row_order_key(row: &SsedIndexRow) -> Vec<u8> {

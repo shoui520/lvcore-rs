@@ -499,6 +499,7 @@ dependencies = [
  "chmlib",
  "encoding_rs",
  "hex",
+ "memchr",
  "quick-xml",
  "rusqlite",
  "serde",

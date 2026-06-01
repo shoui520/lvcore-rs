@@ -344,56 +344,73 @@ impl ReaderBookPackage {
                 diagnostics,
             });
         }
+        let body_hit_blocks = ssed_fulltext_body_hit_blocks(catalog, &body_hit_ranges_by_component);
+        let has_forward_index_component =
+            catalog
+                .components_by_role(SsedComponentRole::Index)
+                .any(|component| {
+                    is_supported_index_type(component.component_type)
+                        && !ssed_index_component_name_is_backward(&component.filename)
+                });
 
         let mut rows_by_component: BTreeMap<String, Vec<SsedFulltextRow>> = BTreeMap::new();
-        let scan_diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
-            if looks_like_raw_anchor_label(&row.key) {
-                return Ok(true);
-            }
-            let Some(component) = catalog.component_for_address(row.body.block) else {
-                diagnostics.push(Diagnostic::warning(
-                    "ssed_fulltext_body_component_missing",
-                    format!(
-                        "no component contains body pointer block {} offset {}",
-                        row.body.block, row.body.offset
-                    ),
-                ));
-                return Ok(true);
-            };
-            if component.role != SsedComponentRole::Honmon {
-                return Ok(true);
-            }
-            let Some(component_offset) = component.relative_offset(row.body.block, row.body.offset)
-            else {
-                diagnostics.push(
-                    Diagnostic::warning(
-                        "ssed_fulltext_body_pointer_invalid",
+        let scan_diagnostics = self.scan_ssed_simple_index_rows_with_filters(
+            None,
+            |component| {
+                !has_forward_index_component
+                    || !ssed_index_component_name_is_backward(&component.filename)
+            },
+            |_, page| ssed_index_page_may_point_to_body_blocks(page, &body_hit_blocks),
+            |row| {
+                if looks_like_raw_anchor_label(&row.key) {
+                    return Ok(true);
+                }
+                let Some(component) = catalog.component_for_address(row.body.block) else {
+                    diagnostics.push(Diagnostic::warning(
+                        "ssed_fulltext_body_component_missing",
                         format!(
-                            "{} does not contain body pointer block {} offset {}",
-                            component.filename, row.body.block, row.body.offset
+                            "no component contains body pointer block {} offset {}",
+                            row.body.block, row.body.offset
                         ),
-                    )
-                    .with_context("component", &component.filename),
-                );
-                return Ok(true);
-            };
-            let Some(ranges) = body_hit_ranges_by_component.get(&component.filename) else {
-                return Ok(true);
-            };
-            if !ssed_fulltext_offset_in_ranges(ranges, component_offset) {
-                return Ok(true);
-            }
-            rows_by_component
-                .entry(component.filename.clone())
-                .or_default()
-                .push(SsedFulltextRow {
-                    offset: component_offset,
-                    body: row.body,
-                    title: row.title,
-                    key: row.key,
-                });
-            Ok(true)
-        })?;
+                    ));
+                    return Ok(true);
+                };
+                if component.role != SsedComponentRole::Honmon {
+                    return Ok(true);
+                }
+                let Some(component_offset) =
+                    component.relative_offset(row.body.block, row.body.offset)
+                else {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_fulltext_body_pointer_invalid",
+                            format!(
+                                "{} does not contain body pointer block {} offset {}",
+                                component.filename, row.body.block, row.body.offset
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    return Ok(true);
+                };
+                let Some(ranges) = body_hit_ranges_by_component.get(&component.filename) else {
+                    return Ok(true);
+                };
+                if !ssed_fulltext_offset_in_ranges(ranges, component_offset) {
+                    return Ok(true);
+                }
+                rows_by_component
+                    .entry(component.filename.clone())
+                    .or_default()
+                    .push(SsedFulltextRow {
+                        offset: component_offset,
+                        body: row.body,
+                        title: row.title,
+                        key: row.key,
+                    });
+                Ok(true)
+            },
+        )?;
         diagnostics.extend(scan_diagnostics);
         for rows in rows_by_component.values_mut() {
             rows.sort_by_key(|row| row.offset);
@@ -877,6 +894,39 @@ fn ssed_fulltext_offset_in_ranges(ranges: &[(u64, u64)], offset: u64) -> bool {
             }
         })
         .is_ok()
+}
+
+fn ssed_fulltext_body_hit_blocks(
+    catalog: &SsedCatalog,
+    ranges_by_component: &BTreeMap<String, Vec<(u64, u64)>>,
+) -> HashSet<u32> {
+    let mut blocks = HashSet::new();
+    for (component_name, ranges) in ranges_by_component {
+        let Some(component) = catalog.component_named(component_name) else {
+            continue;
+        };
+        for (lower, upper) in ranges {
+            let start_block = u64::from(component.start_block) + lower / u64::from(BLOCK_SIZE);
+            let end_block = u64::from(component.start_block) + upper / u64::from(BLOCK_SIZE);
+            for block in start_block..=end_block {
+                if let Ok(block) = u32::try_from(block) {
+                    blocks.insert(block);
+                }
+            }
+        }
+    }
+    blocks
+}
+
+fn ssed_index_page_may_point_to_body_blocks(page: &[u8], body_blocks: &HashSet<u32>) -> bool {
+    if body_blocks.is_empty() {
+        return true;
+    }
+    page.windows(4).any(|window| {
+        body_blocks.contains(&u32::from_be_bytes([
+            window[0], window[1], window[2], window[3],
+        ]))
+    })
 }
 
 fn decode_ssed_fulltext_title_cursor(cursor: Option<&str>) -> Option<usize> {
