@@ -109,10 +109,19 @@ impl BookLibrary {
         detected: DetectedPackage,
         registry: &DriverRegistry,
     ) -> Result<BookId> {
+        let (book_id, _) = self.open_detected_package_with_status(detected, registry)?;
+        Ok(book_id)
+    }
+
+    fn open_detected_package_with_status(
+        &mut self,
+        detected: DetectedPackage,
+        registry: &DriverRegistry,
+    ) -> Result<(BookId, bool)> {
         let package = registry.open_detected_package(detected)?;
         let book_id = package.metadata().book_id.clone();
-        self.insert(package);
-        Ok(book_id)
+        let inserted = self.insert(package);
+        Ok((book_id, inserted))
     }
 
     pub fn open_discovered_paths(
@@ -135,7 +144,11 @@ impl BookLibrary {
                 if options.max.is_some_and(|max| opened.len() >= max) {
                     break;
                 }
-                opened.push(self.open_detected_package(detected, registry)?);
+                let (book_id, inserted) =
+                    self.open_detected_package_with_status(detected, registry)?;
+                if inserted {
+                    opened.push(book_id);
+                }
             }
         }
         Ok(opened)
@@ -176,8 +189,19 @@ impl BookLibrary {
                     break;
                 }
                 let root = detected.root.clone();
-                match self.open_detected_package(detected, registry) {
-                    Ok(book_id) => report.opened.push(book_id),
+                match self.open_detected_package_with_status(detected, registry) {
+                    Ok((book_id, true)) => report.opened.push(book_id),
+                    Ok((book_id, false)) => {
+                        let book_id_text = book_id.0.clone();
+                        report.diagnostics.push(
+                            Diagnostic::info(
+                                "library_duplicate_book_skipped",
+                                format!("duplicate book {book_id_text} was already opened"),
+                            )
+                            .with_context("path", root.display().to_string())
+                            .with_context("book_id", book_id_text),
+                        );
+                    }
                     Err(error) => report.diagnostics.push(
                         Diagnostic::warning(
                             "book_open_failed",
@@ -191,9 +215,13 @@ impl BookLibrary {
         report
     }
 
-    pub fn insert(&mut self, package: Box<dyn BookPackage>) {
+    pub fn insert(&mut self, package: Box<dyn BookPackage>) -> bool {
         let book_id = package.metadata().book_id.clone();
+        if self.books.contains_key(&book_id) {
+            return false;
+        }
         self.books.insert(book_id, package);
+        true
     }
 
     pub fn is_empty(&self) -> bool {

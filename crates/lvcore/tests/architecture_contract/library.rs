@@ -55,6 +55,40 @@ fn library_tolerant_import_reports_opened_books_without_aborting() {
 }
 
 #[test]
+fn library_import_deduplicates_identical_book_ids() {
+    let root = tempdir().unwrap();
+    let first = root.path().join("FirstCopy");
+    let second = root.path().join("SecondCopy");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    fs::write(first.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(second.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let report = library.try_open_discovered_paths(
+        [root.path()],
+        &registry,
+        PackageDiscoveryOptions::default(),
+    );
+
+    assert_eq!(report.opened.len(), 1);
+    assert_eq!(library.len(), 1);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "library_duplicate_book_skipped")
+    );
+
+    let import_result = library.import_result(report);
+    assert_eq!(import_result.book_count, 1);
+    assert_eq!(import_result.books.len(), 1);
+    assert_eq!(import_result.opened_book_ids.len(), 1);
+    assert_eq!(import_result.import_diagnostics.len(), 1);
+}
+
+#[test]
 fn library_routes_all_book_search_without_unhandled_exceptions() {
     let ssed = tempdir().unwrap();
     fs::write(ssed.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
