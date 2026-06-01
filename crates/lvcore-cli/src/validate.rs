@@ -6,7 +6,7 @@ use lvcore::{
     BookId, BookLibrary, BookMetadata, Diagnostic, DiagnosticSeverity, DriverRegistry,
     FormatFamily, HomeSurface, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
     NavigationTarget, RenderOptions, ResolvedTargetView, ResourceKind, SearchHit, SearchMode,
-    SearchQuery, SearchScope,
+    SearchQuery, SearchResultSequence, SearchScope, SequenceHint,
 };
 use serde_json::json;
 
@@ -156,6 +156,16 @@ fn exercise_reader_paths(
                                     &RenderOptions::default(),
                                 ) {
                                     Ok(view) => {
+                                        let window_probe = continuous_window_probe(
+                                            library,
+                                            book_id,
+                                            &target.target,
+                                            surface_sequence_hint(
+                                                format_family,
+                                                &surface.kind,
+                                                &surface.surface_id,
+                                            ),
+                                        );
                                         let mut row = surface_rendered_view_probe(
                                             library,
                                             book_id,
@@ -169,6 +179,7 @@ fn exercise_reader_paths(
                                             },
                                         );
                                         insert_surface_page_probe_fields(&mut row, &probe);
+                                        insert_named_value(&mut row, "window", window_probe);
                                         row
                                     }
                                     Err(error) => json!({
@@ -382,10 +393,12 @@ fn search_mode_exercise(
                     &page.hits,
                     resource_scan_limit,
                 );
+                let window_probe = search_result_window_probe(library, book_id, &page.hits);
                 if let Some(object) = row.as_object_mut() {
                     object.insert("rendered_first".to_owned(), json!(rendered_first));
                     object.insert("rendered_hit_count".to_owned(), json!(rendered_hits.len()));
                     object.insert("resource_scan".to_owned(), resource_scan);
+                    object.insert("window".to_owned(), window_probe);
                 }
             }
             row
@@ -502,6 +515,140 @@ fn rendered_view_probe(
         "first_resource": resource_probe,
     })
     .with_diagnostics(&view.diagnostics)
+}
+
+fn insert_named_value(row: &mut serde_json::Value, name: &str, value: serde_json::Value) {
+    if let Some(object) = row.as_object_mut() {
+        object.insert(name.to_owned(), value);
+    }
+}
+
+fn surface_sequence_hint(
+    family: FormatFamily,
+    kind: &NavigationSurfaceKind,
+    surface_id: &str,
+) -> Option<SequenceHint> {
+    match (family, kind) {
+        (FormatFamily::Ssed, NavigationSurfaceKind::TitleIndexBrowse) => {
+            Some(SequenceHint::TitleIndexOrder {
+                value: surface_id.to_owned(),
+            })
+        }
+        (
+            FormatFamily::Ssed,
+            NavigationSurfaceKind::Menu
+            | NavigationSurfaceKind::Toc
+            | NavigationSurfaceKind::EncyclopediaIndex
+            | NavigationSurfaceKind::AuxiliaryIndex
+            | NavigationSurfaceKind::MultiSelector,
+        ) => Some(SequenceHint::MenuOrder {
+            value: surface_id.to_owned(),
+        }),
+        (FormatFamily::Ssed, NavigationSurfaceKind::Panel) => Some(SequenceHint::PanelOrder {
+            value: surface_id.to_owned(),
+        }),
+        (FormatFamily::LvedSqlite3, NavigationSurfaceKind::TitleIndexBrowse) => {
+            Some(SequenceHint::LvedListOrder)
+        }
+        (FormatFamily::LvedSqlite3, NavigationSurfaceKind::LvedTree) => {
+            Some(SequenceHint::LvedTreeOrder)
+        }
+        (FormatFamily::LvlMultiView, NavigationSurfaceKind::MultiviewTree) => {
+            Some(SequenceHint::MultiviewTreeOrder)
+        }
+        (FormatFamily::Hourei, NavigationSurfaceKind::LawTree) => {
+            Some(SequenceHint::HoureiLawArticleOrder)
+        }
+        _ => None,
+    }
+}
+
+fn search_result_window_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    hits: &[SearchHit],
+) -> serde_json::Value {
+    let Some(first) = hits.first() else {
+        return json!({
+            "status": "no_target",
+        });
+    };
+    match SearchResultSequence::from_hits(hits)
+        .and_then(|sequence| sequence.encode())
+        .map(|value| SequenceHint::SearchResults { value })
+        .and_then(|hint| {
+            library.resolve_target_window(
+                book_id,
+                &first.target,
+                Some(&hint),
+                1,
+                1,
+                &RenderOptions::default(),
+            )
+        }) {
+        Ok(window) => continuous_window_result_json(window),
+        Err(error) => json!({
+            "status": "window_error",
+            "error": error.to_string(),
+        }),
+    }
+}
+
+fn continuous_window_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    target: &lvcore::TargetToken,
+    sequence_hint: Option<SequenceHint>,
+) -> serde_json::Value {
+    match library.resolve_target_window(
+        book_id,
+        target,
+        sequence_hint.as_ref(),
+        1,
+        1,
+        &RenderOptions::default(),
+    ) {
+        Ok(window) => continuous_window_result_json(window),
+        Err(error) => json!({
+            "status": "window_error",
+            "sequence_hint": sequence_hint,
+            "error": error.to_string(),
+        }),
+    }
+}
+
+fn continuous_window_result_json(window: lvcore::TargetWindow) -> serde_json::Value {
+    let mut row = json!({
+        "status": "ok",
+        "center_kind": window.center.kind,
+        "before_count": window.before.len(),
+        "after_count": window.after.len(),
+        "center_display_html_len": window.center.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+    });
+    insert_diagnostic_fields(&mut row, &window.diagnostics);
+    if let Some(object) = row.as_object_mut() {
+        object.insert(
+            "before_kinds".to_owned(),
+            json!(
+                window
+                    .before
+                    .iter()
+                    .map(|view| view.kind)
+                    .collect::<Vec<_>>()
+            ),
+        );
+        object.insert(
+            "after_kinds".to_owned(),
+            json!(
+                window
+                    .after
+                    .iter()
+                    .map(|view| view.kind)
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
+    row
 }
 
 #[cfg(test)]

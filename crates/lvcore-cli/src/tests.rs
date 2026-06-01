@@ -185,6 +185,38 @@ fn validate_deep_exercises_first_rendered_resource() {
 }
 
 #[test]
+fn validate_deep_exercises_continuous_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: false,
+        },
+    );
+    let exercises = output["exercises"].as_array().unwrap();
+    let surface_window = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "surface_first_target")
+        .and_then(|exercise| exercise.get("window"))
+        .expect("surface target validation should exercise continuous view");
+    assert_eq!(surface_window["status"], "ok");
+    assert_eq!(surface_window["after_count"].as_u64(), Some(1));
+
+    let search_window = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_forward")
+        .and_then(|exercise| exercise.get("window"))
+        .expect("search validation should exercise search-result continuous view");
+    assert_eq!(search_window["status"], "ok");
+    assert_eq!(search_window["after_count"].as_u64(), Some(1));
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
 fn validate_deep_scans_beyond_first_target_for_rendered_resources() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
@@ -568,7 +600,9 @@ fn write_lved_cli_fixture(root: &Path) {
                 insert into list values (1, 100, 1, '', '<img src="AC6E.svg"><b>alpha</b>', '');
                 insert into list values (2, 101, 1, '', '<b>beta</b>', '');
                 insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
-                  values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '', '', '∥alpha∥');
+                  values (1, 'Example Dictionary alpha', 'ahpla', 'Example Dictionary alpha', 'Example Dictionary alpha body', '', '', '∥alpha∥');
+                insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                  values (2, 'Example Dictionary beta', 'ateb', 'Example Dictionary beta', 'Example Dictionary beta body', '', '', '∥beta∥');
                 "#,
             )
             .unwrap();
