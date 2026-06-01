@@ -80,3 +80,24 @@ fn payload_header_probe_reads_only_requested_prefix() {
     let prefix = read_file_prefix(&path, 16).unwrap();
     assert_eq!(prefix, b"SQLite format 3\0");
 }
+
+#[test]
+fn logofont_cipher_payload_cache_path_is_stable_and_content_versioned() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("blvbat");
+    fs::write(&path, b"first payload").unwrap();
+
+    let first = decrypted_multiview_cache_path(&path).unwrap();
+    let first_again = decrypted_multiview_cache_path(&path).unwrap();
+    assert_eq!(first, first_again);
+    assert!(
+        first
+            .to_string_lossy()
+            .contains("lvcore-rs/multiview-payloads")
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    fs::write(&path, b"second payload with different size").unwrap();
+    let second = decrypted_multiview_cache_path(&path).unwrap();
+    assert_ne!(first, second);
+}

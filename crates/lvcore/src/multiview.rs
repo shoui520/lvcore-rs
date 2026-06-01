@@ -6,12 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
-use tempfile::TempDir;
 
 use crate::crypto::{decrypt_logofont_cipher_file_to_path, decrypt_logofont_cipher_prefix};
 use crate::error::{Error, Result};
 use crate::search::SearchMode;
-use crate::storage::regular_file_inside_root;
+use crate::storage::{private_cache_dir, regular_file_inside_root};
 
 const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
 
@@ -22,7 +21,6 @@ pub use menu::{MultiviewMenuItem, parse_menu_data};
 pub struct MultiviewStore {
     payloads: Vec<MultiviewPayloadSource>,
     connections: Mutex<BTreeMap<PathBuf, Connection>>,
-    temp_dir: Mutex<Option<TempDir>>,
     decrypted_paths: Mutex<BTreeMap<PathBuf, PathBuf>>,
     roles: Mutex<BTreeMap<PathBuf, MultiviewPayloadRole>>,
     schemas: Mutex<BTreeMap<PathBuf, Arc<MultiviewSqliteSchema>>>,
@@ -116,7 +114,6 @@ impl MultiviewStore {
         Ok(Some(Self {
             payloads,
             connections: Mutex::new(BTreeMap::new()),
-            temp_dir: Mutex::new(None),
             decrypted_paths: Mutex::new(BTreeMap::new()),
             roles: Mutex::new(BTreeMap::new()),
             schemas: Mutex::new(BTreeMap::new()),
@@ -494,36 +491,42 @@ impl MultiviewStore {
         {
             return Ok(existing);
         }
-        let temp_root = {
-            let mut guard = self
-                .temp_dir
-                .lock()
-                .map_err(|_| Error::Driver("multiview temp cache was poisoned".to_owned()))?;
-            if guard.is_none() {
-                *guard = Some(
-                    tempfile::Builder::new()
-                        .prefix("lvcore-multiview-")
-                        .tempdir()?,
-                );
+        let output = decrypted_multiview_cache_path(path)?;
+        if !output.exists() {
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent)?;
             }
-            guard
-                .as_ref()
-                .ok_or_else(|| Error::Driver("temporary directory was not created".to_owned()))?
-                .path()
-                .to_path_buf()
-        };
-        let output = temp_root.join(
-            path.file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "payload".to_owned()),
-        );
-        decrypt_logofont_cipher_file_to_path(path, &output)?;
+            let tmp = output.with_extension(format!("{}.tmp", std::process::id()));
+            decrypt_logofont_cipher_file_to_path(path, &tmp)?;
+            fs::rename(tmp, &output)?;
+        }
         self.decrypted_paths
             .lock()
             .map_err(|_| Error::Driver("multiview decrypt cache was poisoned".to_owned()))?
             .insert(path.to_path_buf(), output.clone());
         Ok(output)
     }
+}
+
+fn decrypted_multiview_cache_path(path: &Path) -> Result<PathBuf> {
+    let mut hasher = sha2::Sha256::new();
+    use sha2::Digest;
+    hasher.update(path.to_string_lossy().as_bytes());
+    if let Ok(metadata) = fs::metadata(path) {
+        hasher.update(metadata.len().to_le_bytes());
+        if let Ok(modified) = metadata.modified()
+            && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH)
+        {
+            hasher.update(duration.as_secs().to_le_bytes());
+            hasher.update(duration.subsec_nanos().to_le_bytes());
+        }
+    }
+    let digest = hex::encode(hasher.finalize());
+    let stem = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "payload".into());
+    Ok(private_cache_dir("multiview-payloads")?.join(format!("{stem}-{digest}.sqlite")))
 }
 
 fn payload_may_have_role(name: &str, payload_count: usize, role: MultiviewPayloadRole) -> bool {
