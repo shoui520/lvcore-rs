@@ -224,6 +224,7 @@ impl ReaderBookPackage {
                     .title_for_body_target(&target)?
                     .unwrap_or_else(|| "SSED entry stream".to_owned());
                 let links = self.hc_common_html_target_links(&rendered.links, &mut diagnostics)?;
+                let html = rewrite_hc_common_html_link_hrefs(rendered.html, &links);
                 diagnostics.extend(rendered.diagnostics);
                 diagnostics.push(Diagnostic::warning(
                     "hc_render_common_html_fallback",
@@ -233,7 +234,7 @@ impl ReaderBookPackage {
                     kind: crate::render::ResolvedTargetKind::EntryBody,
                     target,
                     title: Some(title),
-                    display_html: Some(rendered.html),
+                    display_html: Some(html),
                     basic_text: Some(rendered.text),
                     scroll_anchor,
                     surface: None,
@@ -432,6 +433,36 @@ impl ReaderBookPackage {
         })?;
         Ok(())
     }
+}
+
+fn rewrite_hc_common_html_link_hrefs(mut html: String, links: &[TargetLink]) -> String {
+    for link in links {
+        let Some(raw_href) = link.attributes.get("href") else {
+            continue;
+        };
+        let from = format!("href=\"{}\"", escape_html_attr_minimal(raw_href));
+        let to = format!(
+            "href=\"lvcore://target/{}\"",
+            escape_html_attr_minimal(link.token.as_str())
+        );
+        html = html.replace(&from, &to);
+    }
+    html
+}
+
+fn escape_html_attr_minimal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 impl RendererProvider for ReaderBookPackage {

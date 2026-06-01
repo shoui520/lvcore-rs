@@ -269,10 +269,19 @@ fn native_hc_common_html_fallback_exposes_ssed_address_links_as_targets() {
     assert!(
         view.display_html
             .as_deref()
-            .is_some_and(|html| html.contains("href=\"lvaddr://00000001/0000\""))
+            .is_some_and(|html| html.contains("href=\"lvcore://target/"))
+    );
+    assert!(
+        view.display_html
+            .as_deref()
+            .is_some_and(|html| !html.contains("href=\"lvaddr://00000001/0000\""))
     );
     assert_eq!(view.links.len(), 1);
     assert_eq!(view.links[0].kind, lvcore::TargetKind::SsedAddress);
+    assert_eq!(
+        view.links[0].attributes.get("href").map(String::as_str),
+        Some("lvaddr://00000001/0000")
+    );
     assert_eq!(
         view.links[0].token.decode().unwrap(),
         InternalTarget::SsedAddress {
