@@ -140,6 +140,18 @@ impl ReaderBookPackage {
             .flatten()
             .map(|next| next.saturating_sub(start) as u64);
         }
+        if let Some(marker_len) = ssed_reader_metadata_record_marker_len(&mut reader, start)
+            .ok()
+            .flatten()
+        {
+            return ssed_find_next_metadata_record_boundary_offset(
+                &mut reader,
+                start.saturating_add(marker_len),
+            )
+            .ok()
+            .flatten()
+            .map(|next| next.saturating_sub(start) as u64);
+        }
         None
     }
 
@@ -269,4 +281,32 @@ fn ssed_find_next_marker_variant_offset(
         .windows(marker.len())
         .position(|window| window == marker)
         .map(|relative| offset.saturating_add(relative)))
+}
+
+fn ssed_reader_metadata_record_marker_len(
+    reader: &mut SsedDataFile,
+    offset: usize,
+) -> Result<Option<usize>> {
+    const METADATA_RECORD_MARKER: [u8; 4] = [0x1f, 0x09, 0x99, 0x99];
+    let data = reader.read_range(offset, METADATA_RECORD_MARKER.len())?;
+    if data == METADATA_RECORD_MARKER {
+        Ok(Some(METADATA_RECORD_MARKER.len()))
+    } else {
+        Ok(None)
+    }
+}
+
+fn ssed_find_next_metadata_record_boundary_offset(
+    reader: &mut SsedDataFile,
+    offset: usize,
+) -> Result<Option<usize>> {
+    const RECORD_CLOSE_BEFORE_NEXT_METADATA: [u8; 8] =
+        [0x1f, 0x61, 0x1f, 0x0a, 0x1f, 0x09, 0x99, 0x99];
+    let available = reader.header().expanded_size().saturating_sub(offset);
+    let size = available.min(SSED_MARKER_VARIANT_BOUNDARY_SCAN_LIMIT);
+    let data = reader.read_range(offset, size)?;
+    Ok(data
+        .windows(RECORD_CLOSE_BEFORE_NEXT_METADATA.len())
+        .position(|window| window == RECORD_CLOSE_BEFORE_NEXT_METADATA)
+        .map(|relative| offset.saturating_add(relative).saturating_add(4)))
 }

@@ -462,6 +462,77 @@ fn ssed_hc_renderer_input_uses_local_boundary_for_marker_variants() {
 }
 
 #[test]
+fn ssed_hc_renderer_input_uses_metadata_record_close_boundary() {
+    let dir = tempdir().unwrap();
+    let mut honmon = Vec::new();
+    honmon.extend_from_slice(&[0x1f, 0x09, 0x99, 0x99]);
+    honmon.extend_from_slice(&[0x1f, 0xe2, 0x00, 0x02, 0x23, 0x31, 0x23, 0x32, 0x1f, 0xe3]);
+    honmon.extend_from_slice(&[0x1f, 0x09, 0x99, 0x99]);
+    honmon.extend_from_slice(&[0x1f, 0xe2, 0x00, 0x02, 0x23, 0x33, 0x23, 0x34, 0x1f, 0xe3]);
+    honmon.extend_from_slice(&[0x1f, 0x09, 0x00, 0x03]);
+    honmon.extend_from_slice(b"first");
+    honmon.extend_from_slice(&[0x1f, 0x09, 0x00, 0x02, 0x1f, 0x41, 0x01, 0x60]);
+    honmon.extend_from_slice(b"child");
+    honmon.extend_from_slice(&[0x1f, 0x61, 0x1f, 0x0a]);
+    let second_entry_offset = honmon.len();
+    honmon.extend_from_slice(&[0x1f, 0x09, 0x99, 0x99]);
+    honmon.extend_from_slice(&[0x1f, 0xe2, 0x00, 0x02, 0x23, 0x35, 0x23, 0x36, 0x1f, 0xe3]);
+    honmon.extend_from_slice(b"second");
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+    )
+    .unwrap();
+    let catalog = SsedCatalog {
+        title: "Metadata record boundaries".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 100,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Metadata record boundaries".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 0,
+    })
+    .unwrap();
+
+    let input = package.renderer_input_for_target(&token).unwrap();
+    let RendererInput::HcSsedStream { length, .. } = input else {
+        panic!("SSED address should produce HC renderer input");
+    };
+    assert_eq!(length, Some(second_entry_offset as u64));
+}
+
+#[test]
 fn ssed_hc_renderer_input_does_not_scan_index_for_markerless_stream_length() {
     let dir = tempdir().unwrap();
     let second_pcm = pcmdata_wave_chunks_for_test(1, b"\x81");
