@@ -223,6 +223,7 @@ impl ReaderBookPackage {
                 let title = self
                     .title_for_body_target(&target)?
                     .unwrap_or_else(|| "SSED entry stream".to_owned());
+                let links = self.hc_common_html_target_links(&rendered.links, &mut diagnostics)?;
                 diagnostics.extend(rendered.diagnostics);
                 diagnostics.push(Diagnostic::warning(
                     "hc_render_common_html_fallback",
@@ -237,7 +238,7 @@ impl ReaderBookPackage {
                     scroll_anchor,
                     surface: None,
                     resources,
-                    links: Vec::new(),
+                    links,
                     capabilities: vec![crate::render::RenderCapability::HcRenderInput],
                     diagnostics,
                     debug_trace: (options.include_debug_trace || options.mode == RenderMode::Debug)
@@ -299,6 +300,33 @@ impl ReaderBookPackage {
                 })
             }
         }
+    }
+
+    fn hc_common_html_target_links(
+        &self,
+        links: &[crate::ssed_hc::HcCommonHtmlLink],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<Vec<TargetLink>> {
+        let mut target_links = Vec::new();
+        for link in links {
+            let Some(token) =
+                self.ssed_target_for_loose_address(link.block, link.offset, diagnostics)?
+            else {
+                continue;
+            };
+            let kind = token.decode()?.kind();
+            let mut attributes = BTreeMap::new();
+            attributes.insert("href".to_owned(), link.href.clone());
+            attributes.insert("control".to_owned(), link.control.clone());
+            target_links.push(TargetLink {
+                token,
+                label: link.href.clone(),
+                kind,
+                diagnostics: Vec::new(),
+                attributes,
+            });
+        }
+        Ok(target_links)
     }
 
     fn finalize_resolved_view(

@@ -239,6 +239,55 @@ fn basic_text_mode_decodes_hc_ssed_stream_instead_of_returning_empty_deferred_vi
 }
 
 #[test]
+fn native_hc_common_html_fallback_exposes_ssed_address_links_as_targets() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    let mut honmon = body_jis("参照");
+    honmon.extend_from_slice(&[
+        0x1f, 0x44, 0xaa, 0xbb, 0xcc, 0xdd, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+    ]);
+    honmon.extend_from_slice(&body_jis("本文"));
+    honmon.extend_from_slice(&[0x1f, 0x64, 0, 0, 0, 0, 0, 0]);
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(&honmon),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(&token, &RenderOptions::default())
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        view.display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("href=\"lvaddr://00000001/0000\""))
+    );
+    assert_eq!(view.links.len(), 1);
+    assert_eq!(view.links[0].kind, lvcore::TargetKind::SsedAddress);
+    assert_eq!(
+        view.links[0].token.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 0,
+        }
+    );
+    assert_eq!(
+        view.links[0].attributes.get("control").map(String::as_str),
+        Some("1f44")
+    );
+}
+
+#[test]
 fn debug_mode_decodes_hc_ssed_stream_without_claiming_visual_rendering() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

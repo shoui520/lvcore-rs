@@ -20,7 +20,17 @@ pub struct HcCommonHtmlRender {
     pub text: String,
     pub stats: HcTextStats,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<HcCommonHtmlLink>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HcCommonHtmlLink {
+    pub href: String,
+    pub block: u32,
+    pub offset: u32,
+    pub control: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +125,7 @@ pub fn decode_hc_stream_common_html_with_gaiji(
     let mut html = String::with_capacity(data.len().saturating_mul(2));
     let mut text = String::with_capacity(data.len());
     let mut stats = HcTextStats::default();
+    let mut links = Vec::new();
     let mut unknown_ops = BTreeSet::new();
     let mut style_stack: Vec<HcHtmlStyle> = Vec::new();
     let mut inline_stack: Vec<HcHtmlInline> = Vec::new();
@@ -200,6 +211,14 @@ pub fn decode_hc_stream_common_html_with_gaiji(
                     payload
                 };
                 let target = decode_pointer_payload(target_payload);
+                if let Some((block, offset_value)) = target {
+                    links.push(HcCommonHtmlLink {
+                        href: lvaddr_href(block, offset_value),
+                        block,
+                        offset: offset_value,
+                        control: format!("1f{op:02x}"),
+                    });
+                }
                 append_link_start(&mut html, op, target);
                 inline_stack.push(HcHtmlInline::Link);
                 offset = next;
@@ -349,6 +368,7 @@ pub fn decode_hc_stream_common_html_with_gaiji(
         html: format!("<div class=\"lv-hc-common-html-fallback\">{html}</div>"),
         text,
         stats,
+        links,
         diagnostics,
     }
 }
@@ -678,8 +698,8 @@ fn append_link_start(html: &mut String, op: u8, target: Option<(u32, u32)>) {
     html.push_str("<a class=\"lv-hc-link\"");
     match target {
         Some((block, offset)) => {
-            html.push_str(" href=\"lvaddr://");
-            push_html_attr(html, &format!("{block:08}/{offset:04}"));
+            html.push_str(" href=\"");
+            push_html_attr(html, &lvaddr_href(block, offset));
             html.push('"');
             html.push_str(" data-lv-block=\"");
             push_html_attr(html, &block.to_string());
@@ -698,6 +718,10 @@ fn append_link_start(html: &mut String, op: u8, target: Option<(u32, u32)>) {
     html.push_str(" data-lv-control=\"1f");
     push_html_attr(html, &format!("{op:02x}"));
     html.push_str("\">");
+}
+
+fn lvaddr_href(block: u32, offset: u32) -> String {
+    format!("lvaddr://{block:08}/{offset:04}")
 }
 
 fn append_media_placeholder(html: &mut String, op: u8, payload: &[u8]) {
@@ -884,6 +908,9 @@ mod tests {
         let rendered = decode_hc_stream_common_html(&data);
 
         assert_eq!(rendered.text, "前リンク");
+        assert_eq!(rendered.links.len(), 1);
+        assert_eq!(rendered.links[0].href, "lvaddr://00000003/4660");
+        assert_eq!(rendered.links[0].control, "1f44");
         assert!(
             rendered.html.contains(
                 "<a class=\"lv-hc-link\" href=\"lvaddr://00000003/4660\" data-lv-block=\"3\" data-lv-offset=\"4660\" data-lv-link-status=\"resolved_address\" data-lv-control=\"1f44\">リンク</a>"
