@@ -487,6 +487,11 @@ fn library_delegates_reader_operations_by_book_id() {
         .find(|metadata| metadata.book_id == book_id)
         .unwrap();
     assert!(book_id.0.starts_with("SSED:"));
+    assert!(
+        book_id.0.starts_with("SSED:DICT:"),
+        "library book ids should use the SSED catalog identity, not the temp/package folder: {}",
+        book_id.0
+    );
     assert!(book_id.0.ends_with(&metadata.root_fingerprint[..12]));
 
     let surfaces = library.home_surfaces(&book_id).unwrap();

@@ -277,13 +277,10 @@ impl ReaderBookPackage {
         let fingerprint_short = root_fingerprint
             .get(..12)
             .unwrap_or(root_fingerprint.as_str());
+        let identity_hint = package_identity_hint(root, &detected);
         let book_id = BookId(format!(
             "{}:{}:{}",
-            format_label,
-            root.file_name()
-                .map(|v| v.to_string_lossy())
-                .unwrap_or_else(|| root.as_os_str().to_string_lossy()),
-            fingerprint_short,
+            format_label, identity_hint, fingerprint_short,
         ));
         let metadata = BookMetadata {
             book_id,
@@ -319,6 +316,27 @@ impl ReaderBookPackage {
     pub(super) fn book_id_for_hit(&self) -> BookId {
         self.metadata.book_id.clone()
     }
+}
+
+fn package_identity_hint(root: &Path, detected: &DetectedPackage) -> String {
+    if detected.format_family == FormatFamily::Ssed
+        && let Some(catalog_name) = detected
+            .evidence
+            .iter()
+            .find_map(|value| value.strip_prefix("ssedinfo:"))
+    {
+        let stem = Path::new(catalog_name)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty());
+        if let Some(stem) = stem {
+            return stem.to_owned();
+        }
+    }
+
+    root.file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| root.as_os_str().to_string_lossy().to_string())
 }
 
 impl BookPackage for ReaderBookPackage {

@@ -40,6 +40,11 @@ fn ssed_home_surfaces_are_capability_based() {
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
     let metadata = package.metadata();
     assert_eq!(metadata.format_family, FormatFamily::Ssed);
+    assert!(
+        metadata.book_id.0.starts_with("SSED:DICT:"),
+        "SSED book identity should be based on the catalog .idx stem, not the package folder: {}",
+        metadata.book_id.0
+    );
     assert!(metadata.capabilities.contains(&Capability::HcRenderInput));
     assert!(metadata.capabilities.contains(&Capability::NativeSearch));
     assert!(metadata.capabilities.contains(&Capability::Hanrei));
