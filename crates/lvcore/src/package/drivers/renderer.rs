@@ -225,6 +225,8 @@ impl ReaderBookPackage {
                     .unwrap_or_else(|| "SSED entry stream".to_owned());
                 let links = self.hc_common_html_target_links(&rendered.links, &mut diagnostics)?;
                 let html = rewrite_hc_common_html_link_hrefs(rendered.html, &links);
+                let html =
+                    rewrite_hc_common_html_media_placeholders(html, &rendered.media, &resources);
                 diagnostics.extend(rendered.diagnostics);
                 diagnostics.push(Diagnostic::warning(
                     "hc_render_common_html_fallback",
@@ -448,6 +450,71 @@ fn rewrite_hc_common_html_link_hrefs(mut html: String, links: &[TargetLink]) -> 
         html = html.replace(&from, &to);
     }
     html
+}
+
+fn rewrite_hc_common_html_media_placeholders(
+    mut html: String,
+    media: &[crate::ssed_hc::HcCommonHtmlMedia],
+    resources: &[ResourceRef],
+) -> String {
+    let mut resource_index = 0usize;
+    for media_control in media {
+        if !hc_common_media_control_uses_resource(media_control) {
+            continue;
+        }
+        let Some(resource) = resources.get(resource_index) else {
+            break;
+        };
+        resource_index = resource_index.saturating_add(1);
+        let from = hc_common_media_placeholder_html(media_control);
+        let to = hc_common_resource_html(resource);
+        html = html.replace(&from, &to);
+    }
+    html
+}
+
+fn hc_common_media_control_uses_resource(media: &crate::ssed_hc::HcCommonHtmlMedia) -> bool {
+    matches!(media.control.as_str(), "1f3c" | "1f4a" | "1f4d" | "1f64")
+}
+
+fn hc_common_media_placeholder_html(media: &crate::ssed_hc::HcCommonHtmlMedia) -> String {
+    let mut html = format!(
+        "<span class=\"lv-hc-media-placeholder\" data-lv-control=\"{}\" data-lv-media-index=\"{}\"",
+        escape_html_attr_minimal(&media.control),
+        media.index
+    );
+    if !media.payload_hex.is_empty() {
+        html.push_str(" data-lv-payload=\"");
+        html.push_str(&escape_html_attr_minimal(&media.payload_hex));
+        html.push('"');
+    }
+    html.push_str("></span>");
+    html
+}
+
+fn hc_common_resource_html(resource: &ResourceRef) -> String {
+    let href = resource
+        .href
+        .clone()
+        .unwrap_or_else(|| format!("lvcore://resource/{}", resource.token.as_str()));
+    let href = escape_html_attr_minimal(&href);
+    let label = escape_html_attr_minimal(resource.label.as_deref().unwrap_or("Dictionary media"));
+    match resource.kind {
+        ResourceKind::Image | ResourceKind::Template | ResourceKind::Colscr => {
+            format!("<img class=\"lv-hc-media lv-hc-media-image\" src=\"{href}\" alt=\"{label}\">")
+        }
+        ResourceKind::Audio | ResourceKind::PcmData | ResourceKind::SoundData => {
+            format!(
+                "<audio class=\"lv-hc-media lv-hc-media-audio\" controls src=\"{href}\"></audio>"
+            )
+        }
+        ResourceKind::Video | ResourceKind::MediaBlob => {
+            format!(
+                "<video class=\"lv-hc-media lv-hc-media-video\" controls src=\"{href}\"></video>"
+            )
+        }
+        _ => format!("<a class=\"lv-hc-media lv-hc-media-link\" href=\"{href}\">{label}</a>"),
+    }
 }
 
 fn escape_html_attr_minimal(value: &str) -> String {

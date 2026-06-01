@@ -125,7 +125,9 @@ fn ssed_hc_renderer_input_carries_stream_resource_refs() {
         .render_target(&token, &RenderOptions::default())
         .unwrap();
     assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
-    assert!(view.display_html.is_some());
+    let html = view.display_html.as_deref().unwrap_or_default();
+    assert!(html.contains("<audio"));
+    assert!(html.contains("lvcore://resource/"));
     assert_eq!(view.resources.len(), resources.len());
     assert!(view.capabilities.contains(&RenderCapability::HcRenderInput));
     assert!(view.capabilities.contains(&RenderCapability::Images));

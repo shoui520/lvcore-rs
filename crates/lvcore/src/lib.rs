@@ -89,8 +89,8 @@ pub use ssed_encyclopedia::{
     parse_encyclopedia_index, parse_encyclopedia_index_bytes,
 };
 pub use ssed_hc::{
-    HcCommonHtmlLink, HcCommonHtmlRender, HcTextRender, HcTextStats, decode_hc_stream_basic_text,
-    decode_hc_stream_common_html,
+    HcCommonHtmlLink, HcCommonHtmlMedia, HcCommonHtmlRender, HcTextRender, HcTextStats,
+    decode_hc_stream_basic_text, decode_hc_stream_common_html,
 };
 pub use ssed_index::{SsedIndexPointer, SsedIndexRow};
 pub use ssed_loose_media::{

@@ -22,6 +22,8 @@ pub struct HcCommonHtmlRender {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<HcCommonHtmlLink>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<HcCommonHtmlMedia>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -31,6 +33,13 @@ pub struct HcCommonHtmlLink {
     pub block: u32,
     pub offset: u32,
     pub control: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HcCommonHtmlMedia {
+    pub index: usize,
+    pub control: String,
+    pub payload_hex: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +91,7 @@ const STYLE_END_OPS: &[(u8, HcTextStyle)] = &[
 
 const LINK_START_OPS: &[u8] = &[0x3b, 0x42, 0x43, 0x44, 0x49];
 const LINK_END_OPS: &[u8] = &[0x5b, 0x62, 0x63, 0x64, 0x69];
-const MEDIA_OPS: &[u8] = &[0x39, 0x3c, 0x4a, 0x4d, 0x59, 0x6a];
+const MEDIA_OPS: &[u8] = &[0x39, 0x3c, 0x4a, 0x4d, 0x59, 0x64, 0x6a];
 const PRIVATE_OPS: &[u8] = &[0xe2, 0xe3, 0xe4, 0xe6];
 const VERTICAL_HINT_OPS: &[u8] = &[0x36, 0x37, 0x4b, 0x4c];
 const PRIVATE_RENDERER_DIRECTIVE_OPS: &[u8] = &[0x4e, 0x4f];
@@ -126,6 +135,7 @@ pub fn decode_hc_stream_common_html_with_gaiji(
     let mut text = String::with_capacity(data.len());
     let mut stats = HcTextStats::default();
     let mut links = Vec::new();
+    let mut media = Vec::new();
     let mut unknown_ops = BTreeSet::new();
     let mut style_stack: Vec<HcHtmlStyle> = Vec::new();
     let mut inline_stack: Vec<HcHtmlInline> = Vec::new();
@@ -226,21 +236,32 @@ pub fn decode_hc_stream_common_html_with_gaiji(
             }
 
             if LINK_END_OPS.contains(&op) {
-                stats.link_controls += 1;
                 if let Some(position) = inline_stack
                     .iter()
                     .rposition(|inline| *inline == HcHtmlInline::Link)
                 {
+                    stats.link_controls += 1;
                     inline_stack.remove(position);
                     html.push_str("</a>");
+                    offset = next;
+                    continue;
                 }
-                offset = next;
-                continue;
+                if op != 0x64 {
+                    stats.link_controls += 1;
+                    offset = next;
+                    continue;
+                }
             }
 
             if MEDIA_OPS.contains(&op) {
                 stats.media_controls += 1;
-                append_media_placeholder(&mut html, op, payload);
+                let media_index = media.len();
+                media.push(HcCommonHtmlMedia {
+                    index: media_index,
+                    control: format!("1f{op:02x}"),
+                    payload_hex: hex_lower(payload),
+                });
+                append_media_placeholder(&mut html, op, payload, media_index);
                 offset = next;
                 continue;
             }
@@ -369,6 +390,7 @@ pub fn decode_hc_stream_common_html_with_gaiji(
         text,
         stats,
         links,
+        media,
         diagnostics,
     }
 }
@@ -724,9 +746,12 @@ fn lvaddr_href(block: u32, offset: u32) -> String {
     format!("lvaddr://{block:08}/{offset:04}")
 }
 
-fn append_media_placeholder(html: &mut String, op: u8, payload: &[u8]) {
+fn append_media_placeholder(html: &mut String, op: u8, payload: &[u8], media_index: usize) {
     html.push_str("<span class=\"lv-hc-media-placeholder\" data-lv-control=\"1f");
     push_html_attr(html, &format!("{op:02x}"));
+    html.push('"');
+    html.push_str(" data-lv-media-index=\"");
+    push_html_attr(html, &media_index.to_string());
     html.push('"');
     if !payload.is_empty() {
         html.push_str(" data-lv-payload=\"");
@@ -917,6 +942,26 @@ mod tests {
             )
         );
         assert!(rendered.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn common_html_records_media_placeholders_with_stable_indexes() {
+        let mut data = body_jis("音");
+        data.extend_from_slice(&[
+            0x1f, 0x4a, 0x00, 0x01, 0x00, 0x00, 0x12, 0x34, 0x00, 0x00, 0x12, 0x35, 0x00, 0x00,
+            0x12, 0x36, 0x00, 0x00,
+        ]);
+        data.extend_from_slice(&[0x1f, 0x64, 0x00, 0x00, 0x12, 0x00, 0x00, 0x17]);
+
+        let rendered = decode_hc_stream_common_html(&data);
+
+        assert_eq!(rendered.media.len(), 2);
+        assert_eq!(rendered.media[0].index, 0);
+        assert_eq!(rendered.media[0].control, "1f4a");
+        assert_eq!(rendered.media[1].index, 1);
+        assert_eq!(rendered.media[1].control, "1f64");
+        assert!(rendered.html.contains("data-lv-media-index=\"0\""));
+        assert!(rendered.html.contains("data-lv-media-index=\"1\""));
     }
 
     #[test]
