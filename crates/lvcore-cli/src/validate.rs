@@ -15,6 +15,8 @@ use super::{metadata_for, open_single_book_library};
 const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 32;
 const VALIDATE_SEARCH_HIT_RENDER_LIMIT: usize = 3;
 const VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT: usize = 8;
+const VALIDATE_SURFACE_TARGET_PAGE_LIMIT: usize = 16;
+const VALIDATE_SURFACE_PAGE_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValidateOptions {
@@ -139,47 +141,67 @@ fn exercise_reader_paths(
                     insert_diagnostic_fields(&mut row, diagnostics);
                     row
                 } else {
-                    let targets = opened.actionable_targets();
-                    let resource_scan =
-                        rendered_resource_scan(library, book_id, &targets, resource_scan_limit);
-                    let (target, label) = targets
-                        .first()
-                        .map(|target| (Some(target.target.clone()), target.label_text.clone()))
-                        .unwrap_or((None, String::new()));
-                    match target {
-                        Some(target) => {
-                            match library.render_target(book_id, &target, &RenderOptions::default())
-                            {
-                                Ok(view) => surface_rendered_view_probe(
-                                    library,
+                    match surface_probe_targets(library, book_id, &surface.surface_id, &opened) {
+                        Ok(probe) => {
+                            let resource_scan = rendered_resource_scan(
+                                library,
+                                book_id,
+                                &probe.resource_targets,
+                                resource_scan_limit,
+                            );
+                            match probe.first_target.as_ref() {
+                                Some(target) => match library.render_target(
                                     book_id,
-                                    &view,
-                                    SurfaceRenderedProbeContext {
-                                        surface_id: &surface.surface_id,
-                                        surface_kind: &surface.kind,
-                                        opened_kind: navigation_surface_kind_name(&opened),
-                                        label,
-                                        resource_scan,
-                                    },
-                                ),
-                                Err(error) => json!({
+                                    &target.target,
+                                    &RenderOptions::default(),
+                                ) {
+                                    Ok(view) => {
+                                        let mut row = surface_rendered_view_probe(
+                                            library,
+                                            book_id,
+                                            &view,
+                                            SurfaceRenderedProbeContext {
+                                                surface_id: &surface.surface_id,
+                                                surface_kind: &surface.kind,
+                                                opened_kind: navigation_surface_kind_name(&opened),
+                                                label: target.label_text.clone(),
+                                                resource_scan,
+                                            },
+                                        );
+                                        insert_surface_page_probe_fields(&mut row, &probe);
+                                        row
+                                    }
+                                    Err(error) => json!({
+                                        "kind": "surface_first_target",
+                                        "surface_id": surface.surface_id,
+                                        "surface_kind": surface.kind,
+                                        "status": "render_error",
+                                        "label": target.label_text,
+                                        "resource_scan": resource_scan,
+                                        "pages_scanned": probe.pages_scanned,
+                                        "remaining_cursor": probe.remaining_cursor,
+                                        "error": error.to_string(),
+                                    }),
+                                },
+                                None => json!({
                                     "kind": "surface_first_target",
                                     "surface_id": surface.surface_id,
                                     "surface_kind": surface.kind,
-                                    "status": "render_error",
-                                    "label": label,
+                                    "opened_kind": navigation_surface_kind_name(&opened),
+                                    "status": "no_target",
                                     "resource_scan": resource_scan,
-                                    "error": error.to_string(),
+                                    "pages_scanned": probe.pages_scanned,
+                                    "remaining_cursor": probe.remaining_cursor,
                                 }),
                             }
                         }
-                        None => json!({
+                        Err(error) => json!({
                             "kind": "surface_first_target",
                             "surface_id": surface.surface_id,
                             "surface_kind": surface.kind,
                             "opened_kind": navigation_surface_kind_name(&opened),
-                            "status": "no_target",
-                            "resource_scan": resource_scan,
+                            "status": "surface_page_error",
+                            "error": error.to_string(),
                         }),
                     }
                 }
@@ -205,6 +227,71 @@ fn exercise_reader_paths(
         include_expensive_search,
     ));
     rows
+}
+
+#[derive(Debug)]
+struct SurfaceTargetProbe {
+    first_target: Option<NavigationTarget>,
+    resource_targets: Vec<NavigationTarget>,
+    pages_scanned: usize,
+    remaining_cursor: Option<String>,
+}
+
+fn surface_probe_targets(
+    library: &BookLibrary,
+    book_id: &BookId,
+    surface_id: &str,
+    first_surface: &NavigationSurface,
+) -> lvcore::Result<SurfaceTargetProbe> {
+    let mut pages_scanned = 1usize;
+    let mut resource_targets = first_surface.actionable_targets();
+    let mut remaining_cursor = navigation_surface_next_cursor(first_surface).map(str::to_owned);
+
+    while resource_targets.is_empty()
+        && remaining_cursor.is_some()
+        && pages_scanned < VALIDATE_SURFACE_TARGET_PAGE_LIMIT
+    {
+        let cursor = remaining_cursor.clone();
+        let page = library.open_surface_page(
+            book_id,
+            surface_id,
+            cursor.as_deref(),
+            VALIDATE_SURFACE_PAGE_LIMIT,
+        )?;
+        pages_scanned += 1;
+        resource_targets = page.actionable_targets();
+        remaining_cursor = navigation_surface_next_cursor(&page).map(str::to_owned);
+    }
+
+    Ok(SurfaceTargetProbe {
+        first_target: resource_targets.first().cloned(),
+        resource_targets,
+        pages_scanned,
+        remaining_cursor,
+    })
+}
+
+fn navigation_surface_next_cursor(surface: &NavigationSurface) -> Option<&str> {
+    match surface {
+        NavigationSurface::SimpleMenu { next_cursor, .. }
+        | NavigationSurface::TitleIndexBrowse { next_cursor, .. }
+        | NavigationSurface::HierarchicalTree { next_cursor, .. }
+        | NavigationSurface::InfoPages { next_cursor, .. } => next_cursor.as_deref(),
+        NavigationSurface::ScreenMenu { .. }
+        | NavigationSurface::Panel { .. }
+        | NavigationSurface::FallbackSearch { .. }
+        | NavigationSurface::Deferred { .. } => None,
+    }
+}
+
+fn insert_surface_page_probe_fields(row: &mut serde_json::Value, probe: &SurfaceTargetProbe) {
+    if let Some(object) = row.as_object_mut() {
+        object.insert("pages_scanned".to_owned(), json!(probe.pages_scanned));
+        object.insert(
+            "remaining_cursor".to_owned(),
+            json!(probe.remaining_cursor.clone()),
+        );
+    }
 }
 
 fn search_mode_exercises(
