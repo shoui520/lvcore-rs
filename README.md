@@ -183,6 +183,11 @@ provider slices:
   native index body boundaries for marker-variant entries, keeping
   renderer/resource scans scoped to the focused entry where the boundary is
   known;
+- SSED plain HONMON targets in `Native` and `GenericHtml` render modes now
+  return a bounded basic-text HTML fallback instead of an empty deferred view.
+  The output keeps `HcRenderInput` capability metadata and emits an explicit
+  `hc_render_basic_text_fallback` diagnostic, so reader apps get something
+  displayable without mistaking it for product HC visual parity;
 - SSED KOJIEN6-style `COLSMPL.DIC` records are parsed as typed color-sample
   metadata preserving exact Munsell notation and JIS labels;
 - explicit deferred/unsupported diagnostics instead of fake output.
@@ -194,10 +199,10 @@ known structures.
 
 ## Important Gaps
 
-- SSED HC renderer parity is not ported yet. Plain SSED body targets currently
-  resolve to explicit HC renderer input plus discovered profile/resource refs
-  rather than claiming rendered HTML; known entry boundaries are used when
-  available, while supported dense sidecar targets resolve to preserved HTML or
+- SSED HC renderer parity is not ported yet. Plain SSED body targets expose
+  structured HC renderer input and, for native/generic display, a basic-text HTML
+  fallback with diagnostics. This is intentionally displayable but not a visual
+  parity claim. Supported dense sidecar targets resolve to preserved HTML or
   exact sidecar text.
 - SSED full-text search is implemented as sidecar-body search for understood
   dense HONMON databases plus a bounded, index-anchored HONMON scan for stream
