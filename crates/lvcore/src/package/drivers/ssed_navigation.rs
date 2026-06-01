@@ -227,11 +227,12 @@ pub(super) fn ssed_aux_index_rows_to_nodes(
 
     for (index, row) in rows.iter().enumerate() {
         let rich_label = package.ssed_rich_label(&row.label);
+        let next_target_row = nearest_higher_aux_target_row(rows, row);
         let node = NavigationNode {
             node_id: format!("aux-index:{}:{index}", row.line_number),
             label_html: rich_label.html,
             label_text: rich_label.text,
-            target: ssed_aux_index_row_target(package, row, diagnostics)?,
+            target: ssed_aux_index_row_target(package, row, next_target_row, diagnostics)?,
             diagnostics: rich_label.diagnostics,
             children: Vec::new(),
         };
@@ -268,11 +269,12 @@ pub(super) fn ssed_aux_index_rows_to_flat_nodes(
         .enumerate()
         .map(|(index, row)| {
             let rich_label = package.ssed_rich_label(&row.label);
+            let next_target_row = nearest_higher_aux_target_row(rows, row);
             Ok(NavigationNode {
                 node_id: format!("aux-index:{}:{index}", row.line_number),
                 label_html: rich_label.html,
                 label_text: rich_label.text,
-                target: ssed_aux_index_row_target(package, row, diagnostics)?,
+                target: ssed_aux_index_row_target(package, row, next_target_row, diagnostics)?,
                 diagnostics: rich_label.diagnostics,
                 children: Vec::new(),
             })
@@ -283,6 +285,7 @@ pub(super) fn ssed_aux_index_rows_to_flat_nodes(
 fn ssed_aux_index_row_target(
     package: &ReaderBookPackage,
     row: &SsedAuxIndexRow,
+    next_target_row: Option<&SsedAuxIndexRow>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
     if !row.has_target() {
@@ -305,31 +308,31 @@ fn ssed_aux_index_row_target(
             column: 0,
         })?));
     }
-    let Some(catalog) = &package.ssed_catalog else {
-        diagnostics.push(Diagnostic::warning(
-            "ssed_auxiliary_index_catalog_missing",
-            format!(
-                "auxiliary index row {} points to {:08x}:{:04x}, but no SSED catalog is available",
-                row.line_number, row.block, row.offset
-            ),
-        ));
-        return Ok(None);
-    };
-    let Some(component) = catalog.component_for_address(row.block) else {
-        diagnostics.push(Diagnostic::warning(
-            "ssed_auxiliary_index_target_unresolved",
-            format!(
-                "auxiliary index row {} points outside declared components: {:08x}:{:04x}",
-                row.line_number, row.block, row.offset
-            ),
-        ));
-        return Ok(None);
-    };
-    Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
-        component: component.filename.clone(),
+    let pointer = SsedIndexPointer {
         block: row.block,
         offset: row.offset,
-    })?))
+    };
+    let end = next_target_row.map(|next| SsedIndexPointer {
+        block: next.block,
+        offset: next.offset,
+    });
+    match package.ssed_target_for_index_pointer_with_bound(pointer, end)? {
+        Ok(target) => Ok(Some(target)),
+        Err(diagnostic) => {
+            diagnostics.push(diagnostic);
+            Ok(None)
+        }
+    }
+}
+
+fn nearest_higher_aux_target_row<'a>(
+    rows: &'a [SsedAuxIndexRow],
+    row: &SsedAuxIndexRow,
+) -> Option<&'a SsedAuxIndexRow> {
+    rows.iter()
+        .filter(|candidate| candidate.has_target() && candidate.virtual_selector().is_none())
+        .filter(|candidate| (candidate.block, candidate.offset) > (row.block, row.offset))
+        .min_by_key(|candidate| (candidate.block, candidate.offset))
 }
 
 fn ssed_menu_record_target(

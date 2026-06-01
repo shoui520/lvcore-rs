@@ -156,6 +156,63 @@ fn title_index_browse_prefers_forward_rows_over_backward_search_rows() {
 }
 
 #[test]
+fn ssed_search_hits_render_with_index_body_boundaries() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"abcdef"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0aalpine\x1f\x0abeta\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("alpine", 1, 4, 13, 7),
+            ("beta", 1, 6, 13, 14),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "al".to_owned(),
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedIndexAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
+            index_component: "FHINDEX.DIC".to_owned(),
+        }
+    );
+    let input = package
+        .renderer_input_for_target(&page.hits[0].target)
+        .unwrap();
+    let RendererInput::HcSsedStream { length, .. } = input else {
+        panic!("search hit should resolve to SSED renderer input");
+    };
+    assert_eq!(length, Some(2));
+    assert_eq!(page.next_cursor.as_deref(), Some("1"));
+}
+
+#[test]
 fn title_index_browse_skips_backward_components_before_opening_them() {
     let dir = tempdir().unwrap();
     let record_start = 0x80;

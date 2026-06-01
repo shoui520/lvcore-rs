@@ -145,7 +145,7 @@ impl ReaderBookPackage {
     ) -> Result<TargetWindow> {
         let Some(center_index) = ordered
             .iter()
-            .position(|candidate| &candidate.target == target)
+            .position(|candidate| sequence_targets_match(&candidate.target, target))
         else {
             return Ok(TargetWindow {
                 center: self.render_target(target, options)?,
@@ -189,5 +189,42 @@ impl ReaderBookPackage {
             view.title = Some(title.clone());
         }
         Ok(view)
+    }
+}
+
+fn sequence_targets_match(candidate: &TargetToken, target: &TargetToken) -> bool {
+    candidate == target
+        || match (candidate.decode(), target.decode()) {
+            (Ok(candidate), Ok(target)) => internal_sequence_targets_match(&candidate, &target),
+            _ => false,
+        }
+}
+
+fn internal_sequence_targets_match(candidate: &InternalTarget, target: &InternalTarget) -> bool {
+    ssed_sequence_address(candidate)
+        .zip(ssed_sequence_address(target))
+        .is_some_and(|(candidate, target)| candidate == target)
+}
+
+fn ssed_sequence_address(target: &InternalTarget) -> Option<(&str, u32, u32)> {
+    match target {
+        InternalTarget::SsedAddress {
+            component,
+            block,
+            offset,
+        }
+        | InternalTarget::SsedBoundedAddress {
+            component,
+            block,
+            offset,
+            ..
+        }
+        | InternalTarget::SsedIndexAddress {
+            component,
+            block,
+            offset,
+            ..
+        } => Some((component.as_str(), *block, *offset)),
+        _ => None,
     }
 }

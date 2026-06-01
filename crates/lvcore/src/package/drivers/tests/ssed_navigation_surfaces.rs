@@ -214,6 +214,7 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
             "00000000\t00000000\t大辞林 第四版\n\
                  00005221\t00000722\t\t季語\n\
                  00005221\t000007C2\t\t\t春\n\
+                 00005221\t00000750\t\t\t冬\n\
                  10000000\t0000FFFF\t\t西和ABC順\n\
                  01000000\t0000FFFF\t\t五十音\n",
         ),
@@ -273,6 +274,22 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
     };
     assert_eq!(nodes[0].label_text, "大辞林 第四版");
     assert_eq!(nodes[0].children[0].label_text, "季語");
+    let target = nodes[0].children[0]
+        .target
+        .as_ref()
+        .unwrap()
+        .decode()
+        .unwrap();
+    assert!(matches!(
+        target,
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block: 0x5221,
+            offset: 0x0722,
+            end_block: 0x5221,
+            end_offset: 0x0750
+        } if component == "HONMON.DIC"
+    ));
     let target = nodes[0].children[0].children[0]
         .target
         .as_ref()
@@ -357,7 +374,7 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
     };
     assert_eq!(nodes.len(), 2);
     assert_eq!(nodes[0].label_text, "春");
-    assert_eq!(nodes[1].label_text, "西和ABC順");
+    assert_eq!(nodes[1].label_text, "冬");
     assert_eq!(next_cursor.as_deref(), Some("4"));
 }
 

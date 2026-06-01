@@ -50,6 +50,14 @@ impl BodyProvider for ReaderBookPackage {
                 block,
                 offset,
             } => self.visual_body_for_ssed_address(&component, block, offset),
+            InternalTarget::SsedIndexAddress {
+                component,
+                block,
+                offset,
+                index_component,
+            } => {
+                self.visual_body_for_ssed_index_address(&component, block, offset, &index_component)
+            }
             InternalTarget::SsedBoundedAddress {
                 component,
                 block,

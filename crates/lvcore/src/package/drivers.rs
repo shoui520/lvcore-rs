@@ -122,7 +122,7 @@ use crate::crypto::{
     decrypt_macos_logofont_cipher_file_to_path, decrypt_macos_logofont_cipher_prefix,
     normalize_android_wrapped_sseddata_file_to_path,
 };
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, DiagnosticSeverity};
 use crate::error::{Error, Result};
 use crate::gaiji::{
     GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference, RichLabel,
@@ -240,6 +240,8 @@ pub struct ReaderBookPackage {
     gaiji_unicode_map: BTreeMap<String, String>,
     ssed_sidecar_body_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
+    ssed_index_body_boundaries:
+        OnceLock<std::result::Result<BTreeMap<String, Vec<SsedIndexPointer>>, String>>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
     ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
 }
@@ -308,6 +310,7 @@ impl ReaderBookPackage {
             hourei_store: stores.hourei_store,
             gaiji_unicode_map: stores.gaiji_unicode_map,
             ssed_sidecar_body_resolvers: OnceLock::new(),
+            ssed_index_body_boundaries: OnceLock::new(),
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),
         }

@@ -141,11 +141,10 @@ impl ReaderBookPackage {
                             }
                             _ => false,
                         };
-                        if row_matches {
-                            if !on_row(row)? {
-                                break 'candidates;
-                            }
-                        } else if passed_match_region {
+                        if !on_row(row)? {
+                            break 'candidates;
+                        }
+                        if !row_matches && passed_match_region {
                             break 'pages;
                         }
                     }
@@ -468,7 +467,102 @@ impl ReaderBookPackage {
         self.ssed_target_for_index_pointer_with_bound(row.body, end)
     }
 
-    fn ssed_target_for_index_pointer_with_bound(
+    pub(in crate::package) fn ssed_target_for_search_index_row(
+        &self,
+        row: &SsedIndexRow,
+    ) -> Result<std::result::Result<TargetToken, Diagnostic>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(Err(Diagnostic::error(
+                "ssed_catalog_missing",
+                "SSED index body pointers require a parsed SSEDINFO catalog",
+            )));
+        };
+        let Some(component) = catalog.component_for_address(row.body.block) else {
+            return Ok(Err(Diagnostic::warning(
+                "ssed_index_body_component_missing",
+                format!(
+                    "no component contains index body pointer block {} offset {}",
+                    row.body.block, row.body.offset
+                ),
+            )));
+        };
+        if component
+            .relative_offset(row.body.block, row.body.offset)
+            .is_none()
+        {
+            return Ok(Err(Diagnostic::warning(
+                "ssed_index_body_pointer_invalid",
+                format!(
+                    "{} does not contain index body pointer block {} offset {}",
+                    component.filename, row.body.block, row.body.offset
+                ),
+            )
+            .with_context("component", &component.filename)));
+        }
+        Ok(Ok(TargetToken::new(&InternalTarget::SsedIndexAddress {
+            component: component.filename.clone(),
+            block: row.body.block,
+            offset: row.body.offset,
+            index_component: row.component.clone(),
+        })?))
+    }
+
+    pub(in crate::package) fn ssed_next_index_body_pointer_after(
+        &self,
+        pointer: SsedIndexPointer,
+    ) -> Result<Option<SsedIndexPointer>> {
+        let Some(component_name) = self.ssed_component_for_index_pointer(pointer) else {
+            return Ok(None);
+        };
+        let boundaries = self.ssed_index_body_boundaries()?;
+        let Some(pointers) = boundaries.get(component_name) else {
+            return Ok(None);
+        };
+        Ok(pointers
+            .iter()
+            .find(|candidate| (candidate.block, candidate.offset) > (pointer.block, pointer.offset))
+            .copied())
+    }
+
+    fn ssed_index_body_boundaries(&self) -> Result<&BTreeMap<String, Vec<SsedIndexPointer>>> {
+        let boundaries = self.ssed_index_body_boundaries.get_or_init(|| {
+            self.build_ssed_index_body_boundaries()
+                .map_err(|error| error.to_string())
+        });
+        match boundaries {
+            Ok(boundaries) => Ok(boundaries),
+            Err(error) => Err(Error::Driver(error.clone())),
+        }
+    }
+
+    fn build_ssed_index_body_boundaries(&self) -> Result<BTreeMap<String, Vec<SsedIndexPointer>>> {
+        let mut by_component = BTreeMap::<String, Vec<SsedIndexPointer>>::new();
+        let mut diagnostics = self.scan_ssed_simple_index_rows_with_filters(
+            None,
+            |component| !ssed_index_component_name_is_backward(&component.filename),
+            |_, _| true,
+            |row| {
+                if let Some(component) = self.ssed_component_for_index_pointer(row.body) {
+                    by_component
+                        .entry(component.to_owned())
+                        .or_default()
+                        .push(row.body);
+                }
+                Ok(true)
+            },
+        )?;
+        diagnostics.retain(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+        if let Some(diagnostic) = diagnostics.into_iter().next() {
+            return Err(Error::Driver(diagnostic.message));
+        }
+        for pointers in by_component.values_mut() {
+            pointers.sort_by_key(|pointer| (pointer.block, pointer.offset));
+            pointers.dedup_by_key(|pointer| (pointer.block, pointer.offset));
+        }
+        Ok(by_component)
+    }
+
+    pub(in crate::package) fn ssed_target_for_index_pointer_with_bound(
         &self,
         pointer: SsedIndexPointer,
         end: Option<SsedIndexPointer>,

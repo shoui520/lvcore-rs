@@ -9,7 +9,29 @@ impl ReaderBookPackage {
         block: u32,
         offset: u32,
     ) -> Result<VisualBody> {
-        self.visual_body_for_ssed_address_with_bound(requested_component, block, offset, None)
+        self.visual_body_for_ssed_address_with_options(
+            requested_component,
+            block,
+            offset,
+            None,
+            false,
+        )
+    }
+
+    pub(super) fn visual_body_for_ssed_index_address(
+        &self,
+        requested_component: &str,
+        block: u32,
+        offset: u32,
+        _index_component: &str,
+    ) -> Result<VisualBody> {
+        self.visual_body_for_ssed_address_with_options(
+            requested_component,
+            block,
+            offset,
+            None,
+            true,
+        )
     }
 
     pub(super) fn visual_body_for_ssed_bounded_address(
@@ -20,20 +42,22 @@ impl ReaderBookPackage {
         end_block: u32,
         end_offset: u32,
     ) -> Result<VisualBody> {
-        self.visual_body_for_ssed_address_with_bound(
+        self.visual_body_for_ssed_address_with_options(
             requested_component,
             block,
             offset,
             Some((end_block, end_offset)),
+            false,
         )
     }
 
-    fn visual_body_for_ssed_address_with_bound(
+    fn visual_body_for_ssed_address_with_options(
         &self,
         requested_component: &str,
         block: u32,
         offset: u32,
         end: Option<(u32, u32)>,
+        allow_index_boundary: bool,
     ) -> Result<VisualBody> {
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(VisualBody::Unsupported {
@@ -92,9 +116,25 @@ impl ReaderBookPackage {
         }
         let stream_offset = self.ssed_stream_start_offset(component, component_offset);
         let inferred_length = self.infer_ssed_stream_length(component, stream_offset);
-        let bounded_length = end.and_then(|(end_block, end_offset)| {
+        let explicit_bounded_length = end.and_then(|(end_block, end_offset)| {
             bounded_ssed_stream_length(catalog, component, stream_offset, end_block, end_offset)
         });
+        let index_bounded_length =
+            if allow_index_boundary && end.is_none() && inferred_length.is_none() {
+                self.ssed_next_index_body_pointer_after(SsedIndexPointer { block, offset })?
+                    .and_then(|end| {
+                        bounded_ssed_stream_length(
+                            catalog,
+                            component,
+                            stream_offset,
+                            end.block,
+                            end.offset,
+                        )
+                    })
+            } else {
+                None
+            };
+        let bounded_length = explicit_bounded_length.or(index_bounded_length);
         let length = match (inferred_length, bounded_length) {
             (Some(inferred), Some(bound)) => Some(inferred.min(bound)),
             (Some(inferred), None) => Some(inferred),

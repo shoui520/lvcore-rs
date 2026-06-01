@@ -36,6 +36,7 @@ pub(super) struct SsedIndexSearchCollector<'a> {
     hits: Vec<SearchHit>,
     diagnostics: Vec<Diagnostic>,
     seen_targets: HashSet<String>,
+    pending_row: Option<SsedIndexRow>,
 }
 
 impl<'a> SsedIndexSearchCollector<'a> {
@@ -56,10 +57,21 @@ impl<'a> SsedIndexSearchCollector<'a> {
             hits: Vec::new(),
             diagnostics: Vec::new(),
             seen_targets: HashSet::new(),
+            pending_row: None,
         }
     }
 
     pub(super) fn push_row(&mut self, row: SsedIndexRow) -> Result<bool> {
+        if let Some(pending) = self.pending_row.take() {
+            if pending.body == row.body {
+                self.pending_row = Some(pending);
+                return Ok(true);
+            }
+            self.emit_hit(pending)?;
+            if self.hits.len() >= self.page_limit {
+                return Ok(false);
+            }
+        }
         let key = ssed_index_row_match_text(&row);
         let row_matches = match self.mode {
             SearchMode::Exact => key == self.needle,
@@ -71,20 +83,27 @@ impl<'a> SsedIndexSearchCollector<'a> {
         if !row_matches {
             return Ok(true);
         }
-        let target = match self.package.ssed_target_for_index_pointer(row.body)? {
-            Ok(target) => target,
-            Err(diagnostic) => {
-                self.diagnostics.push(diagnostic);
-                return Ok(true);
-            }
-        };
-        if !self.seen_targets.insert(target.as_str().to_owned()) {
+        let body_key = ssed_index_body_key(row.body);
+        if !self.seen_targets.insert(body_key) {
             return Ok(true);
         }
         if self.matched_count < self.offset {
             self.matched_count = self.matched_count.saturating_add(1);
             return Ok(true);
         }
+        self.pending_row = Some(row);
+        self.matched_count = self.matched_count.saturating_add(1);
+        Ok(true)
+    }
+
+    fn emit_hit(&mut self, row: SsedIndexRow) -> Result<()> {
+        let target = match self.package.ssed_target_for_search_index_row(&row)? {
+            Ok(target) => target,
+            Err(diagnostic) => {
+                self.diagnostics.push(diagnostic);
+                return Ok(());
+            }
+        };
         let title = self.package.ssed_display_text_for_index_row(&row);
         let label = self.package.ssed_rich_label(&title);
         self.hits.push(SearchHit {
@@ -95,8 +114,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
             snippet_html: None,
             diagnostics: label.diagnostics,
         });
-        self.matched_count = self.matched_count.saturating_add(1);
-        Ok(self.hits.len() < self.page_limit)
+        Ok(())
     }
 
     pub(super) fn has_hits(&self) -> bool {
@@ -108,6 +126,27 @@ impl<'a> SsedIndexSearchCollector<'a> {
     }
 
     pub(super) fn into_search_page(mut self, limit: usize) -> SearchPage {
+        if let Some(row) = self.pending_row.take() {
+            match self.package.ssed_target_for_search_index_row(&row) {
+                Ok(Ok(target)) => {
+                    let title = self.package.ssed_display_text_for_index_row(&row);
+                    let label = self.package.ssed_rich_label(&title);
+                    self.hits.push(SearchHit {
+                        book_id: self.package.book_id_for_hit(),
+                        target,
+                        title_html: label.html,
+                        title_text: label.text,
+                        snippet_html: None,
+                        diagnostics: label.diagnostics,
+                    });
+                }
+                Ok(Err(diagnostic)) => self.diagnostics.push(diagnostic),
+                Err(error) => self.diagnostics.push(Diagnostic::warning(
+                    "ssed_search_target_encode_failed",
+                    format!("failed to encode SSED search target: {error}"),
+                )),
+            }
+        }
         let next_cursor = (self.hits.len() > limit).then(|| (self.offset + limit).to_string());
         self.hits.truncate(limit);
         SearchPage {
@@ -116,6 +155,10 @@ impl<'a> SsedIndexSearchCollector<'a> {
             diagnostics: self.diagnostics,
         }
     }
+}
+
+fn ssed_index_body_key(pointer: SsedIndexPointer) -> String {
+    format!("{:08x}:{:04x}", pointer.block, pointer.offset)
 }
 
 pub(super) fn ssed_index_component_name_is_backward(component: &str) -> bool {

@@ -1,5 +1,26 @@
 use super::common::*;
 
+fn assert_ssed_address_target(token: &TargetToken, component: &str, block: u32, offset: u32) {
+    match token.decode().unwrap() {
+        InternalTarget::SsedAddress {
+            component: actual_component,
+            block: actual_block,
+            offset: actual_offset,
+        }
+        | InternalTarget::SsedIndexAddress {
+            component: actual_component,
+            block: actual_block,
+            offset: actual_offset,
+            ..
+        } => {
+            assert_eq!(actual_component, component);
+            assert_eq!(actual_block, block);
+            assert_eq!(actual_offset, offset);
+        }
+        other => panic!("expected SSED address-like target, got {other:?}"),
+    }
+}
+
 #[test]
 fn ssed_simple_index_search_returns_title_backed_hits() {
     let dir = tempdir().unwrap();
@@ -39,14 +60,7 @@ fn ssed_simple_index_search_returns_title_backed_hits() {
 
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "alpha");
-    assert_eq!(
-        page.hits[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
-            component: "HONMON.DIC".to_owned(),
-            block: 1,
-            offset: 2,
-        }
-    );
+    assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, 2);
 }
 
 #[test]
@@ -159,14 +173,7 @@ fn ssed_simple_index_search_supports_backward_matching() {
 
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "beta");
-    assert_eq!(
-        page.hits[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
-            component: "HONMON.DIC".to_owned(),
-            block: 1,
-            offset: 4,
-        }
-    );
+    assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, 4);
 }
 
 #[test]
@@ -220,14 +227,7 @@ fn ssed_reversed_backward_index_supports_suffix_search() {
     assert_eq!(exact.hits.len(), 1);
     assert_eq!(exact.hits[0].title_text, "alpha");
 
-    assert_eq!(
-        backward.hits[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
-            component: "HONMON.DIC".to_owned(),
-            block: 1,
-            offset: 2,
-        }
-    );
+    assert_ssed_address_target(&backward.hits[0].target, "HONMON.DIC", 1, 2);
 }
 
 #[test]
@@ -269,14 +269,7 @@ fn ssed_tagged_index_search_supports_grouped_rows_across_pages() {
 
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "child title");
-    assert_eq!(
-        page.hits[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
-            component: "HONMON.DIC".to_owned(),
-            block: 1,
-            offset: 2,
-        }
-    );
+    assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, 2);
     assert!(
         page.diagnostics
             .iter()
@@ -323,14 +316,7 @@ fn ssed_keyword_and_cross_reference_indexes_resolve_grouped_body_targets() {
 
         assert_eq!(page.hits.len(), 1, "component type {component_type:02x}");
         assert_eq!(page.hits[0].title_text, "group title");
-        assert_eq!(
-            page.hits[0].target.decode().unwrap(),
-            InternalTarget::SsedAddress {
-                component: "HONMON.DIC".to_owned(),
-                block: 1,
-                offset: 6,
-            }
-        );
+        assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, 6);
     }
 }
 
@@ -400,14 +386,7 @@ fn ssed_body_only_and_multi_selector_indexes_resolve_targets() {
             0xa1 => ("multi", 12),
             _ => unreachable!(),
         };
-        assert_eq!(
-            page.hits[0].target.decode().unwrap(),
-            InternalTarget::SsedAddress {
-                component: "HONMON.DIC".to_owned(),
-                block: 1,
-                offset: expected_offset,
-            }
-        );
+        assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, expected_offset);
     }
 }
 
@@ -621,14 +600,7 @@ fn ssed_simple_index_search_does_not_limit_candidates_before_filtering() {
 
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "alpha");
-    assert_eq!(
-        page.hits[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
-            component: "HONMON.DIC".to_owned(),
-            block: 1,
-            offset: 4,
-        }
-    );
+    assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, 4);
 }
 
 #[test]
@@ -663,14 +635,7 @@ fn ssed_simple_index_targets_preserve_declared_honmon_component_name() {
         })
         .unwrap();
 
-    assert_eq!(
-        page.hits[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
-            component: "HONMON.DIN".to_owned(),
-            block: 1,
-            offset: 2,
-        }
-    );
+    assert_ssed_address_target(&page.hits[0].target, "HONMON.DIN", 1, 2);
 }
 
 #[test]

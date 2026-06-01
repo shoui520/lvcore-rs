@@ -214,7 +214,7 @@ fn dense_honmon_search_hit_target_resolves_sidecar_html() {
     assert_eq!(page.hits[0].title_text, "beta");
     assert!(matches!(
         page.hits[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress { .. }
+        InternalTarget::SsedAddress { .. } | InternalTarget::SsedIndexAddress { .. }
     ));
     let body = package
         .visual_body_for_target(&page.hits[0].target)

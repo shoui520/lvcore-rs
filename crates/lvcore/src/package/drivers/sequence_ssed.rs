@@ -20,6 +20,12 @@ impl ReaderBookPackage {
                 block,
                 offset,
                 ..
+            }
+            | InternalTarget::SsedIndexAddress {
+                component,
+                block,
+                offset,
+                ..
             } => (component, block, offset),
             _ => return Ok(None),
         };
