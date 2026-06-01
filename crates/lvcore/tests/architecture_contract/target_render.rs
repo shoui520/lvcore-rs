@@ -239,6 +239,57 @@ fn basic_text_mode_decodes_hc_ssed_stream_instead_of_returning_empty_deferred_vi
 }
 
 #[test]
+fn hc_renderer_profile_suppresses_known_nonliteral_gaiji_markers() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("HC013A.dll"), b"").unwrap();
+    let mut honmon = body_jis("前");
+    honmon.extend_from_slice(&[0xb2, 0x61]);
+    honmon.extend_from_slice(&body_jis("後"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(&honmon),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(
+            &token,
+            &RenderOptions {
+                include_debug_trace: true,
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(view.basic_text.as_deref(), Some("前後"));
+    assert!(
+        view.display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("前後") && !html.contains('〓'))
+    );
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "hc_basic_text_gaiji_placeholders")
+    );
+    assert!(
+        view.debug_trace
+            .as_deref()
+            .unwrap_or_default()
+            .contains("\"suppressed_gaiji_pairs\":1")
+    );
+}
+
+#[test]
 fn native_hc_common_html_fallback_exposes_ssed_address_links_as_targets() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

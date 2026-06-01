@@ -59,12 +59,45 @@ pub struct HcTextStats {
     pub skipped_gaiji_pairs: usize,
     pub resolved_gaiji_pairs: usize,
     pub placeholder_gaiji_pairs: usize,
+    pub suppressed_gaiji_pairs: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HcBasicTextGaiji {
     pub text: String,
     pub resolved: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HcMarkerProfile {
+    pub renderer_code: Option<String>,
+    pub nonliteral_gaiji_codes: BTreeSet<String>,
+}
+
+impl HcMarkerProfile {
+    pub fn suppresses_gaiji_code(&self, code: &str) -> bool {
+        let normalized = normalize_gaiji_code(code);
+        !normalized.is_empty() && self.nonliteral_gaiji_codes.contains(&normalized)
+    }
+}
+
+pub fn hc_marker_profile_for_renderer(renderer_code: Option<&str>) -> HcMarkerProfile {
+    let code = normalize_renderer_code(renderer_code);
+    let nonliteral_gaiji_codes = match code.as_deref() {
+        Some("013A") => ["A225", "A226", "B261", "B262", "B265", "B26A", "B26B"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        Some("013F") => ["B15B", "B15C", "B15E", "B162", "B163"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        _ => BTreeSet::new(),
+    };
+    HcMarkerProfile {
+        renderer_code: code,
+        nonliteral_gaiji_codes,
+    }
 }
 
 const STYLE_START_OPS: &[(u8, HcTextStyle)] = &[
@@ -130,6 +163,14 @@ pub fn decode_hc_stream_common_html(data: &[u8]) -> HcCommonHtmlRender {
 pub fn decode_hc_stream_common_html_with_gaiji(
     data: &[u8],
     mut gaiji_text: impl FnMut(&str) -> Option<HcBasicTextGaiji>,
+) -> HcCommonHtmlRender {
+    decode_hc_stream_common_html_with_gaiji_policy(data, &mut gaiji_text, |_code| false)
+}
+
+pub fn decode_hc_stream_common_html_with_gaiji_policy(
+    data: &[u8],
+    mut gaiji_text: impl FnMut(&str) -> Option<HcBasicTextGaiji>,
+    mut suppress_gaiji: impl FnMut(&str) -> bool,
 ) -> HcCommonHtmlRender {
     let mut html = String::with_capacity(data.len().saturating_mul(2));
     let mut text = String::with_capacity(data.len());
@@ -336,7 +377,9 @@ pub fn decode_hc_stream_common_html_with_gaiji(
         if offset + 1 < data.len() && (0xa1..=0xfe).contains(&byte) {
             let second = data[offset + 1];
             let code = format!("{byte:02X}{second:02X}");
-            if let Some(resolved) = gaiji_text(&code) {
+            if suppress_gaiji(&code) {
+                stats.suppressed_gaiji_pairs += 1;
+            } else if let Some(resolved) = gaiji_text(&code) {
                 push_html_text(&mut html, &resolved.text);
                 text.push_str(&resolved.text);
                 if resolved.resolved {
@@ -398,6 +441,14 @@ pub fn decode_hc_stream_common_html_with_gaiji(
 pub fn decode_hc_stream_basic_text_with_gaiji(
     data: &[u8],
     mut gaiji_text: impl FnMut(&str) -> Option<HcBasicTextGaiji>,
+) -> HcTextRender {
+    decode_hc_stream_basic_text_with_gaiji_policy(data, &mut gaiji_text, |_code| false)
+}
+
+pub fn decode_hc_stream_basic_text_with_gaiji_policy(
+    data: &[u8],
+    mut gaiji_text: impl FnMut(&str) -> Option<HcBasicTextGaiji>,
+    mut suppress_gaiji: impl FnMut(&str) -> bool,
 ) -> HcTextRender {
     let mut text = String::with_capacity(data.len());
     let mut stats = HcTextStats::default();
@@ -528,7 +579,9 @@ pub fn decode_hc_stream_basic_text_with_gaiji(
         if offset + 1 < data.len() && (0xa1..=0xfe).contains(&byte) {
             let second = data[offset + 1];
             let code = format!("{byte:02X}{second:02X}");
-            if let Some(resolved) = gaiji_text(&code) {
+            if suppress_gaiji(&code) {
+                stats.suppressed_gaiji_pairs += 1;
+            } else if let Some(resolved) = gaiji_text(&code) {
                 text.push_str(&resolved.text);
                 if resolved.resolved {
                     stats.resolved_gaiji_pairs += 1;
@@ -603,6 +656,36 @@ fn hc_text_diagnostics(stats: &HcTextStats, unknown_ops: &BTreeSet<u8>) -> Vec<D
     }
 
     diagnostics
+}
+
+fn normalize_renderer_code(renderer_code: Option<&str>) -> Option<String> {
+    let mut code = renderer_code?.trim().to_ascii_uppercase();
+    if let Some(stripped) = code.strip_prefix("HC") {
+        code = stripped.to_owned();
+    }
+    if let Some((before_ext, _)) = code.split_once('.') {
+        code = before_ext.to_owned();
+    }
+    if code.is_empty() {
+        None
+    } else {
+        Some(
+            code.chars()
+                .rev()
+                .take(4)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+        )
+    }
+}
+
+fn normalize_gaiji_code(code: &str) -> String {
+    code.chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_uppercase()
 }
 
 fn style_start(op: u8) -> Option<HcTextStyle> {
@@ -826,7 +909,8 @@ mod tests {
 
     use super::{
         HcBasicTextGaiji, decode_hc_stream_basic_text, decode_hc_stream_basic_text_with_gaiji,
-        decode_hc_stream_common_html, decode_hc_stream_common_html_with_gaiji,
+        decode_hc_stream_basic_text_with_gaiji_policy, decode_hc_stream_common_html,
+        decode_hc_stream_common_html_with_gaiji, hc_marker_profile_for_renderer,
     };
 
     #[test]
@@ -892,6 +976,35 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.code == "hc_basic_text_gaiji_placeholders")
+        );
+    }
+
+    #[test]
+    fn basic_text_suppresses_profile_nonliteral_gaiji_markers_before_resolution() {
+        let marker_profile = hc_marker_profile_for_renderer(Some("HC013A.dll"));
+        let mut data = body_jis("前");
+        data.extend_from_slice(&[0xb2, 0x61]);
+        data.extend_from_slice(&body_jis("後"));
+
+        let rendered = decode_hc_stream_basic_text_with_gaiji_policy(
+            &data,
+            |_code| {
+                Some(HcBasicTextGaiji {
+                    text: "〓".to_owned(),
+                    resolved: false,
+                })
+            },
+            |code| marker_profile.suppresses_gaiji_code(code),
+        );
+
+        assert_eq!(rendered.text, "前後");
+        assert_eq!(rendered.stats.suppressed_gaiji_pairs, 1);
+        assert_eq!(rendered.stats.placeholder_gaiji_pairs, 0);
+        assert!(
+            rendered
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "hc_basic_text_gaiji_placeholders")
         );
     }
 

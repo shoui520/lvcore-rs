@@ -146,18 +146,28 @@ impl ReaderBookPackage {
                 mut diagnostics,
             } => {
                 let scroll_anchor = scroll_anchor_for_token(&target)?;
+                let marker_profile =
+                    hc_marker_profile_for_renderer(profile_hint.as_deref().or_else(|| {
+                        hc_profile
+                            .as_ref()
+                            .map(|profile| profile.profile_id.as_str())
+                    }));
                 if matches!(options.mode, RenderMode::BasicText | RenderMode::Debug) {
                     let data = self.read_ssed_stream_render_slice(&component, offset, length)?;
-                    let rendered = decode_hc_stream_basic_text_with_gaiji(&data, |code| {
-                        let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
-                        let resolved = resolution.unicode.is_some();
-                        let text = resolution
-                            .unicode
-                            .clone()
-                            .unwrap_or_else(|| "〓".to_owned());
-                        diagnostics.extend(resolution.diagnostics);
-                        Some(HcBasicTextGaiji { text, resolved })
-                    });
+                    let rendered = decode_hc_stream_basic_text_with_gaiji_policy(
+                        &data,
+                        |code| {
+                            let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
+                            let resolved = resolution.unicode.is_some();
+                            let text = resolution
+                                .unicode
+                                .clone()
+                                .unwrap_or_else(|| "〓".to_owned());
+                            diagnostics.extend(resolution.diagnostics);
+                            Some(HcBasicTextGaiji { text, resolved })
+                        },
+                        |code| marker_profile.suppresses_gaiji_code(code),
+                    );
                     let title = self
                         .title_for_body_target(&target)?
                         .unwrap_or_else(|| "SSED entry stream".to_owned());
@@ -216,16 +226,20 @@ impl ReaderBookPackage {
                     });
                 }
                 let data = self.read_ssed_stream_render_slice(&component, offset, length)?;
-                let rendered = decode_hc_stream_common_html_with_gaiji(&data, |code| {
-                    let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
-                    let resolved = resolution.unicode.is_some();
-                    let text = resolution
-                        .unicode
-                        .clone()
-                        .unwrap_or_else(|| "〓".to_owned());
-                    diagnostics.extend(resolution.diagnostics);
-                    Some(HcBasicTextGaiji { text, resolved })
-                });
+                let rendered = decode_hc_stream_common_html_with_gaiji_policy(
+                    &data,
+                    |code| {
+                        let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
+                        let resolved = resolution.unicode.is_some();
+                        let text = resolution
+                            .unicode
+                            .clone()
+                            .unwrap_or_else(|| "〓".to_owned());
+                        diagnostics.extend(resolution.diagnostics);
+                        Some(HcBasicTextGaiji { text, resolved })
+                    },
+                    |code| marker_profile.suppresses_gaiji_code(code),
+                );
                 let title = self
                     .title_for_body_target(&target)?
                     .unwrap_or_else(|| "SSED entry stream".to_owned());
