@@ -44,6 +44,7 @@ fn lved_search_is_cursor_paged_by_backend() {
             query: "shared".to_owned(),
             cursor: None,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(first.hits[0].title_text, "alpha");
@@ -58,6 +59,7 @@ fn lved_search_is_cursor_paged_by_backend() {
             query: "shared".to_owned(),
             cursor: first.next_cursor,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(second.hits[0].title_text, "beta");
@@ -104,6 +106,7 @@ fn lved_advanced_search_mode_uses_named_search_column() {
             query: "domain".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 

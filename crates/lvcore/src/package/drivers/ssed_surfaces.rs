@@ -83,6 +83,7 @@ impl ReaderBookPackage {
         surface_id: &str,
         cursor: Option<&str>,
         limit: usize,
+        options: &LabelOptions,
     ) -> Result<NavigationSurface> {
         if limit == 0 {
             return Ok(NavigationSurface::TitleIndexBrowse {
@@ -107,7 +108,7 @@ impl ReaderBookPackage {
             let label = self
                 .ssed_title_text(row.title)
                 .unwrap_or_else(|| row.key.clone());
-            let label = self.ssed_rich_label(&label);
+            let label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
             let target = match self.ssed_target_for_index_row(
                 row,
                 rows.iter()
@@ -142,6 +143,7 @@ impl ReaderBookPackage {
         fallback_name: &str,
         cursor: Option<&str>,
         limit: usize,
+        options: &LabelOptions,
     ) -> Result<NavigationSurface> {
         if limit == 0 {
             return Ok(NavigationSurface::SimpleMenu {
@@ -233,8 +235,13 @@ impl ReaderBookPackage {
             ));
         }
         let mut diagnostics = Vec::new();
-        let nodes =
-            ssed_menu_records_to_nodes_from(self, &parsed.records, offset, &mut diagnostics)?;
+        let nodes = ssed_menu_records_to_nodes_from(
+            self,
+            &parsed.records,
+            offset,
+            &mut diagnostics,
+            &options.gaiji_policy,
+        )?;
         if nodes.is_empty() {
             return Ok(deferred_surface(surface_id, diagnostics));
         }

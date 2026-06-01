@@ -58,8 +58,8 @@ pub use lved_sqlite::{
     LvedSqliteStore, LvedSqliteSummary, LvedTreeIndex, LvedTreeIndexItem,
 };
 pub use navigation::{
-    HomeSurface, NavigationProvider, NavigationStatus, NavigationSurface, NavigationSurfaceKind,
-    NavigationTarget,
+    HomeSurface, LabelOptions, NavigationProvider, NavigationStatus, NavigationSurface,
+    NavigationSurfaceKind, NavigationTarget,
 };
 pub use package::{
     BookAlias, BookAliasKind, BookId, BookMetadata, BookPackage, BookPackageExt, Capability,

@@ -6,10 +6,11 @@ pub(crate) use std::path::Path;
 
 pub(crate) use lvcore::{
     ANDROID_LVEDINFO_MAGIC, BodySourceKind, BookLibrary, Capability, DriverRegistry, FormatFamily,
-    GaijiPolicy, GaijiSourcePreference, InternalResource, InternalTarget, NavigationStatus,
-    NavigationSurface, NavigationSurfaceKind, PackageDiscoveryOptions, RenderMode, RenderOptions,
-    RendererInput, ResolvedTargetKind, ResourceKind, ResourceToken, SSEDDATA_MAGIC, SSEDINFO_MAGIC,
-    SearchMode, SearchQuery, SearchScope, StorageBackend, TargetKind, TargetToken, VisualBody,
+    GaijiPolicy, GaijiSourcePreference, InternalResource, InternalTarget, LabelOptions,
+    NavigationStatus, NavigationSurface, NavigationSurfaceKind, PackageDiscoveryOptions,
+    RenderMode, RenderOptions, RendererInput, ResolvedTargetKind, ResourceKind, ResourceToken,
+    SSEDDATA_MAGIC, SSEDINFO_MAGIC, SearchMode, SearchQuery, SearchScope, StorageBackend,
+    TargetKind, TargetToken, VisualBody,
 };
 pub(crate) use rusqlite::Connection;
 pub(crate) use tempfile::tempdir;

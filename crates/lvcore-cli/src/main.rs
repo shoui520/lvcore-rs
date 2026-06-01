@@ -602,6 +602,7 @@ fn library_search_command_json(
         query,
         cursor,
         limit,
+        gaiji_policy: Some(render_options.gaiji_policy.clone()),
     })?;
     let rendered_first = if render_first {
         page.hits
@@ -646,6 +647,7 @@ fn search_command_json(
         query,
         cursor,
         limit,
+        gaiji_policy: Some(render_options.gaiji_policy.clone()),
     })?;
     let first_target = page.hits.first().map(|hit| hit.target.clone());
     let rendered_first = if render_first {

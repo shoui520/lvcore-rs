@@ -4,6 +4,7 @@ impl ReaderBookPackage {
     pub(super) fn open_ssed_encyclopedia_surface(
         &self,
         surface_id: &str,
+        options: &LabelOptions,
     ) -> Result<NavigationSurface> {
         let Some(path) = self.storage.resolve_casefolded(Path::new("encyclop.idx"))? else {
             return Ok(NavigationSurface::Deferred {
@@ -27,7 +28,12 @@ impl ReaderBookPackage {
             }
         };
         let mut diagnostics = Vec::new();
-        let nodes = ssed_encyclopedia_rows_to_nodes(self, &parsed.rows, &mut diagnostics)?;
+        let nodes = ssed_encyclopedia_rows_to_nodes(
+            self,
+            &parsed.rows,
+            &mut diagnostics,
+            &options.gaiji_policy,
+        )?;
         if nodes.is_empty() {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -111,6 +117,7 @@ impl ReaderBookPackage {
     pub(super) fn open_britannica_top_surface(
         &self,
         surface_id: &str,
+        options: &LabelOptions,
     ) -> Result<NavigationSurface> {
         let dat_files = discover_britannica_top_dat_files(&self.root)?;
         if dat_files.is_empty() {
@@ -127,7 +134,7 @@ impl ReaderBookPackage {
         for dat in dat_files {
             let mut children = Vec::new();
             for record in dat.records {
-                let label = self.ssed_rich_label(&record.title);
+                let label = self.ssed_rich_label_with_policy(&record.title, &options.gaiji_policy);
                 let label_html = if let Some(image) = &record.image_resource {
                     let resource = InternalResource::SsedLooseFile {
                         root_name: image.root_name.clone(),
@@ -208,6 +215,7 @@ impl ReaderBookPackage {
         surface_id: &str,
         cursor: Option<&str>,
         limit: usize,
+        options: &LabelOptions,
     ) -> Result<NavigationSurface> {
         if limit == 0 {
             return Ok(NavigationSurface::HierarchicalTree {
@@ -265,9 +273,14 @@ impl ReaderBookPackage {
         }
         let mut diagnostics = Vec::new();
         let nodes = if offset == 0 {
-            ssed_aux_index_rows_to_nodes(self, page_rows, &mut diagnostics)?
+            ssed_aux_index_rows_to_nodes(self, page_rows, &mut diagnostics, &options.gaiji_policy)?
         } else {
-            ssed_aux_index_rows_to_flat_nodes(self, page_rows, &mut diagnostics)?
+            ssed_aux_index_rows_to_flat_nodes(
+                self,
+                page_rows,
+                &mut diagnostics,
+                &options.gaiji_policy,
+            )?
         };
         if nodes.is_empty() {
             return Ok(NavigationSurface::Deferred {

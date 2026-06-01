@@ -158,7 +158,7 @@ impl ReaderBookPackage {
             }
         };
         let mut view = self.render_target(&target, options)?;
-        let label = self.ssed_index_row_label(row);
+        let label = self.ssed_index_row_label_with_policy(row, &options.gaiji_policy);
         view.title = Some(label.text);
         view.diagnostics.extend(label.diagnostics);
         Ok(Some(view))
@@ -175,7 +175,12 @@ impl ReaderBookPackage {
         let Some(SequenceHint::MenuOrder { value: surface_id }) = sequence_hint else {
             return Ok(None);
         };
-        let surface = self.open_surface(surface_id)?;
+        let surface = self.open_surface_with_options(
+            surface_id,
+            &LabelOptions {
+                gaiji_policy: options.gaiji_policy.clone(),
+            },
+        )?;
         let nodes = match surface {
             NavigationSurface::SimpleMenu { nodes, .. }
             | NavigationSurface::HierarchicalTree { nodes, .. } => nodes,
@@ -222,7 +227,12 @@ impl ReaderBookPackage {
         } else {
             format!("panels:{panel_id}")
         };
-        let surface = self.open_surface(&surface_id)?;
+        let surface = self.open_surface_with_options(
+            &surface_id,
+            &LabelOptions {
+                gaiji_policy: options.gaiji_policy.clone(),
+            },
+        )?;
         let NavigationSurface::Panel { cells, .. } = surface else {
             return Ok(Some(TargetWindow {
                 center: self.render_target(target, options)?,

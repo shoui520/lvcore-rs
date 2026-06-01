@@ -3,8 +3,15 @@ use std::collections::BTreeMap;
 
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
+use crate::gaiji::GaijiPolicy;
 use crate::resources::ResourceRef;
 use crate::target::TargetToken;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelOptions {
+    #[serde(default)]
+    pub gaiji_policy: GaijiPolicy,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -309,6 +316,26 @@ pub trait NavigationProvider: Send + Sync {
         let _ = cursor;
         let _ = limit;
         self.open_surface(surface_id)
+    }
+
+    fn open_surface_with_options(
+        &self,
+        surface_id: &str,
+        options: &LabelOptions,
+    ) -> Result<NavigationSurface> {
+        let _ = options;
+        self.open_surface(surface_id)
+    }
+
+    fn open_surface_page_with_options(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+        options: &LabelOptions,
+    ) -> Result<NavigationSurface> {
+        let _ = options;
+        self.open_surface_page(surface_id, cursor, limit)
     }
 }
 

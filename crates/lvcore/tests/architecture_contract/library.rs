@@ -125,6 +125,7 @@ fn library_routes_all_book_search_without_unhandled_exceptions() {
             query: "test".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
     assert!(page.hits.is_empty());
@@ -165,6 +166,7 @@ fn library_scopes_resource_hrefs_in_search_result_labels() {
             query: "alpha".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -444,6 +446,7 @@ fn library_selected_book_search_uses_backend_cursor_pagination() {
             query: "shared".to_owned(),
             cursor: None,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(first_page.hits.len(), 1);
@@ -465,6 +468,7 @@ fn library_selected_book_search_uses_backend_cursor_pagination() {
             query: "shared".to_owned(),
             cursor: first_page.next_cursor,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(second_page.hits.len(), 1);
@@ -489,6 +493,7 @@ fn library_reports_missing_selected_books_as_diagnostics() {
             query: "test".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 

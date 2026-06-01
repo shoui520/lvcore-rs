@@ -1,7 +1,11 @@
 use super::*;
 
 impl ReaderBookPackage {
-    pub(super) fn open_ssed_panel_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+    pub(super) fn open_ssed_panel_surface(
+        &self,
+        surface_id: &str,
+        options: &LabelOptions,
+    ) -> Result<NavigationSurface> {
         if !self.storage.exists(Path::new("Panels.xml"))? {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -42,7 +46,11 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let mut cells = Vec::new();
         for cell in inline_cells {
-            cells.push(ssed_panel_inline_cell_to_navigation_cell(self, &cell)?);
+            cells.push(ssed_panel_inline_cell_to_navigation_cell(
+                self,
+                &cell,
+                &options.gaiji_policy,
+            )?);
         }
         for data_ref in parsed.data_refs.into_iter().filter(|data_ref| {
             include_external_bins
@@ -74,6 +82,7 @@ impl ReaderBookPackage {
                     &data_ref,
                     &record,
                     &mut diagnostics,
+                    &options.gaiji_policy,
                 )?);
             }
         }

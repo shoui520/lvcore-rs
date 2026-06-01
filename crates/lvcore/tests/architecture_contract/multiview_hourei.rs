@@ -101,6 +101,7 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
             query: "まえ".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(page.hits.len(), 1);
@@ -130,6 +131,7 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
             query: "body".to_owned(),
             cursor: None,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(first.hits[0].title_text, "まえがき");
@@ -143,6 +145,7 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
             query: "body".to_owned(),
             cursor: first.next_cursor,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(second.hits[0].title_text, "本文");
@@ -311,6 +314,7 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
             query: "民".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(page.hits.len(), 1);
@@ -325,6 +329,7 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
             query: "本文".to_owned(),
             cursor: None,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(first.hits[0].title_text, "民法");
@@ -338,6 +343,7 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
             query: "本文".to_owned(),
             cursor: first.next_cursor,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(second.hits[0].title_text, "商法");

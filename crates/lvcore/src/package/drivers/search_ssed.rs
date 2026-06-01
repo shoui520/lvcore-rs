@@ -24,8 +24,15 @@ impl ReaderBookPackage {
         let offset = decode_offset_cursor(query.cursor.as_deref());
         let page_limit = query.limit.saturating_add(1);
         let needle = normalize_search_match_text(&query.query);
-        let mut collector =
-            SsedIndexSearchCollector::new(self, &query.mode, &needle, offset, page_limit);
+        let gaiji_policy = query.label_gaiji_policy();
+        let mut collector = SsedIndexSearchCollector::new(
+            self,
+            &query.mode,
+            &needle,
+            offset,
+            page_limit,
+            gaiji_policy,
+        );
         let mut optimized_scan_components = 0usize;
         let mut scan_needs_linear_fallback = false;
         let ascii_key_needs_linear_safety_net = ssed_ascii_key_needs_linear_safety_net(&needle);
@@ -91,6 +98,7 @@ impl ReaderBookPackage {
         }
 
         let page_limit = query.limit.saturating_add(1);
+        let label_policy = query.label_gaiji_policy();
         let title_cursor = decode_ssed_fulltext_title_cursor(query.cursor.as_deref());
         let chronology_cursor = decode_ssed_fulltext_chronology_cursor(query.cursor.as_deref());
         let row_cursor = decode_ssed_fulltext_row_cursor(query.cursor.as_deref());
@@ -146,7 +154,7 @@ impl ReaderBookPackage {
             } else {
                 hit.body.title.clone()
             };
-            let label = self.ssed_rich_label(&title);
+            let label = self.ssed_rich_label_with_policy(&title, &label_policy);
             let resolver_hint = hit
                 .body
                 .resolver
@@ -207,7 +215,7 @@ impl ReaderBookPackage {
             let mut chronology_hits = 0usize;
             for record in records {
                 let title = record.title();
-                let label = self.ssed_rich_label(&title);
+                let label = self.ssed_rich_label_with_policy(&title, &label_policy);
                 let target = TargetToken::new(&InternalTarget::SsedAuxRecord {
                     source: BRITANNICA_CHRONOLOGY_SOURCE_ID.to_owned(),
                     key: record.inc_code.clone(),
@@ -286,6 +294,7 @@ impl ReaderBookPackage {
                     offset: row_offset,
                     page_limit: remaining_limit,
                     max_checked_rows,
+                    gaiji_policy: &label_policy,
                 })?;
             if row_page.exhausted || previous_hits + row_page.hits.len() >= query.limit {
                 diagnostics.extend(row_page.diagnostics);
@@ -471,7 +480,7 @@ impl ReaderBookPackage {
                 if looks_like_raw_anchor_label(&title) {
                     continue;
                 }
-                let label = self.ssed_rich_label(&title);
+                let label = self.ssed_rich_label_with_policy(&title, &label_policy);
                 hits.push(SearchHit {
                     book_id: self.metadata.book_id.clone(),
                     target,
@@ -508,6 +517,7 @@ impl ReaderBookPackage {
             offset,
             page_limit,
             max_checked_rows,
+            gaiji_policy,
         } = request;
         if page_limit == 0 {
             return Ok(SsedRowDrivenFulltextPage {
@@ -648,7 +658,7 @@ impl ReaderBookPackage {
             if looks_like_raw_anchor_label(&title) {
                 return Ok(true);
             }
-            let label = self.ssed_rich_label(&title);
+            let label = self.ssed_rich_label_with_policy(&title, gaiji_policy);
             hits.push(SearchHit {
                 book_id: self.metadata.book_id.clone(),
                 target,
@@ -801,6 +811,7 @@ impl ReaderBookPackage {
             needle,
             title_offset,
             page_limit,
+            query.label_gaiji_policy(),
         );
         let scan_diagnostics =
             self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
@@ -835,6 +846,7 @@ struct SsedRowDrivenFulltextRequest<'a> {
     offset: usize,
     page_limit: usize,
     max_checked_rows: Option<usize>,
+    gaiji_policy: &'a GaijiPolicy,
 }
 
 struct SsedRowDrivenFulltextPage {

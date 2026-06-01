@@ -47,6 +47,7 @@ fn ssed_fulltext_searches_honmon_body_windows() {
             query: "window needle".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -104,6 +105,7 @@ fn ssed_fulltext_matches_fullwidth_ascii_body_text() {
             query: "fullwidth".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -141,6 +143,7 @@ fn ssed_fulltext_prefetches_first_page_from_index_rows_for_non_ascii_body_query(
             query: "検索語".to_owned(),
             cursor: None,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -220,6 +223,7 @@ fn ssed_fulltext_searches_britannica_chronology_before_honmon_scan() {
             query: "ブリ".to_owned(),
             cursor: None,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
 

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
-use crate::navigation::{HomeSurface, NavigationSurface};
+use crate::navigation::{HomeSurface, LabelOptions, NavigationSurface};
 use crate::package::{
     BookAliasKind, BookId, BookMetadata, BookPackage, DetectedPackage, DriverRegistry,
     PackageDiscoveryOptions,
@@ -271,7 +271,18 @@ impl BookLibrary {
     }
 
     pub fn open_surface(&self, book_id: &BookId, surface_id: &str) -> Result<NavigationSurface> {
-        let mut surface = self.required_book(book_id)?.open_surface(surface_id)?;
+        self.open_surface_with_options(book_id, surface_id, &LabelOptions::default())
+    }
+
+    pub fn open_surface_with_options(
+        &self,
+        book_id: &BookId,
+        surface_id: &str,
+        options: &LabelOptions,
+    ) -> Result<NavigationSurface> {
+        let mut surface = self
+            .required_book(book_id)?
+            .open_surface_with_options(surface_id, options)?;
         scope_navigation_surface_resource_hrefs(book_id, &mut surface);
         Ok(surface)
     }
@@ -283,9 +294,26 @@ impl BookLibrary {
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<NavigationSurface> {
+        self.open_surface_page_with_options(
+            book_id,
+            surface_id,
+            cursor,
+            limit,
+            &LabelOptions::default(),
+        )
+    }
+
+    pub fn open_surface_page_with_options(
+        &self,
+        book_id: &BookId,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+        options: &LabelOptions,
+    ) -> Result<NavigationSurface> {
         let mut surface = self
             .required_book(book_id)?
-            .open_surface_page(surface_id, cursor, limit)?;
+            .open_surface_page_with_options(surface_id, cursor, limit, options)?;
         scope_navigation_surface_resource_hrefs(book_id, &mut surface);
         Ok(surface)
     }

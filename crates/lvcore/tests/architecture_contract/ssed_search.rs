@@ -55,6 +55,7 @@ fn ssed_simple_index_search_returns_title_backed_hits() {
             query: "alp".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -69,6 +70,8 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
     fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
     fs::write(dir.path().join("GA16HALF"), ga16_fixture(0xA121, 8)).unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    fs::write(dir.path().join("Templates/B123.SVG"), b"<svg/>").unwrap();
     fs::write(
         dir.path().join("HONMON.DIC"),
         sseddata_literal_fixture(b"0123456789"),
@@ -95,6 +98,7 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
             query: "alp".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(page.hits.len(), 1);
@@ -124,6 +128,49 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
             .iter()
             .any(|diagnostic| diagnostic.code == "gaiji_unresolved")
     );
+
+    let image_first_policy = GaijiPolicy {
+        priority: vec![
+            GaijiSourcePreference::ExternalResource,
+            GaijiSourcePreference::Unicode,
+            GaijiSourcePreference::Ga16Bitmap,
+            GaijiSourcePreference::Unresolved,
+        ],
+    };
+    let image_first_page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "alp".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: Some(image_first_policy.clone()),
+        })
+        .unwrap();
+    assert_eq!(image_first_page.hits[0].title_text, "alpha 一 〓 〓");
+    assert!(
+        image_first_page.hits[0]
+            .title_html
+            .contains("lvcore-gaiji-external")
+    );
+
+    let image_first_surface = package
+        .open_surface_page_with_options(
+            "title-index",
+            None,
+            100,
+            &LabelOptions {
+                gaiji_policy: image_first_policy,
+            },
+        )
+        .unwrap();
+    let lvcore::NavigationSurface::TitleIndexBrowse { items, .. } = image_first_surface else {
+        panic!("title-index should open as a title/index browse surface");
+    };
+    assert_eq!(items[0].label_text, "alpha 一 〓 〓");
+    assert!(items[0].label_html.contains("lvcore-gaiji-external"));
 
     let window = package
         .resolve_target_window(
@@ -168,6 +215,7 @@ fn ssed_simple_index_search_supports_backward_matching() {
             query: "ta".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -208,6 +256,7 @@ fn ssed_reversed_backward_index_supports_suffix_search() {
             query: "ha".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(backward.hits.len(), 1);
@@ -222,6 +271,7 @@ fn ssed_reversed_backward_index_supports_suffix_search() {
             query: "alpha".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(exact.hits.len(), 1);
@@ -264,6 +314,7 @@ fn ssed_tagged_index_search_supports_grouped_rows_across_pages() {
             query: "parent".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -311,6 +362,7 @@ fn ssed_keyword_and_cross_reference_indexes_resolve_grouped_body_targets() {
                 query: "group".to_owned(),
                 cursor: None,
                 limit: 10,
+                gaiji_policy: None,
             })
             .unwrap();
 
@@ -376,6 +428,7 @@ fn ssed_body_only_and_multi_selector_indexes_resolve_targets() {
                 query: query.to_owned(),
                 cursor: None,
                 limit: 10,
+                gaiji_policy: None,
             })
             .unwrap();
 
@@ -464,6 +517,7 @@ fn ssed_exact_search_uses_internal_page_tree_for_simple_indexes() {
             query: "zeta".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -504,6 +558,7 @@ fn ssed_simple_index_search_handles_raw_ascii_key_order() {
             query: "dog".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -540,6 +595,7 @@ fn ssed_simple_index_search_uses_cursor_pagination() {
             query: "a".to_owned(),
             cursor: None,
             limit: 2,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(
@@ -561,6 +617,7 @@ fn ssed_simple_index_search_uses_cursor_pagination() {
             query: "a".to_owned(),
             cursor: first.next_cursor,
             limit: 2,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(second.hits[0].title_text, "gamma");
@@ -595,6 +652,7 @@ fn ssed_simple_index_search_does_not_limit_candidates_before_filtering() {
             query: "alpha".to_owned(),
             cursor: None,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -632,6 +690,7 @@ fn ssed_simple_index_targets_preserve_declared_honmon_component_name() {
             query: "alpha".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
+use crate::gaiji::GaijiPolicy;
 use crate::package::BookId;
 use crate::target::TargetToken;
 
@@ -32,6 +33,14 @@ pub struct SearchQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
     pub limit: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gaiji_policy: Option<GaijiPolicy>,
+}
+
+impl SearchQuery {
+    pub fn label_gaiji_policy(&self) -> GaijiPolicy {
+        self.gaiji_policy.clone().unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

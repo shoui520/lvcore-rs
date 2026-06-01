@@ -337,7 +337,7 @@ impl NavigationProvider for ReaderBookPackage {
     }
 
     fn open_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
-        self.open_surface_page(surface_id, None, 100)
+        self.open_surface_page_with_options(surface_id, None, 100, &LabelOptions::default())
     }
 
     fn open_surface_page(
@@ -346,6 +346,24 @@ impl NavigationProvider for ReaderBookPackage {
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<NavigationSurface> {
+        self.open_surface_page_with_options(surface_id, cursor, limit, &LabelOptions::default())
+    }
+
+    fn open_surface_with_options(
+        &self,
+        surface_id: &str,
+        options: &LabelOptions,
+    ) -> Result<NavigationSurface> {
+        self.open_surface_page_with_options(surface_id, None, 100, options)
+    }
+
+    fn open_surface_page_with_options(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+        options: &LabelOptions,
+    ) -> Result<NavigationSurface> {
         if surface_id == "search" {
             return Ok(NavigationSurface::FallbackSearch {
                 surface_id: surface_id.to_owned(),
@@ -353,7 +371,7 @@ impl NavigationProvider for ReaderBookPackage {
         }
         match (self.metadata.format_family, surface_id) {
             (FormatFamily::Ssed, "title-index") => {
-                self.open_ssed_title_index_surface(surface_id, cursor, limit)
+                self.open_ssed_title_index_surface(surface_id, cursor, limit, options)
             }
             (FormatFamily::Ssed, "menu") => self.open_ssed_menu_surface(
                 surface_id,
@@ -361,6 +379,7 @@ impl NavigationProvider for ReaderBookPackage {
                 "MENU.DIC",
                 cursor,
                 limit,
+                options,
             ),
             (FormatFamily::Ssed, "toc") => self.open_ssed_menu_surface(
                 surface_id,
@@ -368,27 +387,32 @@ impl NavigationProvider for ReaderBookPackage {
                 "TOC.DIC",
                 cursor,
                 limit,
+                options,
             ),
             (FormatFamily::Ssed, id) if id.starts_with("multi:") => {
-                self.open_ssed_multi_selector_surface(surface_id, cursor, limit)
+                self.open_ssed_multi_selector_surface(surface_id, cursor, limit, options)
             }
             (FormatFamily::Ssed, "screen-menu") => self.open_ssed_screen_menu_surface(surface_id),
-            (FormatFamily::Ssed, "encyclopedia") => self.open_ssed_encyclopedia_surface(surface_id),
+            (FormatFamily::Ssed, "encyclopedia") => {
+                self.open_ssed_encyclopedia_surface(surface_id, options)
+            }
             (FormatFamily::Ssed, "britannica-whatday") => {
                 self.open_britannica_whatday_surface(surface_id, cursor, limit)
             }
-            (FormatFamily::Ssed, "britannica-top") => self.open_britannica_top_surface(surface_id),
+            (FormatFamily::Ssed, "britannica-top") => {
+                self.open_britannica_top_surface(surface_id, options)
+            }
             (FormatFamily::Ssed, id)
                 if id.starts_with("aux-index:") || id.starts_with("numeric-aux:") =>
             {
-                self.open_ssed_aux_index_surface(surface_id, cursor, limit)
+                self.open_ssed_aux_index_surface(surface_id, cursor, limit, options)
             }
             (FormatFamily::Ssed, "hanrei") => {
                 self.open_ssed_hanrei_surface(surface_id, cursor, limit)
             }
-            (FormatFamily::Ssed, "panels") => self.open_ssed_panel_surface(surface_id),
+            (FormatFamily::Ssed, "panels") => self.open_ssed_panel_surface(surface_id, options),
             (FormatFamily::Ssed, id) if id.starts_with("panels:") => {
-                self.open_ssed_panel_surface(surface_id)
+                self.open_ssed_panel_surface(surface_id, options)
             }
             (FormatFamily::LvedSqlite3, "lved-list") => {
                 self.open_lved_list_surface(surface_id, cursor, limit)

@@ -82,6 +82,7 @@ impl ReaderBookPackage {
         surface_id: &str,
         cursor: Option<&str>,
         limit: usize,
+        options: &LabelOptions,
     ) -> Result<NavigationSurface> {
         let Some(parsed_surface) = parse_ssed_multi_surface_id(surface_id) else {
             return Ok(NavigationSurface::Deferred {
@@ -151,6 +152,7 @@ impl ReaderBookPackage {
                 parsed_surface.filter.as_deref(),
                 cursor,
                 limit,
+                options,
             );
         }
 
@@ -159,6 +161,7 @@ impl ReaderBookPackage {
             &parsed_surface.descriptor,
             &descriptor,
             &mut diagnostics,
+            options,
         )?;
         if nodes.is_empty() {
             return Ok(NavigationSurface::Deferred {
@@ -180,6 +183,7 @@ impl ReaderBookPackage {
         filter: Option<&str>,
         cursor: Option<&str>,
         limit: usize,
+        options: &LabelOptions,
     ) -> Result<NavigationSurface> {
         if limit == 0 {
             return Ok(NavigationSurface::TitleIndexBrowse {
@@ -247,7 +251,7 @@ impl ReaderBookPackage {
             let label = self
                 .ssed_title_text(row.title)
                 .unwrap_or_else(|| row.target_key.clone());
-            let label = self.ssed_rich_label(&label);
+            let label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
             let target = match self.ssed_target_for_index_pointer(row.body)? {
                 Ok(target) => target,
                 Err(diagnostic) => {
@@ -275,6 +279,7 @@ impl ReaderBookPackage {
         descriptor_name: &str,
         descriptor: &SsedMultiDescriptor,
         diagnostics: &mut Vec<Diagnostic>,
+        options: &LabelOptions,
     ) -> Result<Vec<NavigationNode>> {
         let mut nodes = Vec::new();
         for record in &descriptor.records {
@@ -283,9 +288,13 @@ impl ReaderBookPackage {
             } else {
                 record.label.clone()
             };
-            let rich_label = self.ssed_rich_label(&label);
-            let children =
-                self.ssed_multi_record_selector_nodes(descriptor_name, record, diagnostics)?;
+            let rich_label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
+            let children = self.ssed_multi_record_selector_nodes(
+                descriptor_name,
+                record,
+                diagnostics,
+                options,
+            )?;
             let target = if children.is_empty() && ssed_multi_record_index_ref(record).is_some() {
                 Some(TargetToken::new(&InternalTarget::TitleIndexItem {
                     surface_id: ssed_multi_record_surface_id(descriptor_name, record.index, None),
@@ -311,6 +320,7 @@ impl ReaderBookPackage {
         descriptor_name: &str,
         record: &SsedMultiRecord,
         diagnostics: &mut Vec<Diagnostic>,
+        options: &LabelOptions,
     ) -> Result<Vec<NavigationNode>> {
         if ssed_multi_record_index_ref(record).is_none() {
             diagnostics.push(Diagnostic::info(
@@ -362,7 +372,13 @@ impl ReaderBookPackage {
             );
             return Ok(Vec::new());
         }
-        ssed_multi_selector_records_to_nodes(self, descriptor_name, record.index, &parsed.records)
+        ssed_multi_selector_records_to_nodes(
+            self,
+            descriptor_name,
+            record.index,
+            &parsed.records,
+            &options.gaiji_policy,
+        )
     }
 
     fn ssed_component_for_multi_ref(

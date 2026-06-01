@@ -379,6 +379,7 @@ fn search_mode_exercise(
         query: query.clone(),
         cursor: None,
         limit,
+        gaiji_policy: None,
     }) {
         Ok(page) => {
             let mut row = json!({

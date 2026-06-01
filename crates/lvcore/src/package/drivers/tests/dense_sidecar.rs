@@ -207,6 +207,7 @@ fn dense_honmon_search_hit_target_resolves_sidecar_html() {
             query: "い".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -260,6 +261,7 @@ fn dense_honmon_fulltext_searches_sidecar_body() {
             query: "beta sidecar body".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 

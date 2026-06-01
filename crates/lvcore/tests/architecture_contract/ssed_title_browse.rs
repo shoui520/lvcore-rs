@@ -149,6 +149,7 @@ fn title_index_browse_prefers_forward_rows_over_backward_search_rows() {
             query: "ha".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
     assert_eq!(backward.hits.len(), 1);
@@ -189,6 +190,7 @@ fn ssed_search_hits_render_with_index_body_boundaries() {
             query: "al".to_owned(),
             cursor: None,
             limit: 1,
+            gaiji_policy: None,
         })
         .unwrap();
 

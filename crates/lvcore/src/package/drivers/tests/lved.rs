@@ -122,6 +122,7 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
             query: "alp".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
 
@@ -268,6 +269,7 @@ fn render_modes_are_explicit_for_preserved_lved_html() {
             query: "alp".to_owned(),
             cursor: None,
             limit: 10,
+            gaiji_policy: None,
         })
         .unwrap();
     let target = &page.hits[0].target;

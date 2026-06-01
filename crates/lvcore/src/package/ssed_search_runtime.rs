@@ -4,6 +4,7 @@ use super::drivers::ReaderBookPackage;
 use super::ssed_search::{normalize_search_match_text, reverse_search_match_text};
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
+use crate::gaiji::GaijiPolicy;
 use crate::search::{SearchHit, SearchMode, SearchPage};
 use crate::ssed_index::{SsedIndexPointer, SsedIndexRow};
 
@@ -37,6 +38,7 @@ pub(super) struct SsedIndexSearchCollector<'a> {
     diagnostics: Vec<Diagnostic>,
     seen_targets: HashSet<String>,
     pending_row: Option<SsedIndexRow>,
+    gaiji_policy: GaijiPolicy,
 }
 
 impl<'a> SsedIndexSearchCollector<'a> {
@@ -46,6 +48,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
         needle: &'a str,
         offset: usize,
         page_limit: usize,
+        gaiji_policy: GaijiPolicy,
     ) -> Self {
         Self {
             package,
@@ -58,6 +61,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
             diagnostics: Vec::new(),
             seen_targets: HashSet::new(),
             pending_row: None,
+            gaiji_policy,
         }
     }
 
@@ -105,7 +109,9 @@ impl<'a> SsedIndexSearchCollector<'a> {
             }
         };
         let title = self.package.ssed_display_text_for_index_row(&row);
-        let label = self.package.ssed_rich_label(&title);
+        let label = self
+            .package
+            .ssed_rich_label_with_policy(&title, &self.gaiji_policy);
         self.hits.push(SearchHit {
             book_id: self.package.book_id_for_hit(),
             target,
@@ -130,7 +136,9 @@ impl<'a> SsedIndexSearchCollector<'a> {
             match self.package.ssed_target_for_search_index_row(&row) {
                 Ok(Ok(target)) => {
                     let title = self.package.ssed_display_text_for_index_row(&row);
-                    let label = self.package.ssed_rich_label(&title);
+                    let label = self
+                        .package
+                        .ssed_rich_label_with_policy(&title, &self.gaiji_policy);
                     self.hits.push(SearchHit {
                         book_id: self.package.book_id_for_hit(),
                         target,

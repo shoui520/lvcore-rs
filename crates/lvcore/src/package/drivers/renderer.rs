@@ -6,9 +6,15 @@ impl ReaderBookPackage {
         target: TargetToken,
         surface_id: &str,
         title: Option<String>,
+        options: &RenderOptions,
     ) -> Result<ResolvedTargetView> {
         let scroll_anchor = scroll_anchor_for_token(&target)?;
-        let surface = self.open_surface(surface_id)?;
+        let surface = self.open_surface_with_options(
+            surface_id,
+            &LabelOptions {
+                gaiji_policy: options.gaiji_policy.clone(),
+            },
+        )?;
         let kind = match &surface {
             NavigationSurface::Panel { .. } => ResolvedTargetKind::PanelSurface,
             NavigationSurface::InfoPages { .. } => ResolvedTargetKind::InfoPage,
@@ -638,18 +644,24 @@ impl RendererProvider for ReaderBookPackage {
             }
             InternalTarget::PanelCell { panel_id, .. } => {
                 let surface_id = format!("panels:{panel_id}");
-                self.view_for_navigation_surface_target(token.clone(), &surface_id, Some(panel_id))
+                self.view_for_navigation_surface_target(
+                    token.clone(),
+                    &surface_id,
+                    Some(panel_id),
+                    options,
+                )
             }
             InternalTarget::MenuItem { surface_id, .. }
             | InternalTarget::TocItem { surface_id, .. }
             | InternalTarget::TitleIndexItem { surface_id, .. } => {
-                self.view_for_navigation_surface_target(token.clone(), &surface_id, None)
+                self.view_for_navigation_surface_target(token.clone(), &surface_id, None, options)
             }
             InternalTarget::MultiviewHref { href, anchor: _ } if href == "menuData.xml" => self
                 .view_for_navigation_surface_target(
                     token.clone(),
                     "menuData",
                     Some("MultiView menu".to_owned()),
+                    options,
                 ),
             InternalTarget::MultiviewHref { href, anchor } => {
                 if anchor.is_none()

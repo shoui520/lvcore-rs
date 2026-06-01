@@ -445,8 +445,12 @@ impl ReaderBookPackage {
         (!title.is_empty()).then_some(title)
     }
 
-    pub(in crate::package) fn ssed_rich_label(&self, value: &str) -> RichLabel {
-        resolve_rich_label(self, value, &GaijiPolicy::default())
+    pub(in crate::package) fn ssed_rich_label_with_policy(
+        &self,
+        value: &str,
+        policy: &GaijiPolicy,
+    ) -> RichLabel {
+        resolve_rich_label(self, value, policy)
     }
 
     pub(in crate::package) fn ssed_target_for_index_pointer(
@@ -656,9 +660,13 @@ impl ReaderBookPackage {
         })?))
     }
 
-    pub(super) fn ssed_index_row_label(&self, row: &SsedIndexRow) -> RichLabel {
+    pub(super) fn ssed_index_row_label_with_policy(
+        &self,
+        row: &SsedIndexRow,
+        policy: &GaijiPolicy,
+    ) -> RichLabel {
         let label = self.ssed_display_text_for_index_row(row);
-        self.ssed_rich_label(&label)
+        self.ssed_rich_label_with_policy(&label, policy)
     }
 
     pub(in crate::package) fn ssed_display_text_for_index_row(&self, row: &SsedIndexRow) -> String {

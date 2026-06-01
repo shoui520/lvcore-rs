@@ -133,9 +133,9 @@ use crate::image::encode_png_rgba;
 use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
 use crate::multiview::{MultiviewStore, parse_menu_data};
 use crate::navigation::{
-    HomeSurface, NavigationItem, NavigationNode, NavigationProvider, NavigationStatus,
-    NavigationSurface, NavigationSurfaceKind, PanelCell, ScreenMenuHotspot, ScreenMenuRect,
-    ScreenMenuScreen,
+    HomeSurface, LabelOptions, NavigationItem, NavigationNode, NavigationProvider,
+    NavigationStatus, NavigationSurface, NavigationSurfaceKind, PanelCell, ScreenMenuHotspot,
+    ScreenMenuRect, ScreenMenuScreen,
 };
 use crate::render::{
     RenderMode, RenderOptions, RendererInput, RendererInputProvider, RendererProvider,

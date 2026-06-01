@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
     package: &ReaderBookPackage,
     cell: &SsedPanelInlineCell,
+    gaiji_policy: &GaijiPolicy,
 ) -> Result<PanelCell> {
     let target = if !cell.ref_id.is_empty() {
         Some(TargetToken::new(&InternalTarget::PanelCell {
@@ -13,7 +14,7 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
     } else {
         None
     };
-    let rich_label = package.ssed_rich_label(&cell.label);
+    let rich_label = package.ssed_rich_label_with_policy(&cell.label, gaiji_policy);
     Ok(PanelCell {
         panel_id: cell.panel_id.clone(),
         row: cell.row.unwrap_or(cell.cell_index),
@@ -30,8 +31,9 @@ pub(super) fn ssed_panel_bin_record_to_navigation_cell(
     data_ref: &SsedPanelDataRef,
     record: &SsedPanelBinRecord,
     diagnostics: &mut Vec<Diagnostic>,
+    gaiji_policy: &GaijiPolicy,
 ) -> Result<PanelCell> {
-    let rich_label = package.ssed_rich_label(&record.text);
+    let rich_label = package.ssed_rich_label_with_policy(&record.text, gaiji_policy);
     Ok(PanelCell {
         panel_id: data_ref.panel_id.clone(),
         row: record.index,

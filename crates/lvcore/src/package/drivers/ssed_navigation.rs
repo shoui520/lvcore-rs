@@ -46,6 +46,7 @@ pub(super) fn ssed_menu_records_to_nodes_from(
     records: &[SsedMenuRecord],
     base_index: usize,
     diagnostics: &mut Vec<Diagnostic>,
+    gaiji_policy: &GaijiPolicy,
 ) -> Result<Vec<NavigationNode>> {
     let mut roots = Vec::new();
     let mut path = Vec::<usize>::new();
@@ -57,7 +58,7 @@ pub(super) fn ssed_menu_records_to_nodes_from(
             continue;
         }
         let target = ssed_menu_record_target(package, record, diagnostics)?;
-        let rich_label = package.ssed_rich_label(label);
+        let rich_label = package.ssed_rich_label_with_policy(label, gaiji_policy);
         let node = NavigationNode {
             node_id: format!("ssed-menu:{global_index}"),
             label_html: rich_label.html,
@@ -95,6 +96,7 @@ pub(super) fn ssed_multi_selector_records_to_nodes(
     descriptor_name: &str,
     record_index: u16,
     records: &[SsedMenuRecord],
+    gaiji_policy: &GaijiPolicy,
 ) -> Result<Vec<NavigationNode>> {
     let mut roots = Vec::new();
     let mut path = Vec::<usize>::new();
@@ -104,7 +106,7 @@ pub(super) fn ssed_multi_selector_records_to_nodes(
         if label.is_empty() {
             continue;
         }
-        let rich_label = package.ssed_rich_label(label);
+        let rich_label = package.ssed_rich_label_with_policy(label, gaiji_policy);
         let node = NavigationNode {
             node_id: format!("multi:{descriptor_name}:record:{record_index}:selector:{index}"),
             label_html: rich_label.html,
@@ -144,12 +146,13 @@ pub(super) fn ssed_encyclopedia_rows_to_nodes(
     package: &ReaderBookPackage,
     rows: &[SsedEncyclopediaRow],
     diagnostics: &mut Vec<Diagnostic>,
+    gaiji_policy: &GaijiPolicy,
 ) -> Result<Vec<NavigationNode>> {
     let mut roots = Vec::new();
     let mut path = Vec::<usize>::new();
 
     for (index, row) in rows.iter().enumerate() {
-        let rich_label = package.ssed_rich_label(&row.label);
+        let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
         let node = NavigationNode {
             node_id: format!("encyclopedia:{}:{index}", row.index),
             label_html: rich_label.html,
@@ -221,12 +224,13 @@ pub(super) fn ssed_aux_index_rows_to_nodes(
     package: &ReaderBookPackage,
     rows: &[SsedAuxIndexRow],
     diagnostics: &mut Vec<Diagnostic>,
+    gaiji_policy: &GaijiPolicy,
 ) -> Result<Vec<NavigationNode>> {
     let mut roots = Vec::new();
     let mut path = Vec::<usize>::new();
 
     for (index, row) in rows.iter().enumerate() {
-        let rich_label = package.ssed_rich_label(&row.label);
+        let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
         let next_target_row = nearest_higher_aux_target_row(rows, row);
         let node = NavigationNode {
             node_id: format!("aux-index:{}:{index}", row.line_number),
@@ -264,11 +268,12 @@ pub(super) fn ssed_aux_index_rows_to_flat_nodes(
     package: &ReaderBookPackage,
     rows: &[SsedAuxIndexRow],
     diagnostics: &mut Vec<Diagnostic>,
+    gaiji_policy: &GaijiPolicy,
 ) -> Result<Vec<NavigationNode>> {
     rows.iter()
         .enumerate()
         .map(|(index, row)| {
-            let rich_label = package.ssed_rich_label(&row.label);
+            let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
             let next_target_row = nearest_higher_aux_target_row(rows, row);
             Ok(NavigationNode {
                 node_id: format!("aux-index:{}:{index}", row.line_number),
