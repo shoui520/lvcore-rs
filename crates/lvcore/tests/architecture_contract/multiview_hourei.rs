@@ -202,6 +202,55 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
 }
 
 #[test]
+fn multiview_search_labels_are_sanitized_for_app_chrome() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        r#"<list><item label="Book"><item label="前" href="000001" /></item></list>"#,
+    )
+    .unwrap();
+    write_minimal_multiview_content_fixture(&dir.path().join("blvdat"));
+    {
+        let connection = Connection::open(dir.path().join("blvdat")).unwrap();
+        connection
+            .execute(
+                "update t_search set f_TitleMain = ?1, f_All = ?2 where f_No = 1",
+                (
+                    r#"<b>まえがき</b><script>alert(1)</script><img src="javascript:bad()" onerror="bad()">"#,
+                    r#"<em>snippet</em><script>alert(1)</script><span class="hostile lvcore-subtitle">safe subtitle</span>"#,
+                ),
+            )
+            .unwrap();
+    }
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "まえ".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    let hit = &page.hits[0];
+    assert!(hit.title_html.contains("<b>まえがき</b>"));
+    assert!(!hit.title_html.contains("<script"));
+    assert!(!hit.title_html.contains("javascript:"));
+    assert!(!hit.title_html.contains("onerror"));
+    let snippet = hit.snippet_html.as_deref().unwrap();
+    assert!(snippet.contains("<em>snippet</em>"));
+    assert!(snippet.contains(r#"<span class="lvcore-subtitle">safe subtitle</span>"#));
+    assert!(!snippet.contains("<script"));
+    assert!(!snippet.contains("hostile"));
+}
+
+#[test]
 fn multiview_law_list_targets_resolve_to_navigation_and_law_bodies() {
     let dir = tempdir().unwrap();
     fs::write(

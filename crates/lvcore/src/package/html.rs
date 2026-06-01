@@ -256,6 +256,146 @@ pub(super) fn escape_plain_label_html(value: &str) -> String {
     escaped
 }
 
+pub(super) fn sanitize_rich_label_html(fragment: &str) -> String {
+    let mut output = String::with_capacity(fragment.len());
+    let mut cursor = 0usize;
+    while cursor < fragment.len() {
+        let Some(relative_start) = fragment[cursor..].find('<') else {
+            output.push_str(&escape_plain_label_html(&fragment[cursor..]));
+            break;
+        };
+        let tag_start = cursor + relative_start;
+        output.push_str(&escape_plain_label_html(&fragment[cursor..tag_start]));
+        let Some(tag_end) = html_tag_end(fragment, tag_start) else {
+            output.push_str("&lt;");
+            cursor = tag_start + 1;
+            continue;
+        };
+        if let Some(safe_tag) = sanitize_label_tag(&fragment[tag_start..tag_end]) {
+            output.push_str(&safe_tag);
+        }
+        cursor = tag_end;
+    }
+    output
+}
+
+fn html_tag_end(fragment: &str, tag_start: usize) -> Option<usize> {
+    let mut quote = None;
+    let mut index = tag_start + 1;
+    while index < fragment.len() {
+        let ch = fragment[index..].chars().next()?;
+        if let Some(quote_ch) = quote {
+            if ch == quote_ch {
+                quote = None;
+            }
+        } else if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+        } else if ch == '>' {
+            return Some(index + ch.len_utf8());
+        }
+        index += ch.len_utf8();
+    }
+    None
+}
+
+fn sanitize_label_tag(raw_tag: &str) -> Option<String> {
+    let inner = raw_tag
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim();
+    if inner.is_empty() || inner.starts_with('!') || inner.starts_with('?') {
+        return None;
+    }
+    if let Some(closing) = inner.strip_prefix('/') {
+        let name = label_tag_name(closing);
+        return safe_label_container_tag(&name).then(|| format!("</{name}>"));
+    }
+
+    let name = label_tag_name(inner);
+    if name == "br" {
+        return Some("<br>".to_owned());
+    }
+    if safe_label_container_tag(&name) && name != "span" {
+        return Some(format!("<{name}>"));
+    }
+    if name == "span" {
+        let class = safe_label_class_attr(raw_tag);
+        return if class.is_empty() {
+            Some("<span>".to_owned())
+        } else {
+            Some(format!(r#"<span class="{class}">"#))
+        };
+    }
+    if name == "img" {
+        return sanitize_label_img(raw_tag);
+    }
+    None
+}
+
+fn label_tag_name(inner: &str) -> String {
+    inner
+        .trim()
+        .trim_end_matches('/')
+        .split_ascii_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+fn safe_label_container_tag(name: &str) -> bool {
+    matches!(name, "b" | "strong" | "i" | "em" | "sub" | "sup" | "span")
+}
+
+fn safe_label_class_attr(raw_tag: &str) -> String {
+    html_attr_value(raw_tag, "class")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter(|class| {
+            matches!(
+                *class,
+                "lvcore-subtitle"
+                    | "lvcore-gaiji"
+                    | "lvcore-gaiji-external"
+                    | "lvcore-gaiji-ga16"
+                    | "lvcore-gaiji-unresolved"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn sanitize_label_img(raw_tag: &str) -> Option<String> {
+    let src = html_attr_value(raw_tag, "src")?;
+    if !src.starts_with("lvcore://resource/") {
+        return None;
+    }
+    let class = safe_label_class_attr(raw_tag);
+    let alt = html_attr_value(raw_tag, "alt").unwrap_or_default();
+    let title = html_attr_value(raw_tag, "title").unwrap_or_default();
+    let mut output = String::from("<img");
+    if !class.is_empty() {
+        output.push_str(r#" class=""#);
+        output.push_str(&escape_plain_label_html(&class));
+        output.push('"');
+    }
+    output.push_str(r#" src=""#);
+    output.push_str(&escape_plain_label_html(&src));
+    output.push('"');
+    if !alt.is_empty() {
+        output.push_str(r#" alt=""#);
+        output.push_str(&escape_plain_label_html(&alt));
+        output.push('"');
+    }
+    if !title.is_empty() {
+        output.push_str(r#" title=""#);
+        output.push_str(&escape_plain_label_html(&title));
+        output.push('"');
+    }
+    output.push('>');
+    Some(output)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HtmlAttrName {
     Href,
@@ -401,5 +541,23 @@ mod tests {
         let attr = next_html_href_or_src_attr(html, &lower, 0).unwrap();
         assert_eq!(attr.name, HtmlAttrName::Href);
         assert_eq!(&html[attr.value_start..attr.value_end], "keep.html");
+    }
+
+    #[test]
+    fn sanitizes_rich_label_html_for_app_chrome() {
+        let html = r#"<b>safe</b><script>alert(1)</script><span class="hostile lvcore-subtitle">sub</span><img class="icon lvcore-gaiji lvcore-gaiji-external" src="lvcore://resource/book/token" onerror="bad()" alt="<A>" title="gaiji"><img src="javascript:alert(1)">"#;
+        let sanitized = sanitize_rich_label_html(html);
+
+        assert!(sanitized.contains("<b>safe</b>"));
+        assert!(!sanitized.contains("<script"));
+        assert!(!sanitized.contains("</script>"));
+        assert!(!sanitized.contains("onerror"));
+        assert!(!sanitized.contains("javascript:"));
+        assert!(!sanitized.contains("hostile"));
+        assert!(!sanitized.contains("class=\"icon"));
+        assert!(sanitized.contains(r#"<span class="lvcore-subtitle">sub</span>"#));
+        assert!(sanitized.contains(
+            r#"<img class="lvcore-gaiji lvcore-gaiji-external" src="lvcore://resource/book/token" alt="&lt;A&gt;" title="gaiji">"#
+        ));
     }
 }

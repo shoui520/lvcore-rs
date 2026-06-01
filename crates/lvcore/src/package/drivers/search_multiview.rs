@@ -29,9 +29,9 @@ impl ReaderBookPackage {
                         href: hit.href,
                         anchor: None,
                     })?,
-                    title_html: hit.title_html,
+                    title_html: sanitize_rich_label_html(&hit.title_html),
                     title_text: hit.title_text,
-                    snippet_html: hit.snippet_html,
+                    snippet_html: hit.snippet_html.as_deref().map(sanitize_rich_label_html),
                     diagnostics: Vec::new(),
                 })
             })

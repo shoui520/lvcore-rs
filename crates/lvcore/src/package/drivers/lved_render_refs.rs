@@ -175,7 +175,9 @@ impl ReaderBookPackage {
     }
 
     pub(super) fn normalize_lved_label_html(&self, html: &str) -> Result<String> {
-        Ok(self.normalize_lved_html_refs(html)?.html)
+        Ok(sanitize_rich_label_html(
+            &self.normalize_lved_html_refs(html)?.html,
+        ))
     }
 
     fn normalize_lved_direct_resource_attrs(

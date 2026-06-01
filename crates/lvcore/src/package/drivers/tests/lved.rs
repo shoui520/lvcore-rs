@@ -256,6 +256,60 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
 }
 
 #[test]
+fn lved_search_and_list_labels_are_sanitized_for_app_chrome() {
+    let dir = tempdir().unwrap();
+    write_lved_search_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        apply_sqlcipher_key(&connection, "test-key").unwrap();
+        connection
+            .execute(
+                "update list set title = ?1, titlesub = ?2 where id = 1",
+                (
+                    r#"<img class="icon lvcore-gaiji" src="AC6E.svg" onerror="bad()"><b>alpha</b><script>alert(1)</script>"#,
+                    r#"<span class="hostile lvcore-subtitle">subtitle</span><img src="javascript:bad()">"#,
+                ),
+            )
+            .unwrap();
+    }
+
+    let package = LvedSqliteDriver.open(dir.path()).unwrap();
+    let list_surface = package.open_surface("lved-list").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = list_surface else {
+        panic!("expected LVED list title/index surface");
+    };
+    let list_html = &items[0].label_html;
+    assert!(list_html.contains("<b>alpha</b>"));
+    assert!(list_html.contains("lvcore://resource/"));
+    assert!(!list_html.contains("<script"));
+    assert!(!list_html.contains("onerror"));
+    assert!(!list_html.contains("javascript:"));
+    assert!(!list_html.contains("class=\"icon"));
+    assert!(!list_html.contains("hostile"));
+    assert!(list_html.contains(r#"<span class="lvcore-subtitle">"#));
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "alp".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    let hit_html = &page.hits[0].title_html;
+    assert!(hit_html.contains("<b>alpha</b>"));
+    assert!(hit_html.contains("lvcore://resource/"));
+    assert!(!hit_html.contains("<script"));
+    assert!(!hit_html.contains("onerror"));
+    assert!(!hit_html.contains("javascript:"));
+    assert!(!hit_html.contains("class=\"icon"));
+}
+
+#[test]
 fn render_modes_are_explicit_for_preserved_lved_html() {
     let dir = tempdir().unwrap();
     write_lved_search_fixture(dir.path());

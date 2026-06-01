@@ -109,7 +109,7 @@ impl ReaderBookPackage {
             .map(|page| {
                 Ok(NavigationItem {
                     item_id: page.name,
-                    label_html: page.title_html,
+                    label_html: sanitize_rich_label_html(&page.title_html),
                     label_text: page.title_text,
                     target: TargetToken::new(&InternalTarget::LvedRow {
                         table: "info".to_owned(),
