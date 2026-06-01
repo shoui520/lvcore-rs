@@ -688,40 +688,6 @@ fn continuous_window_result_json(window: lvcore::TargetWindow) -> serde_json::Va
     row
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn diagnostic_fields_include_counts_and_bounded_samples() {
-        let diagnostics = (0..12)
-            .map(|index| {
-                Diagnostic::warning(
-                    if index % 2 == 0 {
-                        "even_code"
-                    } else {
-                        "odd_code"
-                    },
-                    format!("diagnostic {index}"),
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut row = json!({ "status": "ok" });
-
-        insert_diagnostic_fields(&mut row, &diagnostics);
-
-        assert_eq!(row["diagnostic_count"], 12);
-        assert_eq!(row["diagnostics"].as_array().unwrap().len(), 8);
-        let codes = row["diagnostic_codes"].as_array().unwrap();
-        assert!(codes.iter().any(|entry| {
-            entry["severity"] == "warning" && entry["code"] == "even_code" && entry["count"] == 6
-        }));
-        assert!(codes.iter().any(|entry| {
-            entry["severity"] == "warning" && entry["code"] == "odd_code" && entry["count"] == 6
-        }));
-    }
-}
-
 fn surface_rendered_view_probe(
     library: &BookLibrary,
     book_id: &BookId,
@@ -970,5 +936,39 @@ fn search_mode_key(mode: &SearchMode) -> String {
                 .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
                 .collect::<String>()
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_fields_include_counts_and_bounded_samples() {
+        let diagnostics = (0..12)
+            .map(|index| {
+                Diagnostic::warning(
+                    if index % 2 == 0 {
+                        "even_code"
+                    } else {
+                        "odd_code"
+                    },
+                    format!("diagnostic {index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut row = json!({ "status": "ok" });
+
+        insert_diagnostic_fields(&mut row, &diagnostics);
+
+        assert_eq!(row["diagnostic_count"], 12);
+        assert_eq!(row["diagnostics"].as_array().unwrap().len(), 8);
+        let codes = row["diagnostic_codes"].as_array().unwrap();
+        assert!(codes.iter().any(|entry| {
+            entry["severity"] == "warning" && entry["code"] == "even_code" && entry["count"] == 6
+        }));
+        assert!(codes.iter().any(|entry| {
+            entry["severity"] == "warning" && entry["code"] == "odd_code" && entry["count"] == 6
+        }));
     }
 }

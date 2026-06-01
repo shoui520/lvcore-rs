@@ -1,5 +1,15 @@
 use super::*;
 
+struct SsedMultiRecordBrowseRequest<'a> {
+    surface_id: &'a str,
+    descriptor_component: &'a SsedComponent,
+    record: &'a SsedMultiRecord,
+    filter: Option<&'a str>,
+    cursor: Option<&'a str>,
+    limit: usize,
+    options: &'a LabelOptions,
+}
+
 impl ReaderBookPackage {
     pub(super) fn ssed_multi_home_surfaces(&self) -> Result<Vec<HomeSurface>> {
         let Some(catalog) = &self.ssed_catalog else {
@@ -146,15 +156,15 @@ impl ReaderBookPackage {
                     )],
                 });
             };
-            return self.open_ssed_multi_record_browse_surface(
+            return self.open_ssed_multi_record_browse_surface(SsedMultiRecordBrowseRequest {
                 surface_id,
-                component,
+                descriptor_component: component,
                 record,
-                parsed_surface.filter.as_deref(),
+                filter: parsed_surface.filter.as_deref(),
                 cursor,
                 limit,
                 options,
-            );
+            });
         }
 
         let mut diagnostics = Vec::new();
@@ -180,14 +190,17 @@ impl ReaderBookPackage {
 
     fn open_ssed_multi_record_browse_surface(
         &self,
-        surface_id: &str,
-        descriptor_component: &SsedComponent,
-        record: &SsedMultiRecord,
-        filter: Option<&str>,
-        cursor: Option<&str>,
-        limit: usize,
-        options: &LabelOptions,
+        request: SsedMultiRecordBrowseRequest<'_>,
     ) -> Result<NavigationSurface> {
+        let SsedMultiRecordBrowseRequest {
+            surface_id,
+            descriptor_component,
+            record,
+            filter,
+            cursor,
+            limit,
+            options,
+        } = request;
         if limit == 0 {
             return Ok(NavigationSurface::TitleIndexBrowse {
                 surface_id: surface_id.to_owned(),

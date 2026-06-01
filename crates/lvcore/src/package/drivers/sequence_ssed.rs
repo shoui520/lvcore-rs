@@ -315,7 +315,7 @@ impl ReaderBookPackage {
         )?))
     }
 }
-fn next_distinct_index_row<'a>(rows: &'a [SsedIndexRow], index: usize) -> Option<&'a SsedIndexRow> {
+fn next_distinct_index_row(rows: &[SsedIndexRow], index: usize) -> Option<&SsedIndexRow> {
     let row = rows.get(index)?;
     rows.iter()
         .skip(index + 1)
