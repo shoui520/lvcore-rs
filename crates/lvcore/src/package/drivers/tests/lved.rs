@@ -65,8 +65,23 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
             && surface.target.is_some()
     }));
     assert!(surfaces.iter().any(|surface| {
-        surface.kind == NavigationSurfaceKind::Info && surface.status == NavigationStatus::Available
+        surface.kind == NavigationSurfaceKind::Info
+            && surface.status == NavigationStatus::Available
+            && surface.target.is_some()
     }));
+    let info_home_target = surfaces
+        .iter()
+        .find(|surface| surface.kind == NavigationSurfaceKind::Info)
+        .and_then(|surface| surface.target.as_ref())
+        .unwrap();
+    let info_home_view = package
+        .render_target(info_home_target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(info_home_view.kind, ResolvedTargetKind::InfoPage);
+    assert!(matches!(
+        info_home_view.surface.as_ref().unwrap(),
+        NavigationSurface::InfoPages { .. }
+    ));
     let list_surface = package.open_surface("lved-list").unwrap();
     let list_items = match list_surface {
         NavigationSurface::TitleIndexBrowse { items, .. } => items,

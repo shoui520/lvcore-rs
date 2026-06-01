@@ -241,7 +241,14 @@ impl NavigationProvider for ReaderBookPackage {
                     },
                     title_html: "Info".to_owned(),
                     title_text: "Info".to_owned(),
-                    target: None,
+                    target: info_available
+                        .then(|| {
+                            TargetToken::new(&InternalTarget::MenuItem {
+                                surface_id: "info".to_owned(),
+                                item_id: "root".to_owned(),
+                            })
+                        })
+                        .transpose()?,
                     diagnostics: Vec::new(),
                 });
                 surfaces.push(HomeSurface {
