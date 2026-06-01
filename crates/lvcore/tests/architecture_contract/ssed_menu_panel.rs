@@ -200,6 +200,67 @@ fn multiblock_ssed_menu_without_rows_is_not_advertised_available() {
 }
 
 #[test]
+fn ssed_menu_rows_with_many_links_expand_to_entry_nodes() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+
+    fn push_halfwidth_ascii(data: &mut Vec<u8>, text: &str) {
+        data.extend_from_slice(&[0x1f, 0x04]);
+        data.extend_from_slice(&jis_fullwidth_ascii_key(text));
+        data.extend_from_slice(&[0x1f, 0x05]);
+    }
+
+    let mut menu = Vec::new();
+    menu.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01]);
+    menu.extend_from_slice(&[0x1f, 0x42]);
+    push_halfwidth_ascii(&mut menu, "alpha");
+    menu.extend_from_slice(&[0x22, 0x23]);
+    push_halfwidth_ascii(&mut menu, "search-key");
+    menu.extend_from_slice(&[0x1f, 0x62]);
+    menu.extend_from_slice(&bcd_u32(10));
+    menu.extend_from_slice(&bcd_u16(2));
+    menu.extend_from_slice(&[0x1f, 0x42]);
+    push_halfwidth_ascii(&mut menu, "beta");
+    menu.extend_from_slice(&[0x22, 0x23]);
+    push_halfwidth_ascii(&mut menu, "other-key");
+    menu.extend_from_slice(&[0x1f, 0x62]);
+    menu.extend_from_slice(&bcd_u32(10));
+    menu.extend_from_slice(&bcd_u16(4));
+    menu.extend_from_slice(&[0x1f, 0x0a]);
+    fs::write(dir.path().join("MENU.DIC"), sseddata_literal_fixture(&menu)).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let NavigationSurface::SimpleMenu { nodes, .. } = package.open_surface("menu").unwrap() else {
+        panic!("SSED MENU should decode to a simple menu surface");
+    };
+
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0].label_text, "alpha");
+    assert_eq!(nodes[1].label_text, "beta");
+    assert!(matches!(
+        nodes[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+    assert!(matches!(
+        nodes[1].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 4,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
     let dir = tempdir().unwrap();
     fs::write(

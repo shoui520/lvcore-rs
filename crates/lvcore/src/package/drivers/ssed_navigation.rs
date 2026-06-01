@@ -53,42 +53,120 @@ pub(super) fn ssed_menu_records_to_nodes_from(
 
     for (index, record) in records.iter().enumerate() {
         let global_index = base_index + index;
-        let label = record.label();
-        if label.is_empty() {
-            continue;
-        }
-        let target = ssed_menu_record_target(package, record, diagnostics)?;
-        let rich_label = package.ssed_rich_label_with_policy(label, gaiji_policy);
-        let node = NavigationNode {
-            node_id: format!("ssed-menu:{global_index}"),
-            label_html: rich_label.html,
-            label_text: rich_label.text,
-            target,
-            diagnostics: rich_label.diagnostics,
-            children: Vec::new(),
-        };
+        let nodes =
+            ssed_menu_record_nodes(package, record, global_index, diagnostics, gaiji_policy)?;
         let depth = record.depth.max(1);
-        while path.len() >= depth {
-            path.pop();
-        }
-        if path.is_empty() {
-            roots.push(node);
-            path.push(roots.len() - 1);
-        } else if let Some(parent) = navigation_node_mut_at_path(&mut roots, &path) {
-            parent.children.push(node);
-            path.push(parent.children.len() - 1);
-        } else {
-            diagnostics.push(Diagnostic::warning(
-                "ssed_navigation_tree_depth_invalid",
-                format!("could not attach MENU/TOC row {global_index} at depth {depth}"),
-            ));
-            roots.push(node);
-            path.clear();
-            path.push(roots.len() - 1);
+        for node in nodes {
+            attach_ssed_menu_node(
+                &mut roots,
+                &mut path,
+                node,
+                depth,
+                global_index,
+                diagnostics,
+            );
         }
     }
 
     Ok(roots)
+}
+
+fn ssed_menu_record_nodes(
+    package: &ReaderBookPackage,
+    record: &SsedMenuRecord,
+    global_index: usize,
+    diagnostics: &mut Vec<Diagnostic>,
+    gaiji_policy: &GaijiPolicy,
+) -> Result<Vec<NavigationNode>> {
+    let target_links = record
+        .links
+        .iter()
+        .enumerate()
+        .filter(|(_, link)| {
+            link.destination
+                .as_ref()
+                .is_some_and(|destination| !destination.is_null())
+                && !link.label.trim().is_empty()
+        })
+        .collect::<Vec<_>>();
+    if target_links.len() > 1 {
+        let mut nodes = Vec::new();
+        for (link_index, link) in target_links {
+            let Some(destination) = link.destination.as_ref() else {
+                continue;
+            };
+            let Some(target) = ssed_menu_destination_target(package, destination, diagnostics)?
+            else {
+                continue;
+            };
+            let label = ssed_menu_link_display_label(&link.label);
+            if label.is_empty() {
+                continue;
+            }
+            let rich_label = package.ssed_rich_label_with_policy(&label, gaiji_policy);
+            nodes.push(NavigationNode {
+                node_id: format!("ssed-menu:{global_index}:link:{link_index}"),
+                label_html: rich_label.html,
+                label_text: rich_label.text,
+                target: Some(target),
+                diagnostics: rich_label.diagnostics,
+                children: Vec::new(),
+            });
+        }
+        return Ok(nodes);
+    }
+
+    let label = record.label();
+    if label.is_empty() {
+        return Ok(Vec::new());
+    }
+    let target = ssed_menu_record_target(package, record, diagnostics)?;
+    let rich_label = package.ssed_rich_label_with_policy(label, gaiji_policy);
+    Ok(vec![NavigationNode {
+        node_id: format!("ssed-menu:{global_index}"),
+        label_html: rich_label.html,
+        label_text: rich_label.text,
+        target,
+        diagnostics: rich_label.diagnostics,
+        children: Vec::new(),
+    }])
+}
+
+fn attach_ssed_menu_node(
+    roots: &mut Vec<NavigationNode>,
+    path: &mut Vec<usize>,
+    node: NavigationNode,
+    depth: usize,
+    global_index: usize,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    while path.len() >= depth {
+        path.pop();
+    }
+    if path.is_empty() {
+        roots.push(node);
+        path.push(roots.len() - 1);
+    } else if let Some(parent) = navigation_node_mut_at_path(roots, path) {
+        parent.children.push(node);
+        path.push(parent.children.len() - 1);
+    } else {
+        diagnostics.push(Diagnostic::warning(
+            "ssed_navigation_tree_depth_invalid",
+            format!("could not attach MENU/TOC row {global_index} at depth {depth}"),
+        ));
+        roots.push(node);
+        path.clear();
+        path.push(roots.len() - 1);
+    }
+}
+
+fn ssed_menu_link_display_label(label: &str) -> String {
+    label
+        .split(['■', '§'])
+        .next()
+        .unwrap_or(label)
+        .trim()
+        .to_owned()
 }
 
 pub(super) fn ssed_multi_selector_records_to_nodes(
@@ -372,6 +450,14 @@ fn ssed_menu_record_target(
     else {
         return Ok(None);
     };
+    ssed_menu_destination_target(package, destination, diagnostics)
+}
+
+fn ssed_menu_destination_target(
+    package: &ReaderBookPackage,
+    destination: &SsedMenuDestination,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<TargetToken>> {
     let Some(catalog) = &package.ssed_catalog else {
         diagnostics.push(Diagnostic::error(
             "ssed_catalog_missing",

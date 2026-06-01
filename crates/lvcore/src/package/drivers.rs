@@ -174,7 +174,9 @@ use crate::ssed_loose_media::{
     render_britannica_html_fragment, resolve_loose_media_file, resolve_pcmu_record,
     search_britannica_chronology_records,
 };
-use crate::ssed_menu::{SsedMenuRecord, parse_menu_stream, parse_menu_stream_page};
+use crate::ssed_menu::{
+    SsedMenuDestination, SsedMenuRecord, parse_menu_stream, parse_menu_stream_page,
+};
 use crate::ssed_multi::{
     SsedMultiComponentRef, SsedMultiDescriptor, SsedMultiRecord, parse_multi_descriptor,
 };
