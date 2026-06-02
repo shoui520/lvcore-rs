@@ -21,7 +21,12 @@ pub(super) fn lved_list_label_html(title_html: &str, subtitle_html: &str) -> Str
 }
 
 pub(super) fn home_surface_reader_priority(surface: &HomeSurface) -> (u8, u8) {
-    let status_group = match (surface.status, surface.target.is_some()) {
+    let targetable = surface.target.is_some()
+        || surface
+            .href
+            .as_deref()
+            .is_some_and(|href| !href.trim().is_empty());
+    let status_group = match (surface.status, targetable) {
         (NavigationStatus::Available, true) => 0,
         (NavigationStatus::Available, false) => 1,
         (NavigationStatus::Empty, _) => 2,
@@ -185,5 +190,49 @@ pub(super) fn collect_panel_cell_ordered_targets(
                 title: Some(cell.label_text.clone()),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn surface(
+        surface_id: &str,
+        kind: NavigationSurfaceKind,
+        status: NavigationStatus,
+        href: Option<&str>,
+    ) -> HomeSurface {
+        HomeSurface {
+            href: href.map(str::to_owned),
+            surface_id: surface_id.to_owned(),
+            kind,
+            status,
+            title_html: surface_id.to_owned(),
+            title_text: surface_id.to_owned(),
+            target: None,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn home_surface_priority_treats_href_only_surfaces_as_targetable() {
+        let href_only_panel = surface(
+            "panels",
+            NavigationSurfaceKind::Panel,
+            NavigationStatus::Available,
+            Some("lvcore://target/panel"),
+        );
+        let targetless_menu = surface(
+            "menu",
+            NavigationSurfaceKind::Menu,
+            NavigationStatus::Available,
+            None,
+        );
+
+        assert!(
+            home_surface_reader_priority(&href_only_panel)
+                < home_surface_reader_priority(&targetless_menu)
+        );
     }
 }
