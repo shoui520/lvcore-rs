@@ -53,6 +53,10 @@ LogoVista internals. The frontend receives:
 - rendered target views with HTML/text/resources/links/diagnostics;
 - resource tokens for images, audio, PDFs, media BLOBs, gaiji assets, and other
   dictionary-local resources.
+- search result pages may include an opaque `result_sequence` value. Frontends
+  pass it back as `SequenceHint::SearchResults { value }` when opening a hit
+  with continuous view in the visible result order, including 串刺し検索 pages
+  where neighboring hits may belong to different books.
 
 The frontend should not parse HONMON, `lved.*` links, Panel rows, law references,
 or gaiji codes directly.
@@ -95,6 +99,10 @@ provider slices:
   `library-import` and `library-search` CLI commands that exercise
   frontend-cacheable book metadata, all-book 串刺し検索, and routed first-hit
   rendering across opened books;
+- library search pages expose an opaque search-result sequence for continuous
+  view. The frontend does not need to reconstruct search-result order from
+  target internals; it can pass the returned value back to lvcore when opening a
+  result with surrounding entries;
 - casefolded storage lookup with casing preservation;
 - readable SSED component materialization for plain payloads, LogoFontCipher
   payloads, Mac OS X AES payloads, and observed Mac OS X ZipCrypto `HONMON`
