@@ -112,9 +112,10 @@ impl ReaderBookPackage {
         }
         if let Some(stripped) = relative.strip_prefix("Panel/")
             && let Some(package_name) = self.root.file_name().and_then(|name| name.to_str())
+            && let Some(parent) = self.root.parent()
         {
-            let sibling_panel_root = self.root.with_file_name(format!("{package_name}_Panel"));
-            if sibling_panel_root.is_dir() {
+            let sibling_panel_root = parent.join(format!("{package_name}_Panel"));
+            if regular_directory_inside_root(parent, &sibling_panel_root).unwrap_or(false) {
                 let sibling_storage = DirectoryStorage::new(sibling_panel_root);
                 let stripped_path = Path::new(stripped);
                 if sibling_storage.exists(stripped_path)? {
@@ -126,8 +127,7 @@ impl ReaderBookPackage {
             && let Some(parent) = self.root.parent()
         {
             let candidate = parent.join("bin").join(stripped);
-            if regular_file_inside_root(parent, &candidate).unwrap_or(false) && candidate.is_file()
-            {
+            if regular_file_inside_root(parent, &candidate).unwrap_or(false) {
                 return fs::read(candidate).map(Some).map_err(Error::from);
             }
         }
@@ -166,8 +166,7 @@ impl ReaderBookPackage {
             "menu_iPad.plist",
         ] {
             let candidate = parent.join(path);
-            if regular_file_inside_root(parent, &candidate).unwrap_or(false) && candidate.is_file()
-            {
+            if regular_file_inside_root(parent, &candidate).unwrap_or(false) {
                 return Ok(Some(SsedPanelMetadata {
                     label: path.to_owned(),
                     bytes: fs::read(candidate)?,

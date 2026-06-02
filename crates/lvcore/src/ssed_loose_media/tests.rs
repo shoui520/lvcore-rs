@@ -28,8 +28,7 @@ fn pcmu_record_symlink_escape_is_not_readable() {
     std::fs::write(&outside, b"outside").unwrap();
     std::os::unix::fs::symlink(&outside, pcmu.join("sound.bin")).unwrap();
 
-    let error = read_pcmu_record(&package, 123).unwrap_err();
-    assert!(error.to_string().contains("outside its loose media root"));
+    assert!(read_pcmu_record(&package, 123).unwrap().is_none());
 }
 
 #[cfg(unix)]
@@ -44,7 +43,7 @@ fn britannica_whatday_symlink_escape_is_not_readable() {
     std::os::unix::fs::symlink(&outside, whatday.join("1-1.body")).unwrap();
 
     let error = parse_britannica_whatday_file(&package, "Media", "whatday/1-1.body").unwrap_err();
-    assert!(error.to_string().contains("outside its media root"));
+    assert!(error.to_string().contains("whatday file not found"));
     assert!(!has_britannica_whatday_files(&package).unwrap());
     assert!(
         discover_britannica_whatday_paths(&package)
@@ -83,8 +82,7 @@ fn loose_movie_symlink_escape_is_not_resolved() {
     std::fs::write(&outside, b"outside").unwrap();
     std::os::unix::fs::symlink(&outside, movie.join("00000001")).unwrap();
 
-    let error = find_movie_file(&package, "00000001").unwrap_err();
-    assert!(error.to_string().contains("outside its loose media root"));
+    assert!(find_movie_file(&package, "00000001").unwrap().is_none());
 }
 
 #[cfg(unix)]

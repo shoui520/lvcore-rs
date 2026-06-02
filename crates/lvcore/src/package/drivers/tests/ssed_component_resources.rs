@@ -109,6 +109,48 @@ fn chm_resource_resolution_does_not_advertise_symlinked_escape() {
 
 #[cfg(unix)]
 #[test]
+fn adjacent_templates_symlink_escape_is_not_advertised() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("_DCT_SAMPLE");
+    fs::create_dir(&root).unwrap();
+    let outside = dir.path().join("outside-templates");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("B123.png"), b"outside template").unwrap();
+    symlink(&outside, dir.path().join("_DCT_SAMPLE_Templates")).unwrap();
+    let package = ReaderBookPackage::new(
+        &root,
+        DetectedPackage {
+            root: root.clone(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Templates".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+    let token = ResourceToken::new(&InternalResource::PackageFile {
+        path: "Templates/B123.png".to_owned(),
+        resource_kind: ResourceKind::Image,
+    })
+    .unwrap();
+
+    let resource = package.resolve_resource(&token).unwrap();
+
+    assert!(resource.href.is_none());
+    assert!(
+        resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "resource_missing")
+    );
+    assert!(package.read_resource(&token).is_err());
+}
+
+#[cfg(unix)]
+#[test]
 fn ssed_hanrei_discovery_ignores_symlinked_help_folders() {
     use std::os::unix::fs::symlink;
 

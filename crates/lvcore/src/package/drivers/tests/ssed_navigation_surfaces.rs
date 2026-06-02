@@ -383,6 +383,61 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
     assert_eq!(next_cursor.as_deref(), Some("4"));
 }
 
+#[cfg(unix)]
+#[test]
+fn ssed_adjacent_panel_symlink_escape_is_not_advertised() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("_DCT_SAMPLE");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("Panels.xml"),
+        r#"<?xml version="1.0"?>
+<panels>
+  <panel index="01000000" paneltype="contents">
+    <title>五十音</title>
+    <data type="bin" filename="Panel\All-A.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    let outside = dir.path().join("outside-panel");
+    fs::create_dir(&outside).unwrap();
+    let panel_bin = (1u32)
+        .to_le_bytes()
+        .into_iter()
+        .chain((4u32).to_le_bytes())
+        .chain((3u32).to_le_bytes())
+        .chain((0x20u32).to_le_bytes())
+        .chain([0x24, 0x22, 0, 0])
+        .collect::<Vec<_>>();
+    fs::write(outside.join("All-A.bin"), panel_bin).unwrap();
+    symlink(&outside, dir.path().join("_DCT_SAMPLE_Panel")).unwrap();
+    let package = ReaderBookPackage::new(
+        &root,
+        DetectedPackage {
+            root: root.clone(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Panels".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+
+    let surface = package.open_surface("panels:01000000").unwrap();
+
+    let NavigationSurface::Deferred { diagnostics, .. } = surface else {
+        panic!("expected deferred surface when adjacent Panel root is a symlink");
+    };
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_panel_bin_missing"
+            && diagnostic.message.contains("Panel\\All-A.bin")
+    }));
+}
+
 #[test]
 fn ssed_numeric_auxiliary_index_opens_without_exinfo() {
     let dir = tempdir().unwrap();

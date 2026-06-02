@@ -3,7 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::storage::{path_stays_inside_root, regular_file_inside_root};
+use crate::storage::{
+    path_stays_inside_root, regular_directory_inside_root, regular_file_inside_root,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 
 mod britannica_html;
@@ -141,14 +143,8 @@ pub fn find_movie_file(package_root: &Path, movie_id: &str) -> Result<Option<Pat
     let Some(path) = find_child_casefolded(&directory, movie_id)? else {
         return Ok(None);
     };
-    if !path.is_file() {
+    if !regular_file_inside_root(&directory, &path)? {
         return Ok(None);
-    }
-    if !path_stays_inside_root(&directory, &path)? {
-        return Err(Error::Driver(format!(
-            "_MOVIE file is outside its loose media root: {}",
-            path.display()
-        )));
     }
     Ok(Some(path))
 }
@@ -160,7 +156,9 @@ pub fn discover_britannica_media_roots(package_root: &Path) -> Result<Vec<Britan
         let Some(path) = find_loose_media_root(package_root, &name)? else {
             continue;
         };
-        if !path.is_dir() || !looks_like_britannica_media_root(&path)? {
+        if !regular_directory_inside_root(package_root, &path)?
+            || !looks_like_britannica_media_root(&path)?
+        {
             continue;
         }
         let key = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -360,8 +358,7 @@ pub fn find_loose_media_root(package_root: &Path, root_name: &str) -> Result<Opt
         .flatten()
     {
         if let Some(path) = find_child_casefolded(parent, root_name)?
-            && path.is_dir()
-            && path_stays_inside_root(parent, &path)?
+            && regular_directory_inside_root(parent, &path)?
         {
             return Ok(Some(path));
         }
@@ -387,14 +384,8 @@ pub fn resolve_loose_media_file(
         };
         current = next;
     }
-    if !current.is_file() {
+    if !regular_file_inside_root(&root, &current)? {
         return Ok(None);
-    }
-    if !path_stays_inside_root(&root, &current)? {
-        return Err(Error::Driver(format!(
-            "loose media file is outside its media root: {}",
-            current.display()
-        )));
     }
     Ok(Some(current))
 }
@@ -586,13 +577,14 @@ pub(super) fn find_loose_media_dir(
         let key = directory
             .canonicalize()
             .unwrap_or_else(|_| directory.clone());
-        if !seen.insert(key) || !directory.is_dir() {
+        if !seen.insert(key) || !regular_directory_inside_root(&parent, &directory)? {
             continue;
         }
-        if !path_stays_inside_root(&parent, &directory)? {
-            continue;
-        }
-        if require_wave_map && find_child_casefolded(&directory, "WaveFile.map")?.is_none() {
+        if require_wave_map
+            && !find_child_casefolded(&directory, "WaveFile.map")?
+                .as_ref()
+                .is_some_and(|path| regular_file_inside_root(&directory, path).unwrap_or(false))
+        {
             continue;
         }
         return Ok(Some(directory));
@@ -623,7 +615,9 @@ fn loose_media_candidate_names(package_root: &Path, suffix: &str) -> Vec<(PathBu
 }
 
 pub(super) fn find_child_casefolded(directory: &Path, name: &str) -> Result<Option<PathBuf>> {
-    if !directory.is_dir() {
+    if fs::symlink_metadata(directory).map_or(true, |metadata| {
+        metadata.file_type().is_symlink() || !metadata.is_dir()
+    }) {
         return Ok(None);
     }
     let wanted = name.to_lowercase();
@@ -690,7 +684,7 @@ fn whatday_directories(root: &BritannicaMediaRoot) -> Result<Vec<(PathBuf, Strin
         dirs.push((root.path.clone(), String::new()));
     }
     if let Some(path) = find_child_casefolded(&root.path, "whatday")?
-        && path.is_dir()
+        && regular_directory_inside_root(&root.path, &path)?
     {
         dirs.push((path, "whatday".to_owned()));
     }
@@ -712,7 +706,7 @@ fn top_directories(root: &BritannicaMediaRoot) -> Result<Vec<(PathBuf, String)>>
         dirs.push((root.path.clone(), String::new()));
     }
     if let Some(path) = find_child_casefolded(&root.path, "top")?
-        && path.is_dir()
+        && regular_directory_inside_root(&root.path, &path)?
     {
         dirs.push((path, "top".to_owned()));
     }
@@ -897,7 +891,7 @@ fn resolve_top_image_resource(
                 break;
             }
         }
-        if found && current.is_file() {
+        if found && regular_file_inside_root(media_root, &current)? {
             return Ok(Some(BritannicaLooseResourcePath {
                 root_name: media_root_name.clone(),
                 relative_path: normalized,
@@ -927,9 +921,9 @@ fn read_loose_media_file_checked(
             "loose media root not found: {root_name}"
         )));
     };
-    if !path_stays_inside_root(&root, path)? {
+    if !regular_file_inside_root(&root, path)? {
         return Err(Error::Driver(format!(
-            "loose media file is outside its media root: {}",
+            "loose media file is outside its media root or is not a regular file: {}",
             path.display()
         )));
     }

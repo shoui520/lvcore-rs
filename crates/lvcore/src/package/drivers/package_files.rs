@@ -56,10 +56,9 @@ impl ReaderBookPackage {
             return None;
         }
         let package_name = self.root.file_name().and_then(|name| name.to_str())?;
-        let sibling_templates_root = self
-            .root
-            .with_file_name(format!("{package_name}_Templates"));
-        if !sibling_templates_root.is_dir() {
+        let parent = self.root.parent()?;
+        let sibling_templates_root = parent.join(format!("{package_name}_Templates"));
+        if !regular_directory_inside_root(parent, &sibling_templates_root).unwrap_or(false) {
             return None;
         }
         Some((sibling_templates_root, stripped))

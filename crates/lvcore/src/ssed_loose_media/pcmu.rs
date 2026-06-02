@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::crypto::decrypt_logofont_cipher_bytes;
 use crate::error::Result;
-use crate::storage::path_stays_inside_root;
+use crate::storage::{path_stays_inside_root, regular_file_inside_root};
 
 use super::{find_child_casefolded, find_loose_media_dir};
 
@@ -36,6 +36,9 @@ pub fn load_pcmu_index(package_root: &Path) -> Result<Option<PcmuIndex>> {
     let Some(map_path) = find_child_casefolded(&directory, "WaveFile.map")? else {
         return Ok(None);
     };
+    if !regular_file_inside_root(&directory, &map_path)? {
+        return Ok(None);
+    }
     let text = fs::read_to_string(&map_path)?;
     let mut rows = Vec::new();
     for (line_index, raw_line) in text.lines().enumerate() {
@@ -53,7 +56,7 @@ pub fn load_pcmu_index(package_root: &Path) -> Result<Option<PcmuIndex>> {
         let Some(path) = find_child_casefolded(&directory, stem)? else {
             continue;
         };
-        if !path.is_file() {
+        if !regular_file_inside_root(&directory, &path)? {
             continue;
         }
         rows.push(PcmuMapRecord {
