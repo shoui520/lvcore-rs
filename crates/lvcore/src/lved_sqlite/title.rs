@@ -194,20 +194,37 @@ pub(crate) fn html_text_lines(fragment: &str) -> Vec<String> {
 }
 
 fn decode_basic_html_entities(value: &str) -> String {
+    let mut decoded = value.to_owned();
+    for _ in 0..2 {
+        let next = decode_basic_html_entities_once(&decoded);
+        if next == decoded {
+            return decoded;
+        }
+        decoded = next;
+    }
+    decoded
+}
+
+fn decode_basic_html_entities_once(value: &str) -> String {
     let mut decoded = String::with_capacity(value.len());
     let mut cursor = 0;
     while cursor < value.len() {
         let rest = &value[cursor..];
-        let Some((entity, replacement)) = match_basic_html_entity(rest) else {
-            let Some(ch) = rest.chars().next() else {
-                break;
-            };
-            decoded.push(ch);
-            cursor += ch.len_utf8();
+        if let Some((entity, replacement)) = match_basic_html_entity(rest) {
+            decoded.push_str(replacement);
+            cursor += entity.len();
             continue;
+        }
+        if let Some((entity_len, ch)) = match_numeric_html_entity(rest) {
+            decoded.push(ch);
+            cursor += entity_len;
+            continue;
+        }
+        let Some(ch) = rest.chars().next() else {
+            break;
         };
-        decoded.push_str(replacement);
-        cursor += entity.len();
+        decoded.push(ch);
+        cursor += ch.len_utf8();
     }
     decoded
 }
@@ -215,6 +232,8 @@ fn decode_basic_html_entities(value: &str) -> String {
 fn match_basic_html_entity(value: &str) -> Option<(&'static str, &'static str)> {
     if value.starts_with("&nbsp;") {
         Some(("&nbsp;", " "))
+    } else if value.starts_with("&#160;") {
+        Some(("&#160;", " "))
     } else if value.starts_with("&lt;") {
         Some(("&lt;", "<"))
     } else if value.starts_with("&gt;") {
@@ -223,9 +242,30 @@ fn match_basic_html_entity(value: &str) -> Option<(&'static str, &'static str)> 
         Some(("&amp;", "&"))
     } else if value.starts_with("&quot;") {
         Some(("&quot;", "\""))
+    } else if value.starts_with("&#39;") {
+        Some(("&#39;", "'"))
     } else {
         None
     }
+}
+
+fn match_numeric_html_entity(value: &str) -> Option<(usize, char)> {
+    let value = value.strip_prefix("&#")?;
+    let end = value.find(';')?;
+    let digits = &value[..end];
+    if digits.is_empty() {
+        return None;
+    }
+    let codepoint = if let Some(hex) = digits
+        .strip_prefix('x')
+        .or_else(|| digits.strip_prefix('X'))
+    {
+        u32::from_str_radix(hex, 16).ok()?
+    } else {
+        digits.parse::<u32>().ok()?
+    };
+    let ch = char::from_u32(codepoint)?;
+    Some((2 + end + 1, ch))
 }
 
 pub(crate) fn html_to_text(fragment: &str) -> String {

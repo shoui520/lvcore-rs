@@ -118,9 +118,7 @@ fn strip_html_tags_for_label(value: &str) -> String {
 }
 
 fn html_unescape_label(value: &str) -> String {
-    html_unescape_minimal(value)
-        .replace("&nbsp;", " ")
-        .replace("&#160;", " ")
+    html_decode_text_entities(value)
 }
 
 fn collapse_label_whitespace(value: &str) -> String {
@@ -180,12 +178,7 @@ pub(super) fn html_label_text(fragment: &str) -> String {
             _ => text.push(ch),
         }
     }
-    text.replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .trim()
-        .to_owned()
+    html_decode_text_entities(&text).trim().to_owned()
 }
 
 pub(super) fn html_basic_text(fragment: &str) -> String {
@@ -230,10 +223,7 @@ pub(super) fn html_basic_text(fragment: &str) -> String {
             _ => text.push(ch),
         }
     }
-    text.replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
+    html_decode_text_entities(&text)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -261,11 +251,15 @@ pub(super) fn sanitize_rich_label_html(fragment: &str) -> String {
     let mut cursor = 0usize;
     while cursor < fragment.len() {
         let Some(relative_start) = fragment[cursor..].find('<') else {
-            output.push_str(&escape_plain_label_html(&fragment[cursor..]));
+            output.push_str(&escape_plain_label_html(&html_decode_text_entities(
+                &fragment[cursor..],
+            )));
             break;
         };
         let tag_start = cursor + relative_start;
-        output.push_str(&escape_plain_label_html(&fragment[cursor..tag_start]));
+        output.push_str(&escape_plain_label_html(&html_decode_text_entities(
+            &fragment[cursor..tag_start],
+        )));
         let Some(tag_end) = html_tag_end(fragment, tag_start) else {
             output.push_str("&lt;");
             cursor = tag_start + 1;
@@ -277,6 +271,78 @@ pub(super) fn sanitize_rich_label_html(fragment: &str) -> String {
         cursor = tag_end;
     }
     output
+}
+
+fn html_decode_text_entities(value: &str) -> String {
+    let mut decoded = value.to_owned();
+    for _ in 0..2 {
+        let next = html_decode_text_entities_once(&decoded);
+        if next == decoded {
+            return decoded;
+        }
+        decoded = next;
+    }
+    decoded
+}
+
+fn html_decode_text_entities_once(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut cursor = 0usize;
+    while cursor < value.len() {
+        let Some(relative_start) = value[cursor..].find('&') else {
+            output.push_str(&value[cursor..]);
+            break;
+        };
+        let start = cursor + relative_start;
+        output.push_str(&value[cursor..start]);
+        let rest = &value[start..];
+        if let Some((entity, replacement)) = decode_named_html_entity(rest) {
+            output.push_str(replacement);
+            cursor = start + entity.len();
+            continue;
+        }
+        if let Some((entity_len, ch)) = decode_numeric_html_entity(rest) {
+            output.push(ch);
+            cursor = start + entity_len;
+            continue;
+        }
+        output.push('&');
+        cursor = start + 1;
+    }
+    output
+}
+
+fn decode_named_html_entity(value: &str) -> Option<(&'static str, &'static str)> {
+    [
+        ("&nbsp;", " "),
+        ("&#160;", " "),
+        ("&quot;", "\""),
+        ("&#39;", "'"),
+        ("&lt;", "<"),
+        ("&gt;", ">"),
+        ("&amp;", "&"),
+    ]
+    .into_iter()
+    .find(|(entity, _)| value.starts_with(entity))
+}
+
+fn decode_numeric_html_entity(value: &str) -> Option<(usize, char)> {
+    let value = value.strip_prefix("&#")?;
+    let end = value.find(';')?;
+    let digits = &value[..end];
+    if digits.is_empty() {
+        return None;
+    }
+    let codepoint = if let Some(hex) = digits
+        .strip_prefix('x')
+        .or_else(|| digits.strip_prefix('X'))
+    {
+        u32::from_str_radix(hex, 16).ok()?
+    } else {
+        digits.parse::<u32>().ok()?
+    };
+    let ch = char::from_u32(codepoint)?;
+    Some((2 + end + 1, ch))
 }
 
 fn html_tag_end(fragment: &str, tag_start: usize) -> Option<usize> {
@@ -559,5 +625,16 @@ mod tests {
         assert!(sanitized.contains(
             r#"<img class="lvcore-gaiji lvcore-gaiji-external" src="lvcore://resource/book/token" alt="&lt;A&gt;" title="gaiji">"#
         ));
+    }
+
+    #[test]
+    fn label_text_decodes_numeric_entities_before_sanitizing() {
+        let html = r#"<span>&#x2051;<b>test</b> &#9733; &amp;#x2605;</span>"#;
+
+        assert_eq!(
+            sanitize_rich_label_html(html),
+            "<span>⁑<b>test</b> ★ ★</span>"
+        );
+        assert_eq!(html_label_text(html), "⁑test ★ ★");
     }
 }

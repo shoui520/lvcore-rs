@@ -510,6 +510,10 @@ fn title_probe_ignores_style_blocks_and_staff_affiliations() {
         vec!["A &<B>\"C\"".to_owned()]
     );
     assert_eq!(
+        html_text_lines("<div>&#x2051;test &#9733; &amp;#x2605; &#39;ok&#39;</div>"),
+        vec!["⁑test ★ ★ 'ok'".to_owned()]
+    );
+    assert_eq!(
         html_text_lines(
             "<div>ジーニアス<ruby>英和辞典<rt>えいわじてん</rt></ruby> <ruby>第6版<rt>だいろっぱん</rt></ruby></div>"
         ),
