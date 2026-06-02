@@ -133,6 +133,148 @@ fn ssed_missing_declared_menu_does_not_hide_panel_home_surface() {
 }
 
 #[test]
+fn ssed_mac_panels_plist_opens_like_xml_panels() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("Panels.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>panel</key><dict>
+    <key>00000000</key><dict>
+      <key>paneltype</key><string>menu</string>
+      <key>title</key><string>トップ</string>
+      <key>count_x</key><integer>2</integer>
+      <key>data</key><array><dict><key>cell</key><array>
+        <dict><key>ref</key><string>10000000</string><key>text</key><string>すべて</string></dict>
+      </array></dict></array>
+    </dict>
+    <key>10000000</key><dict>
+      <key>paneltype</key><string>contents</string>
+      <key>title</key><string>すべて</string>
+      <key>data</key><array><dict>
+        <key>filename</key><string>Panel/All-A.bin</string>
+        <key>type</key><string>bin</string>
+      </dict></array>
+    </dict>
+  </dict>
+</dict></plist>"#,
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("Panel")).unwrap();
+    fs::write(dir.path().join("Panel/All-A.bin"), panel_bin_fixture(10, 2)).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::Panels)
+    );
+    let root_panel = package.open_surface("panels").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = root_panel else {
+        panic!("Mac Panels.plist root should decode as a panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "すべて");
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::PanelCell { panel_id, .. } if panel_id == "10000000"
+    ));
+
+    let child_panel = package.open_surface("panels:10000000").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
+        panic!("Mac Panels.plist child should decode BIN rows");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
+fn ssed_ios_mobile_menu_plist_exposes_direct_and_bin_panel_targets() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(root.path().join("bin")).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        root.path().join("menu.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>item</key><string>直接</string>
+    <key>block</key><integer>10</integer>
+    <key>offset</key><integer>2</integer>
+    <key>child</key><array/>
+  </dict>
+  <dict>
+    <key>item</key><string>五十音</string>
+    <key>block</key><integer>0</integer>
+    <key>offset</key><integer>0</integer>
+    <key>path</key><string>All-A</string>
+  </dict>
+</array></plist>"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("bin/All-A.bin"), panel_bin_fixture(10, 4)).unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::Panels),
+        "parent mobile menu.plist should advertise the Panel capability"
+    );
+    let home = package.home_surfaces().unwrap();
+    assert!(home.iter().any(|surface| {
+        surface.surface_id == "panels" && surface.status == NavigationStatus::Available
+    }));
+
+    let root_panel = package.open_surface("panels").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = root_panel else {
+        panic!("mobile menu.plist should decode to a panel surface");
+    };
+    assert_eq!(cells.len(), 2);
+    assert_eq!(cells[0].label_text, "直接");
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+    assert_eq!(cells[1].label_text, "五十音");
+    let InternalTarget::PanelCell { panel_id, .. } =
+        cells[1].target.as_ref().unwrap().decode().unwrap()
+    else {
+        panic!("path-backed mobile menu item should point to a child panel");
+    };
+
+    let child_panel = package.open_surface(&format!("panels:{panel_id}")).unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
+        panic!("path-backed mobile menu item should decode parent bin rows");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 4,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn empty_ssed_menu_is_not_exposed_as_targetable_home_surface() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

@@ -183,7 +183,7 @@ use crate::ssed_multi::{
 };
 use crate::ssed_panel::{
     SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, parse_panel_bin,
-    parse_panel_xml_bytes,
+    parse_panel_plist_bytes, parse_panel_xml_bytes,
 };
 use crate::ssed_pcmdata::{
     PcmDataParseResult, pcmdata_audio_summary, pcmdata_portable_audio_bytes,
@@ -470,34 +470,6 @@ fn routing_aliases_for_package(
             }]
         })
         .unwrap_or_default()
-}
-
-fn push_surface_if_exists(
-    surfaces: &mut Vec<HomeSurface>,
-    storage: &DirectoryStorage,
-    surface_id: &str,
-    kind: NavigationSurfaceKind,
-    title: &str,
-    candidates: &[&str],
-) -> Result<()> {
-    if candidates
-        .iter()
-        .any(|candidate| storage.exists(Path::new(candidate)).unwrap_or(false))
-    {
-        surfaces.push(HomeSurface {
-            surface_id: surface_id.to_owned(),
-            kind,
-            status: NavigationStatus::Available,
-            title_html: title.to_owned(),
-            title_text: title.to_owned(),
-            target: Some(TargetToken::new(&InternalTarget::MenuItem {
-                surface_id: surface_id.to_owned(),
-                item_id: "root".to_owned(),
-            })?),
-            diagnostics: Vec::new(),
-        });
-    }
-    Ok(())
 }
 
 fn deferred_surface(surface_id: &str, diagnostics: Vec<Diagnostic>) -> NavigationSurface {

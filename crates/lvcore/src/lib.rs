@@ -18,6 +18,7 @@ pub mod lved_sqlite;
 pub mod multiview;
 pub mod navigation;
 pub mod package;
+mod plist_xml;
 pub mod render;
 pub mod resources;
 pub mod search;

@@ -4,6 +4,7 @@ use quick_xml::events::{BytesStart, Event};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::plist_xml::{PlistValue, parse_xml_plist};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SsedPanelDataRef {
@@ -25,6 +26,8 @@ pub struct SsedPanelInlineCell {
     pub label: String,
     pub ref_id: String,
     pub action_verb: String,
+    pub target_block: Option<u32>,
+    pub target_offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +73,11 @@ struct CurrentCell {
 pub fn parse_panel_xml_bytes(data: &[u8]) -> Result<SsedPanelXml> {
     let text = decode_xml_bytes(data);
     parse_panel_xml(&text)
+}
+
+pub fn parse_panel_plist_bytes(data: &[u8], source_label: &str) -> Result<SsedPanelXml> {
+    let plist = parse_xml_plist(data, source_label)?;
+    parse_panel_plist_value(&plist)
 }
 
 pub fn parse_panel_xml(xml: &str) -> Result<SsedPanelXml> {
@@ -328,8 +336,272 @@ fn push_inline_cell(
         label,
         ref_id: cell.ref_id,
         action_verb: cell.action_verb,
+        target_block: None,
+        target_offset: None,
     });
     panel.cell_index += 1;
+}
+
+fn parse_panel_plist_value(value: &PlistValue) -> Result<SsedPanelXml> {
+    let mut parsed = SsedPanelXml {
+        data_refs: Vec::new(),
+        inline_cells: Vec::new(),
+    };
+    if let Some(dict) = value.as_dict()
+        && let Some(panels) = dict.get("panel").and_then(PlistValue::as_dict)
+    {
+        for (panel_id, panel_value) in panels {
+            let Some(panel) = panel_value.as_dict() else {
+                continue;
+            };
+            parse_mac_panel_plist_panel(&mut parsed, panel_id, panel);
+        }
+        return Ok(parsed);
+    }
+    if let Some(items) = plist_root_menu_items(value) {
+        parse_mobile_menu_plist_items(&mut parsed, "root", "menu", "Top", &items);
+        return Ok(parsed);
+    }
+    Ok(parsed)
+}
+
+fn parse_mac_panel_plist_panel(
+    parsed: &mut SsedPanelXml,
+    panel_id: &str,
+    panel: &std::collections::BTreeMap<String, PlistValue>,
+) {
+    let panel_type = plist_string(panel, &["paneltype", "type"]);
+    let title = plist_string(panel, &["title", "item", "text"]);
+    let columns = plist_i64(panel, "count_x")
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0);
+    let data_items = plist_data_items(panel);
+    let mut cell_index = 0u32;
+    for data in data_items {
+        if let Some(filename) = plist_string_opt(data, &["filename", "path"]) {
+            parsed.data_refs.push(SsedPanelDataRef {
+                panel_id: panel_id.to_owned(),
+                panel_type: panel_type.clone(),
+                title: title.clone(),
+                filename,
+                data_type: plist_string_opt(data, &["type"]).unwrap_or_else(|| "bin".to_owned()),
+            });
+            continue;
+        }
+        if let Some(cells) = data.get("cell").and_then(PlistValue::as_array) {
+            for cell in cells.iter().filter_map(PlistValue::as_dict) {
+                push_plist_inline_cell(
+                    parsed,
+                    PlistInlineCellContext {
+                        panel_id,
+                        panel_type: &panel_type,
+                        title: &title,
+                        columns,
+                        cell_index,
+                    },
+                    cell,
+                );
+                cell_index = cell_index.saturating_add(1);
+            }
+            continue;
+        }
+        push_plist_inline_cell(
+            parsed,
+            PlistInlineCellContext {
+                panel_id,
+                panel_type: &panel_type,
+                title: &title,
+                columns,
+                cell_index,
+            },
+            data,
+        );
+        cell_index = cell_index.saturating_add(1);
+    }
+}
+
+fn parse_mobile_menu_plist_items(
+    parsed: &mut SsedPanelXml,
+    panel_id: &str,
+    panel_type: &str,
+    title: &str,
+    items: &[PlistValue],
+) {
+    let mut cell_index = 0u32;
+    for (index, item) in items.iter().enumerate() {
+        let Some(dict) = item.as_dict() else {
+            continue;
+        };
+        let label = plist_string(dict, &["item", "text", "title", "label"]);
+        if label.trim().is_empty()
+            && dict.get("child").and_then(PlistValue::as_array).is_none()
+            && plist_string_opt(dict, &["path"]).is_none()
+            && !has_non_zero_address(dict)
+        {
+            continue;
+        }
+        let child_panel_id = format!("{panel_id}.{index:04}");
+        let has_children = dict
+            .get("child")
+            .and_then(PlistValue::as_array)
+            .is_some_and(|children| !children.is_empty());
+        let path = plist_string_opt(dict, &["path"]);
+        let child_title = label.clone();
+        let ref_id = if has_children || path.is_some() {
+            child_panel_id.clone()
+        } else {
+            String::new()
+        };
+        let (row, column) = (Some(cell_index), Some(0));
+        parsed.inline_cells.push(SsedPanelInlineCell {
+            panel_id: panel_id.to_owned(),
+            panel_type: panel_type.to_owned(),
+            title: title.to_owned(),
+            cell_index,
+            row,
+            column,
+            label,
+            ref_id,
+            action_verb: String::new(),
+            target_block: plist_u32(dict, "block").filter(|value| *value > 0),
+            target_offset: plist_u32(dict, "offset"),
+        });
+        cell_index = cell_index.saturating_add(1);
+        if let Some(path) = path {
+            parsed.data_refs.push(SsedPanelDataRef {
+                panel_id: child_panel_id.clone(),
+                panel_type: "contents".to_owned(),
+                title: plist_string(dict, &["item", "text", "title", "label"]),
+                filename: mobile_panel_bin_filename(&path),
+                data_type: "bin".to_owned(),
+            });
+        }
+        if let Some(children) = dict.get("child").and_then(PlistValue::as_array) {
+            parse_mobile_menu_plist_items(parsed, &child_panel_id, "menu", &child_title, children);
+        }
+    }
+}
+
+struct PlistInlineCellContext<'a> {
+    panel_id: &'a str,
+    panel_type: &'a str,
+    title: &'a str,
+    columns: Option<u32>,
+    cell_index: u32,
+}
+
+fn push_plist_inline_cell(
+    parsed: &mut SsedPanelXml,
+    context: PlistInlineCellContext<'_>,
+    cell: &std::collections::BTreeMap<String, PlistValue>,
+) {
+    let label = plist_string(cell, &["text", "title", "item", "label"]);
+    let ref_id = plist_string(cell, &["ref"]);
+    let action_verb = plist_string(cell, &["action_verb", "action"]);
+    if label.trim().is_empty() && ref_id.is_empty() && action_verb.is_empty() {
+        return;
+    }
+    let (row, column) = if let Some(columns) = context.columns {
+        (
+            Some(context.cell_index / columns),
+            Some(context.cell_index % columns),
+        )
+    } else {
+        (None, None)
+    };
+    parsed.inline_cells.push(SsedPanelInlineCell {
+        panel_id: context.panel_id.to_owned(),
+        panel_type: context.panel_type.to_owned(),
+        title: context.title.to_owned(),
+        cell_index: context.cell_index,
+        row,
+        column,
+        label,
+        ref_id,
+        action_verb,
+        target_block: plist_u32(cell, "block").filter(|value| *value > 0),
+        target_offset: plist_u32(cell, "offset"),
+    });
+}
+
+fn plist_root_menu_items(value: &PlistValue) -> Option<Vec<PlistValue>> {
+    if let Some(items) = value.as_array() {
+        return Some(items.to_vec());
+    }
+    let dict = value.as_dict()?;
+    if dict.values().all(|value| value.as_dict().is_some()) {
+        let mut items = dict
+            .iter()
+            .filter_map(|(key, value)| {
+                value
+                    .as_dict()
+                    .map(|dict| (plist_numeric_sort_key(key), PlistValue::Dict(dict.clone())))
+            })
+            .collect::<Vec<_>>();
+        items.sort_by(|left, right| left.0.cmp(&right.0));
+        return Some(items.into_iter().map(|(_, value)| value).collect());
+    }
+    None
+}
+
+fn plist_data_items(
+    panel: &std::collections::BTreeMap<String, PlistValue>,
+) -> Vec<&std::collections::BTreeMap<String, PlistValue>> {
+    let Some(data) = panel.get("data") else {
+        return Vec::new();
+    };
+    if let Some(dict) = data.as_dict() {
+        return vec![dict];
+    }
+    data.as_array()
+        .map(|items| items.iter().filter_map(PlistValue::as_dict).collect())
+        .unwrap_or_default()
+}
+
+fn plist_string(dict: &std::collections::BTreeMap<String, PlistValue>, keys: &[&str]) -> String {
+    plist_string_opt(dict, keys).unwrap_or_default()
+}
+
+fn plist_string_opt(
+    dict: &std::collections::BTreeMap<String, PlistValue>,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        dict.get(*key)
+            .and_then(PlistValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+fn plist_i64(dict: &std::collections::BTreeMap<String, PlistValue>, key: &str) -> Option<i64> {
+    dict.get(key).and_then(PlistValue::as_i64)
+}
+
+fn plist_u32(dict: &std::collections::BTreeMap<String, PlistValue>, key: &str) -> Option<u32> {
+    plist_i64(dict, key).and_then(|value| u32::try_from(value).ok())
+}
+
+fn has_non_zero_address(dict: &std::collections::BTreeMap<String, PlistValue>) -> bool {
+    plist_u32(dict, "block").is_some_and(|value| value > 0)
+        || plist_u32(dict, "offset").is_some_and(|value| value > 0)
+}
+
+fn mobile_panel_bin_filename(path: &str) -> String {
+    let normalized = path.trim().trim_start_matches('/').replace('\\', "/");
+    let with_ext = if normalized.to_ascii_lowercase().ends_with(".bin") {
+        normalized
+    } else {
+        format!("{normalized}.bin")
+    };
+    format!("bin/{with_ext}")
+}
+
+fn plist_numeric_sort_key(key: &str) -> (u8, u32, &str) {
+    key.parse::<u32>()
+        .map(|value| (0, value, key))
+        .unwrap_or((1, u32::MAX, key))
 }
 
 fn decode_xml_bytes(data: &[u8]) -> String {

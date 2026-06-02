@@ -265,7 +265,7 @@ pub(super) fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capab
     if has_ssed_hanrei_casefolded(&storage) {
         capabilities.push(Capability::Hanrei);
     }
-    if has_any_casefolded(&storage, &["Panels.xml", "Panel"]) {
+    if has_ssed_panel_metadata_casefolded(root, &storage) {
         capabilities.push(Capability::Panels);
     }
     if catalog.has_role(SsedComponentRole::GaijiFull)
@@ -274,6 +274,35 @@ pub(super) fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capab
         capabilities.push(Capability::Gaiji);
     }
     capabilities
+}
+
+fn has_ssed_panel_metadata_casefolded(root: &Path, storage: &DirectoryStorage) -> bool {
+    if has_any_casefolded(
+        storage,
+        &[
+            "Panels.xml",
+            "Panels.plist",
+            "menu.plist",
+            "menu_.plist",
+            "menu_iPad.plist",
+        ],
+    ) {
+        return true;
+    }
+    let Some(parent) = root.parent() else {
+        return false;
+    };
+    [
+        "Panels.plist",
+        "menu.plist",
+        "menu_.plist",
+        "menu_iPad.plist",
+    ]
+    .iter()
+    .map(|name| parent.join(name))
+    .any(|candidate| {
+        regular_file_inside_root(parent, &candidate).unwrap_or(false) && candidate.is_file()
+    })
 }
 
 fn ssed_navigation_component_has_non_empty_surface(

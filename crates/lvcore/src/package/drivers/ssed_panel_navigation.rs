@@ -5,16 +5,24 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
     cell: &SsedPanelInlineCell,
     gaiji_policy: &GaijiPolicy,
 ) -> Result<PanelCell> {
+    let rich_label = package.ssed_rich_label_with_policy(&cell.label, gaiji_policy);
+    let mut diagnostics = rich_label.diagnostics;
     let target = if !cell.ref_id.is_empty() {
         Some(TargetToken::new(&InternalTarget::PanelCell {
             panel_id: cell.ref_id.clone(),
             row: 0,
             column: 0,
         })?)
+    } else if let Some(block) = cell.target_block {
+        ssed_panel_address_target(
+            package,
+            block,
+            cell.target_offset.unwrap_or(0),
+            &mut diagnostics,
+        )?
     } else {
         None
     };
-    let rich_label = package.ssed_rich_label_with_policy(&cell.label, gaiji_policy);
     Ok(PanelCell {
         panel_id: cell.panel_id.clone(),
         row: cell.row.unwrap_or(cell.cell_index),
@@ -22,7 +30,7 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
         label_html: rich_label.html,
         label_text: rich_label.text,
         target,
-        diagnostics: rich_label.diagnostics,
+        diagnostics,
     })
 }
 
@@ -50,7 +58,16 @@ fn ssed_panel_record_target(
     record: &SsedPanelBinRecord,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
-    if record.block == 0 && record.offset == 0 {
+    ssed_panel_address_target(package, record.block, record.offset, diagnostics)
+}
+
+fn ssed_panel_address_target(
+    package: &ReaderBookPackage,
+    block: u32,
+    offset: u32,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<TargetToken>> {
+    if block == 0 && offset == 0 {
         return Ok(None);
     }
     let Some(catalog) = &package.ssed_catalog else {
@@ -60,25 +77,22 @@ fn ssed_panel_record_target(
         ));
         return Ok(None);
     };
-    let Some(component) = catalog.component_for_address(record.block) else {
+    let Some(component) = catalog.component_for_address(block) else {
         diagnostics.push(Diagnostic::warning(
             "ssed_panel_target_unresolved",
             format!(
                 "Panel target block {} offset {} is outside declared components",
-                record.block, record.offset
+                block, offset
             ),
         ));
         return Ok(None);
     };
-    if component
-        .relative_offset(record.block, record.offset)
-        .is_none()
-    {
+    if component.relative_offset(block, offset).is_none() {
         diagnostics.push(Diagnostic::warning(
             "ssed_panel_target_invalid",
             format!(
                 "{} does not contain Panel target block {} offset {}",
-                component.filename, record.block, record.offset
+                component.filename, block, offset
             ),
         ));
         return Ok(None);
@@ -98,7 +112,7 @@ fn ssed_panel_record_target(
     }
     Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
         component: component.filename.clone(),
-        block: record.block,
-        offset: record.offset,
+        block,
+        offset,
     })?))
 }

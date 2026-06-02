@@ -263,14 +263,20 @@ impl NavigationProvider for ReaderBookPackage {
                         diagnostics: self.retained_ios_fts_deferred_diagnostics(),
                     });
                 }
-                push_surface_if_exists(
-                    &mut surfaces,
-                    &self.storage,
-                    "panels",
-                    NavigationSurfaceKind::Panel,
-                    "Panels",
-                    &["Panels.xml", "Panel"],
-                )?;
+                if self.has_ssed_panel_metadata()? {
+                    surfaces.push(HomeSurface {
+                        surface_id: "panels".to_owned(),
+                        kind: NavigationSurfaceKind::Panel,
+                        status: NavigationStatus::Available,
+                        title_html: "Panels".to_owned(),
+                        title_text: "Panels".to_owned(),
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: "panels".to_owned(),
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: Vec::new(),
+                    });
+                }
                 if self
                     .ssed_catalog
                     .as_ref()

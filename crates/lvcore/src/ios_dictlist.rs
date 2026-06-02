@@ -1,11 +1,8 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use quick_xml::Reader;
-use quick_xml::events::{BytesStart, Event};
-
-use crate::error::{Error, Result};
+use crate::error::Result;
+use crate::plist_xml::{PlistValue, parse_xml_plist};
 use crate::search::SearchMode;
 use crate::storage::regular_file_inside_root;
 
@@ -22,15 +19,6 @@ pub(crate) struct IosDictFtsPayload {
     pub dict_code: String,
     pub dict_id: Option<i64>,
     pub dictionary_name: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PlistValue {
-    Dict(BTreeMap<String, PlistValue>),
-    Array(Vec<PlistValue>),
-    String(String),
-    Bool(bool),
-    Integer,
 }
 
 pub(crate) fn discover_ios_dictlist_info(root: &Path) -> Result<Option<IosDictListInfo>> {
@@ -50,7 +38,7 @@ pub(crate) fn discover_ios_dictlist_info(root: &Path) -> Result<Option<IosDictLi
             continue;
         }
         let bytes = fs::read(&candidate)?;
-        let value = parse_xml_plist(&bytes)?;
+        let value = parse_xml_plist(&bytes, "DictList.plist")?;
         let plist_dir = candidate.parent().unwrap_or(root);
         let Some(info) = ios_dictlist_info_from_plist(plist_dir, &value)? else {
             continue;
@@ -211,241 +199,6 @@ fn advanced_search_mode_name(mode: &SearchMode) -> &str {
     match mode {
         SearchMode::Advanced(value) => value,
         _ => "",
-    }
-}
-
-fn parse_xml_plist(bytes: &[u8]) -> Result<PlistValue> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|error| Error::Driver(format!("DictList.plist is not UTF-8 XML: {error}")))?;
-    let mut reader = Reader::from_str(text);
-    reader.config_mut().trim_text(true);
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(event)) if event.name().as_ref() == b"plist" => {
-                return parse_plist_root(&mut reader);
-            }
-            Ok(Event::Decl(_)) | Ok(Event::DocType(_)) | Ok(Event::Comment(_)) => {}
-            Ok(Event::Eof) => {
-                return Err(Error::Driver(
-                    "DictList.plist ended before plist root".to_owned(),
-                ));
-            }
-            Err(error) => return Err(plist_xml_error(&reader, error)),
-            _ => {}
-        }
-    }
-}
-
-fn parse_plist_root(reader: &mut Reader<&[u8]>) -> Result<PlistValue> {
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(event)) => return parse_plist_value(reader, event),
-            Ok(Event::Empty(event)) => return parse_empty_plist_value(event),
-            Ok(Event::End(event)) if event.name().as_ref() == b"plist" => {
-                return Err(Error::Driver("empty DictList.plist".to_owned()));
-            }
-            Ok(Event::Comment(_)) => {}
-            Ok(Event::Eof) => {
-                return Err(Error::Driver(
-                    "DictList.plist ended inside plist root".to_owned(),
-                ));
-            }
-            Err(error) => return Err(plist_xml_error(reader, error)),
-            _ => {}
-        }
-    }
-}
-
-fn parse_plist_value(reader: &mut Reader<&[u8]>, event: BytesStart<'_>) -> Result<PlistValue> {
-    match event.name().as_ref() {
-        b"dict" => parse_plist_dict(reader),
-        b"array" => parse_plist_array(reader),
-        b"string" | b"key" => {
-            parse_text_value(reader, event.name().as_ref()).map(PlistValue::String)
-        }
-        b"integer" => {
-            let raw = parse_text_value(reader, b"integer")?;
-            let value = raw.trim().parse::<i64>().map_err(|error| {
-                Error::Driver(format!("invalid DictList.plist integer {raw:?}: {error}"))
-            })?;
-            let _value = value;
-            Ok(PlistValue::Integer)
-        }
-        b"true" => {
-            consume_until_end(reader, b"true")?;
-            Ok(PlistValue::Bool(true))
-        }
-        b"false" => {
-            consume_until_end(reader, b"false")?;
-            Ok(PlistValue::Bool(false))
-        }
-        name => Err(Error::Driver(format!(
-            "unsupported DictList.plist value element <{}>",
-            String::from_utf8_lossy(name)
-        ))),
-    }
-}
-
-fn parse_empty_plist_value(event: BytesStart<'_>) -> Result<PlistValue> {
-    match event.name().as_ref() {
-        b"array" => Ok(PlistValue::Array(Vec::new())),
-        b"dict" => Ok(PlistValue::Dict(BTreeMap::new())),
-        b"string" => Ok(PlistValue::String(String::new())),
-        b"integer" => Ok(PlistValue::Integer),
-        b"true" => Ok(PlistValue::Bool(true)),
-        b"false" => Ok(PlistValue::Bool(false)),
-        name => Err(Error::Driver(format!(
-            "unsupported empty DictList.plist value <{}>",
-            String::from_utf8_lossy(name)
-        ))),
-    }
-}
-
-fn parse_plist_dict(reader: &mut Reader<&[u8]>) -> Result<PlistValue> {
-    let mut rows = BTreeMap::new();
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(event)) if event.name().as_ref() == b"key" => {
-                let key = parse_text_value(reader, b"key")?;
-                let value = parse_next_value(reader)?;
-                rows.insert(key, value);
-            }
-            Ok(Event::End(event)) if event.name().as_ref() == b"dict" => {
-                return Ok(PlistValue::Dict(rows));
-            }
-            Ok(Event::Comment(_)) => {}
-            Ok(Event::Eof) => {
-                return Err(Error::Driver("DictList.plist ended inside dict".to_owned()));
-            }
-            Err(error) => return Err(plist_xml_error(reader, error)),
-            _ => {}
-        }
-    }
-}
-
-fn parse_plist_array(reader: &mut Reader<&[u8]>) -> Result<PlistValue> {
-    let mut rows = Vec::new();
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(event)) => rows.push(parse_plist_value(reader, event)?),
-            Ok(Event::Empty(event)) => rows.push(parse_empty_plist_value(event)?),
-            Ok(Event::End(event)) if event.name().as_ref() == b"array" => {
-                return Ok(PlistValue::Array(rows));
-            }
-            Ok(Event::Comment(_)) => {}
-            Ok(Event::Eof) => {
-                return Err(Error::Driver(
-                    "DictList.plist ended inside array".to_owned(),
-                ));
-            }
-            Err(error) => return Err(plist_xml_error(reader, error)),
-            _ => {}
-        }
-    }
-}
-
-fn parse_next_value(reader: &mut Reader<&[u8]>) -> Result<PlistValue> {
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(event)) => return parse_plist_value(reader, event),
-            Ok(Event::Empty(event)) => return parse_empty_plist_value(event),
-            Ok(Event::Comment(_)) => {}
-            Ok(Event::Eof) => {
-                return Err(Error::Driver(
-                    "DictList.plist ended before dict value".to_owned(),
-                ));
-            }
-            Err(error) => return Err(plist_xml_error(reader, error)),
-            _ => {}
-        }
-    }
-}
-
-fn parse_text_value(reader: &mut Reader<&[u8]>, expected_end: &[u8]) -> Result<String> {
-    let mut text = String::new();
-    loop {
-        match reader.read_event() {
-            Ok(Event::Text(event)) => {
-                let value = event.xml_content().map_err(|error| {
-                    Error::Driver(format!(
-                        "DictList.plist text decode error at byte {}: {error}",
-                        reader.buffer_position()
-                    ))
-                })?;
-                text.push_str(&value);
-            }
-            Ok(Event::CData(event)) => {
-                let value = event.xml_content().map_err(|error| {
-                    Error::Driver(format!(
-                        "DictList.plist CDATA decode error at byte {}: {error}",
-                        reader.buffer_position()
-                    ))
-                })?;
-                text.push_str(&value);
-            }
-            Ok(Event::End(event)) if event.name().as_ref() == expected_end => return Ok(text),
-            Ok(Event::Eof) => {
-                return Err(Error::Driver(format!(
-                    "DictList.plist ended inside <{}>",
-                    String::from_utf8_lossy(expected_end)
-                )));
-            }
-            Err(error) => return Err(plist_xml_error(reader, error)),
-            _ => {}
-        }
-    }
-}
-
-fn consume_until_end(reader: &mut Reader<&[u8]>, expected_end: &[u8]) -> Result<()> {
-    loop {
-        match reader.read_event() {
-            Ok(Event::End(event)) if event.name().as_ref() == expected_end => return Ok(()),
-            Ok(Event::Eof) => {
-                return Err(Error::Driver(format!(
-                    "DictList.plist ended inside <{}>",
-                    String::from_utf8_lossy(expected_end)
-                )));
-            }
-            Err(error) => return Err(plist_xml_error(reader, error)),
-            _ => {}
-        }
-    }
-}
-
-fn plist_xml_error(reader: &Reader<&[u8]>, error: quick_xml::Error) -> Error {
-    Error::Driver(format!(
-        "DictList.plist XML error at byte {}: {error}",
-        reader.buffer_position()
-    ))
-}
-
-impl PlistValue {
-    fn as_dict(&self) -> Option<&BTreeMap<String, PlistValue>> {
-        match self {
-            Self::Dict(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    fn as_array(&self) -> Option<&[PlistValue]> {
-        match self {
-            Self::Array(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    fn as_str(&self) -> Option<&str> {
-        match self {
-            Self::String(value) => Some(value),
-            _ => None,
-        }
-    }
-
-    fn as_bool(&self) -> Option<bool> {
-        match self {
-            Self::Bool(value) => Some(*value),
-            _ => None,
-        }
     }
 }
 
