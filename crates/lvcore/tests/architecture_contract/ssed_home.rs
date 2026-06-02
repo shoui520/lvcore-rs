@@ -1,6 +1,237 @@
 use super::common::*;
 
 #[test]
+fn ios_ssed_shell_with_known_retained_fts_dbc_opens_lved_search_payload() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("OXFPEU4");
+    fs::create_dir(&package_root).unwrap();
+    fs::write(package_root.join("OXFPEU4.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("HONMON.DIC"),
+        sseddata_literal_fixture(b"anchor"),
+    )
+    .unwrap();
+    let payload = package_root.join("OXFPEU4.dbc");
+    let key = lvcore::lved_sqlite::derive_android_lved_sqlcipher_key(750, "OXFPEU4");
+    {
+        let connection = Connection::open(&payload).unwrap();
+        lvcore::lved_sqlite::apply_sqlcipher_key(&connection, &key).unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text, media text);
+                insert into info values (1, 1, 'about.html', '<h1>About OXFPEU4</h1>', '');
+                create table content (id integer primary key, type integer, body text, media text);
+                insert into content values (100, 1, '<article><h1>Alpha</h1><p>retained body</p></article>', '');
+                create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                insert into list values (1, 100, 1, '', '<b>alpha</b>', '');
+                create virtual table search using fts4(forward, back, part, fts, advanced1, advanced2, filter);
+                insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                  values (1, 'alpha', 'ahpla', 'shared alpha', 'alpha body', '', '', '∥alpha∥');
+                ",
+            )
+            .unwrap();
+    }
+    fs::write(
+        root.path().join("DictList.plist"),
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>ItemArray</key><array><dict>
+    <key>DictFolder</key><string>OXFPEU4</string>
+    <key>DictName</key><string>iOS Retained Search Fixture</string>
+    <key>DictFtsDB</key><string>OXFPEU4/OXFPEU4.dbc</string>
+  </dict></array>
+  <key>StatusArray</key><array><dict>
+    <key>SearchMethod</key><array>
+      <dict><key>key</key><string>Forward</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>Backward</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>Literal</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>Part</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>All</string><key>use</key><true/></dict>
+    </array>
+  </dict></array>
+</dict></plist>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    assert_eq!(package.metadata().format_family, FormatFamily::Ssed);
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::NativeSearch)
+    );
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::PreservedHtml)
+    );
+    for mode in [
+        SearchMode::Exact,
+        SearchMode::Forward,
+        SearchMode::Backward,
+        SearchMode::Partial,
+        SearchMode::FullText,
+    ] {
+        assert!(package.metadata().search_modes.contains(&mode));
+    }
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "lved-list" && surface.status == NavigationStatus::Available
+    }));
+    assert!(
+        surfaces
+            .iter()
+            .all(|surface| surface.surface_id != "ios-retained-fts"),
+        "known retained iOS .dbc payload should not be exposed as deferred"
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "alp".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::LvedRow {
+            table,
+            row_id: 100,
+            ..
+        } if table == "content"
+    ));
+    let view = package
+        .render_target(&page.hits[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        view.display_html
+            .as_deref()
+            .unwrap()
+            .contains("retained body")
+    );
+}
+
+#[test]
+fn ios_ssed_shell_with_unknown_retained_fts_dbc_reports_deferred_search_payload() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("HONMON.DIC"),
+        sseddata_literal_fixture(b"anchor"),
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("DICT.dbc"),
+        b"encrypted retained database",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("DictList.plist"),
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>ItemArray</key><array><dict>
+    <key>DictName</key><string>iOS Retained Search Fixture</string>
+    <key>DictFtsDB</key><string>DICT/DICT.dbc</string>
+  </dict></array>
+  <key>StatusArray</key><array><dict>
+    <key>SearchMethod</key><array>
+      <dict><key>key</key><string>Forward</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>Backward</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>Literal</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>Part</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>All</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>Example</string><key>use</key><false/></dict>
+    </array>
+  </dict></array>
+</dict></plist>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    assert_eq!(
+        package.metadata().search_modes,
+        vec![
+            SearchMode::Exact,
+            SearchMode::Forward,
+            SearchMode::Backward,
+            SearchMode::Partial,
+            SearchMode::FullText,
+        ]
+    );
+    assert!(
+        !package
+            .metadata()
+            .capabilities
+            .contains(&Capability::NativeSearch),
+        "the encrypted retained iOS .dbc must not be advertised as implemented native search"
+    );
+    let surfaces = package.home_surfaces().unwrap();
+    let retained = surfaces
+        .iter()
+        .find(|surface| surface.surface_id == "ios-retained-fts")
+        .expect("retained iOS FTS payload should be visible as a deferred home surface");
+    assert_eq!(retained.status, NavigationStatus::Deferred);
+    assert!(retained.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ios_retained_fts_deferred"
+            && diagnostic
+                .context
+                .get("path")
+                .is_some_and(|path| path == "DICT/DICT.dbc")
+            && diagnostic
+                .context
+                .get("dict_code")
+                .is_some_and(|code| code == "DICT")
+            && diagnostic
+                .context
+                .get("exists")
+                .is_some_and(|value| value == "true")
+    }));
+
+    let opened = package.open_surface("ios-retained-fts").unwrap();
+    let NavigationSurface::Deferred { diagnostics, .. } = opened else {
+        panic!("retained iOS FTS surface should open as diagnostic-only deferred surface");
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ios_retained_fts_deferred")
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert!(page.hits.is_empty());
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ios_retained_fts_deferred"),
+        "search must fail honestly until the retained .dbc decryption path is understood"
+    );
+}
+
+#[test]
 fn ssed_home_surfaces_are_capability_based() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

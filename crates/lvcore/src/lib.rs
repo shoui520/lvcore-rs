@@ -12,6 +12,7 @@ pub mod error;
 pub mod gaiji;
 pub mod hourei;
 mod image;
+mod ios_dictlist;
 pub mod library;
 pub mod lved_sqlite;
 pub mod multiview;

@@ -16,8 +16,10 @@ use super::ssed_detection::{
 use super::{BookPackage, DetectedPackage, FormatFamily, PackageDriver};
 use crate::error::{Error, Result};
 use crate::hourei::HoureiStore;
-use crate::lved_sqlite::LvedSqliteStore;
+use crate::ios_dictlist::discover_ios_dictlist_info;
+use crate::lved_sqlite::{AndroidDictInfo, LvedSqliteStore};
 use crate::multiview::MultiviewStore;
+use crate::search::SearchMode;
 use crate::ssed::SsedCatalog;
 use crate::storage::{DirectoryStorage, StorageBackend, regular_file_inside_root};
 
@@ -51,19 +53,88 @@ impl SsedDriver {
         catalog: SsedCatalog,
     ) -> Result<Box<dyn BookPackage>> {
         let package_root = detection.root.clone();
-        let capabilities = ssed_capabilities(&catalog, &package_root);
-        let search_modes = ssed_search_modes(&catalog, &package_root);
+        let mut capabilities = ssed_capabilities(&catalog, &package_root);
+        let retained_ios_dictlist = discover_ios_dictlist_info(&package_root)?;
+        let mut search_modes = ssed_search_modes(&catalog, &package_root);
+        let mut retained_ios_unresolved = retained_ios_dictlist.clone();
+        let mut lved_store = None;
+        let mut lved_summary = None;
+        if search_modes.is_empty()
+            && let Some(info) = &retained_ios_dictlist
+            && let Some((store, summary, modes)) = open_retained_ios_lved_store(info)?
+        {
+            extend_unique_capabilities(&mut capabilities, lved_capabilities(&modes));
+            search_modes = modes;
+            lved_summary = Some(summary);
+            lved_store = Some(store);
+            retained_ios_unresolved = None;
+        }
+        if search_modes.is_empty()
+            && let Some(info) = &retained_ios_dictlist
+            && !info.fts_payloads.is_empty()
+        {
+            search_modes = info.search_modes.clone();
+        }
         Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
             capabilities,
             PackageStores {
                 ssed_catalog: Some(catalog),
+                lved_store,
+                lved_summary,
+                retained_ios_dictlist: retained_ios_unresolved,
                 gaiji_unicode_map: load_package_uni_gaiji_maps(&package_root),
                 search_modes,
                 ..Default::default()
             },
         )))
+    }
+}
+
+fn open_retained_ios_lved_store(
+    info: &crate::ios_dictlist::IosDictListInfo,
+) -> Result<
+    Option<(
+        LvedSqliteStore,
+        crate::lved_sqlite::LvedSqliteSummary,
+        Vec<SearchMode>,
+    )>,
+> {
+    for payload in &info.fts_payloads {
+        let Some(dict_id) = payload.dict_id else {
+            continue;
+        };
+        if !payload.absolute_path.is_file() || payload.dict_code.is_empty() {
+            continue;
+        }
+        let store = LvedSqliteStore::from_payload_with_derived_key_info(
+            payload.absolute_path.clone(),
+            AndroidDictInfo {
+                dict_id,
+                dict_code: payload.dict_code.clone(),
+                title: payload.dictionary_name.clone().unwrap_or_default(),
+                name: payload.dictionary_name.clone().unwrap_or_default(),
+                fonts: Vec::new(),
+            },
+        );
+        let Ok(summary) = store.summary() else {
+            continue;
+        };
+        let modes = store.search_modes()?;
+        return Ok(Some((store, summary, modes)));
+    }
+    Ok(None)
+}
+
+fn extend_unique_capabilities(
+    capabilities: &mut Vec<super::Capability>,
+    extra: Vec<super::Capability>,
+) {
+    for capability in extra {
+        if !capabilities.contains(&capability) {
+            capabilities.push(capability);
+        }
     }
 }
 

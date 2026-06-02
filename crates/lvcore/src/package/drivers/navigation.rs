@@ -1,5 +1,83 @@
 use super::*;
 
+impl ReaderBookPackage {
+    fn push_lved_sqlite_home_surfaces(&self, surfaces: &mut Vec<HomeSurface>) -> Result<()> {
+        let list_available = self
+            .lved_summary
+            .as_ref()
+            .is_some_and(|summary| summary.list_available);
+        let info_available = self
+            .lved_summary
+            .as_ref()
+            .is_some_and(|summary| summary.info_available);
+        let tree_available = self
+            .lved_summary
+            .as_ref()
+            .is_some_and(|summary| summary.tree_available);
+        surfaces.push(HomeSurface {
+            surface_id: "lved-list".to_owned(),
+            kind: NavigationSurfaceKind::TitleIndexBrowse,
+            status: if list_available {
+                NavigationStatus::Available
+            } else {
+                NavigationStatus::Missing
+            },
+            title_html: "LVED list".to_owned(),
+            title_text: "LVED list".to_owned(),
+            target: list_available
+                .then(|| {
+                    TargetToken::new(&InternalTarget::TitleIndexItem {
+                        surface_id: "lved-list".to_owned(),
+                        item_id: "root".to_owned(),
+                    })
+                })
+                .transpose()?,
+            diagnostics: Vec::new(),
+        });
+        surfaces.push(HomeSurface {
+            surface_id: "info".to_owned(),
+            kind: NavigationSurfaceKind::Info,
+            status: if info_available {
+                NavigationStatus::Available
+            } else {
+                NavigationStatus::Missing
+            },
+            title_html: "Info".to_owned(),
+            title_text: "Info".to_owned(),
+            target: info_available
+                .then(|| {
+                    TargetToken::new(&InternalTarget::MenuItem {
+                        surface_id: "info".to_owned(),
+                        item_id: "root".to_owned(),
+                    })
+                })
+                .transpose()?,
+            diagnostics: Vec::new(),
+        });
+        surfaces.push(HomeSurface {
+            surface_id: "lved-tree".to_owned(),
+            kind: NavigationSurfaceKind::LvedTree,
+            status: if tree_available {
+                NavigationStatus::Available
+            } else {
+                NavigationStatus::Missing
+            },
+            title_html: "LVED tree".to_owned(),
+            title_text: "LVED tree".to_owned(),
+            target: tree_available
+                .then(|| {
+                    TargetToken::new(&InternalTarget::MenuItem {
+                        surface_id: "lved-tree".to_owned(),
+                        item_id: "root".to_owned(),
+                    })
+                })
+                .transpose()?,
+            diagnostics: Vec::new(),
+        });
+        Ok(())
+    }
+}
+
 impl NavigationProvider for ReaderBookPackage {
     fn home_surfaces(&self) -> Result<Vec<HomeSurface>> {
         let mut surfaces = Vec::new();
@@ -168,6 +246,23 @@ impl NavigationProvider for ReaderBookPackage {
                         diagnostics,
                     });
                 }
+                if self.lved_store.is_some() {
+                    self.push_lved_sqlite_home_surfaces(&mut surfaces)?;
+                }
+                if !self.retained_ios_fts_payloads.is_empty() {
+                    surfaces.push(HomeSurface {
+                        surface_id: "ios-retained-fts".to_owned(),
+                        kind: NavigationSurfaceKind::Info,
+                        status: NavigationStatus::Deferred,
+                        title_html: "iOS retained FTS database".to_owned(),
+                        title_text: "iOS retained FTS database".to_owned(),
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: "ios-retained-fts".to_owned(),
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: self.retained_ios_fts_deferred_diagnostics(),
+                    });
+                }
                 push_surface_if_exists(
                     &mut surfaces,
                     &self.storage,
@@ -199,78 +294,7 @@ impl NavigationProvider for ReaderBookPackage {
                 }
             }
             FormatFamily::LvedSqlite3 => {
-                let list_available = self
-                    .lved_summary
-                    .as_ref()
-                    .is_some_and(|summary| summary.list_available);
-                let info_available = self
-                    .lved_summary
-                    .as_ref()
-                    .is_some_and(|summary| summary.info_available);
-                let tree_available = self
-                    .lved_summary
-                    .as_ref()
-                    .is_some_and(|summary| summary.tree_available);
-                surfaces.push(HomeSurface {
-                    surface_id: "lved-list".to_owned(),
-                    kind: NavigationSurfaceKind::TitleIndexBrowse,
-                    status: if list_available {
-                        NavigationStatus::Available
-                    } else {
-                        NavigationStatus::Missing
-                    },
-                    title_html: "LVED list".to_owned(),
-                    title_text: "LVED list".to_owned(),
-                    target: list_available
-                        .then(|| {
-                            TargetToken::new(&InternalTarget::TitleIndexItem {
-                                surface_id: "lved-list".to_owned(),
-                                item_id: "root".to_owned(),
-                            })
-                        })
-                        .transpose()?,
-                    diagnostics: Vec::new(),
-                });
-                surfaces.push(HomeSurface {
-                    surface_id: "info".to_owned(),
-                    kind: NavigationSurfaceKind::Info,
-                    status: if info_available {
-                        NavigationStatus::Available
-                    } else {
-                        NavigationStatus::Missing
-                    },
-                    title_html: "Info".to_owned(),
-                    title_text: "Info".to_owned(),
-                    target: info_available
-                        .then(|| {
-                            TargetToken::new(&InternalTarget::MenuItem {
-                                surface_id: "info".to_owned(),
-                                item_id: "root".to_owned(),
-                            })
-                        })
-                        .transpose()?,
-                    diagnostics: Vec::new(),
-                });
-                surfaces.push(HomeSurface {
-                    surface_id: "lved-tree".to_owned(),
-                    kind: NavigationSurfaceKind::LvedTree,
-                    status: if tree_available {
-                        NavigationStatus::Available
-                    } else {
-                        NavigationStatus::Missing
-                    },
-                    title_html: "LVED tree".to_owned(),
-                    title_text: "LVED tree".to_owned(),
-                    target: tree_available
-                        .then(|| {
-                            TargetToken::new(&InternalTarget::MenuItem {
-                                surface_id: "lved-tree".to_owned(),
-                                item_id: "root".to_owned(),
-                            })
-                        })
-                        .transpose()?,
-                    diagnostics: Vec::new(),
-                });
+                self.push_lved_sqlite_home_surfaces(&mut surfaces)?;
             }
             FormatFamily::LvlMultiView => {
                 surfaces.push(HomeSurface {
@@ -428,6 +452,19 @@ impl NavigationProvider for ReaderBookPackage {
             }
             (FormatFamily::Ssed, "hanrei") => {
                 self.open_ssed_hanrei_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::Ssed, "ios-retained-fts") => Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: self.retained_ios_fts_deferred_diagnostics(),
+            }),
+            (FormatFamily::Ssed, "lved-list") if self.lved_store.is_some() => {
+                self.open_lved_list_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::Ssed, "info") if self.lved_store.is_some() => {
+                self.open_lved_info_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::Ssed, "lved-tree") if self.lved_store.is_some() => {
+                self.open_lved_tree_surface(surface_id)
             }
             (FormatFamily::Ssed, "panels") => self.open_ssed_panel_surface(surface_id, options),
             (FormatFamily::Ssed, id) if id.starts_with("panels:") => {

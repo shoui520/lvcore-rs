@@ -191,6 +191,23 @@ pub struct LvedTreeIndex {
 }
 
 impl LvedSqliteStore {
+    pub fn from_payload_with_derived_key_info(
+        payload_path: PathBuf,
+        key_info: AndroidDictInfo,
+    ) -> Self {
+        Self {
+            payload_path,
+            key_file: None,
+            android_info: Some(key_info),
+            connection: default_lved_connection_cache(),
+            tree_indexes_cache: default_lved_tree_index_cache(),
+            tree_index_items_cache: default_lved_tree_index_items_cache(),
+            title_cache: default_lved_title_cache(),
+            schema_cache: default_lved_schema_cache(),
+            media_index_cache: default_lved_media_index_cache(),
+        }
+    }
+
     pub fn discover(root: &Path) -> Result<Option<Self>> {
         let Some(payload_path) = lved_payload_path(root)? else {
             return Ok(None);

@@ -130,6 +130,7 @@ use crate::gaiji::{
 };
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
 use crate::image::encode_png_rgba;
+use crate::ios_dictlist::{IosDictFtsPayload, IosDictListInfo};
 use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
 use crate::multiview::{MultiviewStore, parse_menu_data};
 use crate::navigation::{
@@ -239,6 +240,7 @@ pub struct ReaderBookPackage {
     lved_summary: Option<LvedSqliteSummary>,
     multiview_store: Option<MultiviewStore>,
     hourei_store: Option<HoureiStore>,
+    retained_ios_fts_payloads: Vec<IosDictFtsPayload>,
     gaiji_unicode_map: BTreeMap<String, String>,
     ssed_sidecar_body_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
@@ -249,12 +251,13 @@ pub struct ReaderBookPackage {
 }
 
 #[derive(Debug, Default)]
-pub struct PackageStores {
+pub(crate) struct PackageStores {
     pub ssed_catalog: Option<SsedCatalog>,
     pub lved_store: Option<LvedSqliteStore>,
     pub lved_summary: Option<LvedSqliteSummary>,
     pub multiview_store: Option<MultiviewStore>,
     pub hourei_store: Option<HoureiStore>,
+    pub retained_ios_dictlist: Option<IosDictListInfo>,
     pub search_modes: Vec<SearchMode>,
     pub gaiji_unicode_map: BTreeMap<String, String>,
 }
@@ -270,7 +273,7 @@ type PrefixDecryptFn = fn(&[u8], usize) -> Result<Vec<u8>>;
 type FileDecryptFn = fn(&Path, &Path) -> Result<()>;
 
 impl ReaderBookPackage {
-    pub fn new(
+    pub(crate) fn new(
         root: &Path,
         detected: DetectedPackage,
         capabilities: Vec<Capability>,
@@ -300,6 +303,11 @@ impl ReaderBookPackage {
             },
         };
         let routing_aliases = routing_aliases_for_package(detected.format_family, &stores);
+        let retained_ios_fts_payloads = stores
+            .retained_ios_dictlist
+            .as_ref()
+            .map(|info| info.fts_payloads.clone())
+            .unwrap_or_default();
         Self {
             root: root.to_path_buf(),
             storage: DirectoryStorage::new(root),
@@ -310,6 +318,7 @@ impl ReaderBookPackage {
             lved_summary: stores.lved_summary,
             multiview_store: stores.multiview_store,
             hourei_store: stores.hourei_store,
+            retained_ios_fts_payloads,
             gaiji_unicode_map: stores.gaiji_unicode_map,
             ssed_sidecar_body_resolvers: OnceLock::new(),
             ssed_index_body_boundaries: OnceLock::new(),
@@ -320,6 +329,35 @@ impl ReaderBookPackage {
 
     pub(super) fn book_id_for_hit(&self) -> BookId {
         self.metadata.book_id.clone()
+    }
+
+    pub(super) fn retained_ios_fts_deferred_diagnostics(&self) -> Vec<Diagnostic> {
+        self.retained_ios_fts_payloads
+            .iter()
+            .map(|payload| {
+                Diagnostic::warning(
+                    "ios_retained_fts_deferred",
+                    "iOS DictList.plist declares a DictFtsDB .dbc payload, but no usable derived-key LVED_SQLITE3 store was opened for it",
+                )
+                .with_context("path", payload.relative_path.clone())
+                .with_context("dict_code", payload.dict_code.clone())
+                .with_context(
+                    "dict_id",
+                    payload
+                        .dict_id
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                )
+                .with_context(
+                    "dictionary",
+                    payload.dictionary_name.clone().unwrap_or_default(),
+                )
+                .with_context(
+                    "exists",
+                    payload.absolute_path.is_file().to_string(),
+                )
+            })
+            .collect()
     }
 }
 
@@ -416,12 +454,9 @@ impl BookPackage for ReaderBookPackage {
 }
 
 fn routing_aliases_for_package(
-    format_family: FormatFamily,
+    _format_family: FormatFamily,
     stores: &PackageStores,
 ) -> Vec<BookAlias> {
-    if format_family != FormatFamily::LvedSqlite3 {
-        return Vec::new();
-    }
     stores
         .lved_store
         .as_ref()
