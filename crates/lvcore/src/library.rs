@@ -22,7 +22,7 @@ use crate::target::{InternalTarget, TargetToken};
 mod scope;
 
 use scope::{
-    parse_scoped_resource_href, scope_home_surfaces_resource_hrefs,
+    parse_scoped_resource_href, parse_target_href, scope_home_surfaces_resource_hrefs,
     scope_navigation_surface_resource_hrefs, scope_renderer_input_resource_hrefs,
     scope_resource_ref_href, scope_search_page_resource_hrefs, scope_target_window_resource_hrefs,
     scope_view_resource_hrefs,
@@ -372,6 +372,21 @@ impl BookLibrary {
         }
     }
 
+    /// Parse and route a reader-owned target URL emitted in `display_html`.
+    ///
+    /// The source `book_id` is still required because ordinary target tokens are
+    /// intentionally scoped by the current view; cross-book links then route
+    /// through loaded book aliases when the target itself declares that.
+    pub fn render_target_href_routed(
+        &self,
+        book_id: &BookId,
+        href: &str,
+        options: &RenderOptions,
+    ) -> Result<RoutedTargetView> {
+        let target = parse_target_href(href)?;
+        self.render_target_routed(book_id, &target, options)
+    }
+
     pub fn renderer_input_for_target(
         &self,
         book_id: &BookId,
@@ -459,6 +474,21 @@ impl BookLibrary {
             window,
             diagnostics: routed.diagnostics,
         })
+    }
+
+    /// Parse and route a reader-owned target URL emitted in `display_html`, then
+    /// expand the resolved target into a continuous-view window.
+    pub fn resolve_target_window_href_routed(
+        &self,
+        book_id: &BookId,
+        href: &str,
+        sequence_hint: Option<&SequenceHint>,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<RoutedTargetWindow> {
+        let target = parse_target_href(href)?;
+        self.resolve_target_window_routed(book_id, &target, sequence_hint, before, after, options)
     }
 
     pub fn resolve_resource(

@@ -8,6 +8,7 @@ use crate::render::{RendererInput, ResolvedTargetView};
 use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::SearchPage;
 use crate::sequence::TargetWindow;
+use crate::target::TargetToken;
 
 pub(super) fn scope_target_window_resource_hrefs(
     book_id: &BookId,
@@ -174,6 +175,22 @@ pub(super) fn parse_scoped_resource_href(href: &str) -> Result<(BookId, Resource
     Ok((BookId(book_id), ResourceToken::from_opaque(resource_token)))
 }
 
+pub(super) fn parse_target_href(href: &str) -> Result<TargetToken> {
+    let Some(rest) = href.strip_prefix("lvcore://target/") else {
+        return Err(Error::InvalidTargetHref);
+    };
+    let token = rest
+        .split_once(['?', '#'])
+        .map(|(target, _)| target)
+        .unwrap_or(rest);
+    if token.is_empty() || token.contains('/') {
+        return Err(Error::InvalidTargetHref);
+    }
+    let token = TargetToken::from_opaque(token);
+    token.decode()?;
+    Ok(token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +217,33 @@ mod tests {
             parse_scoped_resource_href("lvcore://resource/REFJSklSTjQ/token123#fig1").unwrap();
         assert_eq!(book_id, BookId("DAIJIRN4".to_owned()));
         assert_eq!(token, ResourceToken::from_opaque("token123"));
+    }
+
+    #[test]
+    fn parses_target_href_with_query_or_fragment_suffix() {
+        let token = TargetToken::new(&crate::target::InternalTarget::Unsupported {
+            reason: "target".to_owned(),
+        })
+        .unwrap();
+        let parsed =
+            parse_target_href(&format!("lvcore://target/{}?x=1#frag", token.as_str())).unwrap();
+        assert_eq!(parsed, token);
+    }
+
+    #[test]
+    fn rejects_invalid_target_hrefs() {
+        assert!(matches!(
+            parse_target_href("lvcore://resource/book/token"),
+            Err(Error::InvalidTargetHref)
+        ));
+        assert!(matches!(
+            parse_target_href("lvcore://target/"),
+            Err(Error::InvalidTargetHref)
+        ));
+        assert!(matches!(
+            parse_target_href("lvcore://target/not/a/token"),
+            Err(Error::InvalidTargetHref)
+        ));
     }
 
     #[test]

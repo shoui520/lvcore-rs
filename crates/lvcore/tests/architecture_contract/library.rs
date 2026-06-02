@@ -700,6 +700,15 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
         .iter()
         .find(|link| link.kind == TargetKind::LvedCrossBook)
         .expect("source entry should expose a typed cross-book LVED link");
+    let source_html = source_view.display_html.as_deref().unwrap();
+    let href_start = source_html
+        .find("lvcore://target/")
+        .expect("source entry should expose target hrefs in display HTML");
+    let target_href = source_html[href_start..]
+        .split('"')
+        .next()
+        .expect("target href should be quoted")
+        .to_owned();
 
     let routed = library
         .render_target_routed(
@@ -767,6 +776,17 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
             .any(|diagnostic| diagnostic.code == "lved_cross_book_routed")
     );
 
+    let routed_from_href = library
+        .render_target_href_routed(
+            &source_book_id,
+            &format!("{target_href}?from=webview#ignored"),
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(routed_from_href.book_id, destination_book_id);
+    assert_eq!(routed_from_href.view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(routed_from_href.view.scroll_anchor.as_deref(), Some("dest"));
+
     let window = library
         .resolve_target_window_routed(
             &source_book_id,
@@ -787,6 +807,23 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
             .iter()
             .any(|diagnostic| diagnostic.code == "lved_cross_book_routed")
     );
+
+    let window_from_href = library
+        .resolve_target_window_href_routed(
+            &source_book_id,
+            &target_href,
+            Some(&lvcore::SequenceHint::LvedListOrder),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window_from_href.book_id, destination_book_id);
+    assert_eq!(window_from_href.window.after.len(), 1);
+    assert_eq!(
+        window_from_href.window.after[0].title.as_deref(),
+        Some("beta")
+    );
 }
 
 #[test]
@@ -803,6 +840,26 @@ fn library_rejects_invalid_scoped_resource_hrefs() {
     assert!(matches!(
         library.resolve_scoped_resource_href("lvcore://resource/not-scoped"),
         Err(lvcore::Error::InvalidResourceHref)
+    ));
+    let book_id = lvcore::BookId("missing".to_owned());
+    assert!(matches!(
+        library.render_target_href_routed(
+            &book_id,
+            "https://example.test/target",
+            &RenderOptions::default(),
+        ),
+        Err(lvcore::Error::InvalidTargetHref)
+    ));
+    assert!(matches!(
+        library.resolve_target_window_href_routed(
+            &book_id,
+            "lvcore://target/not/a/token",
+            None,
+            0,
+            0,
+            &RenderOptions::default(),
+        ),
+        Err(lvcore::Error::InvalidTargetHref)
     ));
 }
 

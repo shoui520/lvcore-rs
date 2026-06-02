@@ -16,6 +16,9 @@ pub enum Error {
     #[error("invalid target token")]
     InvalidTargetToken,
 
+    #[error("invalid target href")]
+    InvalidTargetHref,
+
     #[error("invalid resource token")]
     InvalidResourceToken,
 
