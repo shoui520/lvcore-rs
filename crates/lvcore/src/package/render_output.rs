@@ -224,6 +224,7 @@ mod tests {
     #[test]
     fn generic_html_finalizer_inlines_resources_and_fragmentizes_targets() {
         let view = ResolvedTargetView {
+            href: String::new(),
             kind: ResolvedTargetKind::EntryBody,
             target: token("entry"),
             title: None,
@@ -265,6 +266,7 @@ mod tests {
     #[test]
     fn basic_text_finalizer_flattens_html_and_clears_visual_side_channels() {
         let view = ResolvedTargetView {
+            href: String::new(),
             kind: ResolvedTargetKind::EntryBody,
             target: token("entry"),
             title: None,

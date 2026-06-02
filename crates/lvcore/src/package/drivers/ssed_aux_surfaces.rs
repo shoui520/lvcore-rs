@@ -92,6 +92,7 @@ impl ReaderBookPackage {
                     file.fragment_kind.as_str()
                 );
                 Ok(NavigationItem {
+                    href: String::new(),
                     item_id: format!(
                         "{}:{}",
                         file.root_name,
@@ -166,6 +167,7 @@ impl ReaderBookPackage {
                     ));
                 }
                 children.push(NavigationNode {
+                    href: None,
                     node_id: format!("{}:{}", dat.relative_path, record.index),
                     label_html,
                     label_text: label.text,
@@ -176,6 +178,7 @@ impl ReaderBookPackage {
             }
             let category = dat.category.clone();
             nodes.push(NavigationNode {
+                href: None,
                 node_id: dat.relative_path,
                 label_html: escape_plain_label_html(&category),
                 label_text: category,
@@ -194,6 +197,7 @@ impl ReaderBookPackage {
             nodes.insert(
                 0,
                 NavigationNode {
+                    href: None,
                     node_id: "diagnostics".to_owned(),
                     label_html: "Diagnostics".to_owned(),
                     label_text: "Diagnostics".to_owned(),

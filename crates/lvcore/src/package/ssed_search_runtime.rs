@@ -113,6 +113,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
             .package
             .ssed_rich_label_with_policy(&title, &self.gaiji_policy);
         self.hits.push(SearchHit {
+            href: String::new(),
             book_id: self.package.book_id_for_hit(),
             target,
             title_html: label.html,
@@ -140,6 +141,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
                         .package
                         .ssed_rich_label_with_policy(&title, &self.gaiji_policy);
                     self.hits.push(SearchHit {
+                        href: String::new(),
                         book_id: self.package.book_id_for_hit(),
                         target,
                         title_html: label.html,

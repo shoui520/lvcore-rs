@@ -399,6 +399,7 @@ fn visual_capabilities_are_derived_from_html_and_resources() {
     .unwrap();
     let view = finalize_resolved_view(
         ResolvedTargetView {
+            href: String::new(),
             kind: ResolvedTargetKind::EntryBody,
             target,
             title: None,

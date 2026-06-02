@@ -36,6 +36,7 @@ impl ReaderBookPackage {
                     Some(self.normalize_lved_label_html(&hit.subtitle_html)?)
                 };
                 Ok(SearchHit {
+                    href: String::new(),
                     book_id: self.metadata.book_id.clone(),
                     target,
                     title_html,

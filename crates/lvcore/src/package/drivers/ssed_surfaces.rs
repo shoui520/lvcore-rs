@@ -24,6 +24,7 @@ impl ReaderBookPackage {
             Ok(None) => return Ok(None),
             Err(error) => {
                 return Ok(Some(HomeSurface {
+                    href: None,
                     surface_id: surface_id.to_owned(),
                     kind,
                     status: NavigationStatus::Deferred,
@@ -62,6 +63,7 @@ impl ReaderBookPackage {
         };
 
         Ok(Some(HomeSurface {
+            href: None,
             surface_id: surface_id.to_owned(),
             kind,
             status: if is_empty {
@@ -122,6 +124,7 @@ impl ReaderBookPackage {
                 }
             };
             items.push(NavigationItem {
+                href: String::new(),
                 item_id: format!("{}:{}", row.component, offset + index),
                 label_html: label.html,
                 label_text: label.text,

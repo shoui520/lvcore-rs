@@ -47,6 +47,8 @@ impl SearchQuery {
 pub struct SearchHit {
     pub book_id: BookId,
     pub target: TargetToken,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub href: String,
     pub title_html: String,
     pub title_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

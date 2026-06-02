@@ -25,6 +25,7 @@ impl ReaderBookPackage {
             match self.read_ssed_multi_descriptor(component) {
                 Ok(descriptor) if !descriptor.records.is_empty() => {
                     surfaces.push(HomeSurface {
+                        href: None,
                         surface_id: surface_id.clone(),
                         kind: NavigationSurfaceKind::MultiSelector,
                         status: NavigationStatus::Available,
@@ -38,6 +39,7 @@ impl ReaderBookPackage {
                     });
                 }
                 Ok(_) => surfaces.push(HomeSurface {
+                    href: None,
                     surface_id,
                     kind: NavigationSurfaceKind::MultiSelector,
                     status: NavigationStatus::Empty,
@@ -53,6 +55,7 @@ impl ReaderBookPackage {
                     ],
                 }),
                 Err(error) => surfaces.push(HomeSurface {
+                    href: None,
                     surface_id,
                     kind: NavigationSurfaceKind::MultiSelector,
                     status: NavigationStatus::Deferred,
@@ -279,6 +282,7 @@ impl ReaderBookPackage {
                 }
             };
             items.push(NavigationItem {
+                href: String::new(),
                 item_id: format!("{}:{}", row.component, offset + index),
                 label_html: label.html,
                 label_text: label.text,
@@ -325,6 +329,7 @@ impl ReaderBookPackage {
                 None
             };
             nodes.push(NavigationNode {
+                href: None,
                 node_id: format!("multi:{}:record:{}", descriptor_name, record.index),
                 label_html: rich_label.html,
                 label_text: rich_label.text,

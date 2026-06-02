@@ -741,6 +741,7 @@ fn rendered_search_resource_scan(
             label_html: hit.title_html.clone(),
             label_text: hit.title_text.clone(),
             target: hit.target.clone(),
+            href: hit.href.clone(),
             diagnostics: hit.diagnostics.clone(),
         })
         .collect::<Vec<_>>();

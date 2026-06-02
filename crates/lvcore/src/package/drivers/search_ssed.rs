@@ -164,6 +164,7 @@ impl ReaderBookPackage {
             let mut hit_diagnostics = label.diagnostics;
             hit_diagnostics.extend(hit.body.diagnostics);
             hits.push(SearchHit {
+                href: String::new(),
                 book_id: self.metadata.book_id.clone(),
                 target: TargetToken::new(&InternalTarget::SsedDenseAnchor {
                     anchor: hit.anchor_id,
@@ -222,6 +223,7 @@ impl ReaderBookPackage {
                     anchor: None,
                 })?;
                 hits.push(SearchHit {
+                    href: String::new(),
                     book_id: self.metadata.book_id.clone(),
                     target,
                     title_html: label.html,
@@ -499,6 +501,7 @@ impl ReaderBookPackage {
                 }
                 let label = self.ssed_rich_label_with_policy(&title, &label_policy);
                 hits.push(SearchHit {
+                    href: String::new(),
                     book_id: self.metadata.book_id.clone(),
                     target,
                     title_html: label.html,
@@ -677,6 +680,7 @@ impl ReaderBookPackage {
             }
             let label = self.ssed_rich_label_with_policy(&title, gaiji_policy);
             hits.push(SearchHit {
+                href: String::new(),
                 book_id: self.metadata.book_id.clone(),
                 target,
                 title_html: label.html,

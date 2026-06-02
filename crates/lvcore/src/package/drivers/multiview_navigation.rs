@@ -46,6 +46,7 @@ impl ReaderBookPackage {
                     format!("{} ({})", item.name, item.kana)
                 };
                 Ok(NavigationItem {
+                    href: String::new(),
                     item_id: item.code,
                     label_html: escape_plain_label_html(&label_text),
                     label_text,

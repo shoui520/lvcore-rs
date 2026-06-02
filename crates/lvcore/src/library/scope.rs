@@ -26,6 +26,7 @@ pub(super) fn scope_target_window_resource_hrefs(
 
 pub(super) fn scope_home_surfaces_resource_hrefs(book_id: &BookId, surfaces: &mut [HomeSurface]) {
     for surface in surfaces {
+        surface.href = surface.target.as_ref().map(TargetToken::href);
         surface.title_html = scope_resource_hrefs_in_html(book_id, &surface.title_html);
     }
 }
@@ -41,11 +42,13 @@ pub(super) fn scope_navigation_surface_resource_hrefs(
         }
         NavigationSurface::TitleIndexBrowse { items, .. } => {
             for item in items {
+                item.href = item.target.href();
                 item.label_html = scope_resource_hrefs_in_html(book_id, &item.label_html);
             }
         }
         NavigationSurface::Panel { cells, .. } => {
             for cell in cells {
+                cell.href = cell.target.as_ref().map(TargetToken::href);
                 cell.label_html = scope_resource_hrefs_in_html(book_id, &cell.label_html);
             }
         }
@@ -54,10 +57,14 @@ pub(super) fn scope_navigation_surface_resource_hrefs(
                 if let Some(resource) = &mut screen.background {
                     scope_resource_ref_href(book_id, resource);
                 }
+                for hotspot in &mut screen.hotspots {
+                    hotspot.href = hotspot.target.as_ref().map(TargetToken::href);
+                }
             }
         }
         NavigationSurface::InfoPages { pages, .. } => {
             for page in pages {
+                page.href = page.target.href();
                 page.label_html = scope_resource_hrefs_in_html(book_id, &page.label_html);
             }
         }
@@ -67,12 +74,14 @@ pub(super) fn scope_navigation_surface_resource_hrefs(
 
 fn scope_navigation_node_resource_hrefs(book_id: &BookId, nodes: &mut [NavigationNode]) {
     for node in nodes {
+        node.href = node.target.as_ref().map(TargetToken::href);
         node.label_html = scope_resource_hrefs_in_html(book_id, &node.label_html);
         scope_navigation_node_resource_hrefs(book_id, &mut node.children);
     }
 }
 
 pub(super) fn scope_view_resource_hrefs(book_id: &BookId, view: &mut ResolvedTargetView) {
+    view.href = view.target.href();
     if let Some(surface) = &mut view.surface {
         scope_navigation_surface_resource_hrefs(book_id, surface);
     }
@@ -112,6 +121,7 @@ fn scoped_resource_href(book_id: &BookId, token: &ResourceToken) -> String {
 
 pub(super) fn scope_search_page_resource_hrefs(book_id: &BookId, page: &mut SearchPage) {
     for hit in &mut page.hits {
+        hit.href = hit.target.href();
         hit.title_html = scope_resource_hrefs_in_html(book_id, &hit.title_html);
         if let Some(snippet_html) = &mut hit.snippet_html {
             *snippet_html = scope_resource_hrefs_in_html(book_id, snippet_html);
@@ -194,7 +204,22 @@ pub(super) fn parse_target_href(href: &str) -> Result<TargetToken> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostics::Diagnostic;
+    use crate::navigation::{
+        HomeSurface, NavigationItem, NavigationNode, NavigationStatus, NavigationSurface,
+        NavigationSurfaceKind, PanelCell, ScreenMenuHotspot, ScreenMenuRect, ScreenMenuScreen,
+    };
+    use crate::render::{ResolvedTargetKind, ResolvedTargetView};
     use crate::resources::ResourceKind;
+    use crate::search::{SearchHit, SearchPage};
+    use crate::target::InternalTarget;
+
+    fn target(label: &str) -> TargetToken {
+        TargetToken::new(&InternalTarget::Unsupported {
+            reason: label.to_owned(),
+        })
+        .unwrap()
+    }
 
     #[test]
     fn scopes_resource_href_without_swallowing_query_or_fragment() {
@@ -283,5 +308,162 @@ mod tests {
             resources[0].href.as_deref(),
             Some("lvcore://resource/U1NFRDpBUkNIU0lDNA/resource-token")
         );
+    }
+
+    #[test]
+    fn populates_public_target_hrefs_for_search_hits() {
+        let target = target("search-hit");
+        let mut page = SearchPage {
+            hits: vec![SearchHit {
+                href: String::new(),
+                book_id: BookId("SSED:TEST".to_owned()),
+                target: target.clone(),
+                title_html: "見出し".to_owned(),
+                title_text: "見出し".to_owned(),
+                snippet_html: None,
+                diagnostics: Vec::new(),
+            }],
+            next_cursor: None,
+            diagnostics: Vec::new(),
+        };
+
+        scope_search_page_resource_hrefs(&BookId("SSED:TEST".to_owned()), &mut page);
+
+        assert_eq!(page.hits[0].href, target.href());
+    }
+
+    #[test]
+    fn populates_public_target_hrefs_for_home_and_navigation_surfaces() {
+        let home_target = target("home");
+        let node_target = target("node");
+        let item_target = target("item");
+        let cell_target = target("cell");
+        let hotspot_target = target("hotspot");
+        let mut homes = vec![HomeSurface {
+            href: None,
+            surface_id: "menu".to_owned(),
+            kind: NavigationSurfaceKind::Menu,
+            status: NavigationStatus::Available,
+            title_html: "Menu".to_owned(),
+            title_text: "Menu".to_owned(),
+            target: Some(home_target.clone()),
+            diagnostics: Vec::new(),
+        }];
+        let mut menu = NavigationSurface::SimpleMenu {
+            surface_id: "menu".to_owned(),
+            nodes: vec![NavigationNode {
+                href: None,
+                node_id: "node".to_owned(),
+                label_html: "Node".to_owned(),
+                label_text: "Node".to_owned(),
+                target: Some(node_target.clone()),
+                diagnostics: Vec::new(),
+                children: Vec::new(),
+            }],
+            next_cursor: None,
+        };
+        let mut browse = NavigationSurface::TitleIndexBrowse {
+            surface_id: "title".to_owned(),
+            items: vec![NavigationItem {
+                href: String::new(),
+                item_id: "item".to_owned(),
+                label_html: "Item".to_owned(),
+                label_text: "Item".to_owned(),
+                target: item_target.clone(),
+                diagnostics: Vec::new(),
+            }],
+            next_cursor: None,
+        };
+        let mut panel = NavigationSurface::Panel {
+            surface_id: "panel".to_owned(),
+            cells: vec![PanelCell {
+                href: None,
+                panel_id: "panel".to_owned(),
+                row: 1,
+                column: 2,
+                label_html: "Cell".to_owned(),
+                label_text: "Cell".to_owned(),
+                target: Some(cell_target.clone()),
+                diagnostics: Vec::new(),
+            }],
+        };
+        let mut screen = NavigationSurface::ScreenMenu {
+            surface_id: "screen".to_owned(),
+            screens: vec![ScreenMenuScreen {
+                screen_id: "screen-1".to_owned(),
+                screen_index: 0,
+                width: None,
+                height: None,
+                background: None,
+                hotspots: vec![ScreenMenuHotspot {
+                    href: None,
+                    hotspot_id: "hotspot".to_owned(),
+                    rect: ScreenMenuRect {
+                        x: 0,
+                        y: 0,
+                        width: 10,
+                        height: 10,
+                    },
+                    target: Some(hotspot_target.clone()),
+                    target_kind: None,
+                    diagnostics: Vec::new(),
+                }],
+                diagnostics: Vec::new(),
+            }],
+            stats: Default::default(),
+            diagnostics: Vec::new(),
+        };
+
+        let book_id = BookId("SSED:TEST".to_owned());
+        scope_home_surfaces_resource_hrefs(&book_id, &mut homes);
+        scope_navigation_surface_resource_hrefs(&book_id, &mut menu);
+        scope_navigation_surface_resource_hrefs(&book_id, &mut browse);
+        scope_navigation_surface_resource_hrefs(&book_id, &mut panel);
+        scope_navigation_surface_resource_hrefs(&book_id, &mut screen);
+
+        assert_eq!(homes[0].href.as_deref(), Some(home_target.href().as_str()));
+        let NavigationSurface::SimpleMenu { nodes, .. } = menu else {
+            panic!("expected menu");
+        };
+        assert_eq!(nodes[0].href.as_deref(), Some(node_target.href().as_str()));
+        let NavigationSurface::TitleIndexBrowse { items, .. } = browse else {
+            panic!("expected title browse");
+        };
+        assert_eq!(items[0].href, item_target.href());
+        let NavigationSurface::Panel { cells, .. } = panel else {
+            panic!("expected panel");
+        };
+        assert_eq!(cells[0].href.as_deref(), Some(cell_target.href().as_str()));
+        let NavigationSurface::ScreenMenu { screens, .. } = screen else {
+            panic!("expected screen menu");
+        };
+        assert_eq!(
+            screens[0].hotspots[0].href.as_deref(),
+            Some(hotspot_target.href().as_str())
+        );
+    }
+
+    #[test]
+    fn populates_public_target_href_for_resolved_views() {
+        let target = target("view");
+        let mut view = ResolvedTargetView {
+            href: String::new(),
+            kind: ResolvedTargetKind::EntryBody,
+            target: target.clone(),
+            title: Some("Entry".to_owned()),
+            display_html: None,
+            basic_text: None,
+            scroll_anchor: None,
+            surface: None,
+            resources: Vec::new(),
+            links: Vec::new(),
+            capabilities: Vec::new(),
+            diagnostics: vec![Diagnostic::info("test", "test")],
+            debug_trace: None,
+        };
+
+        scope_view_resource_hrefs(&BookId("SSED:TEST".to_owned()), &mut view);
+
+        assert_eq!(view.href, target.href());
     }
 }

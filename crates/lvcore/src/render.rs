@@ -157,6 +157,8 @@ pub enum ResolvedTargetKind {
 pub struct ResolvedTargetView {
     pub kind: ResolvedTargetKind,
     pub target: TargetToken,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub href: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Reader-ready HTML after lvcore has normalized package links/resources.
@@ -189,6 +191,7 @@ impl ResolvedTargetView {
         Self {
             kind: ResolvedTargetKind::Deferred,
             target,
+            href: String::new(),
             title: Some(title.into()),
             display_html: None,
             basic_text: None,
@@ -210,6 +213,7 @@ impl ResolvedTargetView {
         Self {
             kind: ResolvedTargetKind::Unsupported,
             target,
+            href: String::new(),
             title: Some(title.into()),
             display_html: None,
             basic_text: None,

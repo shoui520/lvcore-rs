@@ -15,6 +15,7 @@ impl ReaderBookPackage {
             .as_ref()
             .is_some_and(|summary| summary.tree_available);
         surfaces.push(HomeSurface {
+            href: None,
             surface_id: "lved-list".to_owned(),
             kind: NavigationSurfaceKind::TitleIndexBrowse,
             status: if list_available {
@@ -35,6 +36,7 @@ impl ReaderBookPackage {
             diagnostics: Vec::new(),
         });
         surfaces.push(HomeSurface {
+            href: None,
             surface_id: "info".to_owned(),
             kind: NavigationSurfaceKind::Info,
             status: if info_available {
@@ -55,6 +57,7 @@ impl ReaderBookPackage {
             diagnostics: Vec::new(),
         });
         surfaces.push(HomeSurface {
+            href: None,
             surface_id: "lved-tree".to_owned(),
             kind: NavigationSurfaceKind::LvedTree,
             status: if tree_available {
@@ -109,6 +112,7 @@ impl NavigationProvider for ReaderBookPackage {
                     || self.storage.exists(Path::new("SCRMENU.DIC"))?
                 {
                     surfaces.push(HomeSurface {
+                        href: None,
                         surface_id: "screen-menu".to_owned(),
                         kind: NavigationSurfaceKind::ScreenMenu,
                         status: NavigationStatus::Available,
@@ -126,6 +130,7 @@ impl NavigationProvider for ReaderBookPackage {
                 }
                 if self.storage.exists(Path::new("encyclop.idx"))? {
                     surfaces.push(HomeSurface {
+            href: None,
                         surface_id: "encyclopedia".to_owned(),
                         kind: NavigationSurfaceKind::EncyclopediaIndex,
                         status: NavigationStatus::Available,
@@ -143,6 +148,7 @@ impl NavigationProvider for ReaderBookPackage {
                 }
                 if has_britannica_whatday_files(&self.root)? {
                     surfaces.push(HomeSurface {
+                        href: None,
                         surface_id: "britannica-whatday".to_owned(),
                         kind: NavigationSurfaceKind::Info,
                         status: NavigationStatus::Available,
@@ -160,6 +166,7 @@ impl NavigationProvider for ReaderBookPackage {
                 }
                 if has_britannica_top_dat_files(&self.root)? {
                     surfaces.push(HomeSurface {
+                        href: None,
                         surface_id: "britannica-top".to_owned(),
                         kind: NavigationSurfaceKind::AuxiliaryIndex,
                         status: NavigationStatus::Available,
@@ -193,6 +200,7 @@ impl NavigationProvider for ReaderBookPackage {
                     };
                     let surface_id = format!("aux-index:{}", spec.index);
                     surfaces.push(HomeSurface {
+                        href: None,
                         surface_id: surface_id.clone(),
                         kind: NavigationSurfaceKind::AuxiliaryIndex,
                         status: NavigationStatus::Available,
@@ -212,6 +220,7 @@ impl NavigationProvider for ReaderBookPackage {
                     let title = spec.info.clone();
                     let surface_id = format!("numeric-aux:{}", spec.info);
                     surfaces.push(HomeSurface {
+            href: None,
                         surface_id: surface_id.clone(),
                         kind: NavigationSurfaceKind::AuxiliaryIndex,
                         status: NavigationStatus::Available,
@@ -234,6 +243,7 @@ impl NavigationProvider for ReaderBookPackage {
                         .flat_map(|page| page.diagnostics.clone())
                         .collect::<Vec<_>>();
                     surfaces.push(HomeSurface {
+                        href: None,
                         surface_id: "hanrei".to_owned(),
                         kind: NavigationSurfaceKind::Hanrei,
                         status: NavigationStatus::Available,
@@ -251,6 +261,7 @@ impl NavigationProvider for ReaderBookPackage {
                 }
                 if !self.retained_ios_fts_payloads.is_empty() {
                     surfaces.push(HomeSurface {
+                        href: None,
                         surface_id: "ios-retained-fts".to_owned(),
                         kind: NavigationSurfaceKind::Info,
                         status: NavigationStatus::Deferred,
@@ -265,6 +276,7 @@ impl NavigationProvider for ReaderBookPackage {
                 }
                 if self.has_ssed_panel_metadata()? {
                     surfaces.push(HomeSurface {
+                        href: None,
                         surface_id: "panels".to_owned(),
                         kind: NavigationSurfaceKind::Panel,
                         status: NavigationStatus::Available,
@@ -283,6 +295,7 @@ impl NavigationProvider for ReaderBookPackage {
                     .is_some_and(|catalog| has_decodable_ssed_index_rows(catalog, &self.storage))
                 {
                     surfaces.push(HomeSurface {
+            href: None,
                         surface_id: "title-index".to_owned(),
                         kind: NavigationSurfaceKind::TitleIndexBrowse,
                         status: NavigationStatus::Available,
@@ -304,6 +317,7 @@ impl NavigationProvider for ReaderBookPackage {
             }
             FormatFamily::LvlMultiView => {
                 surfaces.push(HomeSurface {
+                    href: None,
                     surface_id: "menuData".to_owned(),
                     kind: NavigationSurfaceKind::MultiviewTree,
                     status: NavigationStatus::Available,
@@ -321,6 +335,7 @@ impl NavigationProvider for ReaderBookPackage {
                     let surface_id =
                         super::hourei_navigation::hourei_kana_panel_surface_id().to_owned();
                     surfaces.push(HomeSurface {
+                        href: None,
                         surface_id: surface_id.clone(),
                         kind: NavigationSurfaceKind::Panel,
                         status: NavigationStatus::Available,
@@ -337,6 +352,7 @@ impl NavigationProvider for ReaderBookPackage {
                     });
                 }
                 surfaces.push(HomeSurface {
+                    href: None,
                     surface_id: "law-tree".to_owned(),
                     kind: NavigationSurfaceKind::LawTree,
                     status: if self.hourei_store.is_some() {
@@ -369,6 +385,7 @@ impl NavigationProvider for ReaderBookPackage {
             FormatFamily::Unknown => {}
         }
         surfaces.push(HomeSurface {
+            href: None,
             surface_id: "search".to_owned(),
             kind: NavigationSurfaceKind::SearchFallback,
             status: NavigationStatus::Available,

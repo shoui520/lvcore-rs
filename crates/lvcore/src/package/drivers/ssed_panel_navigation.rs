@@ -24,6 +24,7 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
         None
     };
     Ok(PanelCell {
+        href: None,
         panel_id: cell.panel_id.clone(),
         row: cell.row.unwrap_or(cell.cell_index),
         column: cell.column.unwrap_or(0),
@@ -43,6 +44,7 @@ pub(super) fn ssed_panel_bin_record_to_navigation_cell(
 ) -> Result<PanelCell> {
     let rich_label = package.ssed_rich_label_with_policy(&record.text, gaiji_policy);
     Ok(PanelCell {
+        href: None,
         panel_id: data_ref.panel_id.clone(),
         row: record.index,
         column: 0,

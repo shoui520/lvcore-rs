@@ -57,6 +57,7 @@ impl ReaderBookPackage {
             .map(|law| {
                 let label = hourei_law_node_label(&law);
                 Ok(NavigationItem {
+                    href: String::new(),
                     item_id: format!("law:{}", law.hore_id),
                     label_html: escape_hourei_label_html(&label),
                     label_text: label,
@@ -98,6 +99,7 @@ impl ReaderBookPackage {
                     .map(|law| {
                         let label = hourei_law_node_label(&law);
                         Ok(NavigationNode {
+                            href: None,
                             node_id: format!("law:{}", law.hore_id),
                             label_html: escape_hourei_label_html(&label),
                             label_text: label,
@@ -111,6 +113,7 @@ impl ReaderBookPackage {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(NavigationNode {
+                    href: None,
                     node_id: format!("category:{}", category.id),
                     label_html: escape_hourei_label_html(&category.name),
                     label_text: category.name,
@@ -188,6 +191,7 @@ fn hourei_kana_panel_row_cells(
             })
         });
         cells.push(PanelCell {
+            href: None,
             panel_id: panel_id.to_owned(),
             row,
             column,

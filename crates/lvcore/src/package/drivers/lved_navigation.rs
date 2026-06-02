@@ -49,6 +49,7 @@ impl ReaderBookPackage {
                     format!("{} {}", row.title_text, html_label_text(&row.subtitle_html))
                 };
                 Ok(NavigationItem {
+                    href: String::new(),
                     item_id: row.list_id.to_string(),
                     label_html,
                     label_text,
@@ -108,6 +109,7 @@ impl ReaderBookPackage {
             .into_iter()
             .map(|page| {
                 Ok(NavigationItem {
+                    href: String::new(),
                     item_id: page.name,
                     label_html: sanitize_rich_label_html(&page.title_html),
                     label_text: page.title_text,

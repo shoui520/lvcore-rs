@@ -15,6 +15,7 @@ impl ReaderBookPackage {
         let title = resource_ref.label.clone();
         if options.mode == RenderMode::BasicText {
             return Ok(ResolvedTargetView {
+                href: String::new(),
                 kind: resolved_kind_for_package_html_path(path),
                 target,
                 title,
@@ -35,6 +36,7 @@ impl ReaderBookPackage {
         let mut diagnostics = resource_ref.diagnostics;
         diagnostics.append(&mut normalized.diagnostics);
         Ok(ResolvedTargetView {
+            href: String::new(),
             kind: resolved_kind_for_package_html_path(path),
             target,
             title,
@@ -69,6 +71,7 @@ impl ReaderBookPackage {
         let title = resource_ref.label.clone();
         if options.mode == RenderMode::BasicText {
             return Ok(ResolvedTargetView {
+                href: String::new(),
                 kind: ResolvedTargetKind::InfoPage,
                 target,
                 title,
@@ -89,6 +92,7 @@ impl ReaderBookPackage {
         let mut diagnostics = resource_ref.diagnostics;
         diagnostics.append(&mut normalized.diagnostics);
         Ok(ResolvedTargetView {
+            href: String::new(),
             kind: ResolvedTargetKind::InfoPage,
             target,
             title,
@@ -120,6 +124,7 @@ impl ReaderBookPackage {
         let kind = resolved_kind_for_package_html_path(&format!("{chm_path}/{entry_path}"));
         if options.mode == RenderMode::BasicText {
             return Ok(ResolvedTargetView {
+                href: String::new(),
                 kind,
                 target,
                 title,
@@ -140,6 +145,7 @@ impl ReaderBookPackage {
         let mut diagnostics = resource_ref.diagnostics;
         diagnostics.append(&mut normalized.diagnostics);
         Ok(ResolvedTargetView {
+            href: String::new(),
             kind,
             target,
             title,

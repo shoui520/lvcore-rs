@@ -24,6 +24,7 @@ impl ReaderBookPackage {
             .into_iter()
             .map(|hit| {
                 Ok(SearchHit {
+                    href: String::new(),
                     book_id: self.metadata.book_id.clone(),
                     target: TargetToken::new(&InternalTarget::MultiviewHref {
                         href: hit.href,

@@ -51,6 +51,8 @@ pub struct HomeSurface {
     pub title_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetToken>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -109,6 +111,8 @@ pub struct NavigationNode {
     pub label_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetToken>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -138,6 +142,8 @@ pub struct ScreenMenuHotspot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetToken>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
@@ -157,6 +163,8 @@ pub struct NavigationItem {
     pub label_html: String,
     pub label_text: String,
     pub target: TargetToken,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub href: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -170,6 +178,8 @@ pub struct PanelCell {
     pub label_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetToken>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -181,6 +191,8 @@ pub struct NavigationTarget {
     pub label_html: String,
     pub label_text: String,
     pub target: TargetToken,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub href: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -232,6 +244,7 @@ impl NavigationSurface {
                 .flat_map(|screen| {
                     screen.hotspots.iter().filter_map(|hotspot| {
                         hotspot.target.as_ref().map(|target| NavigationTarget {
+                            href: String::new(),
                             surface_id: surface_id.clone(),
                             source_id: format!("{}:{}", screen.screen_id, hotspot.hotspot_id),
                             label_html: hotspot.hotspot_id.clone(),
@@ -247,6 +260,7 @@ impl NavigationSurface {
             } => items
                 .iter()
                 .map(|item| NavigationTarget {
+                    href: String::new(),
                     surface_id: surface_id.clone(),
                     source_id: item.item_id.clone(),
                     label_html: item.label_html.clone(),
@@ -259,6 +273,7 @@ impl NavigationSurface {
                 .iter()
                 .filter_map(|cell| {
                     cell.target.as_ref().map(|target| NavigationTarget {
+                        href: String::new(),
                         surface_id: surface_id.clone(),
                         source_id: format!("{}:{}:{}", cell.panel_id, cell.row, cell.column),
                         label_html: cell.label_html.clone(),
@@ -273,6 +288,7 @@ impl NavigationSurface {
             } => pages
                 .iter()
                 .map(|page| NavigationTarget {
+                    href: String::new(),
                     surface_id: surface_id.clone(),
                     source_id: page.item_id.clone(),
                     label_html: page.label_html.clone(),
@@ -347,6 +363,7 @@ fn collect_node_targets(
     for node in nodes {
         if let Some(target) = &node.target {
             targets.push(NavigationTarget {
+                href: String::new(),
                 surface_id: surface_id.to_owned(),
                 source_id: node.node_id.clone(),
                 label_html: node.label_html.clone(),
@@ -382,12 +399,14 @@ mod tests {
         let surface = NavigationSurface::HierarchicalTree {
             surface_id: "menuData".to_owned(),
             nodes: vec![NavigationNode {
+                href: None,
                 node_id: "root".to_owned(),
                 label_html: "Root".to_owned(),
                 label_text: "Root".to_owned(),
                 target: None,
                 diagnostics: Vec::new(),
                 children: vec![NavigationNode {
+                    href: None,
                     node_id: "child".to_owned(),
                     label_html: "Child".to_owned(),
                     label_text: "Child".to_owned(),

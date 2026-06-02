@@ -35,6 +35,7 @@ impl ReaderBookPackage {
             diagnostics.extend(surface_diagnostics.clone());
         }
         Ok(ResolvedTargetView {
+            href: String::new(),
             kind,
             target,
             title: title.or_else(|| Some(surface_id.to_owned())),
@@ -59,6 +60,7 @@ impl ReaderBookPackage {
             return Ok(None);
         };
         Ok(Some(ResolvedTargetView {
+            href: String::new(),
             kind: ResolvedTargetKind::NavigationSurface,
             target,
             title: Some(title),
@@ -90,6 +92,7 @@ impl ReaderBookPackage {
                 let title = self.title_for_body_target(&target)?;
                 if options.mode == RenderMode::BasicText {
                     return Ok(ResolvedTargetView {
+                        href: String::new(),
                         kind: view_kind,
                         target,
                         title: Some(title.unwrap_or_else(|| "Entry".to_owned())),
@@ -121,6 +124,7 @@ impl ReaderBookPackage {
                     },
                 };
                 Ok(ResolvedTargetView {
+                    href: String::new(),
                     kind: view_kind,
                     target,
                     title: Some(title.unwrap_or_else(|| "Entry".to_owned())),
@@ -184,6 +188,7 @@ impl ReaderBookPackage {
                         ));
                     }
                     return Ok(ResolvedTargetView {
+                        href: String::new(),
                         kind: if options.mode == RenderMode::Debug {
                             crate::render::ResolvedTargetKind::Deferred
                         } else {
@@ -253,6 +258,7 @@ impl ReaderBookPackage {
                     "SSED stream was rendered through common HC HTML fallback; product visual HC/profile rendering is not implemented yet",
                 ));
                 Ok(ResolvedTargetView {
+                    href: String::new(),
                     kind: crate::render::ResolvedTargetKind::EntryBody,
                     target,
                     title: Some(title),
@@ -284,6 +290,7 @@ impl ReaderBookPackage {
             RendererInput::SemanticFallback { target, text } => {
                 let scroll_anchor = scroll_anchor_for_token(&target)?;
                 Ok(ResolvedTargetView {
+                    href: String::new(),
                     kind: crate::render::ResolvedTargetKind::EntryBody,
                     target,
                     title: Some("Semantic fallback".to_owned()),
@@ -308,6 +315,7 @@ impl ReaderBookPackage {
             } => {
                 let scroll_anchor = scroll_anchor_for_token(&target)?;
                 Ok(ResolvedTargetView {
+                    href: String::new(),
                     kind: crate::render::ResolvedTargetKind::Unsupported,
                     target,
                     title: Some(reason),
@@ -642,6 +650,7 @@ impl RendererProvider for ReaderBookPackage {
                     } else {
                         let diagnostics = resource_ref.diagnostics.clone();
                         ResolvedTargetView {
+                            href: String::new(),
                             kind: ResolvedTargetKind::MediaResource,
                             target: token.clone(),
                             title: resource_ref.label.clone(),

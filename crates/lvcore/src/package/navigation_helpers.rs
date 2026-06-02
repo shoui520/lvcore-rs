@@ -92,6 +92,7 @@ fn lved_tree_level_to_nodes(
             None
         };
         nodes.push(NavigationNode {
+            href: None,
             node_id: format!("tree:{}:{}", item.data_id, item_index),
             label_html: escape_plain_label_html(&item.label),
             label_text: item.label.clone(),
@@ -124,6 +125,7 @@ pub(super) fn multiview_menu_item_to_node(
         .map(|(index, child)| multiview_menu_item_to_node(child, &format!("{node_id}.{index}")))
         .collect::<Result<Vec<_>>>()?;
     Ok(NavigationNode {
+        href: None,
         node_id: node_id.to_owned(),
         label_html: escape_plain_label_html(&item.label),
         label_text: item.label.clone(),

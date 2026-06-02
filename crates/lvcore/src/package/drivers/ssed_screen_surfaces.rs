@@ -101,6 +101,7 @@ impl ReaderBookPackage {
                         let (target, target_kind) =
                             self.ssed_screen_menu_hotspot_target(surface_id, parsed, hotspot)?;
                         Ok(ScreenMenuHotspot {
+                            href: None,
                             hotspot_id: format!("hotspot-{index}"),
                             rect: ScreenMenuRect {
                                 x: hotspot.rect.x,

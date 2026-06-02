@@ -42,6 +42,7 @@ impl ReaderBookPackage {
             .map(|page| {
                 let resource = ResourceToken::new(&page.resource)?;
                 Ok(NavigationItem {
+                    href: String::new(),
                     item_id: page.item_id,
                     label_html: escape_plain_label_html(&page.label),
                     label_text: page.label,
