@@ -52,39 +52,71 @@ impl ReaderBookPackage {
                 &options.gaiji_policy,
             )?);
         }
-        for data_ref in parsed.data_refs.into_iter().filter(|data_ref| {
-            include_external_bins
-                && requested_panel_id.is_none_or(|panel_id| data_ref.panel_id == panel_id)
-        }) {
-            let Some(data) = self.read_ssed_panel_bin_bytes(&data_ref.filename)? else {
-                diagnostics.push(Diagnostic::warning(
-                    "ssed_panel_bin_missing",
-                    format!("Panel BIN {} was not found", data_ref.filename),
-                ));
-                continue;
-            };
-            let panel = match parse_panel_bin(&data) {
-                Ok(panel) => panel,
-                Err(error) => {
-                    diagnostics.push(Diagnostic::warning(
-                        "ssed_panel_bin_parse_failed",
-                        format!(
-                            "Panel BIN {} could not be parsed: {error}",
-                            data_ref.filename
-                        ),
-                    ));
-                    continue;
-                }
-            };
-            for record in panel.records {
-                cells.push(ssed_panel_bin_record_to_navigation_cell(
-                    self,
-                    &data_ref,
-                    &record,
+        let selected_data_refs = parsed
+            .data_refs
+            .iter()
+            .filter(|data_ref| {
+                include_external_bins
+                    && requested_panel_id.is_none_or(|panel_id| data_ref.panel_id == panel_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut missing_data_refs = Vec::new();
+        for data_ref in &selected_data_refs {
+            if matches!(
+                self.append_ssed_panel_bin_cells(
+                    data_ref,
+                    &mut cells,
                     &mut diagnostics,
                     &options.gaiji_policy,
-                )?);
+                )?,
+                SsedPanelBinLoadStatus::Missing
+            ) {
+                missing_data_refs.push(data_ref.clone());
             }
+        }
+        if cells.is_empty()
+            && requested_panel_id.is_some()
+            && selected_data_refs
+                .iter()
+                .any(ssed_panel_data_ref_is_aggregate)
+        {
+            let mut aggregate_source_count = 0usize;
+            for data_ref in parsed.data_refs.iter().filter(|data_ref| {
+                !ssed_panel_data_ref_is_aggregate(data_ref)
+                    && !selected_data_refs.iter().any(|selected| {
+                        selected.panel_id == data_ref.panel_id
+                            && selected.filename == data_ref.filename
+                    })
+            }) {
+                if matches!(
+                    self.append_ssed_panel_bin_cells(
+                        data_ref,
+                        &mut cells,
+                        &mut diagnostics,
+                        &options.gaiji_policy,
+                    )?,
+                    SsedPanelBinLoadStatus::Decoded
+                ) {
+                    aggregate_source_count += 1;
+                }
+            }
+            if aggregate_source_count > 0 {
+                missing_data_refs.clear();
+                diagnostics.push(
+                    Diagnostic::info(
+                        "ssed_panel_aggregate_synthesized",
+                        "missing aggregate Panel BIN was synthesized from available content BIN panels",
+                    )
+                    .with_context("source_count", aggregate_source_count.to_string()),
+                );
+            }
+        }
+        for data_ref in missing_data_refs {
+            diagnostics.push(Diagnostic::warning(
+                "ssed_panel_bin_missing",
+                format!("Panel BIN {} was not found", data_ref.filename),
+            ));
         }
         if cells.is_empty() {
             if diagnostics.is_empty() {
@@ -102,6 +134,41 @@ impl ReaderBookPackage {
             surface_id: surface_id.to_owned(),
             cells,
         })
+    }
+
+    fn append_ssed_panel_bin_cells(
+        &self,
+        data_ref: &SsedPanelDataRef,
+        cells: &mut Vec<PanelCell>,
+        diagnostics: &mut Vec<Diagnostic>,
+        gaiji_policy: &GaijiPolicy,
+    ) -> Result<SsedPanelBinLoadStatus> {
+        let Some(data) = self.read_ssed_panel_bin_bytes(&data_ref.filename)? else {
+            return Ok(SsedPanelBinLoadStatus::Missing);
+        };
+        let panel = match parse_panel_bin(&data) {
+            Ok(panel) => panel,
+            Err(error) => {
+                diagnostics.push(Diagnostic::warning(
+                    "ssed_panel_bin_parse_failed",
+                    format!(
+                        "Panel BIN {} could not be parsed: {error}",
+                        data_ref.filename
+                    ),
+                ));
+                return Ok(SsedPanelBinLoadStatus::ParseFailed);
+            }
+        };
+        for record in panel.records {
+            cells.push(ssed_panel_bin_record_to_navigation_cell(
+                self,
+                data_ref,
+                &record,
+                diagnostics,
+                gaiji_policy,
+            )?);
+        }
+        Ok(SsedPanelBinLoadStatus::Decoded)
     }
 
     fn read_ssed_panel_bin_bytes(&self, filename: &str) -> Result<Option<Vec<u8>>> {
@@ -176,6 +243,29 @@ impl ReaderBookPackage {
         }
         Ok(None)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SsedPanelBinLoadStatus {
+    Decoded,
+    Missing,
+    ParseFailed,
+}
+
+fn ssed_panel_data_ref_is_aggregate(data_ref: &SsedPanelDataRef) -> bool {
+    let title = data_ref.title.trim();
+    if title == "すべて" || title.eq_ignore_ascii_case("all") {
+        return true;
+    }
+    let filename = data_ref.filename.replace('\\', "/");
+    let Some(stem) = Path::new(&filename)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+    else {
+        return false;
+    };
+    let stem = stem.to_ascii_lowercase();
+    stem == "all" || stem.ends_with("_all") || stem.ends_with("-all")
 }
 
 struct SsedPanelMetadata {

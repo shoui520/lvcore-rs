@@ -46,6 +46,81 @@ fn ssed_panels_can_read_package_adjacent_panel_sidecar_directory() {
 }
 
 #[test]
+fn ssed_missing_aggregate_panel_bin_synthesizes_from_available_content_bins() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(package_root.join("Panel")).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("Panels.xml"),
+        r#"<panels>
+  <panel index="00000000" paneltype="menu" count_x="2">
+    <title>索引</title>
+    <data>
+      <cell ref="10000000">すべて</cell>
+      <cell ref="20100000">あ</cell>
+    </data>
+  </panel>
+  <panel index="10000000" paneltype="contents">
+    <title>すべて</title>
+    <data type="bin" filename="Panel\DICT_all.bin" />
+  </panel>
+  <panel index="20100000" paneltype="contents">
+    <title>あ</title>
+    <data type="bin" filename="Panel\DICT_a.bin" />
+  </panel>
+  <panel index="20200000" paneltype="contents">
+    <title>い</title>
+    <data type="bin" filename="Panel\DICT_i.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("Panel/DICT_a.bin"),
+        panel_bin_fixture(10, 2),
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("Panel/DICT_i.bin"),
+        panel_bin_fixture(10, 4),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let all_panel = package.open_surface("panels:10000000").unwrap();
+
+    let lvcore::NavigationSurface::Panel { cells, .. } = all_panel else {
+        panic!("missing aggregate Panel BIN should synthesize from available content BIN rows");
+    };
+    assert_eq!(cells.len(), 2);
+    assert!(
+        cells.iter().all(|cell| !cell
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "ssed_panel_bin_missing" })),
+        "the missing aggregate BIN is replaced by available content bins"
+    );
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+    assert!(matches!(
+        cells[1].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 4,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn ssed_missing_declared_menu_does_not_hide_panel_home_surface() {
     let root = tempdir().unwrap();
     let package_root = root.path().join("IWKOKU7N");
