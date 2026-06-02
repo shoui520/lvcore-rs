@@ -120,7 +120,7 @@ pub(super) fn finalize_resolved_view(
             }) {
                 view.diagnostics.push(Diagnostic::info(
                     "generic_html_router_required",
-                    "GenericHtml currently preserves lvcore:// links and resources; callers must provide a router or request Native/BasicText output",
+                    "GenericHtml output still contains lvcore:// links or resources that could not be converted to standalone browser references",
                 ));
             }
         }

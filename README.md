@@ -112,6 +112,11 @@ provider slices:
   gaiji, and continuous view;
 - frontend-safe tagged JSON for search scopes and continuous-view sequence
   hints, matching the Tauri/Svelte contract shape;
+- render-mode separation for the three reader output targets: `Native` keeps
+  app-internal target/resource routing for the dedicated reader, `GenericHtml`
+  attempts standalone browser output by embedding readable resources as data
+  URLs and fragmentizing target links, and `BasicText` flattens renderer output
+  after lvcore has interpreted known dictionary markup;
 - native indexed search/browse for the observed SSED leaf row families:
   simple, keyless pointer-table, body-only, tagged/grouped, keyword,
   cross-reference, and multi-selector rows;
