@@ -14,7 +14,7 @@ use super::ssed_payload::{
 use super::ssed_zip::ssed_component_filename_aliases;
 use super::{Capability, DetectedPackage, FormatFamily};
 use crate::error::{Error, Result};
-use crate::gaiji::parse_uni_gaiji_map;
+use crate::gaiji::{parse_ccaltstr_gaiji_map, parse_uni_gaiji_map};
 use crate::multiview::parse_menu_data;
 use crate::ssed::{ANDROID_LVEDINFO_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponentRole};
 use crate::ssed_aux_index::{is_numeric_aux_index_filename, parse_aux_index_specs_from_exinfo};
@@ -109,6 +109,16 @@ pub(super) fn files_with_suffix(root: &Path, suffix: &str) -> Result<Vec<PathBuf
 
 pub(super) fn load_package_uni_gaiji_maps(root: &Path) -> BTreeMap<String, String> {
     let mut merged = BTreeMap::new();
+    for name in ["CCALTSTR.HA", "CCALTSTR.FU"] {
+        let path = root.join(name);
+        if !regular_file_inside_root(root, &path).unwrap_or(false) {
+            continue;
+        }
+        let Ok(data) = fs::read(&path) else {
+            continue;
+        };
+        merged.extend(parse_ccaltstr_gaiji_map(&data));
+    }
     let Ok(paths) = files_with_suffix(root, ".uni") else {
         return merged;
     };

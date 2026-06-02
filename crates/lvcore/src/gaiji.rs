@@ -4,6 +4,11 @@ use std::collections::BTreeMap;
 use crate::diagnostics::Diagnostic;
 use crate::resources::ResourceRef;
 
+const CCALTSTR_HEADER_SIZE: usize = 16;
+const CCALTSTR_RECORD_SIZE: usize = 62;
+const CCALTSTR_VALUE_SIZE: usize = 60;
+const CCALTSTR_HALF_MAGIC: &[u8; 8] = b"SDICALTH";
+const CCALTSTR_FULL_MAGIC: &[u8; 8] = b"SDICALTF";
 const UNI_MAGIC: &[u8; 6] = b"Ver2  ";
 const UNI_VER2_HEADER_SIZE: usize = 10;
 const UNI_SIMPLE_HEADER_SIZE: usize = 4;
@@ -165,6 +170,49 @@ pub fn parse_uni_gaiji_map(data: &[u8]) -> BTreeMap<String, String> {
         UNI_SIMPLE_RECORD_SIZE,
         &mut map,
     );
+    map
+}
+
+pub fn parse_ccaltstr_gaiji_map(data: &[u8]) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    if data.len() < CCALTSTR_HEADER_SIZE {
+        return map;
+    }
+    if data.get(..8) != Some(CCALTSTR_HALF_MAGIC) && data.get(..8) != Some(CCALTSTR_FULL_MAGIC) {
+        return map;
+    }
+
+    let Some(start_code) = be_u16(data, 10) else {
+        return map;
+    };
+    let Some(record_count) = be_u16(data, 12) else {
+        return map;
+    };
+    let record_count = usize::from(record_count);
+    let expected_size = CCALTSTR_HEADER_SIZE + record_count.saturating_mul(CCALTSTR_RECORD_SIZE);
+    if expected_size != data.len() {
+        return map;
+    }
+
+    let mut offset = CCALTSTR_HEADER_SIZE;
+    for index in 0..record_count {
+        let Some(record) = data.get(offset..offset + CCALTSTR_RECORD_SIZE) else {
+            return BTreeMap::new();
+        };
+        let Some(code) = be_u16(record, 0) else {
+            return BTreeMap::new();
+        };
+        let expected_code = gaiji_grid_code_for_index(start_code, index);
+        if code != expected_code {
+            return BTreeMap::new();
+        }
+        let value = decode_ccaltstr_value(&record[2..2 + CCALTSTR_VALUE_SIZE]);
+        if !value.is_empty() {
+            map.insert(format!("{code:04X}"), value);
+        }
+        offset += CCALTSTR_RECORD_SIZE;
+    }
+
     map
 }
 
@@ -336,6 +384,39 @@ fn decode_uni_code_units(data: &[u8]) -> String {
     out
 }
 
+fn decode_ccaltstr_value(data: &[u8]) -> String {
+    let value = data.split(|byte| *byte == 0).next().unwrap_or_default();
+    if value.is_empty() {
+        return String::new();
+    }
+    if let Ok(ascii) = std::str::from_utf8(value)
+        && ascii.is_ascii()
+    {
+        return ascii.to_owned();
+    }
+    let (decoded, _encoding, _had_errors) = encoding_rs::SHIFT_JIS.decode(value);
+    decoded.into_owned()
+}
+
+fn gaiji_grid_code_for_index(start_code: u16, index: usize) -> u16 {
+    let row = u32::from(start_code >> 8);
+    let cell = u32::from(start_code & 0x00ff);
+    let zero_based = row
+        .saturating_sub(0x21)
+        .saturating_mul(94)
+        .saturating_add(cell.saturating_sub(0x21))
+        .saturating_add(u32::try_from(index).unwrap_or(u32::MAX));
+    let next_row = zero_based / 94 + 0x21;
+    let next_cell = zero_based % 94 + 0x21;
+    ((next_row << 8) | next_cell) as u16
+}
+
+fn be_u16(data: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(
+        data.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
 fn be_u32(data: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes(
         data.get(offset..offset + 4)?.try_into().ok()?,
@@ -375,6 +456,51 @@ mod tests {
         let map = parse_uni_gaiji_map(&data);
         assert_eq!(map.get("A128").map(String::as_str), Some("★"));
         assert_eq!(map.get("B123").map(String::as_str), Some("一"));
+    }
+
+    #[test]
+    fn parses_ccaltstr_alt_strings_in_jis_grid_order() {
+        fn record(code: u16, value: &[u8]) -> Vec<u8> {
+            let mut row = Vec::new();
+            row.extend_from_slice(&code.to_be_bytes());
+            row.extend_from_slice(value);
+            row.resize(CCALTSTR_RECORD_SIZE, 0);
+            row
+        }
+
+        let mut data = Vec::new();
+        data.extend_from_slice(CCALTSTR_HALF_MAGIC);
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0xA17Eu16.to_be_bytes());
+        data.extend_from_slice(&2u16.to_be_bytes());
+        data.extend_from_slice(&[0, 0]);
+        data.extend_from_slice(&record(0xA17E, b"x"));
+        data.extend_from_slice(&record(0xA221, b"ae"));
+
+        let map = parse_ccaltstr_gaiji_map(&data);
+        assert_eq!(map.get("A17E").map(String::as_str), Some("x"));
+        assert_eq!(map.get("A221").map(String::as_str), Some("ae"));
+    }
+
+    #[test]
+    fn rejects_ccaltstr_sequence_mismatch() {
+        fn record(code: u16) -> Vec<u8> {
+            let mut row = Vec::new();
+            row.extend_from_slice(&code.to_be_bytes());
+            row.resize(CCALTSTR_RECORD_SIZE, 0);
+            row
+        }
+
+        let mut data = Vec::new();
+        data.extend_from_slice(CCALTSTR_HALF_MAGIC);
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0xA121u16.to_be_bytes());
+        data.extend_from_slice(&2u16.to_be_bytes());
+        data.extend_from_slice(&[0, 0]);
+        data.extend_from_slice(&record(0xA121));
+        data.extend_from_slice(&record(0xA123));
+
+        assert!(parse_ccaltstr_gaiji_map(&data).is_empty());
     }
 
     #[test]

@@ -116,6 +116,53 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
 }
 
 #[test]
+fn ssed_ccaltstr_supplies_unicode_fallback_for_gaiji_labels() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("CCALTSTR.HA"),
+        ccaltstr_fixture(b"SDICALTH", 0xA17E, &[(0xA17E, b"x"), (0xA221, b"ae")]),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let resolved = package.resolve_gaiji("A221", &GaijiPolicy::default());
+    assert_eq!(
+        resolved.preferred_source,
+        Some(GaijiSourcePreference::Unicode)
+    );
+    assert_eq!(resolved.unicode.as_deref(), Some("ae"));
+
+    let label = lvcore::resolve_rich_label(
+        package.as_ref(),
+        "word <zA221>",
+        &LabelOptions::default().gaiji_policy,
+    );
+    assert_eq!(label.text, "word ae");
+    assert_eq!(label.html, "word ae");
+}
+
+#[test]
+fn ssed_uni_gaiji_mapping_overrides_ccaltstr_alt_string() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("CCALTSTR.FU"),
+        ccaltstr_fixture(b"SDICALTF", 0xB123, &[(0xB123, b"ALT")]),
+    )
+    .unwrap();
+    fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let resolved = package.resolve_gaiji("B123", &GaijiPolicy::default());
+    assert_eq!(
+        resolved.preferred_source,
+        Some(GaijiSourcePreference::Unicode)
+    );
+    assert_eq!(resolved.unicode.as_deref(), Some("一"));
+}
+
+#[test]
 fn ssed_template_resources_can_live_in_package_adjacent_templates_directory() {
     let root = tempdir().unwrap();
     let package_root = root.path().join("IWKOKU7N");
@@ -141,6 +188,21 @@ fn ssed_template_resources_can_live_in_package_adjacent_templates_directory() {
     })
     .unwrap();
     assert_eq!(package.read_resource(&token).unwrap(), b"<svg/>");
+}
+
+fn ccaltstr_fixture(magic: &[u8; 8], start_code: u16, rows: &[(u16, &[u8])]) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(magic);
+    data.extend_from_slice(&1u16.to_le_bytes());
+    data.extend_from_slice(&start_code.to_be_bytes());
+    data.extend_from_slice(&(rows.len() as u16).to_be_bytes());
+    data.extend_from_slice(&[0, 0]);
+    for (code, value) in rows {
+        data.extend_from_slice(&code.to_be_bytes());
+        data.extend_from_slice(value);
+        data.resize(data.len() + (60 - value.len()), 0);
+    }
+    data
 }
 
 #[test]
