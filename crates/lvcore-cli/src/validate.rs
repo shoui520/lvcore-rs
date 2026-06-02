@@ -187,19 +187,15 @@ fn exercise_reader_paths(
                                     &RenderOptions::default(),
                                 ) {
                                     Ok(view) => {
-                                        let window_probe = surface_sequence_hint(
-                                            format_family,
-                                            &surface.kind,
-                                            &surface.surface_id,
-                                        )
-                                        .map(|hint| {
-                                            continuous_window_probe(
-                                                library,
-                                                book_id,
-                                                &target.target,
-                                                hint,
-                                            )
-                                        });
+                                        let window_probe =
+                                            target.sequence_hint.clone().map(|hint| {
+                                                continuous_window_probe(
+                                                    library,
+                                                    book_id,
+                                                    &target.target,
+                                                    hint,
+                                                )
+                                            });
                                         let mut row = surface_rendered_view_probe(
                                             library,
                                             book_id,
@@ -557,46 +553,6 @@ fn rendered_view_probe(
 fn insert_named_value(row: &mut serde_json::Value, name: &str, value: serde_json::Value) {
     if let Some(object) = row.as_object_mut() {
         object.insert(name.to_owned(), value);
-    }
-}
-
-fn surface_sequence_hint(
-    family: FormatFamily,
-    kind: &NavigationSurfaceKind,
-    surface_id: &str,
-) -> Option<SequenceHint> {
-    if *kind == NavigationSurfaceKind::LvedTree || surface_id == "lved-tree" {
-        return Some(SequenceHint::LvedTreeOrder);
-    }
-    if *kind == NavigationSurfaceKind::TitleIndexBrowse && surface_id == "lved-list" {
-        return Some(SequenceHint::LvedListOrder);
-    }
-    match (family, kind) {
-        (FormatFamily::Ssed, NavigationSurfaceKind::TitleIndexBrowse) => {
-            Some(SequenceHint::TitleIndexOrder {
-                value: surface_id.to_owned(),
-            })
-        }
-        (
-            FormatFamily::Ssed,
-            NavigationSurfaceKind::Menu
-            | NavigationSurfaceKind::Toc
-            | NavigationSurfaceKind::EncyclopediaIndex
-            | NavigationSurfaceKind::AuxiliaryIndex
-            | NavigationSurfaceKind::MultiSelector,
-        ) => Some(SequenceHint::MenuOrder {
-            value: surface_id.to_owned(),
-        }),
-        (FormatFamily::Ssed, NavigationSurfaceKind::Panel) => Some(SequenceHint::PanelOrder {
-            value: surface_id.to_owned(),
-        }),
-        (FormatFamily::LvlMultiView, NavigationSurfaceKind::MultiviewTree) => {
-            Some(SequenceHint::MultiviewTreeOrder)
-        }
-        (FormatFamily::Hourei, NavigationSurfaceKind::LawTree) => {
-            Some(SequenceHint::HoureiLawArticleOrder)
-        }
-        _ => None,
     }
 }
 
