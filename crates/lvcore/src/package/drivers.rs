@@ -155,7 +155,7 @@ use crate::ssed_aux_index::{
     SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,
     parse_aux_index_specs_from_exinfo, parse_aux_index_text_bytes,
 };
-use crate::ssed_encyclopedia::{SsedEncyclopediaRow, parse_encyclopedia_index};
+use crate::ssed_encyclopedia::{SsedEncyclopediaRow, parse_encyclopedia_index_bytes};
 use crate::ssed_figure::{FigureDimensions, figure_bitmap_to_png};
 use crate::ssed_ga16::{ga16_glyph_png, ga16_resource_covers_code};
 use crate::ssed_hc::{

@@ -200,6 +200,56 @@ fn ssed_encyclopedia_index_opens_as_navigation_tree() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn ssed_encyclopedia_index_symlink_escape_is_deferred() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::write(
+        outside.path().join("encyclop.idx"),
+        cp932(
+            "#LVEDBRSR encyclopedia#Ver.1.0 2008.01.07\t\t\n\
+                 #Outside\t\t\n\
+                 00000000\t00000000\tOutside\t\t\n",
+        ),
+    )
+    .unwrap();
+    symlink(
+        outside.path().join("encyclop.idx"),
+        dir.path().join("encyclop.idx"),
+    )
+    .unwrap();
+
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Sample".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+
+    let surface = package.open_surface("encyclopedia").unwrap();
+    let NavigationSurface::Deferred {
+        surface_id,
+        diagnostics,
+    } = surface
+    else {
+        panic!("expected symlinked encyclop.idx to be deferred");
+    };
+    assert_eq!(surface_id, "encyclopedia");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_encyclopedia_index_missing"
+            || diagnostic.code == "ssed_encyclopedia_index_read_failed"
+    }));
+}
+
 #[test]
 fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
     let dir = tempdir().unwrap();

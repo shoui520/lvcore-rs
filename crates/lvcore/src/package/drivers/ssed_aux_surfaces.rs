@@ -6,7 +6,8 @@ impl ReaderBookPackage {
         surface_id: &str,
         options: &LabelOptions,
     ) -> Result<NavigationSurface> {
-        let Some(path) = self.storage.resolve_casefolded(Path::new("encyclop.idx"))? else {
+        let path = Path::new("encyclop.idx");
+        if !self.storage.exists(path)? {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics: vec![Diagnostic::info(
@@ -14,8 +15,20 @@ impl ReaderBookPackage {
                     "encyclop.idx is not present in this SSED package",
                 )],
             });
+        }
+        let bytes = match self.storage.read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![Diagnostic::warning(
+                        "ssed_encyclopedia_index_read_failed",
+                        format!("failed to read encyclop.idx: {error}"),
+                    )],
+                });
+            }
         };
-        let parsed = match parse_encyclopedia_index(&path) {
+        let parsed = match parse_encyclopedia_index_bytes(&bytes) {
             Ok(parsed) => parsed,
             Err(error) => {
                 return Ok(NavigationSurface::Deferred {
