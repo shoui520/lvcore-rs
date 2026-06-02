@@ -123,6 +123,12 @@ provider slices:
 - SQLCipher-backed LVED_SQLITE3 list/search/content/info/media access where the
   package key is available, plus retained text-tree navigation from `tree.idx`
   and product-specific `res/*.idx` files;
+- iOS SSED shells that declare retained `DictFtsDB` `.dbc` payloads through
+  `DictList.plist` can open those payloads as embedded LVED_SQLITE3 stores when
+  the observed dict id/code-derived key is known. Known retained payloads expose
+  LVED list/info/search/body behavior through the same provider path as normal
+  LVED_SQLITE3 books; unknown encrypted retained payloads are reported as
+  deferred diagnostics rather than fake search support;
 - frontend-visible search-mode metadata, with SSED modes derived from available
   title indexes/HONMON payloads and LVED advanced modes derived from actual
   `search` table columns;
