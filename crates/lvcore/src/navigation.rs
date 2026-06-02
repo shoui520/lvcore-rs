@@ -5,6 +5,7 @@ use crate::diagnostics::Diagnostic;
 use crate::error::Result;
 use crate::gaiji::GaijiPolicy;
 use crate::resources::ResourceRef;
+use crate::sequence::SequenceHint;
 use crate::target::TargetToken;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,6 +194,8 @@ pub struct NavigationTarget {
     pub target: TargetToken,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub href: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence_hint: Option<SequenceHint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -223,7 +226,41 @@ impl NavigationSurface {
         }
     }
 
+    pub fn sequence_hint(&self) -> Option<SequenceHint> {
+        match self {
+            Self::TitleIndexBrowse { surface_id, .. } if surface_id == "lved-list" => {
+                Some(SequenceHint::LvedListOrder)
+            }
+            Self::TitleIndexBrowse { surface_id, .. } => Some(SequenceHint::TitleIndexOrder {
+                value: surface_id.clone(),
+            }),
+            Self::SimpleMenu { surface_id, .. } => Some(SequenceHint::MenuOrder {
+                value: surface_id.clone(),
+            }),
+            Self::HierarchicalTree { surface_id, .. } if surface_id == "lved-tree" => {
+                Some(SequenceHint::LvedTreeOrder)
+            }
+            Self::HierarchicalTree { surface_id, .. } if surface_id == "menuData" => {
+                Some(SequenceHint::MultiviewTreeOrder)
+            }
+            Self::HierarchicalTree { surface_id, .. } if surface_id == "law-tree" => {
+                Some(SequenceHint::HoureiLawArticleOrder)
+            }
+            Self::HierarchicalTree { surface_id, .. } => Some(SequenceHint::MenuOrder {
+                value: surface_id.clone(),
+            }),
+            Self::Panel { surface_id, .. } => Some(SequenceHint::PanelOrder {
+                value: surface_id.clone(),
+            }),
+            Self::ScreenMenu { .. }
+            | Self::InfoPages { .. }
+            | Self::FallbackSearch { .. }
+            | Self::Deferred { .. } => None,
+        }
+    }
+
     pub fn actionable_targets(&self) -> Vec<NavigationTarget> {
+        let sequence_hint = self.sequence_hint();
         match self {
             Self::SimpleMenu {
                 surface_id, nodes, ..
@@ -232,7 +269,7 @@ impl NavigationSurface {
                 surface_id, nodes, ..
             } => {
                 let mut targets = Vec::new();
-                collect_node_targets(surface_id, nodes, &mut targets);
+                collect_node_targets(surface_id, nodes, sequence_hint.as_ref(), &mut targets);
                 targets
             }
             Self::ScreenMenu {
@@ -250,6 +287,7 @@ impl NavigationSurface {
                             label_html: hotspot.hotspot_id.clone(),
                             label_text: hotspot.hotspot_id.clone(),
                             target: target.clone(),
+                            sequence_hint: sequence_hint.clone(),
                             diagnostics: hotspot.diagnostics.clone(),
                         })
                     })
@@ -266,6 +304,7 @@ impl NavigationSurface {
                     label_html: item.label_html.clone(),
                     label_text: item.label_text.clone(),
                     target: item.target.clone(),
+                    sequence_hint: sequence_hint.clone(),
                     diagnostics: item.diagnostics.clone(),
                 })
                 .collect(),
@@ -279,6 +318,7 @@ impl NavigationSurface {
                         label_html: cell.label_html.clone(),
                         label_text: cell.label_text.clone(),
                         target: target.clone(),
+                        sequence_hint: sequence_hint.clone(),
                         diagnostics: cell.diagnostics.clone(),
                     })
                 })
@@ -294,6 +334,7 @@ impl NavigationSurface {
                     label_html: page.label_html.clone(),
                     label_text: page.label_text.clone(),
                     target: page.target.clone(),
+                    sequence_hint: sequence_hint.clone(),
                     diagnostics: page.diagnostics.clone(),
                 })
                 .collect(),
@@ -358,6 +399,7 @@ pub trait NavigationProvider: Send + Sync {
 fn collect_node_targets(
     surface_id: &str,
     nodes: &[NavigationNode],
+    sequence_hint: Option<&SequenceHint>,
     targets: &mut Vec<NavigationTarget>,
 ) {
     for node in nodes {
@@ -369,10 +411,11 @@ fn collect_node_targets(
                 label_html: node.label_html.clone(),
                 label_text: node.label_text.clone(),
                 target: target.clone(),
+                sequence_hint: sequence_hint.cloned(),
                 diagnostics: node.diagnostics.clone(),
             });
         }
-        collect_node_targets(surface_id, &node.children, targets);
+        collect_node_targets(surface_id, &node.children, sequence_hint, targets);
     }
 }
 
@@ -424,6 +467,66 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].source_id, "child");
         assert_eq!(targets[0].label_text, "Child");
+        assert_eq!(
+            targets[0].sequence_hint,
+            Some(SequenceHint::MultiviewTreeOrder)
+        );
+    }
+
+    #[test]
+    fn navigation_surfaces_expose_backend_sequence_hints() {
+        let lved = NavigationSurface::TitleIndexBrowse {
+            surface_id: "lved-list".to_owned(),
+            items: vec![NavigationItem {
+                href: String::new(),
+                item_id: "1".to_owned(),
+                label_html: "alpha".to_owned(),
+                label_text: "alpha".to_owned(),
+                target: token("alpha"),
+                diagnostics: Vec::new(),
+            }],
+            next_cursor: None,
+        };
+        assert_eq!(lved.sequence_hint(), Some(SequenceHint::LvedListOrder));
+        assert_eq!(
+            lved.actionable_targets()[0].sequence_hint,
+            Some(SequenceHint::LvedListOrder)
+        );
+
+        let title = NavigationSurface::TitleIndexBrowse {
+            surface_id: "FHTITLE".to_owned(),
+            items: Vec::new(),
+            next_cursor: None,
+        };
+        assert_eq!(
+            title.sequence_hint(),
+            Some(SequenceHint::TitleIndexOrder {
+                value: "FHTITLE".to_owned()
+            })
+        );
+
+        let menu = NavigationSurface::SimpleMenu {
+            surface_id: "menu".to_owned(),
+            nodes: Vec::new(),
+            next_cursor: None,
+        };
+        assert_eq!(
+            menu.sequence_hint(),
+            Some(SequenceHint::MenuOrder {
+                value: "menu".to_owned()
+            })
+        );
+
+        let panel = NavigationSurface::Panel {
+            surface_id: "panels:01010000".to_owned(),
+            cells: Vec::new(),
+        };
+        assert_eq!(
+            panel.sequence_hint(),
+            Some(SequenceHint::PanelOrder {
+                value: "panels:01010000".to_owned()
+            })
+        );
     }
 
     #[test]
