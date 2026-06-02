@@ -26,7 +26,9 @@ pub(super) fn scope_target_window_resource_hrefs(
 
 pub(super) fn scope_home_surfaces_resource_hrefs(book_id: &BookId, surfaces: &mut [HomeSurface]) {
     for surface in surfaces {
-        surface.href = surface.target.as_ref().map(TargetToken::href);
+        if let Some(target) = &surface.target {
+            surface.href = Some(target.href());
+        }
         surface.title_html = scope_resource_hrefs_in_html(book_id, &surface.title_html);
     }
 }
@@ -48,7 +50,9 @@ pub(super) fn scope_navigation_surface_resource_hrefs(
         }
         NavigationSurface::Panel { cells, .. } => {
             for cell in cells {
-                cell.href = cell.target.as_ref().map(TargetToken::href);
+                if let Some(target) = &cell.target {
+                    cell.href = Some(target.href());
+                }
                 cell.label_html = scope_resource_hrefs_in_html(book_id, &cell.label_html);
             }
         }
@@ -58,7 +62,9 @@ pub(super) fn scope_navigation_surface_resource_hrefs(
                     scope_resource_ref_href(book_id, resource);
                 }
                 for hotspot in &mut screen.hotspots {
-                    hotspot.href = hotspot.target.as_ref().map(TargetToken::href);
+                    if let Some(target) = &hotspot.target {
+                        hotspot.href = Some(target.href());
+                    }
                 }
             }
         }
@@ -74,7 +80,9 @@ pub(super) fn scope_navigation_surface_resource_hrefs(
 
 fn scope_navigation_node_resource_hrefs(book_id: &BookId, nodes: &mut [NavigationNode]) {
     for node in nodes {
-        node.href = node.target.as_ref().map(TargetToken::href);
+        if let Some(target) = &node.target {
+            node.href = Some(target.href());
+        }
         node.label_html = scope_resource_hrefs_in_html(book_id, &node.label_html);
         scope_navigation_node_resource_hrefs(book_id, &mut node.children);
     }
@@ -339,16 +347,32 @@ mod tests {
         let item_target = target("item");
         let cell_target = target("cell");
         let hotspot_target = target("hotspot");
-        let mut homes = vec![HomeSurface {
-            href: None,
-            surface_id: "menu".to_owned(),
-            kind: NavigationSurfaceKind::Menu,
-            status: NavigationStatus::Available,
-            title_html: "Menu".to_owned(),
-            title_text: "Menu".to_owned(),
-            target: Some(home_target.clone()),
-            diagnostics: Vec::new(),
-        }];
+        let href_only_home = "lvcore://target/home-href-only?surface=menu".to_owned();
+        let href_only_node = "lvcore://target/node-href-only?source=backend".to_owned();
+        let href_only_cell = "lvcore://target/cell-href-only?source=backend".to_owned();
+        let href_only_hotspot = "lvcore://target/hotspot-href-only?source=backend".to_owned();
+        let mut homes = vec![
+            HomeSurface {
+                href: None,
+                surface_id: "menu".to_owned(),
+                kind: NavigationSurfaceKind::Menu,
+                status: NavigationStatus::Available,
+                title_html: "Menu".to_owned(),
+                title_text: "Menu".to_owned(),
+                target: Some(home_target.clone()),
+                diagnostics: Vec::new(),
+            },
+            HomeSurface {
+                href: Some(href_only_home.clone()),
+                surface_id: "href-only-menu".to_owned(),
+                kind: NavigationSurfaceKind::Menu,
+                status: NavigationStatus::Available,
+                title_html: "Href Menu".to_owned(),
+                title_text: "Href Menu".to_owned(),
+                target: None,
+                diagnostics: Vec::new(),
+            },
+        ];
         let mut menu = NavigationSurface::SimpleMenu {
             surface_id: "menu".to_owned(),
             nodes: vec![NavigationNode {
@@ -358,7 +382,15 @@ mod tests {
                 label_text: "Node".to_owned(),
                 target: Some(node_target.clone()),
                 diagnostics: Vec::new(),
-                children: Vec::new(),
+                children: vec![NavigationNode {
+                    href: Some(href_only_node.clone()),
+                    node_id: "href-only-node".to_owned(),
+                    label_html: "Href Node".to_owned(),
+                    label_text: "Href Node".to_owned(),
+                    target: None,
+                    diagnostics: Vec::new(),
+                    children: Vec::new(),
+                }],
             }],
             next_cursor: None,
         };
@@ -376,16 +408,28 @@ mod tests {
         };
         let mut panel = NavigationSurface::Panel {
             surface_id: "panel".to_owned(),
-            cells: vec![PanelCell {
-                href: None,
-                panel_id: "panel".to_owned(),
-                row: 1,
-                column: 2,
-                label_html: "Cell".to_owned(),
-                label_text: "Cell".to_owned(),
-                target: Some(cell_target.clone()),
-                diagnostics: Vec::new(),
-            }],
+            cells: vec![
+                PanelCell {
+                    href: None,
+                    panel_id: "panel".to_owned(),
+                    row: 1,
+                    column: 2,
+                    label_html: "Cell".to_owned(),
+                    label_text: "Cell".to_owned(),
+                    target: Some(cell_target.clone()),
+                    diagnostics: Vec::new(),
+                },
+                PanelCell {
+                    href: Some(href_only_cell.clone()),
+                    panel_id: "panel".to_owned(),
+                    row: 2,
+                    column: 3,
+                    label_html: "Href Cell".to_owned(),
+                    label_text: "Href Cell".to_owned(),
+                    target: None,
+                    diagnostics: Vec::new(),
+                },
+            ],
         };
         let mut screen = NavigationSurface::ScreenMenu {
             surface_id: "screen".to_owned(),
@@ -395,19 +439,34 @@ mod tests {
                 width: None,
                 height: None,
                 background: None,
-                hotspots: vec![ScreenMenuHotspot {
-                    href: None,
-                    hotspot_id: "hotspot".to_owned(),
-                    rect: ScreenMenuRect {
-                        x: 0,
-                        y: 0,
-                        width: 10,
-                        height: 10,
+                hotspots: vec![
+                    ScreenMenuHotspot {
+                        href: None,
+                        hotspot_id: "hotspot".to_owned(),
+                        rect: ScreenMenuRect {
+                            x: 0,
+                            y: 0,
+                            width: 10,
+                            height: 10,
+                        },
+                        target: Some(hotspot_target.clone()),
+                        target_kind: None,
+                        diagnostics: Vec::new(),
                     },
-                    target: Some(hotspot_target.clone()),
-                    target_kind: None,
-                    diagnostics: Vec::new(),
-                }],
+                    ScreenMenuHotspot {
+                        href: Some(href_only_hotspot.clone()),
+                        hotspot_id: "href-only-hotspot".to_owned(),
+                        rect: ScreenMenuRect {
+                            x: 1,
+                            y: 1,
+                            width: 10,
+                            height: 10,
+                        },
+                        target: None,
+                        target_kind: None,
+                        diagnostics: Vec::new(),
+                    },
+                ],
                 diagnostics: Vec::new(),
             }],
             stats: Default::default(),
@@ -422,10 +481,15 @@ mod tests {
         scope_navigation_surface_resource_hrefs(&book_id, &mut screen);
 
         assert_eq!(homes[0].href.as_deref(), Some(home_target.href().as_str()));
+        assert_eq!(homes[1].href.as_deref(), Some(href_only_home.as_str()));
         let NavigationSurface::SimpleMenu { nodes, .. } = menu else {
             panic!("expected menu");
         };
         assert_eq!(nodes[0].href.as_deref(), Some(node_target.href().as_str()));
+        assert_eq!(
+            nodes[0].children[0].href.as_deref(),
+            Some(href_only_node.as_str())
+        );
         let NavigationSurface::TitleIndexBrowse { items, .. } = browse else {
             panic!("expected title browse");
         };
@@ -434,12 +498,17 @@ mod tests {
             panic!("expected panel");
         };
         assert_eq!(cells[0].href.as_deref(), Some(cell_target.href().as_str()));
+        assert_eq!(cells[1].href.as_deref(), Some(href_only_cell.as_str()));
         let NavigationSurface::ScreenMenu { screens, .. } = screen else {
             panic!("expected screen menu");
         };
         assert_eq!(
             screens[0].hotspots[0].href.as_deref(),
             Some(hotspot_target.href().as_str())
+        );
+        assert_eq!(
+            screens[0].hotspots[1].href.as_deref(),
+            Some(href_only_hotspot.as_str())
         );
     }
 
