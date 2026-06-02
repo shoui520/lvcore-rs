@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
     BookId, BookLibrary, BookMetadata, DriverRegistry, Error, LibraryImportReport,
     LibraryImportResult, PackageDiscoveryOptions, RenderMode, RenderOptions, ResourceToken, Result,
-    SearchMode, SearchQuery, SearchScope, SequenceHint, TargetToken,
+    SearchMode, SearchQuery, SearchResultSequence, SearchScope, SequenceHint, TargetToken,
 };
 use serde_json::json;
 
@@ -119,6 +119,12 @@ enum Command {
         /// Include backend debug trace in rendered output.
         #[arg(long)]
         debug_trace: bool,
+        /// Resolve a cross-book search-result window before the first hit.
+        #[arg(long, default_value_t = 0)]
+        window_before: usize,
+        /// Resolve a cross-book search-result window after the first hit.
+        #[arg(long, default_value_t = 0)]
+        window_after: usize,
     },
     /// Open a library/corpus set and print frontend-cacheable book metadata.
     LibraryImport {
@@ -422,6 +428,8 @@ fn main() -> Result<()> {
             render_first,
             render_mode,
             debug_trace,
+            window_before,
+            window_after,
         } => {
             let registry = DriverRegistry::default();
             let output = library_search_command_json(
@@ -434,6 +442,8 @@ fn main() -> Result<()> {
                 cursor,
                 cli_render_options(render_mode, debug_trace),
                 render_first,
+                window_before,
+                window_after,
             )?;
             write_json_pretty(&output)?;
         }
@@ -593,6 +603,8 @@ fn library_search_command_json(
     cursor: Option<String>,
     render_options: RenderOptions,
     render_first: bool,
+    window_before: usize,
+    window_after: usize,
 ) -> Result<serde_json::Value> {
     let (library, import_report) = open_library_from_paths(registry, paths, max);
     let metadata = library.metadata_snapshot();
@@ -604,10 +616,31 @@ fn library_search_command_json(
         limit,
         gaiji_policy: Some(render_options.gaiji_policy.clone()),
     })?;
+    let search_result_sequence = SearchResultSequence::from_search_page(&page)?.encode()?;
+    let sequence_hint = SequenceHint::SearchResults {
+        value: search_result_sequence.clone(),
+    };
     let rendered_first = if render_first {
         page.hits
             .first()
             .map(|hit| library.render_target_routed(&hit.book_id, &hit.target, &render_options))
+            .transpose()?
+    } else {
+        None
+    };
+    let target_window = if window_before > 0 || window_after > 0 {
+        page.hits
+            .first()
+            .map(|hit| {
+                library.resolve_search_result_window_routed(
+                    &hit.book_id,
+                    &hit.target,
+                    &search_result_sequence,
+                    window_before,
+                    window_after,
+                    &render_options,
+                )
+            })
             .transpose()?
     } else {
         None
@@ -619,8 +652,11 @@ fn library_search_command_json(
         "import_diagnostics": import_report.diagnostics,
         "hits": page.hits,
         "next_cursor": page.next_cursor,
+        "search_result_sequence": search_result_sequence,
+        "sequence_hint": sequence_hint,
         "diagnostics": page.diagnostics,
         "rendered_first": rendered_first,
+        "target_window": target_window,
     }))
 }
 
@@ -649,6 +685,7 @@ fn search_command_json(
         limit,
         gaiji_policy: Some(render_options.gaiji_policy.clone()),
     })?;
+    let search_result_sequence = SearchResultSequence::from_search_page(&page)?.encode()?;
     let first_target = page.hits.first().map(|hit| hit.target.clone());
     let rendered_first = if render_first {
         first_target
@@ -679,6 +716,8 @@ fn search_command_json(
         "metadata": metadata,
         "hits": page.hits,
         "next_cursor": page.next_cursor,
+        "search_result_sequence": search_result_sequence.clone(),
+        "sequence_hint": SequenceHint::SearchResults { value: search_result_sequence },
         "diagnostics": page.diagnostics,
         "rendered_first": rendered_first,
         "target_window": target_window,

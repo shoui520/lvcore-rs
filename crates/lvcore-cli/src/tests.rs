@@ -478,6 +478,8 @@ fn library_search_command_uses_all_books_scope_and_routed_rendering() {
         None,
         RenderOptions::default(),
         true,
+        0,
+        1,
     )
     .unwrap();
 
@@ -487,6 +489,25 @@ fn library_search_command_uses_all_books_scope_and_routed_rendering() {
     assert_eq!(output["hits"].as_array().unwrap().len(), 2);
     assert_eq!(output["rendered_first"]["view"]["kind"], "entry_body");
     assert!(output["rendered_first"]["book_id"].as_str().is_some());
+    assert!(output["search_result_sequence"].as_str().is_some());
+    assert_eq!(
+        output["sequence_hint"]["kind"].as_str(),
+        Some("search_results")
+    );
+    let window = &output["target_window"];
+    assert_eq!(window["center"]["view"]["kind"], "entry_body");
+    assert_eq!(window["before"].as_array().unwrap().len(), 0);
+    assert_eq!(window["after"].as_array().unwrap().len(), 1);
+    assert_ne!(
+        window["center"]["book_id"].as_str(),
+        window["after"][0]["book_id"].as_str()
+    );
+    assert!(
+        window["after"][0]["view"]["display_html"]
+            .as_str()
+            .unwrap()
+            .contains("body")
+    );
 }
 
 #[test]

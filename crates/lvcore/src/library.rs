@@ -16,7 +16,9 @@ use crate::package::{
 use crate::render::{RenderOptions, RendererInput, ResolvedTargetKind, ResolvedTargetView};
 use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::{SearchPage, SearchQuery, SearchScope};
-use crate::sequence::{SequenceHint, TargetWindow};
+use crate::sequence::{
+    SearchResultSequence, SearchResultSequenceTarget, SequenceHint, TargetWindow,
+};
 use crate::target::{InternalTarget, TargetToken};
 
 mod scope;
@@ -45,6 +47,15 @@ pub struct RoutedTargetView {
 pub struct RoutedTargetWindow {
     pub book_id: BookId,
     pub window: TargetWindow,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryTargetWindow {
+    pub center: RoutedTargetView,
+    pub before: Vec<RoutedTargetView>,
+    pub after: Vec<RoutedTargetView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -491,6 +502,80 @@ impl BookLibrary {
         self.resolve_target_window_routed(book_id, &target, sequence_hint, before, after, options)
     }
 
+    /// Resolve a continuous-view window in search-result order across a loaded
+    /// library. This is the reader-core path for 串刺し検索 result pages, where
+    /// neighboring hits may belong to different books and therefore need
+    /// per-view resource/link scoping.
+    pub fn resolve_search_result_window_routed(
+        &self,
+        source_book_id: &BookId,
+        target: &TargetToken,
+        sequence_value: &str,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<LibraryTargetWindow> {
+        let sequence = match SearchResultSequence::decode(sequence_value) {
+            Ok(sequence) => sequence,
+            Err(error) => {
+                let diagnostic =
+                    Diagnostic::warning("search_results_sequence_invalid", error.to_string());
+                let mut center = self.render_target_routed(source_book_id, target, options)?;
+                center.view.diagnostics.push(diagnostic.clone());
+                center.diagnostics.push(diagnostic.clone());
+                return Ok(LibraryTargetWindow {
+                    center,
+                    before: Vec::new(),
+                    after: Vec::new(),
+                    diagnostics: vec![diagnostic],
+                });
+            }
+        };
+        let Some(center_index) = sequence.targets.iter().position(|candidate| {
+            library_search_sequence_target_matches(candidate, source_book_id, target)
+        }) else {
+            let diagnostic = Diagnostic::info(
+                "sequence_target_not_in_search_results",
+                "target is not present in the provided library search-result order",
+            );
+            let mut center = self.render_target_routed(source_book_id, target, options)?;
+            center.view.diagnostics.push(diagnostic.clone());
+            center.diagnostics.push(diagnostic.clone());
+            return Ok(LibraryTargetWindow {
+                center,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![diagnostic],
+            });
+        };
+
+        let before_start = center_index.saturating_sub(before);
+        let before_views = sequence.targets[before_start..center_index]
+            .iter()
+            .map(|item| self.render_search_sequence_target_routed(source_book_id, item, options))
+            .collect::<Result<Vec<_>>>()?;
+        let mut center = self.render_search_sequence_target_routed(
+            source_book_id,
+            &sequence.targets[center_index],
+            options,
+        )?;
+        if let Some(title) = &sequence.targets[center_index].title {
+            center.view.title = Some(title.clone());
+        }
+        let after_end = (center_index + 1 + after).min(sequence.targets.len());
+        let after_views = sequence.targets[center_index + 1..after_end]
+            .iter()
+            .map(|item| self.render_search_sequence_target_routed(source_book_id, item, options))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(LibraryTargetWindow {
+            center,
+            before: before_views,
+            after: after_views,
+            diagnostics: Vec::new(),
+        })
+    }
+
     pub fn resolve_resource(
         &self,
         book_id: &BookId,
@@ -626,6 +711,43 @@ impl BookLibrary {
         })
     }
 
+    fn render_search_sequence_target_routed(
+        &self,
+        source_book_id: &BookId,
+        item: &SearchResultSequenceTarget,
+        options: &RenderOptions,
+    ) -> Result<RoutedTargetView> {
+        let item_book_id = item.book_id.as_ref().unwrap_or(source_book_id);
+        if self.book(item_book_id).is_none() {
+            let diagnostic = Diagnostic::warning(
+                "search_result_sequence_book_missing",
+                format!(
+                    "search-result sequence referenced {}, which is not open in the library",
+                    item_book_id.0
+                ),
+            )
+            .with_context("book_id", &item_book_id.0);
+            let mut view = ResolvedTargetView::unsupported(
+                item.target.clone(),
+                item.title
+                    .clone()
+                    .unwrap_or_else(|| "Missing book".to_owned()),
+                diagnostic.clone(),
+            );
+            view.href = item.target.href();
+            return Ok(RoutedTargetView {
+                book_id: item_book_id.clone(),
+                view,
+                diagnostics: vec![diagnostic],
+            });
+        }
+        let mut routed = self.render_target_routed(item_book_id, &item.target, options)?;
+        if let Some(title) = &item.title {
+            routed.view.title = Some(title.clone());
+        }
+        Ok(routed)
+    }
+
     fn search_many<'a>(
         &self,
         book_ids: impl Iterator<Item = &'a BookId>,
@@ -743,6 +865,18 @@ impl BookLibrary {
         }
         Ok(page)
     }
+}
+
+fn library_search_sequence_target_matches(
+    candidate: &SearchResultSequenceTarget,
+    source_book_id: &BookId,
+    target: &TargetToken,
+) -> bool {
+    candidate.target == *target
+        && candidate
+            .book_id
+            .as_ref()
+            .is_none_or(|book_id| book_id == source_book_id)
 }
 
 fn encode_library_search_cursor(

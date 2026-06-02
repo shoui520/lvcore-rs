@@ -233,6 +233,7 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
         list_items
             .into_iter()
             .map(|item| crate::sequence::SearchResultSequenceTarget {
+                book_id: None,
                 target: item.target,
                 title: Some(item.label_text),
             })

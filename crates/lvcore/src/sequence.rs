@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::Diagnostic;
 use crate::error::{Error, Result};
+use crate::package::BookId;
 use crate::render::{RenderOptions, ResolvedTargetView};
 use crate::search::{SearchHit, SearchPage};
 use crate::target::TargetToken;
@@ -33,6 +34,8 @@ pub struct SearchResultSequence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchResultSequenceTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_id: Option<BookId>,
     pub target: TargetToken,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -55,6 +58,7 @@ impl SearchResultSequence {
         Self::new(
             hits.iter()
                 .map(|hit| SearchResultSequenceTarget {
+                    book_id: Some(hit.book_id.clone()),
                     target: hit.target.clone(),
                     title: Some(hit.title_text.clone()),
                 })
@@ -159,6 +163,7 @@ mod tests {
     fn search_result_sequence_round_trips_as_opaque_hint_value() {
         let target = TargetToken::from_opaque("opaque-target");
         let sequence = SearchResultSequence::new(vec![SearchResultSequenceTarget {
+            book_id: None,
             target: target.clone(),
             title: Some("alpha".to_owned()),
         }])
