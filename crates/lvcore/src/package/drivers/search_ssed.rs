@@ -280,7 +280,7 @@ impl ReaderBookPackage {
             }
         }
         let byte_candidates = ssed_body_search_byte_candidates(&query.query);
-        let row_driven_search_allowed = row_cursor.is_some();
+        let row_driven_search_allowed = query.cursor.is_none() || row_cursor.is_some();
         if honmon_body_window_scan_needed
             && row_driven_search_allowed
             && (query.cursor.is_none() || row_cursor.is_some())

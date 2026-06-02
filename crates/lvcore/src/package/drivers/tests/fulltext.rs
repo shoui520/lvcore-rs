@@ -4,7 +4,7 @@ use std::path::Path;
 use super::*;
 
 #[test]
-fn ssed_fulltext_searches_honmon_body_windows() {
+fn ssed_fulltext_prefetches_initial_honmon_body_rows() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
     let search_modes = ssed_search_modes(&catalog, dir.path());
@@ -70,6 +70,12 @@ fn ssed_fulltext_searches_honmon_body_windows() {
     assert!(
         page.diagnostics
             .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
             .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
     );
 }
@@ -113,7 +119,7 @@ fn ssed_fulltext_matches_fullwidth_ascii_body_text() {
 }
 
 #[test]
-fn ssed_fulltext_uses_bounded_body_scan_for_non_ascii_body_query() {
+fn ssed_fulltext_prefetches_non_ascii_body_query() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
     let search_modes = ssed_search_modes(&catalog, dir.path());
@@ -155,6 +161,55 @@ fn ssed_fulltext_uses_bounded_body_scan_for_non_ascii_body_query() {
             .as_deref()
             .is_some_and(|snippet| snippet.contains("検索語"))
     );
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
+    );
+}
+
+#[test]
+fn ssed_fulltext_body_cursor_uses_bounded_honmon_scan() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic fulltext".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "検索語".to_owned(),
+            cursor: Some("body:0".to_owned()),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
     assert!(
         page.diagnostics
             .iter()
