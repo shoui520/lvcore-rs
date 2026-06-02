@@ -267,7 +267,7 @@ impl ReaderBookPackage {
                 Ok(Some(path)) => path,
                 Ok(None) => {
                     diagnostics.push(
-                        Diagnostic::warning(
+                        Diagnostic::info(
                             "ssed_index_component_missing",
                             format!("{} is declared but not present on disk", component.filename),
                         )
@@ -367,7 +367,7 @@ impl ReaderBookPackage {
             Ok(Some(path)) => path,
             Ok(None) => {
                 diagnostics.push(
-                    Diagnostic::warning(
+                    Diagnostic::info(
                         "ssed_index_component_missing",
                         format!("{} is declared but not present on disk", component.filename),
                     )
