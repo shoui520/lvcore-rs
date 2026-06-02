@@ -243,4 +243,11 @@ mod tests {
             vec![SearchMode::Forward, SearchMode::FullText]
         );
     }
+
+    #[test]
+    fn maps_observed_ios_lved_sqlcipher_dict_ids() {
+        assert_eq!(ios_lved_sqlcipher_dict_id("OXFPEU4"), Some(750));
+        assert_eq!(ios_lved_sqlcipher_dict_id("_DCT_KQCMPROS"), Some(751));
+        assert_eq!(ios_lved_sqlcipher_dict_id("unknown"), None);
+    }
 }
