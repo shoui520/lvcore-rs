@@ -11,6 +11,7 @@ impl ReaderBookPackage {
             return Ok(SearchPage {
                 hits: Vec::new(),
                 next_cursor: None,
+                result_sequence: None,
                 diagnostics: Vec::new(),
             });
         }
@@ -50,6 +51,7 @@ impl ReaderBookPackage {
         Ok(SearchPage {
             hits,
             next_cursor,
+            result_sequence: None,
             diagnostics: Vec::new(),
         })
     }

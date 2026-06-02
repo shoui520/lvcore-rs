@@ -62,6 +62,15 @@ pub struct SearchPage {
     pub hits: Vec<SearchHit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// Opaque search-result order value for continuous view.
+    ///
+    /// Frontends pass this back as `SequenceHint::SearchResults { value }`
+    /// when the user opens a hit and wants surrounding search results shown in
+    /// the same entry body view. Individual package providers may leave this
+    /// empty; the library boundary populates it after book-scoped hrefs are
+    /// applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_sequence: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -71,6 +80,7 @@ impl SearchPage {
         Self {
             hits: Vec::new(),
             next_cursor: None,
+            result_sequence: None,
             diagnostics: vec![Diagnostic::info("search_deferred", message)],
         }
     }

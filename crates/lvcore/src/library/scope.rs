@@ -332,6 +332,7 @@ mod tests {
                 diagnostics: Vec::new(),
             }],
             next_cursor: None,
+            result_sequence: None,
             diagnostics: Vec::new(),
         };
 

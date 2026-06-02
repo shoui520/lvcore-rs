@@ -608,6 +608,7 @@ impl BookLibrary {
                     .ok_or_else(|| Error::BookNotFound(book_id.0.clone()))?;
                 let mut page = book.search(query)?;
                 scope_search_page_resource_hrefs(book_id, &mut page);
+                populate_search_result_sequence(&mut page)?;
                 Ok(page)
             }
             SearchScope::SelectedBooks { book_ids } => self.search_many(book_ids.iter(), query),
@@ -757,6 +758,7 @@ impl BookLibrary {
             return Ok(SearchPage {
                 hits: Vec::new(),
                 next_cursor: None,
+                result_sequence: None,
                 diagnostics: Vec::new(),
             });
         }
@@ -774,6 +776,7 @@ impl BookLibrary {
         let mut page = SearchPage {
             hits: Vec::new(),
             next_cursor: None,
+            result_sequence: None,
             diagnostics: Vec::new(),
         };
         if let Some(diagnostic) = cursor_diagnostic {
@@ -863,8 +866,18 @@ impl BookLibrary {
         if page.hits.len() > query.limit {
             page.hits.truncate(query.limit);
         }
+        populate_search_result_sequence(&mut page)?;
         Ok(page)
     }
+}
+
+fn populate_search_result_sequence(page: &mut SearchPage) -> Result<()> {
+    if page.hits.is_empty() {
+        page.result_sequence = None;
+        return Ok(());
+    }
+    page.result_sequence = Some(SearchResultSequence::from_search_page(page)?.encode()?);
+    Ok(())
 }
 
 fn library_search_sequence_target_matches(

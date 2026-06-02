@@ -6,6 +6,7 @@ impl ReaderBookPackage {
             return Ok(SearchPage {
                 hits: Vec::new(),
                 next_cursor: None,
+                result_sequence: None,
                 diagnostics: Vec::new(),
             });
         }
@@ -93,6 +94,7 @@ impl ReaderBookPackage {
             return Ok(SearchPage {
                 hits: Vec::new(),
                 next_cursor: None,
+                result_sequence: None,
                 diagnostics: Vec::new(),
             });
         }
@@ -100,6 +102,7 @@ impl ReaderBookPackage {
             return Ok(SearchPage {
                 hits: Vec::new(),
                 next_cursor: None,
+                result_sequence: None,
                 diagnostics: vec![Diagnostic::error(
                     "ssed_catalog_missing",
                     "SSED full-text search requires a parsed SSEDINFO catalog",
@@ -199,6 +202,7 @@ impl ReaderBookPackage {
             return Ok(SearchPage {
                 hits,
                 next_cursor: Some(query.limit.to_string()),
+                result_sequence: None,
                 diagnostics,
             });
         }
@@ -207,6 +211,7 @@ impl ReaderBookPackage {
             return Ok(SearchPage {
                 hits,
                 next_cursor: Some((offset + query.limit).to_string()),
+                result_sequence: None,
                 diagnostics,
             });
         }
@@ -260,6 +265,7 @@ impl ReaderBookPackage {
                         "chronology:{}",
                         chronology_offset.saturating_add(query.limit)
                     )),
+                    result_sequence: None,
                     diagnostics,
                 });
             }
@@ -275,6 +281,7 @@ impl ReaderBookPackage {
                             ))
                         },
                     ),
+                    result_sequence: None,
                     diagnostics,
                 });
             }
@@ -312,6 +319,7 @@ impl ReaderBookPackage {
                 return Ok(SearchPage {
                     hits,
                     next_cursor,
+                    result_sequence: None,
                     diagnostics,
                 });
             }
@@ -321,6 +329,7 @@ impl ReaderBookPackage {
             return Ok(SearchPage {
                 hits,
                 next_cursor: None,
+                result_sequence: None,
                 diagnostics,
             });
         }
@@ -347,6 +356,7 @@ impl ReaderBookPackage {
             return Ok(SearchPage {
                 hits,
                 next_cursor: None,
+                result_sequence: None,
                 diagnostics,
             });
         }
@@ -529,6 +539,7 @@ impl ReaderBookPackage {
         Ok(SearchPage {
             hits,
             next_cursor,
+            result_sequence: None,
             diagnostics,
         })
     }

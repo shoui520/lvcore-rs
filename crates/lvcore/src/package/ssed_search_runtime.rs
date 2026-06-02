@@ -164,6 +164,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
         SearchPage {
             hits: self.hits,
             next_cursor,
+            result_sequence: None,
             diagnostics: self.diagnostics,
         }
     }

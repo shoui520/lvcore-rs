@@ -22,6 +22,7 @@ impl SearchProvider for ReaderBookPackage {
                 return Ok(SearchPage {
                     hits: Vec::new(),
                     next_cursor: None,
+                    result_sequence: None,
                     diagnostics: self.retained_ios_fts_deferred_diagnostics(),
                 });
             }
