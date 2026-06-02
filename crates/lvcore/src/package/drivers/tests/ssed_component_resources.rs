@@ -107,6 +107,70 @@ fn chm_resource_resolution_does_not_advertise_symlinked_escape() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn ssed_hanrei_discovery_ignores_symlinked_help_folders() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let real_help = root.path().join("RealHelp");
+    fs::create_dir_all(real_help.join("contents")).unwrap();
+    fs::write(
+        real_help.join("contents").join("hanrei.html"),
+        b"<html><title>outside help through symlink</title></html>",
+    )
+    .unwrap();
+    symlink(&real_help, root.path().join("Book_HELP.localized")).unwrap();
+    let package = ReaderBookPackage::new(
+        root.path(),
+        DetectedPackage {
+            root: root.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("HANREI".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+
+    let pages = package.discover_ssed_hanrei_pages().unwrap();
+
+    assert!(pages.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn ssed_hanrei_discovery_ignores_symlinked_hanrei_folder() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let real_hanrei = root.path().join("RealHanrei");
+    fs::create_dir_all(&real_hanrei).unwrap();
+    fs::write(
+        real_hanrei.join("index.html"),
+        b"<html><title>hanrei through symlink</title></html>",
+    )
+    .unwrap();
+    symlink(&real_hanrei, root.path().join("HANREI")).unwrap();
+    let package = ReaderBookPackage::new(
+        root.path(),
+        DetectedPackage {
+            root: root.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("HANREI".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+
+    let pages = package.discover_ssed_hanrei_pages().unwrap();
+
+    assert!(pages.is_empty());
+}
+
 #[test]
 fn ssed_pcmdata_address_uses_loose_pcmu_audio_when_component_is_absent() {
     let dir = tempdir().unwrap();

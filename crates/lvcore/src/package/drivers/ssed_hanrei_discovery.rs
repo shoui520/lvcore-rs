@@ -20,7 +20,7 @@ impl ReaderBookPackage {
         self.push_ssed_hanrei_chm_pages("HANREI.chm", &mut pages, &mut seen)?;
 
         for path in self.storage.list_dir(Path::new(""))? {
-            if !path.is_dir() {
+            if !regular_directory_inside_root(&self.root, &path)? {
                 continue;
             }
             let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
@@ -45,7 +45,7 @@ impl ReaderBookPackage {
 
             let contents_dir = format!("{root}/contents");
             for child in self.storage.list_dir(Path::new(&contents_dir))? {
-                if !child.is_file() {
+                if !regular_file_inside_root(&self.root, &child)? {
                     continue;
                 }
                 let Some(file_name) = child.file_name().map(|value| value.to_string_lossy()) else {
@@ -83,9 +83,11 @@ impl ReaderBookPackage {
                 continue;
             }
             let candidate = format!("{relative_dir}/{file_name}");
-            if child.is_dir() {
+            if regular_directory_inside_root(&self.root, &child)? {
                 self.push_ssed_hanrei_folder_pages(&candidate, pages, seen, depth + 1)?;
-            } else if child.is_file() && path_has_extension(&file_name, &["html", "htm"]) {
+            } else if regular_file_inside_root(&self.root, &child)?
+                && path_has_extension(&file_name, &["html", "htm"])
+            {
                 self.push_ssed_hanrei_page(&candidate, pages, seen)?;
             }
         }
@@ -106,6 +108,12 @@ impl ReaderBookPackage {
             return Ok(());
         }
         if !self.storage.exists(Path::new(&normalized))? {
+            return Ok(());
+        }
+        let Some(path) = self.storage.resolve_casefolded(Path::new(&normalized))? else {
+            return Ok(());
+        };
+        if !regular_file_inside_root(&self.root, &path)? {
             return Ok(());
         }
         if !seen.insert(normalized.to_ascii_lowercase()) {
@@ -149,6 +157,9 @@ impl ReaderBookPackage {
         let Some(resolved) = self.storage.resolve_casefolded(Path::new(chm_path))? else {
             return Ok(());
         };
+        if !regular_file_inside_root(&self.root, &resolved)? {
+            return Ok(());
+        }
         let mut entries = match list_chm_entries(&resolved) {
             Ok(entries) => entries,
             Err(err) => {

@@ -244,7 +244,44 @@ pub(crate) fn regular_file_inside_root(root: &Path, path: &Path) -> Result<bool>
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Ok(false);
     }
+    if path_has_symlink_component(root, path)? {
+        return Ok(false);
+    }
     path_stays_inside_root(root, path)
+}
+
+pub(crate) fn regular_directory_inside_root(root: &Path, path: &Path) -> Result<bool> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(false);
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Ok(false);
+    }
+    if path_has_symlink_component(root, path)? {
+        return Ok(false);
+    }
+    path_stays_inside_root(root, path)
+}
+
+fn path_has_symlink_component(root: &Path, path: &Path) -> Result<bool> {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return Ok(false);
+    };
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(name) => current.push(name),
+            std::path::Component::CurDir => continue,
+            _ => return Ok(true),
+        }
+        let Ok(metadata) = fs::symlink_metadata(&current) else {
+            return Ok(false);
+        };
+        if metadata.file_type().is_symlink() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn path_stays_inside_root_canonical(canonical_root: &Path, path: &Path) -> Result<bool> {
@@ -329,5 +366,21 @@ mod tests {
         assert!(storage.read(Path::new("outside-link")).is_err());
 
         fs::remove_file(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn regular_file_inside_root_rejects_symlink_parent() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let real = dir.path().join("real");
+        fs::create_dir(&real).unwrap();
+        fs::write(real.join("page.html"), b"inside").unwrap();
+        symlink(&real, dir.path().join("linked")).unwrap();
+
+        assert!(
+            !regular_file_inside_root(dir.path(), &dir.path().join("linked/page.html")).unwrap()
+        );
     }
 }

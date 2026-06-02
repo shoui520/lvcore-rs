@@ -202,7 +202,7 @@ use crate::ssed_sidecar::{
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
 use crate::storage::{
     DirectoryStorage, StorageBackend, path_stays_inside_root, private_cache_dir,
-    regular_file_inside_root,
+    regular_directory_inside_root, regular_file_inside_root,
 };
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
