@@ -134,6 +134,7 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
         .unwrap();
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "まえがき");
+    assert_eq!(page.hits[0].href, page.hits[0].target.href());
     assert_eq!(
         page.hits[0].target.decode().unwrap(),
         InternalTarget::MultiviewHref {
@@ -451,6 +452,7 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
         .unwrap();
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "民法");
+    assert_eq!(page.hits[0].href, page.hits[0].target.href());
 
     let first = package
         .search(&SearchQuery {

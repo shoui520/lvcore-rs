@@ -93,6 +93,7 @@ fn lved_search_is_cursor_paged_by_backend() {
         })
         .unwrap();
     assert_eq!(first.hits[0].title_text, "alpha");
+    assert_eq!(first.hits[0].href, first.hits[0].target.href());
     assert_eq!(first.next_cursor.as_deref(), Some("1"));
 
     let second = package

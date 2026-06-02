@@ -176,13 +176,15 @@ impl ReaderBookPackage {
                 .map(|name| name.to_string_lossy().to_string());
             let mut hit_diagnostics = label.diagnostics;
             hit_diagnostics.extend(hit.body.diagnostics);
+            let target = TargetToken::new(&InternalTarget::SsedDenseAnchor {
+                anchor: hit.anchor_id,
+                resolver_hint,
+            })?;
+            let href = target.href();
             hits.push(SearchHit {
-                href: String::new(),
+                href,
                 book_id: self.metadata.book_id.clone(),
-                target: TargetToken::new(&InternalTarget::SsedDenseAnchor {
-                    anchor: hit.anchor_id,
-                    resolver_hint,
-                })?,
+                target,
                 title_html: label.html,
                 title_text: label.text,
                 snippet_html: ssed_fulltext_snippet_html(&hit.body.text, &query.query),
@@ -235,8 +237,9 @@ impl ReaderBookPackage {
                     key: record.inc_code.clone(),
                     anchor: None,
                 })?;
+                let href = target.href();
                 hits.push(SearchHit {
-                    href: String::new(),
+                    href,
                     book_id: self.metadata.book_id.clone(),
                     target,
                     title_html: label.html,
@@ -512,8 +515,9 @@ impl ReaderBookPackage {
                     continue;
                 }
                 let label = self.ssed_rich_label_with_policy(&title, &label_policy);
+                let href = target.href();
                 hits.push(SearchHit {
-                    href: String::new(),
+                    href,
                     book_id: self.metadata.book_id.clone(),
                     target,
                     title_html: label.html,
@@ -763,8 +767,9 @@ impl ReaderBookPackage {
                 return Ok(true);
             }
             let label = self.ssed_rich_label_with_policy(&title, gaiji_policy);
+            let href = target.href();
             hits.push(SearchHit {
-                href: String::new(),
+                href,
                 book_id: self.metadata.book_id.clone(),
                 target,
                 title_html: label.html,

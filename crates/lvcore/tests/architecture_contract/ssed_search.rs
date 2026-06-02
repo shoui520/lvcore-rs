@@ -61,6 +61,7 @@ fn ssed_simple_index_search_returns_title_backed_hits() {
 
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "alpha");
+    assert_eq!(page.hits[0].href, page.hits[0].target.href());
     assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, 2);
 }
 

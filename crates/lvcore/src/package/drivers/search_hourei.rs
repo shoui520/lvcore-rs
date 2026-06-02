@@ -23,13 +23,15 @@ impl ReaderBookPackage {
         let hits = raw_hits
             .into_iter()
             .map(|hit| {
+                let target = TargetToken::new(&InternalTarget::HoureiLaw {
+                    hore_id: hit.hore_id,
+                    anchor: None,
+                })?;
+                let href = target.href();
                 Ok(SearchHit {
-                    href: String::new(),
+                    href,
                     book_id: self.metadata.book_id.clone(),
-                    target: TargetToken::new(&InternalTarget::HoureiLaw {
-                        hore_id: hit.hore_id,
-                        anchor: None,
-                    })?,
+                    target,
                     title_html: hit.title_html,
                     title_text: hit.title_text,
                     snippet_html: hit.snippet_html,

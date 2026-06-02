@@ -29,6 +29,7 @@ impl ReaderBookPackage {
                     anchor: hit.anchor,
                     query: None,
                 })?;
+                let href = target.href();
                 let title_html = self.normalize_lved_label_html(&hit.title_html)?;
                 let snippet_html = if hit.subtitle_html.is_empty() {
                     None
@@ -36,7 +37,7 @@ impl ReaderBookPackage {
                     Some(self.normalize_lved_label_html(&hit.subtitle_html)?)
                 };
                 Ok(SearchHit {
-                    href: String::new(),
+                    href,
                     book_id: self.metadata.book_id.clone(),
                     target,
                     title_html,

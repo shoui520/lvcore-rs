@@ -112,8 +112,9 @@ impl<'a> SsedIndexSearchCollector<'a> {
         let label = self
             .package
             .ssed_rich_label_with_policy(&title, &self.gaiji_policy);
+        let href = target.href();
         self.hits.push(SearchHit {
-            href: String::new(),
+            href,
             book_id: self.package.book_id_for_hit(),
             target,
             title_html: label.html,
@@ -140,8 +141,9 @@ impl<'a> SsedIndexSearchCollector<'a> {
                     let label = self
                         .package
                         .ssed_rich_label_with_policy(&title, &self.gaiji_policy);
+                    let href = target.href();
                     self.hits.push(SearchHit {
-                        href: String::new(),
+                        href,
                         book_id: self.package.book_id_for_hit(),
                         target,
                         title_html: label.html,
