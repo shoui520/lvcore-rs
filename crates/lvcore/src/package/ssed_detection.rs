@@ -58,9 +58,10 @@ pub(super) fn root_fingerprint(root: &Path) -> String {
     if let Ok(entries) = fs::read_dir(root) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let Ok(metadata) = entry.metadata() else {
+            let Ok(metadata) = entry.path().symlink_metadata() else {
                 continue;
             };
+            let file_type = metadata.file_type();
             let name = path
                 .file_name()
                 .map(|v| v.to_string_lossy().to_string())
@@ -68,7 +69,9 @@ pub(super) fn root_fingerprint(root: &Path) -> String {
             names.insert(
                 json!({
                     "name": name,
-                    "is_file": metadata.is_file(),
+                    "is_file": file_type.is_file(),
+                    "is_dir": file_type.is_dir(),
+                    "is_symlink": file_type.is_symlink(),
                     "len": metadata.len(),
                 })
                 .to_string(),
@@ -445,4 +448,32 @@ fn has_html_file_under_casefolded(
         }
         child.is_file() && path_has_extension(&file_name, &["html", "htm"])
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::root_fingerprint;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    #[test]
+    fn root_fingerprint_does_not_follow_symlink_targets() {
+        use std::os::unix::fs::symlink;
+
+        let package = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let outside_file = outside.path().join("outside.bin");
+        fs::write(&outside_file, b"short").unwrap();
+        symlink(&outside_file, package.path().join("payload-link")).unwrap();
+
+        let before = root_fingerprint(package.path());
+        fs::write(&outside_file, b"much longer outside target").unwrap();
+        let after = root_fingerprint(package.path());
+
+        assert_eq!(
+            before, after,
+            "package fingerprint must hash the symlink entry, not outside target metadata",
+        );
+    }
 }
