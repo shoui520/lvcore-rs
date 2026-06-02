@@ -276,6 +276,15 @@ fn dense_honmon_fulltext_searches_sidecar_body() {
             .iter()
             .any(|diagnostic| diagnostic.code == "ssed_fulltext_sidecar_scan")
     );
+    assert!(page.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_fulltext_honmon_scan_skipped_sidecar_backed"
+    }));
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
+    );
     let view = package
         .render_target(&page.hits[0].target, &RenderOptions::default())
         .unwrap();

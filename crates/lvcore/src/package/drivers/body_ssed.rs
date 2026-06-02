@@ -404,7 +404,7 @@ impl ReaderBookPackage {
         }
     }
 
-    fn ssed_dense_anchor_at_component_offset(
+    pub(super) fn ssed_dense_anchor_at_component_offset(
         &self,
         component: &SsedComponent,
         offset: usize,

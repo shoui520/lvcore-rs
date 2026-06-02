@@ -96,6 +96,16 @@ impl ReaderBookPackage {
                 diagnostics: Vec::new(),
             });
         }
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(SearchPage {
+                hits: Vec::new(),
+                next_cursor: None,
+                diagnostics: vec![Diagnostic::error(
+                    "ssed_catalog_missing",
+                    "SSED full-text search requires a parsed SSEDINFO catalog",
+                )],
+            });
+        };
 
         let page_limit = query.limit.saturating_add(1);
         let label_policy = query.label_gaiji_policy();
@@ -104,7 +114,10 @@ impl ReaderBookPackage {
         let row_cursor = decode_ssed_fulltext_row_cursor(query.cursor.as_deref());
         let offset = decode_ssed_fulltext_body_cursor(query.cursor.as_deref());
         let mut diagnostics = Vec::new();
-        if (query.cursor.is_none() || title_cursor.is_some())
+        let honmon_body_window_scan_needed =
+            self.ssed_honmon_body_window_scan_is_needed(catalog, &mut diagnostics)?;
+        if honmon_body_window_scan_needed
+            && title_cursor.is_some()
             && let Some(page) = self.ssed_fulltext_title_index_prepass(
                 query,
                 &needle,
@@ -263,19 +276,10 @@ impl ReaderBookPackage {
                 });
             }
         }
-        let Some(catalog) = &self.ssed_catalog else {
-            return Ok(SearchPage {
-                hits,
-                next_cursor: None,
-                diagnostics: vec![Diagnostic::error(
-                    "ssed_catalog_missing",
-                    "SSED full-text search requires a parsed SSEDINFO catalog",
-                )],
-            });
-        };
         let byte_candidates = ssed_body_search_byte_candidates(&query.query);
-        let row_driven_search_allowed = row_cursor.is_some() || !byte_candidates.is_empty();
-        if row_driven_search_allowed
+        let row_driven_search_allowed = row_cursor.is_some();
+        if honmon_body_window_scan_needed
+            && row_driven_search_allowed
             && (query.cursor.is_none() || row_cursor.is_some())
             && hits.len() < page_limit
         {
@@ -319,6 +323,14 @@ impl ReaderBookPackage {
                     diagnostics,
                 });
             }
+        }
+        if !honmon_body_window_scan_needed {
+            hits.truncate(query.limit);
+            return Ok(SearchPage {
+                hits,
+                next_cursor: None,
+                diagnostics,
+            });
         }
         diagnostics.push(Diagnostic::info(
             "ssed_fulltext_body_window_scan",
@@ -523,6 +535,78 @@ impl ReaderBookPackage {
             next_cursor,
             diagnostics,
         })
+    }
+
+    fn ssed_honmon_body_window_scan_is_needed(
+        &self,
+        catalog: &SsedCatalog,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<bool> {
+        let resolvers = self.ssed_sidecar_body_resolvers()?;
+        if resolvers.is_empty() {
+            return Ok(true);
+        }
+        if resolvers
+            .iter()
+            .any(SsedSidecarBodyResolver::is_ordered_honbun_renderer_body)
+        {
+            diagnostics.push(Diagnostic::info(
+                "ssed_fulltext_honmon_scan_skipped_sidecar_backed",
+                "SSED full-text search skipped raw HONMON scanning because ordered HONBUN renderer rows are the visual body source",
+            ));
+            return Ok(false);
+        }
+
+        const SIDECAR_BACKED_SAMPLE_TARGETS: usize = 16;
+        let mut checked_targets = 0usize;
+        let mut sidecar_backed_targets = 0usize;
+        let mut sample_diagnostics = self.scan_ssed_simple_index_rows_with_filters(
+            None,
+            |component| !ssed_index_component_name_is_backward(&component.filename),
+            |_, _| true,
+            |row| {
+                if checked_targets >= SIDECAR_BACKED_SAMPLE_TARGETS {
+                    return Ok(false);
+                }
+                if looks_like_raw_anchor_label(&row.key) {
+                    return Ok(true);
+                }
+                let Some(component) = catalog.component_for_address(row.body.block) else {
+                    return Ok(true);
+                };
+                if component.role != SsedComponentRole::Honmon {
+                    return Ok(true);
+                }
+                let Some(component_offset) =
+                    component.relative_offset(row.body.block, row.body.offset)
+                else {
+                    return Ok(true);
+                };
+                checked_targets = checked_targets.saturating_add(1);
+                if self
+                    .ssed_dense_anchor_at_component_offset(
+                        component,
+                        usize::try_from(component_offset).unwrap_or(usize::MAX),
+                    )?
+                    .is_some()
+                {
+                    sidecar_backed_targets = sidecar_backed_targets.saturating_add(1);
+                }
+                Ok(true)
+            },
+        )?;
+        diagnostics.append(&mut sample_diagnostics);
+        if checked_targets > 0 && checked_targets == sidecar_backed_targets {
+            diagnostics.push(
+                Diagnostic::info(
+                    "ssed_fulltext_honmon_scan_skipped_sidecar_backed",
+                    "SSED full-text search skipped raw HONMON scanning because sampled native index targets dereference to dense sidecar bodies",
+                )
+                .with_context("checked_targets", checked_targets.to_string()),
+            );
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     fn ssed_fulltext_row_driven_body_page(

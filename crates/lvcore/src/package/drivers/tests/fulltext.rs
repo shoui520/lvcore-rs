@@ -113,7 +113,7 @@ fn ssed_fulltext_matches_fullwidth_ascii_body_text() {
 }
 
 #[test]
-fn ssed_fulltext_prefetches_first_page_from_index_rows_for_non_ascii_body_query() {
+fn ssed_fulltext_uses_bounded_body_scan_for_non_ascii_body_query() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
     let search_modes = ssed_search_modes(&catalog, dir.path());
@@ -158,13 +158,13 @@ fn ssed_fulltext_prefetches_first_page_from_index_rows_for_non_ascii_body_query(
     assert!(
         page.diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
     );
     assert!(
         !page
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
     );
 }
 

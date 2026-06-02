@@ -235,9 +235,15 @@ pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
         });
     }
 
+    if sidecar_sql_prefilter_is_authoritative(query) {
+        return search_ssed_dense_sidecar_bodies_prefiltered(
+            resolvers, query, &needle, offset, limit,
+        );
+    }
+
     if offset == 0 {
         let prefiltered =
-            search_ssed_dense_sidecar_bodies_prefiltered(resolvers, query, &needle, limit)?;
+            search_ssed_dense_sidecar_bodies_prefiltered(resolvers, query, &needle, 0, limit)?;
         if prefiltered.hits.len() >= limit {
             return Ok(prefiltered);
         }
@@ -284,6 +290,7 @@ fn search_ssed_dense_sidecar_bodies_prefiltered(
     resolvers: &[SsedSidecarBodyResolver],
     query: &str,
     needle: &str,
+    offset: usize,
     limit: usize,
 ) -> Result<SsedSidecarSearchPage> {
     let pattern = sqlite_like_contains_pattern(query);
@@ -313,6 +320,10 @@ fn search_ssed_dense_sidecar_bodies_prefiltered(
             if !sidecar_search_hit_matches(&hit, needle) {
                 continue;
             }
+            if matched < offset {
+                matched = matched.saturating_add(1);
+                continue;
+            }
             hits.push(hit);
             matched = matched.saturating_add(1);
             if hits.len() >= limit {
@@ -329,6 +340,16 @@ fn search_ssed_dense_sidecar_bodies_prefiltered(
         matched_count: matched,
         exhausted: true,
     })
+}
+
+fn sidecar_sql_prefilter_is_authoritative(query: &str) -> bool {
+    let query = query.trim();
+    !query.is_empty()
+        && !query.chars().any(char::is_whitespace)
+        && !query
+            .chars()
+            .any(|ch| matches!(ch as u32, 0xff01..=0xff5e | 0x3000))
+        && !query.bytes().any(|byte| byte.is_ascii_alphabetic())
 }
 
 pub fn discover_ssed_sidecar_body_resolvers(
@@ -1105,3 +1126,22 @@ const PLAIN_COLUMN_ALIASES: &[&str] = &[
     "Pinyin",
     "data",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_sql_prefilter_is_authoritative_for_plain_japanese_needles() {
+        assert!(sidecar_sql_prefilter_is_authoritative("白水"));
+        assert!(sidecar_sql_prefilter_is_authoritative("ブリ"));
+    }
+
+    #[test]
+    fn sidecar_sql_prefilter_is_not_authoritative_when_rust_normalization_matters() {
+        assert!(!sidecar_sql_prefilter_is_authoritative("fulltext"));
+        assert!(!sidecar_sql_prefilter_is_authoritative("ＦＵＬＬＴＥＸＴ"));
+        assert!(!sidecar_sql_prefilter_is_authoritative("白 水"));
+        assert!(!sidecar_sql_prefilter_is_authoritative("　"));
+    }
+}
