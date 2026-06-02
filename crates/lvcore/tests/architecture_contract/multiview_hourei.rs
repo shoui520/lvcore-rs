@@ -583,6 +583,52 @@ fn hourei_rejects_traversal_law_target_ids_before_body_lookup() {
     }
 }
 
+#[test]
+fn hourei_rejects_numeric_law_target_ids_not_owned_by_book() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("book");
+    fs::create_dir_all(&package_root).unwrap();
+    write_minimal_hourei_fixture(&package_root);
+
+    let unknown_id = "401000000000000999";
+    fs::write(
+        package_root
+            .join("_DataBase")
+            .join("HTMLs/H")
+            .join(format!("{unknown_id}_H.html")),
+        "<div>unknown cached body</div>",
+    )
+    .unwrap();
+    let unknown_db = package_root
+        .join("_DataBase")
+        .join("H01")
+        .join(format!("{unknown_id}.db"));
+    let connection = Connection::open(&unknown_db).unwrap();
+    connection
+        .execute_batch(
+            "create table t_page (f_rec_id integer primary key, f_text text);
+             insert into t_page values (1, '<div>unknown shard body</div>');",
+        )
+        .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let token = TargetToken::new(&InternalTarget::HoureiLaw {
+        hore_id: unknown_id.to_owned(),
+        anchor: None,
+    })
+    .unwrap();
+    let view = package
+        .render_target(&token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::Unsupported);
+    assert!(view.display_html.is_none());
+    assert!(
+        view.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "hourei_law_missing")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn hourei_rejects_cached_law_html_symlink_escape() {

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::search::SearchMode;
-use crate::storage::{path_stays_inside_root, regular_file_inside_root};
+use crate::storage::regular_file_inside_root;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HoureiStore {
@@ -288,6 +288,9 @@ impl HoureiStore {
         if !is_valid_hourei_law_id(hore_id) {
             return Ok(None);
         }
+        if !self.law_id_exists(hore_id)? {
+            return Ok(None);
+        }
         if let Some(path) = self.cached_law_html_path(hore_id)? {
             return Ok(Some(decode_hourei_text(&fs::read(path)?)?));
         }
@@ -394,7 +397,43 @@ impl HoureiStore {
     }
 
     fn open_core_db(&self, name: &str) -> Result<Connection> {
-        open_readonly_sqlite(&self.root.join("_DataBase").join(name))
+        let Some(path) = self.core_db_path(name)? else {
+            return Err(Error::Driver(format!(
+                "Hourei core database is missing or outside the package: {name}"
+            )));
+        };
+        open_readonly_sqlite(&path)
+    }
+
+    fn law_id_exists(&self, hore_id: &str) -> Result<bool> {
+        if !is_valid_hourei_law_id(hore_id) {
+            return Ok(false);
+        }
+        let Some(path) = self.core_db_path("hore_base.db")? else {
+            return Ok(false);
+        };
+        let connection = open_readonly_sqlite(&path)?;
+        if !sqlite_table_has_columns(&connection, "t_hore", &["f_hore_id"])? {
+            return Ok(false);
+        }
+        let exists = connection
+            .query_row(
+                "select 1 from t_hore where f_hore_id = ? limit 1",
+                [hore_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(exists)
+    }
+
+    fn core_db_path(&self, name: &str) -> Result<Option<PathBuf>> {
+        let path = self.root.join("_DataBase").join(name);
+        if regular_file_inside_root(&self.root, &path)? {
+            Ok(Some(path))
+        } else {
+            Ok(None)
+        }
     }
 
     fn cached_law_html_path(&self, hore_id: &str) -> Result<Option<PathBuf>> {
@@ -404,7 +443,7 @@ impl HoureiStore {
             .join("HTMLs")
             .join("H")
             .join(format!("{hore_id}_H.html"));
-        if path.is_file() && path_stays_inside_root(&self.root, &path)? {
+        if regular_file_inside_root(&self.root, &path)? {
             Ok(Some(path))
         } else {
             Ok(None)
@@ -433,7 +472,7 @@ impl HoureiStore {
             .join("_DataBase")
             .join(format!("{prefix}{year:02}"))
             .join(format!("{hore_id}.db"));
-        if path.is_file() && path_stays_inside_root(&self.root, &path)? {
+        if regular_file_inside_root(&self.root, &path)? {
             Ok(Some(path))
         } else {
             Ok(None)
