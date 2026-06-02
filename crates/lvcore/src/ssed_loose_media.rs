@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::storage::path_stays_inside_root;
+use crate::storage::{path_stays_inside_root, regular_file_inside_root};
 use rusqlite::{Connection, OptionalExtension, params};
 
 mod britannica_html;
@@ -182,7 +182,7 @@ pub fn discover_britannica_chronology_db(package_root: &Path) -> Result<Option<P
     for entry in fs::read_dir(package_root)? {
         let entry = entry?;
         let path = entry.path();
-        if !path.is_file() {
+        if !regular_file_inside_root(package_root, &path)? {
             continue;
         }
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
@@ -190,9 +190,6 @@ pub fn discover_britannica_chronology_db(package_root: &Path) -> Result<Option<P
         };
         let lower = name.to_ascii_lowercase();
         if !lower.starts_with("bri") || !lower.ends_with(".db") {
-            continue;
-        }
-        if !path_stays_inside_root(package_root, &path)? {
             continue;
         }
         let Ok(connection) =
@@ -418,7 +415,9 @@ pub fn has_britannica_whatday_files(package_root: &Path) -> Result<bool> {
         for (directory, _) in whatday_directories(&root)? {
             for entry in fs::read_dir(directory)? {
                 let path = entry?.path();
-                if path.is_file() && parse_whatday_filename(&path).is_some() {
+                if regular_file_inside_root(&root.path, &path)?
+                    && parse_whatday_filename(&path).is_some()
+                {
                     return Ok(true);
                 }
             }
@@ -435,7 +434,7 @@ pub fn discover_britannica_whatday_paths(
         for (directory, relative_prefix) in whatday_directories(&root)? {
             for entry in fs::read_dir(directory)? {
                 let path = entry?.path();
-                if !path.is_file() {
+                if !regular_file_inside_root(&root.path, &path)? {
                     continue;
                 }
                 let Some((month, day, fragment_kind)) = parse_whatday_filename(&path) else {
@@ -519,7 +518,9 @@ pub fn discover_britannica_top_dat_files(package_root: &Path) -> Result<Vec<Brit
         for (directory, relative_prefix) in top_directories(&root)? {
             for entry in fs::read_dir(directory)? {
                 let path = entry?.path();
-                if !path.is_file() || top_dat_category(&path).is_none() {
+                if !regular_file_inside_root(&root.path, &path)?
+                    || top_dat_category(&path).is_none()
+                {
                     continue;
                 }
                 let relative_path = if relative_prefix.is_empty() {
@@ -558,7 +559,8 @@ pub fn has_britannica_top_dat_files(package_root: &Path) -> Result<bool> {
         for (directory, _) in top_directories(&root)? {
             for entry in fs::read_dir(directory)? {
                 let path = entry?.path();
-                if path.is_file() && top_dat_category(&path).is_some() {
+                if regular_file_inside_root(&root.path, &path)? && top_dat_category(&path).is_some()
+                {
                     return Ok(true);
                 }
             }

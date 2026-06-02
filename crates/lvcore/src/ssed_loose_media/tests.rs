@@ -45,11 +45,17 @@ fn britannica_whatday_symlink_escape_is_not_readable() {
 
     let error = parse_britannica_whatday_file(&package, "Media", "whatday/1-1.body").unwrap_err();
     assert!(error.to_string().contains("outside its media root"));
+    assert!(!has_britannica_whatday_files(&package).unwrap());
+    assert!(
+        discover_britannica_whatday_paths(&package)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[cfg(unix)]
 #[test]
-fn britannica_top_dat_symlink_escape_is_not_readable() {
+fn britannica_top_dat_symlink_escape_is_not_discovered() {
     let dir = tempfile::tempdir().unwrap();
     let package = dir.path().join("dict");
     let top = package.join("Media").join("top");
@@ -58,8 +64,12 @@ fn britannica_top_dat_symlink_escape_is_not_readable() {
     std::fs::write(&outside, b"id\ntitle\ndesc\n00000001:0000\nimage.jpg\n").unwrap();
     std::os::unix::fs::symlink(&outside, top.join("top_people.dat")).unwrap();
 
-    let error = discover_britannica_top_dat_files(&package).unwrap_err();
-    assert!(error.to_string().contains("outside its media root"));
+    assert!(!has_britannica_top_dat_files(&package).unwrap());
+    assert!(
+        discover_britannica_top_dat_files(&package)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[cfg(unix)]
