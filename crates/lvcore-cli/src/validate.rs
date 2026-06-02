@@ -565,6 +565,12 @@ fn surface_sequence_hint(
     kind: &NavigationSurfaceKind,
     surface_id: &str,
 ) -> Option<SequenceHint> {
+    if *kind == NavigationSurfaceKind::LvedTree || surface_id == "lved-tree" {
+        return Some(SequenceHint::LvedTreeOrder);
+    }
+    if *kind == NavigationSurfaceKind::TitleIndexBrowse && surface_id == "lved-list" {
+        return Some(SequenceHint::LvedListOrder);
+    }
     match (family, kind) {
         (FormatFamily::Ssed, NavigationSurfaceKind::TitleIndexBrowse) => {
             Some(SequenceHint::TitleIndexOrder {
@@ -584,12 +590,6 @@ fn surface_sequence_hint(
         (FormatFamily::Ssed, NavigationSurfaceKind::Panel) => Some(SequenceHint::PanelOrder {
             value: surface_id.to_owned(),
         }),
-        (FormatFamily::LvedSqlite3, NavigationSurfaceKind::TitleIndexBrowse) => {
-            Some(SequenceHint::LvedListOrder)
-        }
-        (FormatFamily::LvedSqlite3, NavigationSurfaceKind::LvedTree) => {
-            Some(SequenceHint::LvedTreeOrder)
-        }
         (FormatFamily::LvlMultiView, NavigationSurfaceKind::MultiviewTree) => {
             Some(SequenceHint::MultiviewTreeOrder)
         }

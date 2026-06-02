@@ -23,8 +23,10 @@ fn ios_ssed_shell_with_known_retained_fts_dbc_opens_lved_search_payload() {
                 insert into info values (1, 1, 'about.html', '<h1>About OXFPEU4</h1>', '');
                 create table content (id integer primary key, type integer, body text, media text);
                 insert into content values (100, 1, '<article><h1>Alpha</h1><p>retained body</p></article>', '');
+                insert into content values (101, 1, '<article><h1>Beta</h1><p>next retained body</p></article>', '');
                 create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
                 insert into list values (1, 100, 1, '', '<b>alpha</b>', '');
+                insert into list values (2, 101, 1, '', '<b>beta</b>', '');
                 create virtual table search using fts4(forward, back, part, fts, advanced1, advanced2, filter);
                 insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                   values (1, 'alpha', 'ahpla', 'shared alpha', 'alpha body', '', '', '∥alpha∥');
@@ -119,6 +121,47 @@ fn ios_ssed_shell_with_known_retained_fts_dbc_opens_lved_search_payload() {
             .as_deref()
             .unwrap()
             .contains("retained body")
+    );
+    let window = package
+        .resolve_target_window(&page.hits[0].target, None, 0, 1, &RenderOptions::default())
+        .unwrap();
+    assert!(
+        window
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
+    assert_eq!(window.center.title.as_deref(), Some("alpha"));
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].title.as_deref(), Some("beta"));
+    assert!(
+        window.after[0]
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("next retained body")
+    );
+    let title_index_hint_window = package
+        .resolve_target_window(
+            &page.hits[0].target,
+            Some(&lvcore::SequenceHint::TitleIndexOrder {
+                value: "lved-list".to_owned(),
+            }),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert!(
+        title_index_hint_window
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
+    assert_eq!(title_index_hint_window.after.len(), 1);
+    assert_eq!(
+        title_index_hint_window.after[0].title.as_deref(),
+        Some("beta")
     );
 }
 

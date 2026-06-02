@@ -41,16 +41,14 @@ impl SequenceProvider for ReaderBookPackage {
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::LvedSqlite3
-            && matches!(sequence_hint, Some(SequenceHint::LvedTreeOrder))
+        if self.lved_store.is_some()
+            && sequence_hint.is_some_and(is_lved_tree_sequence_hint)
             && let Some(window) = self.resolve_lved_tree_window(target, before, after, options)?
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::LvedSqlite3
-            && sequence_hint.is_none_or(|hint| {
-                matches!(hint, SequenceHint::LvedListOrder | SequenceHint::BodyOrder)
-            })
+        if self.lved_store.is_some()
+            && sequence_hint.is_none_or(is_lved_list_sequence_hint)
             && let Some(window) = self.resolve_lved_list_window(target, before, after, options)?
         {
             return Ok(window);
@@ -88,6 +86,22 @@ impl SequenceProvider for ReaderBookPackage {
             )],
         })
     }
+}
+
+fn is_lved_tree_sequence_hint(hint: &SequenceHint) -> bool {
+    matches!(hint, SequenceHint::LvedTreeOrder)
+        || matches!(
+            hint,
+            SequenceHint::TitleIndexOrder { value } if value == "lved-tree"
+        )
+}
+
+fn is_lved_list_sequence_hint(hint: &SequenceHint) -> bool {
+    matches!(hint, SequenceHint::LvedListOrder | SequenceHint::BodyOrder)
+        || matches!(
+            hint,
+            SequenceHint::TitleIndexOrder { value } if value == "lved-list"
+        )
 }
 
 impl ReaderBookPackage {
