@@ -879,6 +879,9 @@ fn populate_search_result_sequence(page: &mut SearchPage) -> Result<()> {
     }
     if page.hits.len() > SEARCH_RESULT_SEQUENCE_MAX_TARGETS {
         page.result_sequence = None;
+        for hit in &mut page.hits {
+            hit.sequence_hint = None;
+        }
         page.diagnostics.push(
             Diagnostic::info(
                 "search_result_sequence_omitted",
@@ -892,7 +895,14 @@ fn populate_search_result_sequence(page: &mut SearchPage) -> Result<()> {
         );
         return Ok(());
     }
-    page.result_sequence = Some(SearchResultSequence::from_search_page(page)?.encode()?);
+    let value = SearchResultSequence::from_search_page(page)?.encode()?;
+    let hint = SequenceHint::SearchResults {
+        value: value.clone(),
+    };
+    for hit in &mut page.hits {
+        hit.sequence_hint = Some(hint.clone());
+    }
+    page.result_sequence = Some(value);
     Ok(())
 }
 
@@ -993,6 +1003,7 @@ mod tests {
             title_html: format!("hit {index}"),
             title_text: format!("hit {index}"),
             snippet_html: None,
+            sequence_hint: None,
             diagnostics: Vec::new(),
         }
     }
@@ -1011,10 +1022,36 @@ mod tests {
         populate_search_result_sequence(&mut page).unwrap();
 
         assert!(page.result_sequence.is_none());
+        assert!(page.hits.iter().all(|hit| hit.sequence_hint.is_none()));
         assert!(
             page.diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.code == "search_result_sequence_omitted")
         );
+    }
+
+    #[test]
+    fn search_pages_attach_backend_sequence_hint_to_each_hit() {
+        let mut page = SearchPage {
+            hits: vec![search_hit(0), search_hit(1)],
+            next_cursor: None,
+            result_sequence: None,
+            diagnostics: Vec::new(),
+        };
+
+        populate_search_result_sequence(&mut page).unwrap();
+
+        let sequence = page
+            .result_sequence
+            .clone()
+            .expect("page sequence should be populated");
+        for hit in &page.hits {
+            assert_eq!(
+                hit.sequence_hint,
+                Some(SequenceHint::SearchResults {
+                    value: sequence.clone()
+                })
+            );
+        }
     }
 }

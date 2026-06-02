@@ -120,6 +120,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
             title_html: label.html,
             title_text: label.text,
             snippet_html: None,
+            sequence_hint: None,
             diagnostics: label.diagnostics,
         });
         Ok(())
@@ -149,6 +150,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
                         title_html: label.html,
                         title_text: label.text,
                         snippet_html: None,
+                        sequence_hint: None,
                         diagnostics: label.diagnostics,
                     });
                 }

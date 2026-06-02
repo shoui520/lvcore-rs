@@ -191,6 +191,7 @@ impl ReaderBookPackage {
                 title_html: label.html,
                 title_text: label.text,
                 snippet_html: ssed_fulltext_snippet_html(&hit.body.text, &query.query),
+                sequence_hint: None,
                 diagnostics: hit_diagnostics,
             });
             if hits.len() >= page_limit {
@@ -250,6 +251,7 @@ impl ReaderBookPackage {
                     title_html: label.html,
                     title_text: label.text,
                     snippet_html: ssed_fulltext_snippet_html(&record.text, &query.query),
+                    sequence_hint: None,
                     diagnostics: label.diagnostics,
                 });
                 chronology_hits = chronology_hits.saturating_add(1);
@@ -525,6 +527,7 @@ impl ReaderBookPackage {
                     title_html: label.html,
                     title_text: label.text,
                     snippet_html: ssed_fulltext_snippet_html(&body_text, &query.query),
+                    sequence_hint: None,
                     diagnostics: label.diagnostics,
                 });
                 matched_count = matched_count.saturating_add(1);
@@ -782,6 +785,7 @@ impl ReaderBookPackage {
                 title_html: label.html,
                 title_text: label.text,
                 snippet_html: ssed_fulltext_snippet_html(&body_text, raw_query),
+                sequence_hint: None,
                 diagnostics: label.diagnostics,
             });
             if hits.len() >= page_limit {

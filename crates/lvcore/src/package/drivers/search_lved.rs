@@ -44,6 +44,7 @@ impl ReaderBookPackage {
                     title_html,
                     title_text: hit.title_text,
                     snippet_html,
+                    sequence_hint: None,
                     diagnostics: Vec::new(),
                 })
             })

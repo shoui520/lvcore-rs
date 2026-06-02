@@ -329,6 +329,7 @@ mod tests {
                 title_html: "見出し".to_owned(),
                 title_text: "見出し".to_owned(),
                 snippet_html: None,
+                sequence_hint: None,
                 diagnostics: Vec::new(),
             }],
             next_cursor: None,
