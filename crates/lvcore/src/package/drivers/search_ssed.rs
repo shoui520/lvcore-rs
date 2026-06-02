@@ -289,11 +289,6 @@ impl ReaderBookPackage {
             let previous_hits = hits.len();
             let row_offset = row_cursor.unwrap_or(0);
             let remaining_limit = page_limit.saturating_sub(previous_hits);
-            let max_checked_rows = if row_cursor.is_some() {
-                None
-            } else {
-                Some(SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS)
-            };
             let row_page =
                 self.ssed_fulltext_row_driven_body_page(SsedRowDrivenFulltextRequest {
                     catalog,
@@ -302,22 +297,16 @@ impl ReaderBookPackage {
                     byte_candidates: &byte_candidates,
                     offset: row_offset,
                     page_limit: remaining_limit,
-                    max_checked_rows,
+                    max_checked_rows: Some(SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS),
                     gaiji_policy: &label_policy,
                 })?;
-            if row_page.exhausted || previous_hits + row_page.hits.len() >= query.limit {
+            if row_page.exhausted || query.cursor.is_none() || row_cursor.is_some() {
                 diagnostics.extend(row_page.diagnostics);
-                let row_hit_count = row_page.hits.len();
                 hits.extend(row_page.hits);
-                let returned_row_hits =
-                    query.limit.saturating_sub(previous_hits).min(row_hit_count);
-                let next_cursor = if row_page.exhausted && row_hit_count <= returned_row_hits {
+                let next_cursor = if row_page.exhausted {
                     None
                 } else {
-                    Some(format!(
-                        "row:{}",
-                        row_offset.saturating_add(returned_row_hits)
-                    ))
+                    Some(format!("row:{}", row_page.next_row_offset))
                 };
                 hits.truncate(query.limit);
                 return Ok(SearchPage {
@@ -631,6 +620,7 @@ impl ReaderBookPackage {
             return Ok(SsedRowDrivenFulltextPage {
                 hits: Vec::new(),
                 exhausted: true,
+                next_row_offset: offset,
                 diagnostics: Vec::new(),
             });
         }
@@ -638,7 +628,7 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let mut readers: BTreeMap<String, SsedDataFile> = BTreeMap::new();
         let mut seen_offsets: BTreeSet<(String, u64)> = BTreeSet::new();
-        let mut matched_count = 0usize;
+        let mut skipped_rows = 0usize;
         let mut checked_rows = 0usize;
         let mut byte_candidate_rows = 0usize;
         let mut decoded_candidate_rows = 0usize;
@@ -679,6 +669,10 @@ impl ReaderBookPackage {
                 return Ok(true);
             };
             if !seen_offsets.insert((component.filename.clone(), component_offset)) {
+                return Ok(true);
+            }
+            if skipped_rows < offset {
+                skipped_rows = skipped_rows.saturating_add(1);
                 return Ok(true);
             }
             checked_rows = checked_rows.saturating_add(1);
@@ -751,10 +745,6 @@ impl ReaderBookPackage {
                 return Ok(true);
             }
             decoded_candidate_rows = decoded_candidate_rows.saturating_add(1);
-            if matched_count < offset {
-                matched_count = matched_count.saturating_add(1);
-                return Ok(true);
-            }
             let target = match self.ssed_target_for_index_pointer(row.body)? {
                 Ok(target) => target,
                 Err(diagnostic) => {
@@ -777,7 +767,6 @@ impl ReaderBookPackage {
                 snippet_html: ssed_fulltext_snippet_html(&body_text, raw_query),
                 diagnostics: label.diagnostics,
             });
-            matched_count = matched_count.saturating_add(1);
             if hits.len() >= page_limit {
                 stopped_early = true;
                 return Ok(false);
@@ -788,7 +777,7 @@ impl ReaderBookPackage {
         diagnostics.push(
             Diagnostic::info(
                 "ssed_fulltext_row_driven_body_prefetch",
-                "SSED full-text search checked native index targets before falling back to a sequential HONMON scan",
+                "SSED full-text search checked a bounded page of native index targets",
             )
             .with_context("checked_rows", checked_rows.to_string())
             .with_context("byte_candidate_rows", byte_candidate_rows.to_string())
@@ -797,6 +786,7 @@ impl ReaderBookPackage {
         Ok(SsedRowDrivenFulltextPage {
             hits,
             exhausted: !stopped_early,
+            next_row_offset: offset.saturating_add(checked_rows),
             diagnostics,
         })
     }
@@ -946,7 +936,7 @@ impl ReaderBookPackage {
     }
 }
 
-const SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS: usize = 4096;
+const SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS: usize = 512;
 
 struct SsedRowDrivenFulltextRequest<'a> {
     catalog: &'a SsedCatalog,
@@ -962,6 +952,7 @@ struct SsedRowDrivenFulltextRequest<'a> {
 struct SsedRowDrivenFulltextPage {
     hits: Vec<SearchHit>,
     exhausted: bool,
+    next_row_offset: usize,
     diagnostics: Vec<Diagnostic>,
 }
 
