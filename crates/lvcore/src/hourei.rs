@@ -371,9 +371,15 @@ impl HoureiStore {
         if relative.is_empty() {
             return Ok(None);
         }
+        if !is_safe_hourei_resource_reference(relative) {
+            return Ok(None);
+        }
         let direct = self.root.join(relative);
-        if direct.is_file() {
+        if regular_file_inside_root(&self.root, &direct)? {
             return Ok(Some(PathBuf::from(relative)));
+        }
+        if fs::symlink_metadata(&direct).is_ok() {
+            return Ok(None);
         }
         let filename = Path::new(relative)
             .file_name()
@@ -503,6 +509,15 @@ impl HoureiStore {
 
 fn is_valid_hourei_law_id(hore_id: &str) -> bool {
     !hore_id.is_empty() && hore_id.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn is_safe_hourei_resource_reference(relative: &str) -> bool {
+    Path::new(relative).components().all(|component| {
+        matches!(
+            component,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    })
 }
 
 fn hourei_law_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HoureiLawEntry> {
@@ -771,5 +786,47 @@ mod tests {
         };
 
         assert!(store.law_html("123").unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_resource_symlink_escape_is_not_returned() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("outside.png"), b"outside").unwrap();
+        symlink(
+            outside.path().join("outside.png"),
+            root.path().join("icon.png"),
+        )
+        .unwrap();
+        let store = HoureiStore {
+            root: root.path().to_path_buf(),
+        };
+
+        assert!(
+            store
+                .resource_path_by_reference("icon.png")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn direct_resource_traversal_escape_is_not_returned() {
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("outside.png"), b"outside").unwrap();
+        let store = HoureiStore {
+            root: root.path().to_path_buf(),
+        };
+
+        assert!(
+            store
+                .resource_path_by_reference("../outside/outside.png")
+                .unwrap()
+                .is_none()
+        );
     }
 }
