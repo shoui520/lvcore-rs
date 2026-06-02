@@ -191,6 +191,10 @@ impl TargetToken {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn href(&self) -> String {
+        format!("lvcore://target/{}", self.0)
+    }
 }
 
 impl std::fmt::Display for TargetToken {
@@ -216,6 +220,7 @@ struct TargetEnvelope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TargetLink {
     pub token: TargetToken,
+    pub href: String,
     pub label: String,
     pub kind: TargetKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -226,8 +231,10 @@ pub struct TargetLink {
 
 impl TargetLink {
     pub fn new(label: impl Into<String>, target: &InternalTarget) -> Result<Self> {
+        let token = TargetToken::new(target)?;
         Ok(Self {
-            token: TargetToken::new(target)?,
+            href: token.href(),
+            token,
             label: label.into(),
             kind: target.kind(),
             diagnostics: Vec::new(),
@@ -249,5 +256,6 @@ mod tests {
         let token = TargetToken::new(&target).unwrap();
         assert_eq!(token.decode().unwrap(), target);
         assert!(!token.as_str().contains("00100050"));
+        assert_eq!(token.href(), format!("lvcore://target/{}", token.as_str()));
     }
 }

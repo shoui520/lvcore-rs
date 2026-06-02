@@ -341,8 +341,10 @@ impl ReaderBookPackage {
             let mut attributes = BTreeMap::new();
             attributes.insert("href".to_owned(), link.href.clone());
             attributes.insert("control".to_owned(), link.control.clone());
+            let href = token.href();
             target_links.push(TargetLink {
                 token,
+                href,
                 label: link.href.clone(),
                 kind,
                 diagnostics: Vec::new(),

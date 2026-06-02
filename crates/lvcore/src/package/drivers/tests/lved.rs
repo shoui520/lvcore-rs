@@ -152,6 +152,9 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
     assert!(!html.contains("lved.dataid:101"));
     assert!(!html.contains("lved.info:help.html"));
     assert_eq!(view.links.len(), 2);
+    assert!(view.links.iter().all(|link| {
+        link.href == format!("lvcore://target/{}", link.token.as_str()) && html.contains(&link.href)
+    }));
     assert!(view.links.iter().any(|link| matches!(
         link.token.decode().unwrap(),
         InternalTarget::LvedRow {
