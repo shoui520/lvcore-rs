@@ -99,6 +99,9 @@ pub(super) fn finalize_resolved_view(
     mut view: ResolvedTargetView,
     options: &RenderOptions,
 ) -> ResolvedTargetView {
+    if view.href.is_empty() {
+        view.href = view.target.href();
+    }
     update_visual_capabilities(&mut view);
 
     match options.mode {
@@ -261,6 +264,30 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code == "generic_html_targets_fragmentized")
         );
+    }
+
+    #[test]
+    fn resolved_view_finalizer_populates_public_target_href() {
+        let target = token("entry");
+        let view = ResolvedTargetView {
+            href: String::new(),
+            kind: ResolvedTargetKind::EntryBody,
+            target: target.clone(),
+            title: None,
+            display_html: Some("<p>entry</p>".to_owned()),
+            basic_text: None,
+            scroll_anchor: None,
+            surface: None,
+            resources: Vec::new(),
+            links: Vec::new(),
+            capabilities: Default::default(),
+            diagnostics: Vec::new(),
+            debug_trace: None,
+        };
+
+        let view = finalize_resolved_view(view, &RenderOptions::default());
+
+        assert_eq!(view.href, target.href());
     }
 
     #[test]
