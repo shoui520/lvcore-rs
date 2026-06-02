@@ -175,6 +175,71 @@ fn ssed_fulltext_prefetches_non_ascii_body_query() {
 }
 
 #[test]
+fn ssed_fulltext_prefetch_treats_unresolved_index_body_pointers_as_skipped_hints() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_fixture(dir.path());
+    let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    index_page[2..4].copy_from_slice(&2u16.to_be_bytes());
+    let mut pos = 4usize;
+    for (key, body_block, body_offset) in [(b"\x24\x22", 0x20_0000u32, 0u16), (b"\x24\x23", 100, 0)]
+    {
+        index_page[pos] = key.len() as u8;
+        pos += 1;
+        index_page[pos..pos + key.len()].copy_from_slice(key);
+        pos += key.len();
+        index_page[pos..pos + 4].copy_from_slice(&body_block.to_be_bytes());
+        index_page[pos + 4..pos + 6].copy_from_slice(&body_offset.to_be_bytes());
+        index_page[pos + 6..pos + 10].copy_from_slice(&300u32.to_be_bytes());
+        index_page[pos + 10..pos + 12].copy_from_slice(&0u16.to_be_bytes());
+        pos += 12;
+    }
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+    )
+    .unwrap();
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic fulltext".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "検索語".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    let missing = page
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "ssed_fulltext_body_component_missing")
+        .expect("unresolved index body pointer should be reported as a skipped hint");
+    assert_eq!(missing.severity, crate::DiagnosticSeverity::Info);
+}
+
+#[test]
 fn ssed_fulltext_body_cursor_uses_bounded_honmon_scan() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());

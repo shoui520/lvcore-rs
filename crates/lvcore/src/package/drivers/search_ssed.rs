@@ -372,13 +372,16 @@ impl ReaderBookPackage {
                     return Ok(true);
                 }
                 let Some(component) = catalog.component_for_address(row.body.block) else {
-                    diagnostics.push(Diagnostic::warning(
-                        "ssed_fulltext_body_component_missing",
-                        format!(
-                            "no component contains body pointer block {} offset {}",
-                            row.body.block, row.body.offset
-                        ),
-                    ));
+                    diagnostics.push(
+                        Diagnostic::info(
+                            "ssed_fulltext_body_component_missing",
+                            format!(
+                                "no component contains body pointer block {} offset {}",
+                                row.body.block, row.body.offset
+                            ),
+                        )
+                        .with_context("index_component", &row.component),
+                    );
                     return Ok(true);
                 };
                 if component.role != SsedComponentRole::Honmon {
@@ -388,7 +391,7 @@ impl ReaderBookPackage {
                     component.relative_offset(row.body.block, row.body.offset)
                 else {
                     diagnostics.push(
-                        Diagnostic::warning(
+                        Diagnostic::info(
                             "ssed_fulltext_body_pointer_invalid",
                             format!(
                                 "{} does not contain body pointer block {} offset {}",
@@ -642,13 +645,16 @@ impl ReaderBookPackage {
                 return Ok(true);
             }
             let Some(component) = catalog.component_for_address(row.body.block) else {
-                diagnostics.push(Diagnostic::warning(
-                    "ssed_fulltext_body_component_missing",
-                    format!(
-                        "no component contains body pointer block {} offset {}",
-                        row.body.block, row.body.offset
-                    ),
-                ));
+                diagnostics.push(
+                    Diagnostic::info(
+                        "ssed_fulltext_body_component_missing",
+                        format!(
+                            "no component contains body pointer block {} offset {}",
+                            row.body.block, row.body.offset
+                        ),
+                    )
+                    .with_context("index_component", &row.component),
+                );
                 return Ok(true);
             };
             if component.role != SsedComponentRole::Honmon {
@@ -657,7 +663,7 @@ impl ReaderBookPackage {
             let Some(component_offset) = component.relative_offset(row.body.block, row.body.offset)
             else {
                 diagnostics.push(
-                    Diagnostic::warning(
+                    Diagnostic::info(
                         "ssed_fulltext_body_pointer_invalid",
                         format!(
                             "{} does not contain body pointer block {} offset {}",
