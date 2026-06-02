@@ -548,6 +548,14 @@ fn resource_command_resolves_rendered_resource_tokens() {
     assert!(has_scoped_resource_href(
         resource_output["resource"]["href"].as_str().unwrap()
     ));
+
+    let href = search_output["rendered_first"]["resources"][0]["href"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let href_output = resource_command_json(&DriverRegistry::default(), dir.path(), href).unwrap();
+    assert_eq!(href_output["byte_len"].as_u64(), Some(6));
+    assert_eq!(href_output["resource"]["kind"], "image");
 }
 
 #[test]
@@ -596,6 +604,83 @@ fn window_command_resolves_continuous_view_for_target_tokens() {
         output["sequence_hint"],
         serde_json::json!({ "kind": "lved_list_order" })
     );
+
+    let rendered = search_command_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        "alp".to_owned(),
+        SearchMode::Forward,
+        10,
+        None,
+        RenderOptions::default(),
+        true,
+        0,
+        0,
+    )
+    .unwrap();
+    let href = first_target_href(rendered["rendered_first"]["display_html"].as_str().unwrap());
+
+    let href_output = window_command_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        href,
+        Some(SequenceHint::LvedListOrder),
+        1,
+        0,
+        RenderOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        href_output["window"]["center"]["display_html"]
+            .as_str()
+            .unwrap()
+            .contains("next body")
+    );
+    assert_eq!(href_output["window"]["before"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        href_output["routing_diagnostics"].as_array().unwrap().len(),
+        0
+    );
+}
+
+#[test]
+fn render_command_resolves_target_hrefs_from_display_html() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+
+    let search_output = search_command_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        "alp".to_owned(),
+        SearchMode::Forward,
+        10,
+        None,
+        RenderOptions::default(),
+        true,
+        0,
+        0,
+    )
+    .unwrap();
+    let href = first_target_href(
+        search_output["rendered_first"]["display_html"]
+            .as_str()
+            .unwrap(),
+    );
+    let output = render_command_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        href,
+        RenderOptions::default(),
+    )
+    .unwrap();
+
+    assert!(
+        output["view"]["display_html"]
+            .as_str()
+            .unwrap()
+            .contains("next body")
+    );
+    assert_eq!(output["routing_diagnostics"].as_array().unwrap().len(), 0);
 }
 
 fn has_scoped_resource_href(html: &str) -> bool {
@@ -609,6 +694,18 @@ fn has_scoped_resource_href(html: &str) -> bool {
         .next()
         .unwrap_or_default();
     value.split('/').count() == 2
+}
+
+fn first_target_href(html: &str) -> String {
+    const PREFIX: &str = "lvcore://target/";
+    let start = html
+        .find(PREFIX)
+        .expect("rendered HTML should contain a target href");
+    html[start..]
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>'))
+        .next()
+        .unwrap()
+        .to_owned()
 }
 
 fn write_lved_cli_fixture(root: &Path) {
@@ -641,7 +738,7 @@ fn write_lved_cli_fixture(root: &Path) {
                   advanced2,
                   filter
                 );
-                insert into content values (100, 1, '<article><object data="AC6E.svg"></object><p>body</p></article>', '');
+                insert into content values (100, 1, '<article><object data="AC6E.svg"></object><p>body</p><a href="lved.dataid.result:101#jump">beta</a></article>', '');
                 insert into content values (101, 1, '<article><p>next body</p></article>', '');
                 insert into media values (1, 'AC6E', 4, X'3C7376672F3E');
                 insert into list values (1, 100, 1, '', '<img src="AC6E.svg"><b>alpha</b>', '');

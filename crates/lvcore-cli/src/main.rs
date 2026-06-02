@@ -145,7 +145,7 @@ enum Command {
     Render {
         /// Package root or payload path to inspect.
         path: PathBuf,
-        /// Target token previously returned by search, navigation, or links.
+        /// Target token, or a `lvcore://target/...` href emitted in rendered HTML.
         token: String,
         /// Render mode to request.
         #[arg(long, default_value = "native")]
@@ -165,7 +165,7 @@ enum Command {
     Window {
         /// Package root or payload path to inspect.
         path: PathBuf,
-        /// Target token previously returned by search, navigation, or links.
+        /// Target token, or a `lvcore://target/...` href emitted in rendered HTML.
         token: String,
         /// Sequence order to use. Defaults to the package's target-appropriate order.
         #[arg(long)]
@@ -190,7 +190,7 @@ enum Command {
     Resource {
         /// Package root or payload path to inspect.
         path: PathBuf,
-        /// Resource token previously returned by rendered views or navigation labels.
+        /// Resource token, or a `lvcore://resource/...` href emitted in rendered HTML.
         token: String,
     },
 }
@@ -467,16 +467,9 @@ fn main() -> Result<()> {
             debug_trace,
         } => {
             let registry = DriverRegistry::default();
-            let (library, book_id) = open_single_book_library(&registry, &path)?;
-            let metadata = metadata_for(&library, &book_id);
-            let target = TargetToken::from_opaque(token);
             let render_options = cli_render_options(mode, debug_trace);
-            let view = library.render_target(&book_id, &target, &render_options)?;
-            write_json_pretty(&json!({
-                "metadata": metadata,
-                "render_options": render_options,
-                "view": view,
-            }))?;
+            let output = render_command_json(&registry, &path, token, render_options)?;
+            write_json_pretty(&output)?;
         }
         Command::RendererInput { path, token } => {
             let registry = DriverRegistry::default();
@@ -692,6 +685,31 @@ fn search_command_json(
     }))
 }
 
+fn render_command_json(
+    registry: &DriverRegistry,
+    path: &Path,
+    token: String,
+    render_options: RenderOptions,
+) -> Result<serde_json::Value> {
+    let (library, book_id) = open_single_book_library(registry, path)?;
+    let metadata = metadata_for(&library, &book_id);
+    let (routed_book_id, view, routing_diagnostics) = if token.starts_with("lvcore://target/") {
+        let routed = library.render_target_href_routed(&book_id, &token, &render_options)?;
+        (routed.book_id, routed.view, routed.diagnostics)
+    } else {
+        let target = TargetToken::from_opaque(token);
+        let view = library.render_target(&book_id, &target, &render_options)?;
+        (book_id.clone(), view, Vec::new())
+    };
+    Ok(json!({
+        "metadata": metadata,
+        "routed_book_id": routed_book_id,
+        "routing_diagnostics": routing_diagnostics,
+        "render_options": render_options,
+        "view": view,
+    }))
+}
+
 fn window_command_json(
     registry: &DriverRegistry,
     path: &Path,
@@ -703,17 +721,32 @@ fn window_command_json(
 ) -> Result<serde_json::Value> {
     let (library, book_id) = open_single_book_library(registry, path)?;
     let metadata = metadata_for(&library, &book_id);
-    let target = TargetToken::from_opaque(token);
-    let window = library.resolve_target_window(
-        &book_id,
-        &target,
-        sequence_hint.as_ref(),
-        before,
-        after,
-        &render_options,
-    )?;
+    let (routed_book_id, window, routing_diagnostics) = if token.starts_with("lvcore://target/") {
+        let routed = library.resolve_target_window_href_routed(
+            &book_id,
+            &token,
+            sequence_hint.as_ref(),
+            before,
+            after,
+            &render_options,
+        )?;
+        (routed.book_id, routed.window, routed.diagnostics)
+    } else {
+        let target = TargetToken::from_opaque(token);
+        let window = library.resolve_target_window(
+            &book_id,
+            &target,
+            sequence_hint.as_ref(),
+            before,
+            after,
+            &render_options,
+        )?;
+        (book_id.clone(), window, Vec::new())
+    };
     Ok(json!({
         "metadata": metadata,
+        "routed_book_id": routed_book_id,
+        "routing_diagnostics": routing_diagnostics,
         "sequence_hint": sequence_hint,
         "before": before,
         "after": after,
@@ -729,9 +762,18 @@ fn resource_command_json(
 ) -> Result<serde_json::Value> {
     let (library, book_id) = open_single_book_library(registry, path)?;
     let metadata = metadata_for(&library, &book_id);
-    let resource = ResourceToken::from_opaque(token);
-    let resource_ref = library.resolve_resource(&book_id, &resource)?;
-    let bytes = library.read_resource(&book_id, &resource)?;
+    let (resource_ref, bytes) = if token.starts_with("lvcore://resource/") {
+        (
+            library.resolve_scoped_resource_href(&token)?,
+            library.read_scoped_resource_href(&token)?,
+        )
+    } else {
+        let resource = ResourceToken::from_opaque(token);
+        (
+            library.resolve_resource(&book_id, &resource)?,
+            library.read_resource(&book_id, &resource)?,
+        )
+    };
     Ok(json!({
         "metadata": metadata,
         "resource": resource_ref,
