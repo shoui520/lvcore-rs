@@ -17,7 +17,8 @@ use crate::render::{RenderOptions, RendererInput, ResolvedTargetKind, ResolvedTa
 use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::{SearchPage, SearchQuery, SearchScope};
 use crate::sequence::{
-    SearchResultSequence, SearchResultSequenceTarget, SequenceHint, TargetWindow,
+    SEARCH_RESULT_SEQUENCE_MAX_TARGETS, SearchResultSequence, SearchResultSequenceTarget,
+    SequenceHint, TargetWindow,
 };
 use crate::target::{InternalTarget, TargetToken};
 
@@ -876,6 +877,21 @@ fn populate_search_result_sequence(page: &mut SearchPage) -> Result<()> {
         page.result_sequence = None;
         return Ok(());
     }
+    if page.hits.len() > SEARCH_RESULT_SEQUENCE_MAX_TARGETS {
+        page.result_sequence = None;
+        page.diagnostics.push(
+            Diagnostic::info(
+                "search_result_sequence_omitted",
+                "search result page is larger than the maximum continuous-view sequence payload",
+            )
+            .with_context("hit_count", page.hits.len().to_string())
+            .with_context(
+                "max_targets",
+                SEARCH_RESULT_SEQUENCE_MAX_TARGETS.to_string(),
+            ),
+        );
+        return Ok(());
+    }
     page.result_sequence = Some(SearchResultSequence::from_search_page(page)?.encode()?);
     Ok(())
 }
@@ -958,4 +974,47 @@ fn library_search_cursor_fingerprint(book_ids: &[&BookId], query: &SearchQuery) 
         hasher.update(b"\0");
     }
     hex::encode(hasher.finalize())[..16].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::SearchHit;
+
+    fn search_hit(index: usize) -> SearchHit {
+        let target = TargetToken::new(&InternalTarget::Unsupported {
+            reason: format!("hit-{index}"),
+        })
+        .unwrap();
+        SearchHit {
+            book_id: BookId("SSED:TEST".to_owned()),
+            href: target.href(),
+            target,
+            title_html: format!("hit {index}"),
+            title_text: format!("hit {index}"),
+            snippet_html: None,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn oversized_search_pages_omit_sequence_instead_of_failing() {
+        let mut page = SearchPage {
+            hits: (0..=SEARCH_RESULT_SEQUENCE_MAX_TARGETS)
+                .map(search_hit)
+                .collect(),
+            next_cursor: None,
+            result_sequence: None,
+            diagnostics: Vec::new(),
+        };
+
+        populate_search_result_sequence(&mut page).unwrap();
+
+        assert!(page.result_sequence.is_none());
+        assert!(
+            page.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "search_result_sequence_omitted")
+        );
+    }
 }

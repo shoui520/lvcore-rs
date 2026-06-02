@@ -10,7 +10,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 const SEARCH_RESULT_SEQUENCE_VERSION: u8 = 1;
-const SEARCH_RESULT_SEQUENCE_MAX_TARGETS: usize = 2048;
+pub const SEARCH_RESULT_SEQUENCE_MAX_TARGETS: usize = 2048;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
