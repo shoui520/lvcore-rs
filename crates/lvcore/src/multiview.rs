@@ -139,16 +139,31 @@ impl MultiviewStore {
         if limit == 0 {
             return Ok(Vec::new());
         }
+        if let Some(hits) = self.content_search_page(query, mode, offset, limit)?
+            && !hits.is_empty()
+        {
+            return Ok(hits);
+        }
+        self.law_search_page(query, mode, offset, limit)
+    }
+
+    fn content_search_page(
+        &self,
+        query: &str,
+        mode: &SearchMode,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Option<Vec<MultiviewSearchHit>>> {
         let Some(payload) = self.first_payload_by_role(MultiviewPayloadRole::ContentSearchBody)?
         else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
         let sqlite_path = self.sqlite_path_for_payload(payload)?;
         self.with_connection(&sqlite_path, |connection| {
             let schema = self.schema(&sqlite_path, connection)?;
             if !schema.table_has_columns("t_search", &["f_ID", "f_KeyWord", "f_TitleMain", "f_All"])
             {
-                return Ok(Vec::new());
+                return Ok(Some(Vec::new()));
             }
             let (column, pattern) = match mode {
                 SearchMode::Exact => ("f_KeyWord", format!("%§{query}§%")),
@@ -188,7 +203,214 @@ impl MultiviewStore {
                 })
             })?;
             rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map(Some)
                 .map_err(Error::from)
+        })
+    }
+
+    fn law_search_page(
+        &self,
+        query: &str,
+        mode: &SearchMode,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<MultiviewSearchHit>> {
+        if *mode != SearchMode::FullText {
+            return self.law_metadata_search_page(query, mode, offset, limit);
+        }
+
+        let metadata_count = self.law_metadata_match_count(query, mode)?;
+        let mut hits = Vec::new();
+        if offset < metadata_count {
+            hits.extend(self.law_metadata_search_page(query, mode, offset, limit)?);
+        }
+        if hits.len() >= limit {
+            hits.truncate(limit);
+            return Ok(hits);
+        }
+
+        let body_offset = offset.saturating_sub(metadata_count);
+        let body_limit = limit.saturating_sub(hits.len());
+        hits.extend(self.law_body_search_page(query, body_offset, body_limit)?);
+        hits.truncate(limit);
+        Ok(hits)
+    }
+
+    fn law_metadata_match_count(&self, query: &str, mode: &SearchMode) -> Result<usize> {
+        if query.trim().is_empty() {
+            return Ok(0);
+        }
+        let Some(payload) = self.first_payload_by_role(MultiviewPayloadRole::LawMetadata)? else {
+            return Ok(0);
+        };
+        let sqlite_path = self.sqlite_path_for_payload(payload)?;
+        self.with_connection(&sqlite_path, |connection| {
+            let schema = self.schema(&sqlite_path, connection)?;
+            let searchable_columns = law_metadata_search_columns(&schema);
+            if searchable_columns.is_empty() {
+                return Ok(0);
+            }
+            let (operator, pattern) = sql_match_operator_and_pattern(query, mode);
+            let conditions = sql_conditions_for_columns(&searchable_columns, operator);
+            let sql = format!("select count(*) from t_hore where {conditions}");
+            let params = vec![pattern; searchable_columns.len()];
+            let count = connection.query_row(&sql, rusqlite::params_from_iter(params), |row| {
+                row.get::<_, i64>(0)
+            })?;
+            Ok(count.max(0) as usize)
+        })
+    }
+
+    fn law_metadata_search_page(
+        &self,
+        query: &str,
+        mode: &SearchMode,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<MultiviewSearchHit>> {
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(payload) = self.first_payload_by_role(MultiviewPayloadRole::LawMetadata)? else {
+            return Ok(Vec::new());
+        };
+        let sqlite_path = self.sqlite_path_for_payload(payload)?;
+        self.with_connection(&sqlite_path, |connection| {
+            let schema = self.schema(&sqlite_path, connection)?;
+            let searchable_columns = law_metadata_search_columns(&schema);
+            if searchable_columns.is_empty() {
+                return Ok(Vec::new());
+            }
+            let (operator, pattern) = sql_match_operator_and_pattern(query, mode);
+            let conditions = sql_conditions_for_columns(&searchable_columns, operator);
+            let name_sub = optional_column_expr(&schema, "t_hore", "f_name_sub");
+            let abbr1 = optional_column_expr(&schema, "t_hore", "f_abbr1");
+            let commonname = optional_column_expr(&schema, "t_hore", "f_commonname");
+            let sql = format!(
+                "select f_hore_code, f_name, {name_sub}, f_name_kana, {abbr1}, {commonname} \
+                 from t_hore where {conditions} \
+                 order by f_kana_order, f_name_kana, f_name, f_hore_code limit ? offset ?",
+            );
+            let mut params = vec![pattern; searchable_columns.len()];
+            params.push(limit.to_string());
+            params.push(offset.to_string());
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map(rusqlite::params_from_iter(params), |row| {
+                let code = sqlite_value_to_string(row.get_ref(0)?)?;
+                let name = sqlite_value_to_string(row.get_ref(1)?)?;
+                let name_sub = sqlite_value_to_string(row.get_ref(2)?)?;
+                let kana = sqlite_value_to_string(row.get_ref(3)?)?;
+                let abbr = sqlite_value_to_string(row.get_ref(4)?)?;
+                let common = sqlite_value_to_string(row.get_ref(5)?)?;
+                let title_html = if name_sub.is_empty() || name_sub == name {
+                    name.clone()
+                } else {
+                    format!("{name}<span class=\"lv-subtitle\">{name_sub}</span>")
+                };
+                let snippet = [kana, abbr, common]
+                    .into_iter()
+                    .filter(|part| !part.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" / ");
+                Ok(MultiviewSearchHit {
+                    href: code,
+                    title_html,
+                    title_text: name,
+                    snippet_html: (!snippet.is_empty()).then_some(snippet),
+                })
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::from)
+        })
+    }
+
+    fn law_body_search_page(
+        &self,
+        query: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<MultiviewSearchHit>> {
+        if query.trim().is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let Some(payload) = self.first_payload_by_role(MultiviewPayloadRole::LawBody)? else {
+            return Ok(Vec::new());
+        };
+        let sqlite_path = self.sqlite_path_for_payload(payload)?;
+        self.with_connection(&sqlite_path, |connection| {
+            let schema = self.schema(&sqlite_path, connection)?;
+            let pattern = format!("%{}%", escape_sql_like(query));
+            let mut remaining_offset = offset;
+            let mut remaining_limit = limit;
+            let mut hits = Vec::new();
+            for table in law_body_tables(&schema) {
+                if remaining_limit == 0 {
+                    break;
+                }
+                let conditions = "coalesce(f_text_plane, '') like ? escape '\\' \
+                    or coalesce(f_text, '') like ? escape '\\'";
+                let count_sql = format!(
+                    "select count(*) from {} where {conditions}",
+                    quote_identifier(&table)
+                );
+                let count = connection.query_row(
+                    &count_sql,
+                    rusqlite::params![pattern, pattern],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                let count = count.max(0) as usize;
+                if remaining_offset >= count {
+                    remaining_offset -= count;
+                    continue;
+                }
+
+                let select_sql = format!(
+                    "select f_hore_code, f_title_no, f_title_sub, f_anchor, f_text_plane \
+                     from {} where {conditions} order by f_rec_id limit ? offset ?",
+                    quote_identifier(&table)
+                );
+                let mut statement = connection.prepare(&select_sql)?;
+                let rows = statement.query_map(
+                    rusqlite::params![
+                        pattern,
+                        pattern,
+                        remaining_limit as i64,
+                        remaining_offset as i64
+                    ],
+                    |row| {
+                        let hore_code = sqlite_value_to_string(row.get_ref(0)?)?;
+                        let title_no = sqlite_value_to_string(row.get_ref(1)?)?;
+                        let title_sub = sqlite_value_to_string(row.get_ref(2)?)?;
+                        let anchor = sqlite_value_to_string(row.get_ref(3)?)?;
+                        let text_plane = sqlite_value_to_string(row.get_ref(4)?)?;
+                        let title_html = [title_no.as_str(), title_sub.as_str()]
+                            .into_iter()
+                            .filter(|part| !part.trim().is_empty())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let title_html = if title_html.is_empty() {
+                            if anchor.is_empty() {
+                                hore_code.clone()
+                            } else {
+                                anchor.clone()
+                            }
+                        } else {
+                            title_html
+                        };
+                        Ok(MultiviewSearchHit {
+                            href: if anchor.is_empty() { hore_code } else { anchor },
+                            title_text: html_to_text(&title_html),
+                            title_html,
+                            snippet_html: plain_snippet(&text_plane, 220),
+                        })
+                    },
+                )?;
+                let mut table_hits = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+                remaining_limit = remaining_limit.saturating_sub(table_hits.len());
+                remaining_offset = 0;
+                hits.append(&mut table_hits);
+            }
+            Ok(hits)
         })
     }
 
@@ -875,6 +1097,50 @@ fn sqlite_value_to_string(value: ValueRef<'_>) -> rusqlite::Result<String> {
     }
 }
 
+fn law_metadata_search_columns(schema: &MultiviewSqliteSchema) -> Vec<&'static str> {
+    if !schema.table_has_columns("t_hore", &["f_hore_code", "f_name", "f_name_kana"]) {
+        return Vec::new();
+    }
+    [
+        "f_name",
+        "f_name_sub",
+        "f_name_kana",
+        "f_abbr1",
+        "f_abbr1_kana",
+        "f_nickname",
+        "f_commonname",
+        "f_commonname_kana",
+        "f_commonname_ex",
+        "f_abbr_user",
+        "f_abbr_user_kana",
+        "f_temp_kana",
+    ]
+    .into_iter()
+    .filter(|column| schema.table_has_columns("t_hore", &[*column]))
+    .collect()
+}
+
+fn law_body_tables(schema: &MultiviewSqliteSchema) -> Vec<String> {
+    schema
+        .table_names()
+        .filter(|table| {
+            schema.table_has_columns(
+                table,
+                &[
+                    "f_hore_code",
+                    "f_rec_id",
+                    "f_title_no",
+                    "f_title_sub",
+                    "f_anchor",
+                    "f_text",
+                    "f_text_plane",
+                ],
+            )
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
 fn html_to_text(fragment: &str) -> String {
     let mut text = String::with_capacity(fragment.len());
     let mut in_tag = false;
@@ -892,6 +1158,67 @@ fn html_to_text(fragment: &str) -> String {
         .replace("&amp;", "&")
         .trim()
         .to_owned()
+}
+
+fn plain_snippet(text: &str, max_chars: usize) -> Option<String> {
+    let snippet = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect::<String>();
+    (!snippet.is_empty()).then_some(snippet)
+}
+
+fn sql_match_operator_and_pattern(query: &str, mode: &SearchMode) -> (&'static str, String) {
+    match mode {
+        SearchMode::Exact => ("=", query.to_owned()),
+        SearchMode::Forward => ("like", format!("{}%", escape_sql_like(query))),
+        SearchMode::Backward => ("like", format!("%{}", escape_sql_like(query))),
+        SearchMode::Partial | SearchMode::FullText | SearchMode::Advanced(_) => {
+            ("like", format!("%{}%", escape_sql_like(query)))
+        }
+    }
+}
+
+fn escape_sql_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '%' | '_' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn sql_conditions_for_columns(columns: &[&str], operator: &str) -> String {
+    columns
+        .iter()
+        .map(|column| {
+            if operator == "=" {
+                format!("coalesce({}, '') = ?", quote_identifier(column))
+            } else {
+                format!(
+                    "coalesce({}, '') like ? escape '\\'",
+                    quote_identifier(column)
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+fn optional_column_expr(schema: &MultiviewSqliteSchema, table: &str, column: &str) -> String {
+    if schema.table_has_columns(table, &[column]) {
+        quote_identifier(column)
+    } else {
+        "''".to_owned()
+    }
 }
 
 fn quote_identifier(identifier: &str) -> String {

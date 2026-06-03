@@ -101,3 +101,135 @@ fn logofont_cipher_payload_cache_path_is_stable_and_content_versioned() {
     let second = decrypted_multiview_cache_path(&path).unwrap();
     assert_ne!(first, second);
 }
+
+#[test]
+fn law_multiview_search_uses_hore_metadata_when_search_body_table_is_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let metadata_path = dir.path().join("nlvdat");
+    let connection = Connection::open(&metadata_path).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            create table t_hore (
+                f_hore_code text primary key,
+                f_name text,
+                f_name_sub text,
+                f_name_kana text,
+                f_kana_order integer,
+                f_abbr1 text,
+                f_abbr1_kana text,
+                f_nickname text,
+                f_commonname text,
+                f_commonname_kana text,
+                f_commonname_ex text,
+                f_abbr_user text,
+                f_abbr_user_kana text,
+                f_temp_kana text
+            );
+            insert into t_hore values
+                ('M110', '民法', '民法', 'みんぽう', 100, '民', 'みん', '', '', '', '', '', '', ''),
+                ('T010', '相続税法', '相続税法', 'そうぞくぜいほう', 200, '相続税', 'そうぞくぜい', '', '', '', '', '', '', '');
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = MultiviewStore::discover(dir.path()).unwrap().unwrap();
+
+    let forward_hits = store
+        .search_page("民法", &SearchMode::Forward, 0, 10)
+        .unwrap();
+    assert_eq!(forward_hits[0].href, "M110");
+    assert_eq!(forward_hits[0].title_text, "民法");
+
+    let exact_hits = store
+        .search_page("民法", &SearchMode::Exact, 0, 10)
+        .unwrap();
+    assert_eq!(exact_hits.len(), 1);
+    assert_eq!(exact_hits[0].href, "M110");
+
+    let fulltext_name_hits = store
+        .search_page("相続", &SearchMode::FullText, 0, 10)
+        .unwrap();
+    assert_eq!(fulltext_name_hits[0].href, "T010");
+    assert_eq!(fulltext_name_hits[0].title_text, "相続税法");
+}
+
+#[test]
+fn law_multiview_fulltext_search_uses_law_body_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let metadata_path = dir.path().join("nlvdat");
+    let metadata = Connection::open(&metadata_path).unwrap();
+    metadata
+        .execute_batch(
+            r#"
+            create table t_hore (
+                f_hore_code text primary key,
+                f_name text,
+                f_name_sub text,
+                f_name_kana text,
+                f_kana_order integer
+            );
+            insert into t_hore values
+                ('M110', '民法', '民法', 'みんぽう', 100);
+            "#,
+        )
+        .unwrap();
+    drop(metadata);
+
+    let body_path = dir.path().join("blvbat");
+    let body = Connection::open(&body_path).unwrap();
+    body.execute_batch(
+        r#"
+        create table t_M110 (
+            f_hore_code text,
+            f_hore_id integer,
+            f_rec_id integer,
+            f_rec_type integer,
+            f_title_no text,
+            f_title_sub text,
+            f_anchor text,
+            f_text text,
+            f_text_plane text
+        );
+        insert into t_M110 values
+            ('M110', 1, 10000, 0, '第一条', '基本原則', 'M110_HON-j1',
+             '<p>私権は、公共の福祉に適合しなければならない。</p>',
+             '私権は、公共の福祉に適合しなければならない。'),
+            ('M110', 1, 20000, 0, '第一三条', '保佐人の同意を要する行為等', 'M110_HON-j13',
+             '<p>保証及び相続の承認に関する条文。</p>',
+             '保証及び相続の承認に関する条文。');
+        "#,
+    )
+    .unwrap();
+    drop(body);
+
+    let store = MultiviewStore::discover(dir.path()).unwrap().unwrap();
+    let name_hits = store
+        .search_page("民法", &SearchMode::Forward, 0, 10)
+        .unwrap();
+    assert_eq!(name_hits.len(), 1);
+    assert_eq!(name_hits[0].href, "M110");
+    assert_eq!(name_hits[0].title_text, "民法");
+
+    let body_hits = store
+        .search_page("保証", &SearchMode::FullText, 0, 10)
+        .unwrap();
+    assert_eq!(body_hits.len(), 1);
+    assert_eq!(body_hits[0].href, "M110_HON-j13");
+    assert_eq!(
+        body_hits[0].title_text,
+        "第一三条 保佐人の同意を要する行為等"
+    );
+    assert!(
+        body_hits[0]
+            .snippet_html
+            .as_deref()
+            .unwrap()
+            .contains("保証")
+    );
+
+    let body = store.body_for_href(&body_hits[0].href).unwrap().unwrap();
+    assert_eq!(body.title, "第一三条 保佐人の同意を要する行為等");
+    assert!(body.html.contains("保証及び相続"));
+}
