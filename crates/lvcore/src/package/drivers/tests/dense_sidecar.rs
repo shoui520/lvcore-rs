@@ -146,6 +146,7 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     fs::write(package_root.join("OTHER/image/b129.png"), b"png-bytes").unwrap();
     fs::write(package_root.join("HANREI/img/b159_M.png"), b"hanrei-png").unwrap();
     fs::write(dir.path().join("img/KG003173.svg"), b"<svg/>").unwrap();
+    fs::write(dir.path().join("img/Furoku0.pdf"), b"%PDF").unwrap();
     let catalog =
         write_ssed_dense_sidecar_fixture(&package_root, DenseSidecarFixture::BodyRowsWithLvedLinks);
     let package = ReaderBookPackage::new(
@@ -177,11 +178,12 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
 
     assert!(!html.contains("lved.dataid:"));
     assert!(!html.contains("src=\"b129.png\""));
+    assert!(!html.contains("src=\"furoku01_01.jpg\""));
     assert!(!html.contains("data = \"KG003173.svg\""));
     assert!(html.contains("lvcore://target/"));
     assert!(html.contains("lvcore://resource/"));
     assert_eq!(view.links.len(), 2);
-    assert_eq!(view.resources.len(), 4);
+    assert_eq!(view.resources.len(), 5);
     assert!(
         view.links
             .iter()
@@ -225,6 +227,11 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
             && resource.kind == ResourceKind::Image
             && resource.href.is_some()
     }));
+    assert!(view.resources.iter().any(|resource| {
+        resource.label.as_deref() == Some("Furoku0.pdf")
+            && resource.kind == ResourceKind::Pdf
+            && resource.href.is_some()
+    }));
     let mut resource_bytes = view
         .resources
         .iter()
@@ -234,6 +241,7 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     assert_eq!(
         resource_bytes,
         vec![
+            b"%PDF".to_vec(),
             b"<svg/>".to_vec(),
             b"hanrei-png".to_vec(),
             b"png-bytes".to_vec(),

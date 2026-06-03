@@ -482,6 +482,15 @@ impl ReaderBookPackage {
                     path: candidate,
                 }));
             }
+            if let Some((root_name, path)) = candidate.split_once('/')
+                && resolve_loose_media_file(&self.root, root_name, path)?.is_some()
+            {
+                return Ok(Some(InternalResource::SsedLooseFile {
+                    root_name: root_name.to_owned(),
+                    path: path.to_owned(),
+                    resource_kind: resource_kind_from_path(&candidate),
+                }));
+            }
         }
         if let Some(resource) = self.ssed_sidecar_media_resource_for_ref(&relative)? {
             return Ok(Some(resource));
