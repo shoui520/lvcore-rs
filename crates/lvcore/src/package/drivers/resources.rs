@@ -65,6 +65,20 @@ impl ResourceProvider for ReaderBookPackage {
             InternalResource::MediaBlob {
                 key, resource_kind, ..
             } => self.resolve_media_blob_resource(token, &key, resource_kind),
+            InternalResource::SsedSidecarMedia {
+                sidecar,
+                table,
+                name,
+                label,
+                resource_kind,
+            } => self.resolve_ssed_sidecar_media_resource(
+                token,
+                &sidecar,
+                &table,
+                &name,
+                &label,
+                resource_kind,
+            ),
             InternalResource::Unsupported { reason } => {
                 self.resolve_unsupported_resource(token, reason)
             }
@@ -121,6 +135,12 @@ impl ResourceProvider for ReaderBookPackage {
             InternalResource::MediaBlob { store, key, .. } => {
                 self.read_media_blob_resource(&store, &key)
             }
+            InternalResource::SsedSidecarMedia {
+                sidecar,
+                table,
+                name,
+                ..
+            } => self.read_ssed_sidecar_media_resource(&sidecar, &table, &name),
             InternalResource::Unsupported { reason } => Err(Error::Driver(reason)),
         }
     }

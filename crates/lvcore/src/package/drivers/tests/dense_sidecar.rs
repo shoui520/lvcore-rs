@@ -181,7 +181,7 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     assert!(html.contains("lvcore://target/"));
     assert!(html.contains("lvcore://resource/"));
     assert_eq!(view.links.len(), 2);
-    assert_eq!(view.resources.len(), 3);
+    assert_eq!(view.resources.len(), 4);
     assert!(
         view.links
             .iter()
@@ -220,6 +220,11 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
             && resource.kind == ResourceKind::Image
             && resource.href.is_some()
     }));
+    assert!(view.resources.iter().any(|resource| {
+        resource.label.as_deref() == Some("sidecar_pic.png")
+            && resource.kind == ResourceKind::Image
+            && resource.href.is_some()
+    }));
     let mut resource_bytes = view
         .resources
         .iter()
@@ -231,7 +236,8 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
         vec![
             b"<svg/>".to_vec(),
             b"hanrei-png".to_vec(),
-            b"png-bytes".to_vec()
+            b"png-bytes".to_vec(),
+            b"\xff\xd8\xff\xe0".to_vec(),
         ]
     );
 

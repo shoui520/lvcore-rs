@@ -475,6 +475,17 @@ impl ReaderBookPackage {
                 }));
             }
         }
+        for candidate in ssed_sidecar_ios_appendix_resource_candidates(&relative) {
+            if self.resolve_package_file_path(&candidate)?.is_some() {
+                return Ok(Some(InternalResource::PackageFile {
+                    resource_kind: resource_kind_from_path(&candidate),
+                    path: candidate,
+                }));
+            }
+        }
+        if let Some(resource) = self.ssed_sidecar_media_resource_for_ref(&relative)? {
+            return Ok(Some(resource));
+        }
         Ok(None)
     }
 
@@ -551,6 +562,56 @@ fn ssed_sidecar_direct_resource_candidates(relative: &str) -> Vec<String> {
     candidates
 }
 
+fn ssed_sidecar_ios_appendix_resource_candidates(relative: &str) -> Vec<String> {
+    let filename = relative.rsplit('/').next().unwrap_or(relative);
+    let lower = filename.to_ascii_lowercase();
+    if !lower.ends_with(".jpg") && !lower.ends_with(".jpeg") {
+        return Vec::new();
+    }
+    let stem = lower
+        .strip_suffix(".jpeg")
+        .or_else(|| lower.strip_suffix(".jpg"))
+        .unwrap_or(lower.as_str());
+    let Some((prefix, number)) = parse_ios_appendix_image_stem(stem) else {
+        return Vec::new();
+    };
+    match prefix {
+        "furoku" if number > 0 => {
+            let resource_number = number - 1;
+            vec![
+                format!("img/Furoku{resource_number}.pdf"),
+                format!("Furoku{resource_number}.pdf"),
+            ]
+        }
+        "kanmatsu" => match number {
+            1 => vec!["img/Furoku9.pdf".to_owned(), "Furoku9.pdf".to_owned()],
+            2 => vec!["img/Furoku10.pdf".to_owned(), "Furoku10.pdf".to_owned()],
+            3 => vec![
+                "img/Furoku11.png".to_owned(),
+                "Furoku11.png".to_owned(),
+                "img/Furoku11.html".to_owned(),
+                "Furoku11.html".to_owned(),
+            ],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn parse_ios_appendix_image_stem(stem: &str) -> Option<(&'static str, u32)> {
+    for prefix in ["furoku", "kanmatsu"] {
+        let Some(rest) = stem.strip_prefix(prefix) else {
+            continue;
+        };
+        let digits: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if digits.is_empty() || !rest[digits.len()..].starts_with('_') {
+            return None;
+        }
+        return digits.parse().ok().map(|number| (prefix, number));
+    }
+    None
+}
+
 fn looks_like_relative_html_resource_ref(raw_value: &str) -> bool {
     normalized_sidecar_direct_resource_ref(
         &html_unescape_minimal(raw_value).trim().replace('\\', "/"),
@@ -586,4 +647,35 @@ fn normalized_sidecar_direct_resource_ref(value: &str) -> Option<String> {
         }
     }
     (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ios_iwkoku_appendix_image_aliases_match_observed_resource_names() {
+        assert_eq!(
+            ssed_sidecar_ios_appendix_resource_candidates("furoku01_01.jpg"),
+            vec!["img/Furoku0.pdf", "Furoku0.pdf"]
+        );
+        assert_eq!(
+            ssed_sidecar_ios_appendix_resource_candidates("appendix/furoku09_46.jpg"),
+            vec!["img/Furoku8.pdf", "Furoku8.pdf"]
+        );
+        assert_eq!(
+            ssed_sidecar_ios_appendix_resource_candidates("kanmatsu01_02.jpg"),
+            vec!["img/Furoku9.pdf", "Furoku9.pdf"]
+        );
+        assert_eq!(
+            ssed_sidecar_ios_appendix_resource_candidates("kanmatsu03_01.jpg"),
+            vec![
+                "img/Furoku11.png",
+                "Furoku11.png",
+                "img/Furoku11.html",
+                "Furoku11.html"
+            ]
+        );
+        assert!(ssed_sidecar_ios_appendix_resource_candidates("image.png").is_empty());
+    }
 }

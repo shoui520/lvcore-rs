@@ -66,6 +66,13 @@ pub enum InternalResource {
         key: String,
         resource_kind: ResourceKind,
     },
+    SsedSidecarMedia {
+        sidecar: String,
+        table: String,
+        name: String,
+        label: String,
+        resource_kind: ResourceKind,
+    },
     SoundData {
         sound_id: u32,
     },
@@ -95,6 +102,7 @@ impl InternalResource {
             Self::SsedPcmDataRange { .. } => ResourceKind::PcmData,
             Self::SsedFigure { .. } | Self::SsedGa16Glyph { .. } => ResourceKind::Image,
             Self::MediaBlob { resource_kind, .. } => *resource_kind,
+            Self::SsedSidecarMedia { resource_kind, .. } => *resource_kind,
             Self::SoundData { .. } => ResourceKind::SoundData,
             Self::LooseMovie { .. } => ResourceKind::Video,
             Self::SsedPdfSpread { .. } => ResourceKind::Pdf,
@@ -220,6 +228,20 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("HANREI"));
+    }
+
+    #[test]
+    fn token_round_trips_ssed_sidecar_media_resource() {
+        let resource = InternalResource::SsedSidecarMedia {
+            sidecar: "vlpljblM".to_owned(),
+            table: "media".to_owned(),
+            name: "SS0261".to_owned(),
+            label: "SS0261.jpg".to_owned(),
+            resource_kind: ResourceKind::Image,
+        };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("SS0261"));
     }
 
     #[test]

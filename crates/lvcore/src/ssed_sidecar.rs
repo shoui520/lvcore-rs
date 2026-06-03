@@ -35,6 +35,24 @@ pub struct SsedSidecarBodyResolver {
     pub plain_column: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsedSidecarMediaResolver {
+    pub path: PathBuf,
+    pub storage: SsedSidecarStorage,
+    pub table: String,
+    pub name_column: String,
+    pub blob_column: String,
+    pub type_column: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsedSidecarMedia {
+    pub name: String,
+    pub data: Vec<u8>,
+    pub media_type: Option<i64>,
+    pub resolver: SsedSidecarMediaResolver,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsedSidecarKind {
     TContents,
@@ -375,6 +393,85 @@ pub fn discover_ssed_sidecar_body_resolvers(
     }
     resolvers.sort_by_key(resolver_priority);
     Ok(resolvers)
+}
+
+pub fn discover_ssed_sidecar_media_resolvers(
+    root: &Path,
+    dict_id_hint: Option<&str>,
+) -> Result<Vec<SsedSidecarMediaResolver>> {
+    let mut resolvers = Vec::new();
+    for candidate in sidecar_file_candidates(root, dict_id_hint)? {
+        let Some(storage) = sqlite_storage(&candidate)? else {
+            continue;
+        };
+        let connection = open_sidecar_connection(&candidate, storage)?;
+        let tables = sqlite_table_names(&connection)?;
+        for table in tables {
+            let columns = sqlite_columns(&connection, &table)?;
+            let Some(resolver) =
+                media_resolver_for_table(candidate.clone(), storage, &table, &columns)
+            else {
+                continue;
+            };
+            resolvers.push(resolver);
+        }
+    }
+    resolvers.sort_by_key(media_resolver_priority);
+    Ok(resolvers)
+}
+
+pub fn lookup_ssed_sidecar_media(
+    resolvers: &[SsedSidecarMediaResolver],
+    sidecar_hint: Option<&str>,
+    table_hint: Option<&str>,
+    media_name: &str,
+) -> Result<Option<SsedSidecarMedia>> {
+    let query_names = sidecar_media_query_names(media_name);
+    for resolver in resolvers
+        .iter()
+        .filter(|resolver| media_resolver_matches_hint(resolver, sidecar_hint, table_hint))
+    {
+        let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
+        let mut select_columns = vec![resolver.name_column.clone(), resolver.blob_column.clone()];
+        let mut select_expressions = vec![
+            quote_sql_identifier(&resolver.name_column),
+            quote_sql_identifier(&resolver.blob_column),
+        ];
+        if let Some(type_column) = &resolver.type_column {
+            select_columns.push(type_column.clone());
+            select_expressions.push(quote_sql_identifier(type_column));
+        }
+        let sql = format!(
+            "select {} from {} where lower({}) = lower(?) limit 1",
+            select_expressions.join(", "),
+            quote_sql_identifier(&resolver.table),
+            quote_sql_identifier(&resolver.name_column),
+        );
+        let mut statement = connection.prepare(&sql)?;
+        for name in &query_names {
+            let row = statement
+                .query_row([name.as_str()], |row| {
+                    let stored_name = sqlite_value_to_string(row.get_ref(0)?)?;
+                    let data = sqlite_value_to_bytes(row.get_ref(1)?)?;
+                    let media_type = if resolver.type_column.is_some() {
+                        sqlite_value_to_i64(row.get_ref(2)?)
+                    } else {
+                        None
+                    };
+                    Ok(SsedSidecarMedia {
+                        name: stored_name,
+                        data,
+                        media_type,
+                        resolver: resolver.clone(),
+                    })
+                })
+                .optional()?;
+            if let Some(media) = row {
+                return Ok(Some(media));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn search_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> String {
@@ -740,6 +837,28 @@ fn resolver_for_table(
     })
 }
 
+fn media_resolver_for_table(
+    path: PathBuf,
+    storage: SsedSidecarStorage,
+    table: &str,
+    columns: &[String],
+) -> Option<SsedSidecarMediaResolver> {
+    let table_name = table.casefold();
+    if table_name != "media" && !table_name.contains("media") {
+        return None;
+    }
+    let name_column = find_column(columns, MEDIA_NAME_COLUMN_ALIASES)?;
+    let blob_column = find_column(columns, MEDIA_BLOB_COLUMN_ALIASES)?;
+    Some(SsedSidecarMediaResolver {
+        path,
+        storage,
+        table: table.to_owned(),
+        name_column,
+        blob_column,
+        type_column: find_column(columns, MEDIA_TYPE_COLUMN_ALIASES),
+    })
+}
+
 fn sidecar_kind_for_table(table: &str) -> SsedSidecarKind {
     let table = table.casefold();
     if table == "t_contents" || table.starts_with("t_contents_") {
@@ -780,6 +899,67 @@ fn resolver_priority(resolver: &SsedSidecarBodyResolver) -> (u8, u8, String, Str
         resolver.table.casefold(),
         file,
     )
+}
+
+fn media_resolver_priority(resolver: &SsedSidecarMediaResolver) -> (u8, String, String) {
+    let file = display_name(&resolver.path).casefold();
+    let table_priority = if resolver.table.eq_ignore_ascii_case("media") {
+        0
+    } else {
+        1
+    };
+    (table_priority, resolver.table.casefold(), file)
+}
+
+fn media_resolver_matches_hint(
+    resolver: &SsedSidecarMediaResolver,
+    sidecar_hint: Option<&str>,
+    table_hint: Option<&str>,
+) -> bool {
+    if let Some(sidecar_hint) = sidecar_hint {
+        let Some(name) = resolver.path.file_name().map(|name| name.to_string_lossy()) else {
+            return false;
+        };
+        if !name.eq_ignore_ascii_case(sidecar_hint) {
+            return false;
+        }
+    }
+    if let Some(table_hint) = table_hint
+        && !resolver.table.eq_ignore_ascii_case(table_hint)
+    {
+        return false;
+    }
+    true
+}
+
+fn sidecar_media_query_names(media_name: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let normalized = media_name.replace('\\', "/");
+    let filename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    for candidate in [normalized.as_str(), filename] {
+        let candidate = candidate.trim();
+        if !candidate.is_empty() {
+            push_unique(&mut names, candidate.to_owned());
+            let stem = Path::new(candidate)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .trim();
+            if !stem.is_empty() && stem != candidate {
+                push_unique(&mut names, stem.to_owned());
+            }
+        }
+    }
+    names
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&value))
+    {
+        values.push(value);
+    }
 }
 
 fn is_android_rowid_body_table(
@@ -950,6 +1130,26 @@ fn sqlite_value_to_string(value: ValueRef<'_>) -> rusqlite::Result<String> {
         ValueRef::Integer(value) => Ok(value.to_string()),
         ValueRef::Real(value) => Ok(value.to_string()),
         ValueRef::Text(bytes) | ValueRef::Blob(bytes) => Ok(decode_sqlite_text(bytes)),
+    }
+}
+
+fn sqlite_value_to_bytes(value: ValueRef<'_>) -> rusqlite::Result<Vec<u8>> {
+    match value {
+        ValueRef::Null => Ok(Vec::new()),
+        ValueRef::Integer(value) => Ok(value.to_string().into_bytes()),
+        ValueRef::Real(value) => Ok(value.to_string().into_bytes()),
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => Ok(bytes.to_vec()),
+    }
+}
+
+fn sqlite_value_to_i64(value: ValueRef<'_>) -> Option<i64> {
+    match value {
+        ValueRef::Integer(value) => Some(value),
+        ValueRef::Real(value) => Some(value as i64),
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|value| value.trim().parse().ok()),
+        ValueRef::Null => None,
     }
 }
 
@@ -1126,6 +1326,24 @@ const PLAIN_COLUMN_ALIASES: &[&str] = &[
     "Pinyin",
     "data",
 ];
+
+const MEDIA_NAME_COLUMN_ALIASES: &[&str] = &[
+    "name",
+    "Name",
+    "f_name",
+    "file",
+    "File",
+    "filename",
+    "file_name",
+    "path",
+    "Path",
+];
+
+const MEDIA_BLOB_COLUMN_ALIASES: &[&str] = &[
+    "main", "Main", "f_main", "blob", "Blob", "f_blob", "data", "Data",
+];
+
+const MEDIA_TYPE_COLUMN_ALIASES: &[&str] = &["type", "Type", "f_type", "media_type"];
 
 #[cfg(test)]
 mod tests {

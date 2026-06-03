@@ -1,6 +1,102 @@
 use super::*;
 
 impl ReaderBookPackage {
+    pub(super) fn ssed_sidecar_media_resolvers(&self) -> Result<&[SsedSidecarMediaResolver]> {
+        let resolvers = self.ssed_sidecar_media_resolvers.get_or_init(|| {
+            discover_ssed_sidecar_media_resolvers(
+                &self.root,
+                inferred_folder_title(&self.root).as_deref(),
+            )
+            .map_err(|error| error.to_string())
+        });
+        match resolvers {
+            Ok(resolvers) => Ok(resolvers.as_slice()),
+            Err(error) => Err(Error::Driver(error.clone())),
+        }
+    }
+
+    pub(super) fn ssed_sidecar_media_resource_for_ref(
+        &self,
+        media_ref: &str,
+    ) -> Result<Option<InternalResource>> {
+        let Some(media) =
+            lookup_ssed_sidecar_media(self.ssed_sidecar_media_resolvers()?, None, None, media_ref)?
+        else {
+            return Ok(None);
+        };
+        let sidecar = media
+            .resolver
+            .path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if sidecar.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(InternalResource::SsedSidecarMedia {
+            sidecar,
+            table: media.resolver.table,
+            name: media.name,
+            label: media_ref.to_owned(),
+            resource_kind: resource_kind_from_path(media_ref),
+        }))
+    }
+
+    pub(super) fn resolve_ssed_sidecar_media_resource(
+        &self,
+        token: &ResourceToken,
+        sidecar: &str,
+        table: &str,
+        name: &str,
+        label: &str,
+        resource_kind: ResourceKind,
+    ) -> Result<ResourceRef> {
+        let media = lookup_ssed_sidecar_media(
+            self.ssed_sidecar_media_resolvers()?,
+            Some(sidecar),
+            Some(table),
+            name,
+        )?;
+        let mut diagnostics = Vec::new();
+        let href = if media.is_some() {
+            Some(format!("lvcore://resource/{}", token.as_str()))
+        } else {
+            diagnostics.push(Diagnostic::warning(
+                "resource_missing",
+                format!("{sidecar}:{table}:{name} was not found in SSED sidecar media"),
+            ));
+            None
+        };
+        Ok(ResourceRef {
+            token: token.clone(),
+            kind: resource_kind,
+            label: Some(label.to_owned()),
+            href,
+            mime_type: resource_mime_type(resource_kind, Some(label)).map(str::to_owned),
+            diagnostics,
+        })
+    }
+
+    pub(super) fn read_ssed_sidecar_media_resource(
+        &self,
+        sidecar: &str,
+        table: &str,
+        name: &str,
+    ) -> Result<Vec<u8>> {
+        let Some(media) = lookup_ssed_sidecar_media(
+            self.ssed_sidecar_media_resolvers()?,
+            Some(sidecar),
+            Some(table),
+            name,
+        )?
+        else {
+            return Err(Error::Driver(format!(
+                "SSED sidecar media resource not found: {sidecar}:{table}:{name}"
+            )));
+        };
+        Ok(media.data)
+    }
+
     pub(super) fn resolve_ssed_loose_file_resource(
         &self,
         token: &ResourceToken,
