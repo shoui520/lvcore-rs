@@ -351,8 +351,14 @@ impl ReaderBookPackage {
             cursor = end;
         }
         output.push_str(&html[cursor..]);
+        let html = self.normalize_ssed_sidecar_direct_resource_attrs(
+            &output,
+            &mut resources,
+            &mut diagnostics,
+            &mut seen_resource_tokens,
+        )?;
         Ok(NormalizedHtmlRefs {
-            html: output,
+            html,
             resources,
             links,
             diagnostics,
@@ -399,6 +405,83 @@ impl ReaderBookPackage {
         Ok(output)
     }
 
+    fn normalize_ssed_sidecar_direct_resource_attrs(
+        &self,
+        html: &str,
+        resources: &mut Vec<ResourceRef>,
+        diagnostics: &mut Vec<Diagnostic>,
+        seen_resource_tokens: &mut BTreeSet<String>,
+    ) -> Result<String> {
+        let mut output = String::with_capacity(html.len());
+        let mut cursor = 0usize;
+        let lower = html.to_ascii_lowercase();
+        while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
+            output.push_str(&html[cursor..attr.value_start]);
+            let raw_value = &html[attr.value_start..attr.value_end];
+            if matches!(attr.name, HtmlAttrName::Src | HtmlAttrName::Data)
+                && !raw_value.starts_with("lvcore://")
+            {
+                match self.ssed_sidecar_direct_resource(raw_value)? {
+                    Some(resource) => {
+                        let token = ResourceToken::new(&resource)?;
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            let resource_ref = self.resolve_resource(&token)?;
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
+                    }
+                    None if looks_like_relative_html_resource_ref(raw_value) => {
+                        output.push_str(raw_value);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_direct_resource_missing",
+                            format!(
+                                "could not resolve SSED sidecar resource reference {raw_value}"
+                            ),
+                        ));
+                    }
+                    None => output.push_str(raw_value),
+                }
+            } else {
+                output.push_str(raw_value);
+            }
+            cursor = attr.value_end;
+        }
+        output.push_str(&html[cursor..]);
+        Ok(output)
+    }
+
+    fn ssed_sidecar_direct_resource(&self, raw_value: &str) -> Result<Option<InternalResource>> {
+        let value = html_unescape_minimal(raw_value).trim().replace('\\', "/");
+        let Some(relative) = normalized_sidecar_direct_resource_ref(&value) else {
+            return Ok(None);
+        };
+        let mut candidates = vec![relative.clone()];
+        if !relative.contains('/') {
+            candidates.push(format!("OTHER/image/{relative}"));
+            candidates.push(format!("Templates/{relative}"));
+        }
+        for candidate in candidates {
+            if self.resolve_package_file_path(&candidate)?.is_some() {
+                return Ok(Some(InternalResource::PackageFile {
+                    resource_kind: resource_kind_from_path(&candidate),
+                    path: candidate,
+                }));
+            }
+        }
+        for root_name in ["img", "img_un"] {
+            if resolve_loose_media_file(&self.root, root_name, &relative)?.is_some() {
+                return Ok(Some(InternalResource::SsedLooseFile {
+                    root_name: root_name.to_owned(),
+                    path: relative.clone(),
+                    resource_kind: resource_kind_from_path(&relative),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
     fn lved_direct_resource(&self, raw_value: &str) -> Result<Option<InternalResource>> {
         let value = html_unescape_minimal(raw_value).trim().replace('\\', "/");
         if value.is_empty()
@@ -440,4 +523,41 @@ impl ReaderBookPackage {
             resource_kind: resource_kind_from_path(relative),
         }))
     }
+}
+
+fn looks_like_relative_html_resource_ref(raw_value: &str) -> bool {
+    normalized_sidecar_direct_resource_ref(
+        &html_unescape_minimal(raw_value).trim().replace('\\', "/"),
+    )
+    .is_some()
+}
+
+fn normalized_sidecar_direct_resource_ref(value: &str) -> Option<String> {
+    if value.is_empty()
+        || value.starts_with('#')
+        || value.starts_with('/')
+        || value.starts_with("http://")
+        || value.starts_with("https://")
+        || value.starts_with("data:")
+        || value.starts_with("file:")
+        || value.starts_with("javascript:")
+        || value.starts_with("mailto:")
+        || value.starts_with("lvcore://")
+        || value.starts_with("lved.")
+    {
+        return None;
+    }
+    let relative = value.split(['#', '?']).next().unwrap_or("").trim();
+    if relative.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for part in relative.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => return None,
+            _ => parts.push(part),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
 }

@@ -138,18 +138,24 @@ fn dense_honmon_address_target_resolves_sidecar_html() {
 #[test]
 fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     let dir = tempdir().unwrap();
+    let package_root = dir.path().join("Book");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(dir.path().join("img")).unwrap();
+    fs::create_dir_all(package_root.join("OTHER/image")).unwrap();
+    fs::write(package_root.join("OTHER/image/b129.png"), b"png-bytes").unwrap();
+    fs::write(dir.path().join("img/KG003173.svg"), b"<svg/>").unwrap();
     let catalog =
-        write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRowsWithLvedLinks);
+        write_ssed_dense_sidecar_fixture(&package_root, DenseSidecarFixture::BodyRowsWithLvedLinks);
     let package = ReaderBookPackage::new(
-        dir.path(),
+        &package_root,
         DetectedPackage {
-            root: dir.path().to_path_buf(),
+            root: package_root.clone(),
             format_family: FormatFamily::Ssed,
             confidence: 95,
             title: Some("Dense".to_owned()),
             evidence: Vec::new(),
         },
-        ssed_capabilities(&catalog, dir.path()),
+        ssed_capabilities(&catalog, &package_root),
         PackageStores {
             ssed_catalog: Some(catalog),
             ..Default::default()
@@ -168,8 +174,12 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     let html = view.display_html.as_deref().unwrap();
 
     assert!(!html.contains("lved.dataid:"));
+    assert!(!html.contains("src=\"b129.png\""));
+    assert!(!html.contains("data = \"KG003173.svg\""));
     assert!(html.contains("lvcore://target/"));
+    assert!(html.contains("lvcore://resource/"));
     assert_eq!(view.links.len(), 2);
+    assert_eq!(view.resources.len(), 2);
     assert!(
         view.links
             .iter()
@@ -192,6 +202,26 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     assert_eq!(
         self_link.attributes.get("html_anchor").map(String::as_str),
         Some("spot")
+    );
+    assert!(view.resources.iter().any(|resource| {
+        resource.label.as_deref() == Some("b129.png")
+            && resource.kind == ResourceKind::Image
+            && resource.href.is_some()
+    }));
+    assert!(view.resources.iter().any(|resource| {
+        resource.label.as_deref() == Some("KG003173.svg")
+            && resource.kind == ResourceKind::Image
+            && resource.href.is_some()
+    }));
+    let mut resource_bytes = view
+        .resources
+        .iter()
+        .map(|resource| package.read_resource(&resource.token).unwrap())
+        .collect::<Vec<_>>();
+    resource_bytes.sort();
+    assert_eq!(
+        resource_bytes,
+        vec![b"<svg/>".to_vec(), b"png-bytes".to_vec()]
     );
 
     let linked_view = package
