@@ -128,6 +128,17 @@ pub(super) fn lved_pdf_resource(raw_ref: &str) -> Option<InternalResource> {
 }
 
 pub(super) fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {
+    let (content_id, anchor) = lved_dataid_anchor(raw_ref)?;
+    let row_id = content_id.parse::<i64>().ok()?;
+    Some(InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id,
+        anchor,
+        query: None,
+    })
+}
+
+pub(super) fn lved_dataid_anchor(raw_ref: &str) -> Option<(String, Option<String>)> {
     let value = raw_ref
         .strip_prefix("lved.dataid.result:")
         .or_else(|| raw_ref.strip_prefix("lved.dataid:"))
@@ -136,14 +147,14 @@ pub(super) fn lved_dataid_target(raw_ref: &str) -> Option<InternalTarget> {
     if value.is_empty() || !value.as_bytes().first().is_some_and(u8::is_ascii_digit) {
         return None;
     }
-    let (row_id, anchor) = split_lved_target_anchor(value);
-    let row_id = row_id.parse::<i64>().ok()?;
-    Some(InternalTarget::LvedRow {
-        table: "content".to_owned(),
-        row_id,
-        anchor: (!anchor.is_empty()).then(|| anchor.to_owned()),
-        query: None,
-    })
+    let (content_id, anchor) = split_lved_target_anchor(value);
+    if content_id.is_empty() || !content_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some((
+        content_id.to_owned(),
+        (!anchor.is_empty()).then(|| anchor.to_owned()),
+    ))
 }
 
 pub(super) fn lved_cross_book_target(raw_ref: &str) -> Option<InternalTarget> {
@@ -260,6 +271,11 @@ mod tests {
 
     #[test]
     fn parses_lved_targets_and_preserves_viewer_hooks() {
+        assert_eq!(
+            lved_dataid_anchor("lved.dataid:00157445#body"),
+            Some(("00157445".to_owned(), Some("body".to_owned())))
+        );
+
         let Some(InternalTarget::LvedRow { row_id, anchor, .. }) =
             lved_dataid_target("lved.dataid:123#body")
         else {

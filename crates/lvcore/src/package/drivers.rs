@@ -67,8 +67,8 @@ use super::html::{
 };
 use super::lved_refs::{
     LvedHtmlRefKind, is_lved_ref_terminator, lved_binran_target, lved_cross_book_target,
-    lved_dataid_target, lved_image_resource, lved_info_target, lved_media_resource,
-    lved_pdf_resource, lved_viewer_hook_target, next_lved_ref,
+    lved_dataid_anchor, lved_dataid_target, lved_image_resource, lved_info_target,
+    lved_media_resource, lved_pdf_resource, lved_viewer_hook_target, next_lved_ref,
 };
 use super::navigation_helpers::{
     OrderedSequenceTarget, collect_navigation_node_ordered_targets,

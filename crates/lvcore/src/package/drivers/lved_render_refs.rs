@@ -174,6 +174,191 @@ impl ReaderBookPackage {
         })
     }
 
+    pub(super) fn normalize_ssed_sidecar_lved_html_refs(
+        &self,
+        html: &str,
+    ) -> Result<NormalizedHtmlRefs> {
+        let mut output = String::with_capacity(html.len());
+        let mut resources = Vec::new();
+        let mut links = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut seen_resource_tokens = BTreeSet::new();
+        let mut seen_target_tokens = BTreeSet::new();
+        let mut cursor = 0usize;
+        let lower = html.to_ascii_lowercase();
+        while let Some((relative_start, ref_kind)) = next_lved_ref(&lower[cursor..]) {
+            let start = cursor + relative_start;
+            output.push_str(&html[cursor..start]);
+            let end = html[start..]
+                .find(is_lved_ref_terminator)
+                .map(|index| start + index)
+                .unwrap_or(html.len());
+            let raw_ref = &html[start..end];
+            match ref_kind {
+                LvedHtmlRefKind::DataId => {
+                    if let Some((anchor, html_anchor)) = lved_dataid_anchor(raw_ref) {
+                        let target = InternalTarget::SsedDenseAnchor {
+                            anchor,
+                            resolver_hint: None,
+                        };
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            if let Some(html_anchor) = html_anchor {
+                                link.attributes
+                                    .insert("html_anchor".to_owned(), html_anchor);
+                                link.diagnostics.push(Diagnostic::info(
+                                    "ssed_sidecar_dataid_anchor_preserved_as_link_attribute",
+                                    "SSED dense-anchor targets do not yet carry secondary HTML scroll anchors",
+                                ));
+                            }
+                            links.push(link);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_dataid_ref_unparsed",
+                            format!("could not parse SSED sidecar LVED dataid reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::Media => {
+                    if let Some(resource) = lved_media_resource(raw_ref) {
+                        let token = ResourceToken::new(&resource)?;
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            let resource_ref = self.resolve_resource(&token)?;
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_media_ref_unparsed",
+                            format!("could not parse SSED sidecar LVED media reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::Image => {
+                    if let Some(resource) = lved_image_resource(raw_ref) {
+                        let token = ResourceToken::new(&resource)?;
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            let resource_ref = self.resolve_resource(&token)?;
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_image_ref_unparsed",
+                            format!("could not parse SSED sidecar LVED image reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::Pdf => {
+                    if let Some(resource) = lved_pdf_resource(raw_ref) {
+                        let token = ResourceToken::new(&resource)?;
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            let resource_ref = self.resolve_resource(&token)?;
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_pdf_ref_unparsed",
+                            format!("could not parse SSED sidecar LVED PDF reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::CrossBook => {
+                    if let Some(target) = lved_cross_book_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            link.diagnostics.push(Diagnostic::info(
+                                "ssed_sidecar_cross_book_deferred",
+                                "cross-dictionary sidecar link requires library-wide routing",
+                            ));
+                            links.push(link);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_cross_book_ref_unparsed",
+                            format!(
+                                "could not parse SSED sidecar cross-dictionary reference {raw_ref}"
+                            ),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::Info => {
+                    if let Some(target) = lved_info_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            links.push(TargetLink::new(raw_ref, &target)?);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_info_ref_unparsed",
+                            format!("could not parse SSED sidecar LVED info reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::Binran => {
+                    if let Some(target) = lved_binran_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            links.push(TargetLink::new(raw_ref, &target)?);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_binran_ref_unparsed",
+                            format!("could not parse SSED sidecar LVED binran reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::ViewerHook => {
+                    let target = lved_viewer_hook_target(raw_ref);
+                    let token = TargetToken::new(&target)?;
+                    let href = format!("lvcore://target/{}", token.as_str());
+                    if seen_target_tokens.insert(token.as_str().to_owned()) {
+                        let mut link = TargetLink::new(raw_ref, &target)?;
+                        link.diagnostics.push(Diagnostic::info(
+                            "ssed_sidecar_lved_viewer_hook_deferred",
+                            "SSED sidecar LVED viewer hook is preserved as a non-executed target",
+                        ));
+                        links.push(link);
+                    }
+                    output.push_str(&href);
+                }
+            }
+            cursor = end;
+        }
+        output.push_str(&html[cursor..]);
+        Ok(NormalizedHtmlRefs {
+            html: output,
+            resources,
+            links,
+            diagnostics,
+        })
+    }
+
     pub(super) fn normalize_lved_label_html(&self, html: &str) -> Result<String> {
         Ok(sanitize_rich_label_html(
             &self.normalize_lved_html_refs(html)?.html,

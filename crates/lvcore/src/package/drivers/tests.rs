@@ -27,6 +27,7 @@ mod ssed_renderer_input;
 
 enum DenseSidecarFixture {
     BodyRows,
+    BodyRowsWithLvedLinks,
     AndroidRowidTimesFiveBodyRows,
     TitleOnlyThenBodyRows,
     ShardedTContentsBodyRows,
@@ -105,6 +106,9 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
     match fixture {
         DenseSidecarFixture::BodyRows => {
             write_dense_body_db(root.join("body.db"), true, true, false);
+        }
+        DenseSidecarFixture::BodyRowsWithLvedLinks => {
+            write_dense_body_db_with_lved_links(root.join("body.db"));
         }
         DenseSidecarFixture::AndroidRowidTimesFiveBodyRows => {
             write_android_body_db(root.join("DENSE.db"), "DENSE");
@@ -269,6 +273,37 @@ fn write_dense_body_db(path: PathBuf, alpha: bool, beta: bool, blob: bool) {
                 .unwrap();
         }
     }
+}
+
+fn write_dense_body_db_with_lved_links(path: PathBuf) {
+    let connection = Connection::open(path).unwrap();
+    connection
+            .execute_batch(
+                "create table t_contents (f_DataId integer primary key, f_Title blob, f_Html blob, f_Plane blob);",
+            )
+            .unwrap();
+    connection
+        .execute(
+            "insert into t_contents values (?, ?, ?, ?)",
+            (
+                1,
+                "alpha".as_bytes(),
+                "<div>alpha linked sidecar html</div>".as_bytes(),
+                "alpha sidecar body".as_bytes(),
+            ),
+        )
+        .unwrap();
+    connection
+        .execute(
+            "insert into t_contents values (?, ?, ?, ?)",
+            (
+                2,
+                "beta".as_bytes(),
+                r#"<div>beta <a href="lved.dataid:00000001">alpha</a> <a href="lved.dataid.result:00000002#spot">self</a></div>"#.as_bytes(),
+                "beta sidecar body".as_bytes(),
+            ),
+        )
+        .unwrap();
 }
 
 fn write_sharded_t_contents_body_db(path: PathBuf) {

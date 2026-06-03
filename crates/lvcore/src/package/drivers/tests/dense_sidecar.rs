@@ -136,6 +136,74 @@ fn dense_honmon_address_target_resolves_sidecar_html() {
 }
 
 #[test]
+fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
+    let dir = tempdir().unwrap();
+    let catalog =
+        write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRowsWithLvedLinks);
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 32,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+    let html = view.display_html.as_deref().unwrap();
+
+    assert!(!html.contains("lved.dataid:"));
+    assert!(html.contains("lvcore://target/"));
+    assert_eq!(view.links.len(), 2);
+    assert!(
+        view.links
+            .iter()
+            .all(|link| link.kind == TargetKind::SsedDenseAnchor)
+    );
+    assert!(view.links.iter().any(|link| matches!(
+        link.token.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, resolver_hint: None } if anchor == "00000001"
+    )));
+    let self_link = view
+        .links
+        .iter()
+        .find(|link| {
+            matches!(
+                link.token.decode().unwrap(),
+                InternalTarget::SsedDenseAnchor { anchor, resolver_hint: None } if anchor == "00000002"
+            )
+        })
+        .expect("expected self dense-anchor link");
+    assert_eq!(
+        self_link.attributes.get("html_anchor").map(String::as_str),
+        Some("spot")
+    );
+
+    let linked_view = package
+        .render_target(&view.links[0].token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(
+        linked_view.display_html.as_deref(),
+        Some("<div>alpha linked sidecar html</div>")
+    );
+}
+
+#[test]
 fn dense_honmon_ordered_honbun_sidecar_resolves_by_entry_slice_order() {
     let dir = tempdir().unwrap();
     let catalog =

@@ -116,6 +116,9 @@ impl ReaderBookPackage {
                     BodySourceKind::BritannicaChronologySqlite => {
                         self.normalize_britannica_loose_html_refs(&html)?
                     }
+                    BodySourceKind::SidecarHtml | BodySourceKind::RendererDatabase => {
+                        self.normalize_ssed_sidecar_lved_html_refs(&html)?
+                    }
                     _ => NormalizedHtmlRefs {
                         html,
                         resources: Vec::new(),
