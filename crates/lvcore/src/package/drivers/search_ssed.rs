@@ -384,6 +384,9 @@ impl ReaderBookPackage {
                     return Ok(true);
                 }
                 let Some(component) = catalog.component_for_address(row.body.block) else {
+                    if self.ssed_index_row_body_pointer_is_outside_catalog_range(&row) {
+                        return Ok(true);
+                    }
                     diagnostics.push(
                         Diagnostic::info(
                             "ssed_fulltext_body_component_missing",
@@ -659,6 +662,9 @@ impl ReaderBookPackage {
                 return Ok(true);
             }
             let Some(component) = catalog.component_for_address(row.body.block) else {
+                if self.ssed_index_row_body_pointer_is_outside_catalog_range(&row) {
+                    return Ok(true);
+                }
                 diagnostics.push(
                     Diagnostic::info(
                         "ssed_fulltext_body_component_missing",

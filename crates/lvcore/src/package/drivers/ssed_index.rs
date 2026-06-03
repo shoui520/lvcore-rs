@@ -529,6 +529,32 @@ impl ReaderBookPackage {
         })?))
     }
 
+    pub(in crate::package) fn ssed_index_row_body_pointer_is_outside_catalog_range(
+        &self,
+        row: &SsedIndexRow,
+    ) -> bool {
+        let Some(catalog) = &self.ssed_catalog else {
+            return false;
+        };
+        if catalog.component_for_address(row.body.block).is_some() {
+            return false;
+        }
+        let mut ranged_components = catalog
+            .components
+            .iter()
+            .filter(|component| component.has_positive_range());
+        let Some(first) = ranged_components.next() else {
+            return false;
+        };
+        let mut min_start = first.start_block;
+        let mut max_end = first.end_block;
+        for component in ranged_components {
+            min_start = min_start.min(component.start_block);
+            max_end = max_end.max(component.end_block);
+        }
+        row.body.block < min_start || row.body.block > max_end
+    }
+
     pub(in crate::package) fn ssed_next_index_body_pointer_after(
         &self,
         pointer: SsedIndexPointer,

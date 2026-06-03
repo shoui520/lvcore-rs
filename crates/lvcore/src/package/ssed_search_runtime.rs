@@ -87,6 +87,12 @@ impl<'a> SsedIndexSearchCollector<'a> {
         if !row_matches {
             return Ok(true);
         }
+        if self
+            .package
+            .ssed_index_row_body_pointer_is_outside_catalog_range(&row)
+        {
+            return Ok(true);
+        }
         let body_key = ssed_index_body_key(row.body);
         if !self.seen_targets.insert(body_key) {
             return Ok(true);

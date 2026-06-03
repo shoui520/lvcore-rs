@@ -175,7 +175,7 @@ fn ssed_fulltext_prefetches_non_ascii_body_query() {
 }
 
 #[test]
-fn ssed_fulltext_prefetch_treats_unresolved_index_body_pointers_as_skipped_hints() {
+fn ssed_fulltext_prefetch_skips_out_of_catalog_index_body_pointers() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
     let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
@@ -231,12 +231,70 @@ fn ssed_fulltext_prefetch_treats_unresolved_index_body_pointers_as_skipped_hints
         .unwrap();
 
     assert_eq!(page.hits.len(), 1);
-    let missing = page
-        .diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.code == "ssed_fulltext_body_component_missing")
-        .expect("unresolved index body pointer should be reported as a skipped hint");
-    assert_eq!(missing.severity, crate::DiagnosticSeverity::Info);
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_fulltext_body_component_missing"),
+        "out-of-catalog index body pointers are sentinel/internal rows, not missing body components"
+    );
+}
+
+#[test]
+fn ssed_native_search_skips_out_of_catalog_index_body_pointers() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_fixture(dir.path());
+    let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    index_page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    index_page[4] = 2;
+    index_page[5..7].copy_from_slice(&[0x24, 0x22]);
+    index_page[7..11].copy_from_slice(&0x20_0000u32.to_be_bytes());
+    index_page[11..13].copy_from_slice(&0u16.to_be_bytes());
+    index_page[13..17].copy_from_slice(&300u32.to_be_bytes());
+    index_page[17..19].copy_from_slice(&0u16.to_be_bytes());
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+    )
+    .unwrap();
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic fulltext".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "あ".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert!(page.hits.is_empty());
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_index_body_component_missing"),
+        "out-of-catalog index body pointers are sentinel/internal rows, not missing body components"
+    );
 }
 
 #[test]
