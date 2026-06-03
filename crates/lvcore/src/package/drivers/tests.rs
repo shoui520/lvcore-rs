@@ -299,7 +299,7 @@ fn write_dense_body_db_with_lved_links(path: PathBuf) {
             (
                 2,
                 "beta".as_bytes(),
-                r#"<div>beta <img src="b129.png" class="icon"><object data = "KG003173.svg"></object> <a href="lved.dataid:00000001">alpha</a> <a href="lved.dataid.result:00000002#spot">self</a></div>"#.as_bytes(),
+                r#"<div>beta <img src="b129.png" class="icon"><img src="b159_M.png"><object data = "KG003173.svg"></object> <a href="lved.dataid:00000001">alpha</a> <a href="lved.dataid.result:00000002#spot">self</a></div>"#.as_bytes(),
                 "beta sidecar body".as_bytes(),
             ),
         )

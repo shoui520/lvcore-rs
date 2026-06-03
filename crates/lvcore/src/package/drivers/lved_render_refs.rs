@@ -457,11 +457,7 @@ impl ReaderBookPackage {
         let Some(relative) = normalized_sidecar_direct_resource_ref(&value) else {
             return Ok(None);
         };
-        let mut candidates = vec![relative.clone()];
-        if !relative.contains('/') {
-            candidates.push(format!("OTHER/image/{relative}"));
-            candidates.push(format!("Templates/{relative}"));
-        }
+        let candidates = ssed_sidecar_direct_resource_candidates(&relative);
         for candidate in candidates {
             if self.resolve_package_file_path(&candidate)?.is_some() {
                 return Ok(Some(InternalResource::PackageFile {
@@ -523,6 +519,36 @@ impl ReaderBookPackage {
             resource_kind: resource_kind_from_path(relative),
         }))
     }
+}
+
+fn ssed_sidecar_direct_resource_candidates(relative: &str) -> Vec<String> {
+    let mut candidates = vec![relative.to_owned()];
+    if relative.contains('/') {
+        return candidates;
+    }
+    candidates.extend(
+        [
+            "OTHER/image",
+            "OTHER/images",
+            "Templates",
+            "templates",
+            "HANREI/img",
+            "HANREI/contents/img",
+            "res",
+            "resources",
+            "img",
+            "image",
+            "images",
+            "Gaijitemp",
+            "gaijitemp",
+            "appendix/img",
+            "manual/contents/img",
+            "resource/kmkimges",
+        ]
+        .into_iter()
+        .map(|root| format!("{root}/{relative}")),
+    );
+    candidates
 }
 
 fn looks_like_relative_html_resource_ref(raw_value: &str) -> bool {

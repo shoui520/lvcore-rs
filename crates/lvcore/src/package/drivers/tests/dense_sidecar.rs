@@ -142,7 +142,9 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     fs::create_dir(&package_root).unwrap();
     fs::create_dir(dir.path().join("img")).unwrap();
     fs::create_dir_all(package_root.join("OTHER/image")).unwrap();
+    fs::create_dir_all(package_root.join("HANREI/img")).unwrap();
     fs::write(package_root.join("OTHER/image/b129.png"), b"png-bytes").unwrap();
+    fs::write(package_root.join("HANREI/img/b159_M.png"), b"hanrei-png").unwrap();
     fs::write(dir.path().join("img/KG003173.svg"), b"<svg/>").unwrap();
     let catalog =
         write_ssed_dense_sidecar_fixture(&package_root, DenseSidecarFixture::BodyRowsWithLvedLinks);
@@ -179,7 +181,7 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     assert!(html.contains("lvcore://target/"));
     assert!(html.contains("lvcore://resource/"));
     assert_eq!(view.links.len(), 2);
-    assert_eq!(view.resources.len(), 2);
+    assert_eq!(view.resources.len(), 3);
     assert!(
         view.links
             .iter()
@@ -213,6 +215,11 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
             && resource.kind == ResourceKind::Image
             && resource.href.is_some()
     }));
+    assert!(view.resources.iter().any(|resource| {
+        resource.label.as_deref() == Some("b159_M.png")
+            && resource.kind == ResourceKind::Image
+            && resource.href.is_some()
+    }));
     let mut resource_bytes = view
         .resources
         .iter()
@@ -221,7 +228,11 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     resource_bytes.sort();
     assert_eq!(
         resource_bytes,
-        vec![b"<svg/>".to_vec(), b"png-bytes".to_vec()]
+        vec![
+            b"<svg/>".to_vec(),
+            b"hanrei-png".to_vec(),
+            b"png-bytes".to_vec()
+        ]
     );
 
     let linked_view = package
