@@ -214,6 +214,80 @@ fn ssed_hanrei_discovery_ignores_symlinked_hanrei_folder() {
 }
 
 #[test]
+fn ssed_hanrei_package_html_rewrites_relative_resources() {
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("HANREI/contents")).unwrap();
+    fs::create_dir_all(root.path().join("HANREI/img")).unwrap();
+    fs::write(
+        root.path().join("HANREI/contents/03_fj_hanrei02.html"),
+        br#"<html><head><link rel="stylesheet" href="../hanrei.css"></head><body><img src="../img/b159_M.png"><a href="../top.html">top</a></body></html>"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("HANREI/top.html"), b"<html>top</html>").unwrap();
+    fs::write(root.path().join("HANREI/hanrei.css"), b"body{}").unwrap();
+    fs::write(root.path().join("HANREI/img/b159_M.png"), b"hanrei-png").unwrap();
+    let package = ReaderBookPackage::new(
+        root.path(),
+        DetectedPackage {
+            root: root.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("HANREI".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+    let resource = ResourceToken::new(&InternalResource::PackageFile {
+        path: "HANREI/contents/03_fj_hanrei02.html".to_owned(),
+        resource_kind: ResourceKind::Html,
+    })
+    .unwrap();
+    let target = TargetToken::new(&InternalTarget::Resource {
+        resource,
+        anchor: None,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+    let html = view.display_html.as_deref().unwrap();
+
+    assert!(!html.contains("../img/b159_M.png"));
+    assert!(!html.contains("../hanrei.css"));
+    assert!(!html.contains("../top.html"));
+    assert!(html.contains("lvcore://resource/"));
+    assert!(html.contains("lvcore://target/"));
+    assert_eq!(view.resources.len(), 2);
+    assert!(view.resources.iter().any(|resource| {
+        resource.label.as_deref() == Some("b159_M.png")
+            && resource.kind == ResourceKind::Image
+            && resource.href.is_some()
+    }));
+    assert!(view.resources.iter().any(|resource| {
+        resource.label.as_deref() == Some("hanrei.css")
+            && resource.kind == ResourceKind::Css
+            && resource.href.is_some()
+    }));
+    let image_ref = view
+        .resources
+        .iter()
+        .find(|resource| resource.label.as_deref() == Some("b159_M.png"))
+        .unwrap();
+    assert_eq!(
+        package.read_resource(&image_ref.token).unwrap(),
+        b"hanrei-png"
+    );
+    assert_eq!(view.links.len(), 1);
+    assert_eq!(view.links[0].label, "../top.html");
+    assert!(matches!(
+        view.links[0].token.decode().unwrap(),
+        InternalTarget::Resource { .. }
+    ));
+}
+
+#[test]
 fn ssed_pcmdata_address_uses_loose_pcmu_audio_when_component_is_absent() {
     let dir = tempdir().unwrap();
     let package_root = dir.path().join("_DCT_SAMPLE");
