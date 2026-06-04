@@ -922,12 +922,8 @@ fn search_probe_lookup_text(title: &str) -> Option<String> {
         if ch.is_whitespace() || is_search_probe_label_boundary(ch) {
             break;
         }
-        if out
-            .chars()
-            .next()
-            .is_some_and(|first| first.is_ascii_alphabetic())
-            && ch.is_ascii_digit()
-        {
+        let first = out.chars().next();
+        if ch.is_ascii_digit() && first.is_some_and(|first| !first.is_ascii_digit()) {
             break;
         }
         out.push(ch);
@@ -1037,8 +1033,13 @@ mod tests {
             "日本国憲法"
         );
         assert_eq!(search_probe_query("あ【あ・ア】", &SearchMode::Exact), "あ");
+        assert_eq!(
+            search_probe_query("ああ1（aa）", &SearchMode::Exact),
+            "ああ"
+        );
         assert_eq!(search_probe_query("read1小", &SearchMode::Exact), "read");
         assert_eq!(search_probe_query("0＜sze zro＞", &SearchMode::Exact), "0");
+        assert_eq!(search_probe_query("3D", &SearchMode::Exact), "3D");
     }
 
     #[test]
