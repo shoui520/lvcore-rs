@@ -871,8 +871,9 @@ fn first_actionable_label(surface: &NavigationSurface) -> Option<String> {
         .find(|label| !label.is_empty())
 }
 
-fn search_probe_prefix(title: &str) -> Option<&str> {
-    let trimmed = title.trim();
+fn search_probe_prefix(title: &str) -> Option<String> {
+    let normalized = search_probe_lookup_text(title)?;
+    let trimmed = normalized.as_str();
     if trimmed.is_empty() {
         return None;
     }
@@ -891,11 +892,12 @@ fn search_probe_prefix(title: &str) -> Option<&str> {
             break;
         }
     }
-    (end > 0).then_some(&trimmed[..end])
+    (end > 0).then(|| trimmed[..end].to_owned())
 }
 
 fn search_probe_suffix(title: &str) -> Option<String> {
-    let trimmed = title.trim();
+    let normalized = search_probe_lookup_text(title)?;
+    let trimmed = normalized.as_str();
     if trimmed.is_empty() {
         return None;
     }
@@ -907,21 +909,74 @@ fn search_probe_suffix(title: &str) -> Option<String> {
     }
 }
 
+fn search_probe_lookup_text(title: &str) -> Option<String> {
+    let mut started = false;
+    let mut out = String::new();
+    for ch in title.trim().chars() {
+        if !started {
+            if is_search_probe_leading_decoration(ch) || ch.is_whitespace() {
+                continue;
+            }
+            started = true;
+        }
+        if ch.is_whitespace() || is_search_probe_label_boundary(ch) {
+            break;
+        }
+        if out
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+            && ch.is_ascii_digit()
+        {
+            break;
+        }
+        out.push(ch);
+    }
+    let out = out.trim().to_owned();
+    (!out.is_empty()).then_some(out)
+}
+
+fn is_search_probe_leading_decoration(ch: char) -> bool {
+    matches!(
+        ch,
+        '◎' | '○'
+            | '●'
+            | '■'
+            | '□'
+            | '◆'
+            | '◇'
+            | '・'
+            | '▶'
+            | '▷'
+            | '▸'
+            | '▹'
+            | '→'
+            | '⇒'
+            | '※'
+    )
+}
+
+fn is_search_probe_label_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '【' | '（' | '(' | '［' | '[' | '〖' | '〘' | '<' | '＜' | ':' | '：'
+    )
+}
+
 fn search_probe_query(title: &str, mode: &SearchMode) -> String {
     match mode {
         SearchMode::Exact => {
-            let trimmed = title.trim();
-            if trimmed.is_empty() {
-                "a".to_owned()
+            if let Some(trimmed) = search_probe_lookup_text(title) {
+                trimmed
             } else {
-                trimmed.to_owned()
+                "a".to_owned()
             }
         }
         SearchMode::Backward => search_probe_suffix(title).unwrap_or_else(|| "a".to_owned()),
         SearchMode::Forward
         | SearchMode::Partial
         | SearchMode::FullText
-        | SearchMode::Advanced(_) => search_probe_prefix(title).unwrap_or("a").to_owned(),
+        | SearchMode::Advanced(_) => search_probe_prefix(title).unwrap_or_else(|| "a".to_owned()),
     }
 }
 
@@ -973,5 +1028,32 @@ mod tests {
         assert!(codes.iter().any(|entry| {
             entry["severity"] == "warning" && entry["code"] == "odd_code" && entry["count"] == 6
         }));
+    }
+
+    #[test]
+    fn search_probe_query_uses_lookup_term_not_display_decoration() {
+        assert_eq!(
+            search_probe_query("◎日本国憲法", &SearchMode::Exact),
+            "日本国憲法"
+        );
+        assert_eq!(search_probe_query("あ【あ・ア】", &SearchMode::Exact), "あ");
+        assert_eq!(search_probe_query("read1小", &SearchMode::Exact), "read");
+        assert_eq!(search_probe_query("0＜sze zro＞", &SearchMode::Exact), "0");
+    }
+
+    #[test]
+    fn search_probe_prefix_and_suffix_use_lookup_term() {
+        assert_eq!(
+            search_probe_query("◎日本国憲法", &SearchMode::Forward),
+            "日本"
+        );
+        assert_eq!(
+            search_probe_query("◎日本国憲法", &SearchMode::Backward),
+            "憲法"
+        );
+        assert_eq!(
+            search_probe_query("関係 関係がある 〖0001.01〗", &SearchMode::Partial),
+            "関係"
+        );
     }
 }
