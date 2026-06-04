@@ -317,6 +317,68 @@ fn lved_search_and_list_labels_are_sanitized_for_app_chrome() {
 }
 
 #[test]
+fn lved_search_normalizes_hiragana_queries_to_observed_katakana_keys() {
+    let dir = tempdir().unwrap();
+    write_lved_search_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        apply_sqlcipher_key(&connection, "test-key").unwrap();
+        connection
+            .execute_batch(
+                r#"
+                insert into content values (103, 1, '<article><h1>あいかわらず</h1></article>', '');
+                insert into list values (4, 103, 1, '', 'あいかわらず【相変わらず】', '');
+                insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                  values (
+                    4,
+                    'アイカワラズ 相変ワラズ',
+                    'ズラワ変相 ズラワカイア',
+                    'ア イ カ ワ ラ ズ ∥ 相 変 ワ ラ ズ',
+                    'ア イ カ ワ ラ ズ 【 相 変 ワ ラ ズ 】',
+                    '',
+                    '',
+                    '∥アイカワラズ∥相変ワラズ∥'
+                  );
+                "#,
+            )
+            .unwrap();
+    }
+
+    let package = LvedSqliteDriver.open(dir.path()).unwrap();
+    for mode in [
+        SearchMode::Exact,
+        SearchMode::Forward,
+        SearchMode::Backward,
+        SearchMode::Partial,
+        SearchMode::FullText,
+    ] {
+        let query = match mode {
+            SearchMode::Exact => "あいかわらず",
+            SearchMode::Backward => "わらず",
+            _ => "あい",
+        };
+        let page = package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
+                mode: mode.clone(),
+                query: query.to_owned(),
+                cursor: None,
+                limit: 10,
+                gaiji_policy: None,
+            })
+            .unwrap();
+        assert!(
+            page.hits
+                .iter()
+                .any(|hit| hit.title_text == "あいかわらず【相変わらず】"),
+            "hiragana query {query:?} did not match katakana LVED key in mode {mode:?}"
+        );
+    }
+}
+
+#[test]
 fn render_modes_are_explicit_for_preserved_lved_html() {
     let dir = tempdir().unwrap();
     write_lved_search_fixture(dir.path());

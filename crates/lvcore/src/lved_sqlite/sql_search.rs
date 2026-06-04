@@ -1,4 +1,5 @@
-use rusqlite::{Connection, Row};
+use rusqlite::types::Value;
+use rusqlite::{Connection, Row, params_from_iter};
 
 use super::title::html_to_text;
 use super::{LvedSearchHit, LvedSqliteSchema, has_column, nonempty_string, sqlite_value_to_string};
@@ -21,14 +22,24 @@ pub(super) fn search_lved_sqlite_connection(
     if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
         return Ok(Vec::new());
     }
-    let normalized = normalize_lved_query(query);
-    if normalized.is_empty() {
+    let normalized_variants = lved_query_variants(query);
+    if normalized_variants.is_empty() {
         return Ok(Vec::new());
     }
-    let Some((where_clause, parameters)) = lved_search_where(&normalized, mode, search_columns)
-    else {
+    let mut where_clauses = Vec::new();
+    let mut parameters = Vec::new();
+    for normalized in normalized_variants {
+        if let Some((where_clause, mut variant_parameters)) =
+            lved_search_where(&normalized, mode, search_columns)
+        {
+            where_clauses.push(format!("({where_clause})"));
+            parameters.append(&mut variant_parameters);
+        }
+    }
+    if where_clauses.is_empty() {
         return Ok(Vec::new());
-    };
+    }
+    let where_clause = where_clauses.join(" or ");
 
     let projection = lved_list_projection(list_columns);
     let sql = format!(
@@ -37,25 +48,15 @@ pub(super) fn search_lved_sqlite_connection(
         projection.anchor, projection.title, projection.subtitle, projection.kind
     );
     let mut statement = connection.prepare(&sql)?;
-    match parameters.as_slice() {
-        [parameter] => {
-            let rows = statement.query_map(
-                (parameter.as_str(), limit as i64, offset as i64),
-                lved_search_hit_from_row,
-            )?;
-            rows.collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(Error::from)
-        }
-        [first, second] => {
-            let rows = statement.query_map(
-                (first.as_str(), second.as_str(), limit as i64, offset as i64),
-                lved_search_hit_from_row,
-            )?;
-            rows.collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(Error::from)
-        }
-        _ => Ok(Vec::new()),
-    }
+    let mut sql_parameters = parameters
+        .into_iter()
+        .map(Value::Text)
+        .collect::<Vec<Value>>();
+    sql_parameters.push(Value::Integer(limit as i64));
+    sql_parameters.push(Value::Integer(offset as i64));
+    let rows = statement.query_map(params_from_iter(sql_parameters), lved_search_hit_from_row)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
 }
 
 pub(super) fn lved_list_hits_by_id_clause(
@@ -123,19 +124,10 @@ fn lved_search_where(
         SearchMode::Exact => {
             if has_column(search_columns, "filter") {
                 let like_parameter = format!("%∥{}∥%", escape_sql_like(normalized));
-                if let Some(match_parameter) = exact_filter_match_parameter(normalized) {
-                    Some((
-                        "s.rowid in (select rowid from search where search match ?) \
-                         and s.filter like ? escape '\\'"
-                            .to_owned(),
-                        vec![match_parameter, like_parameter],
-                    ))
-                } else {
-                    Some((
-                        "s.filter like ? escape '\\'".to_owned(),
-                        vec![like_parameter],
-                    ))
-                }
+                Some((
+                    "s.filter like ? escape '\\'".to_owned(),
+                    vec![like_parameter],
+                ))
             } else if has_column(search_columns, "forward") {
                 Some(("s.forward = ?".to_owned(), vec![normalized.to_owned()]))
             } else {
@@ -235,17 +227,6 @@ fn fts_match(
     })
 }
 
-fn exact_filter_match_parameter(normalized: &str) -> Option<String> {
-    if normalized.is_empty()
-        || normalized
-            .chars()
-            .any(|ch| matches!(ch, '"' | '\'' | ':' | '*' | '(' | ')'))
-    {
-        return None;
-    }
-    Some(format!("filter:∥{normalized}∥"))
-}
-
 fn one_parameter_where(value: Option<(String, String)>) -> Option<(String, Vec<String>)> {
     value.map(|(where_clause, parameter)| (where_clause, vec![parameter]))
 }
@@ -256,6 +237,31 @@ fn normalize_lved_query(query: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
+}
+
+fn lved_query_variants(query: &str) -> Vec<String> {
+    let normalized = normalize_lved_query(query);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    let mut variants = vec![normalized.clone()];
+    let katakana = hiragana_to_katakana(&normalized);
+    if katakana != normalized {
+        variants.push(katakana);
+    }
+    variants
+}
+
+fn hiragana_to_katakana(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '\u{3041}'..='\u{3096}' => char::from_u32(ch as u32 + 0x60).unwrap_or(ch),
+            '\u{309d}' => '\u{30fd}',
+            '\u{309e}' => '\u{30fe}',
+            _ => ch,
+        })
+        .collect()
 }
 
 fn fts_tokens(query: &str, split_chars: bool) -> Vec<String> {
