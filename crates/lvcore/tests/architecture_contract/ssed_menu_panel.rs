@@ -350,6 +350,59 @@ fn ssed_ios_mobile_menu_plist_exposes_direct_and_bin_panel_targets() {
 }
 
 #[test]
+fn ssed_ios_mobile_menu_plist_opens_nested_child_panel_without_flattening_root() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        root.path().join("menu.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>item</key><string>親</string>
+    <key>child</key><array>
+      <dict>
+        <key>item</key><string>子</string>
+        <key>block</key><integer>10</integer>
+        <key>offset</key><integer>6</integer>
+      </dict>
+    </array>
+  </dict>
+</array></plist>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let root_panel = package.open_surface("panels").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = root_panel else {
+        panic!("mobile root menu should decode to a panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "親");
+    let InternalTarget::PanelCell { panel_id, .. } =
+        cells[0].target.as_ref().unwrap().decode().unwrap()
+    else {
+        panic!("nested mobile menu item should point to a child panel");
+    };
+
+    let child_panel = package.open_surface(&format!("panels:{panel_id}")).unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
+        panic!("mobile child menu should decode to a panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "子");
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 6,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn empty_ssed_menu_is_not_exposed_as_targetable_home_surface() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

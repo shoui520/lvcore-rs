@@ -138,6 +138,7 @@ use crate::navigation::{
     NavigationStatus, NavigationSurface, NavigationSurfaceKind, PanelCell, ScreenMenuHotspot,
     ScreenMenuRect, ScreenMenuScreen,
 };
+use crate::plist_xml::{PlistValue, parse_xml_plist};
 use crate::render::{
     RenderMode, RenderOptions, RendererInput, RendererInputProvider, RendererProvider,
     ResolvedTargetKind, ResolvedTargetView,
@@ -183,7 +184,7 @@ use crate::ssed_multi::{
 };
 use crate::ssed_panel::{
     SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, parse_panel_bin,
-    parse_panel_plist_bytes, parse_panel_xml_bytes,
+    parse_panel_plist_value_for_panel, parse_panel_xml_bytes,
 };
 use crate::ssed_pcmdata::{
     PcmDataParseResult, pcmdata_audio_summary, pcmdata_portable_audio_bytes,
@@ -252,6 +253,7 @@ pub struct ReaderBookPackage {
         OnceLock<std::result::Result<BTreeMap<String, Vec<SsedIndexPointer>>, String>>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
     ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
+    ssed_panel_plist: OnceLock<std::result::Result<Option<PlistValue>, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -329,6 +331,7 @@ impl ReaderBookPackage {
             ssed_index_body_boundaries: OnceLock::new(),
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),
+            ssed_panel_plist: OnceLock::new(),
         }
     }
 

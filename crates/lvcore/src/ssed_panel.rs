@@ -76,8 +76,16 @@ pub fn parse_panel_xml_bytes(data: &[u8]) -> Result<SsedPanelXml> {
 }
 
 pub fn parse_panel_plist_bytes(data: &[u8], source_label: &str) -> Result<SsedPanelXml> {
+    parse_panel_plist_panel_bytes(data, source_label, None)
+}
+
+pub fn parse_panel_plist_panel_bytes(
+    data: &[u8],
+    source_label: &str,
+    requested_panel_id: Option<&str>,
+) -> Result<SsedPanelXml> {
     let plist = parse_xml_plist(data, source_label)?;
-    parse_panel_plist_value(&plist)
+    parse_panel_plist_value_for_panel(&plist, requested_panel_id)
 }
 
 pub fn parse_panel_xml(xml: &str) -> Result<SsedPanelXml> {
@@ -342,7 +350,10 @@ fn push_inline_cell(
     panel.cell_index += 1;
 }
 
-fn parse_panel_plist_value(value: &PlistValue) -> Result<SsedPanelXml> {
+pub(crate) fn parse_panel_plist_value_for_panel(
+    value: &PlistValue,
+    requested_panel_id: Option<&str>,
+) -> Result<SsedPanelXml> {
     let mut parsed = SsedPanelXml {
         data_refs: Vec::new(),
         inline_cells: Vec::new(),
@@ -351,6 +362,9 @@ fn parse_panel_plist_value(value: &PlistValue) -> Result<SsedPanelXml> {
         && let Some(panels) = dict.get("panel").and_then(PlistValue::as_dict)
     {
         for (panel_id, panel_value) in panels {
+            if requested_panel_id.is_some_and(|requested| requested != panel_id) {
+                continue;
+            }
             let Some(panel) = panel_value.as_dict() else {
                 continue;
             };
@@ -359,7 +373,7 @@ fn parse_panel_plist_value(value: &PlistValue) -> Result<SsedPanelXml> {
         return Ok(parsed);
     }
     if let Some(items) = plist_root_menu_items(value) {
-        parse_mobile_menu_plist_items(&mut parsed, "root", "menu", "Top", &items);
+        parse_mobile_menu_plist_panel(&mut parsed, &items, requested_panel_id.unwrap_or("root"));
         return Ok(parsed);
     }
     Ok(parsed)
@@ -420,12 +434,41 @@ fn parse_mac_panel_plist_panel(
     }
 }
 
+fn parse_mobile_menu_plist_panel(
+    parsed: &mut SsedPanelXml,
+    root_items: &[&PlistValue],
+    panel_id: &str,
+) {
+    if panel_id == "root" {
+        parse_mobile_menu_plist_items(parsed, "root", "menu", "Top", root_items);
+        return;
+    }
+    let Some(item) = mobile_menu_item_for_panel_id(root_items, panel_id) else {
+        return;
+    };
+    let title = plist_string(item, &["item", "text", "title", "label"]);
+    if let Some(path) = plist_string_opt(item, &["path"]) {
+        parsed.data_refs.push(SsedPanelDataRef {
+            panel_id: panel_id.to_owned(),
+            panel_type: "contents".to_owned(),
+            title,
+            filename: mobile_panel_bin_filename(&path),
+            data_type: "bin".to_owned(),
+        });
+        return;
+    }
+    if let Some(children) = item.get("child").and_then(PlistValue::as_array) {
+        let child_items = children.iter().collect::<Vec<_>>();
+        parse_mobile_menu_plist_items(parsed, panel_id, "menu", &title, &child_items);
+    }
+}
+
 fn parse_mobile_menu_plist_items(
     parsed: &mut SsedPanelXml,
     panel_id: &str,
     panel_type: &str,
     title: &str,
-    items: &[PlistValue],
+    items: &[&PlistValue],
 ) {
     let mut cell_index = 0u32;
     for (index, item) in items.iter().enumerate() {
@@ -446,7 +489,6 @@ fn parse_mobile_menu_plist_items(
             .and_then(PlistValue::as_array)
             .is_some_and(|children| !children.is_empty());
         let path = plist_string_opt(dict, &["path"]);
-        let child_title = label.clone();
         let ref_id = if has_children || path.is_some() {
             child_panel_id.clone()
         } else {
@@ -476,10 +518,29 @@ fn parse_mobile_menu_plist_items(
                 data_type: "bin".to_owned(),
             });
         }
-        if let Some(children) = dict.get("child").and_then(PlistValue::as_array) {
-            parse_mobile_menu_plist_items(parsed, &child_panel_id, "menu", &child_title, children);
-        }
     }
+}
+
+fn mobile_menu_item_for_panel_id<'a>(
+    root_items: &[&'a PlistValue],
+    panel_id: &str,
+) -> Option<&'a std::collections::BTreeMap<String, PlistValue>> {
+    let mut parts = panel_id.split('.');
+    if parts.next()? != "root" {
+        return None;
+    }
+    let index = mobile_panel_part_index(parts.next()?)?;
+    let mut item = root_items.get(index)?.as_dict()?;
+    for part in parts {
+        let index = mobile_panel_part_index(part)?;
+        let children = item.get("child")?.as_array()?;
+        item = children.get(index)?.as_dict()?;
+    }
+    Some(item)
+}
+
+fn mobile_panel_part_index(value: &str) -> Option<usize> {
+    value.parse::<usize>().ok()
 }
 
 struct PlistInlineCellContext<'a> {
@@ -524,9 +585,9 @@ fn push_plist_inline_cell(
     });
 }
 
-fn plist_root_menu_items(value: &PlistValue) -> Option<Vec<PlistValue>> {
+fn plist_root_menu_items(value: &PlistValue) -> Option<Vec<&PlistValue>> {
     if let Some(items) = value.as_array() {
-        return Some(items.to_vec());
+        return Some(items.iter().collect());
     }
     let dict = value.as_dict()?;
     if dict.values().all(|value| value.as_dict().is_some()) {
@@ -535,7 +596,7 @@ fn plist_root_menu_items(value: &PlistValue) -> Option<Vec<PlistValue>> {
             .filter_map(|(key, value)| {
                 value
                     .as_dict()
-                    .map(|dict| (plist_numeric_sort_key(key), PlistValue::Dict(dict.clone())))
+                    .map(|_| (plist_numeric_sort_key(key), value))
             })
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.0.cmp(&right.0));

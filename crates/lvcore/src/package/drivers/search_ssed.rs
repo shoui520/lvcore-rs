@@ -48,9 +48,7 @@ impl ReaderBookPackage {
             scan_needs_linear_fallback = scan_result.needs_linear_fallback;
             collector.extend_diagnostics(scan_result.diagnostics);
         }
-        if !collector.has_hits()
-            && (optimized_scan_components == 0 || scan_needs_linear_fallback)
-        {
+        if !collector.has_hits() && (optimized_scan_components == 0 || scan_needs_linear_fallback) {
             let scan_diagnostics = if query.mode == SearchMode::Partial {
                 self.scan_ssed_partial_index_rows(&needle, |row| collector.push_row(row))?
             } else {

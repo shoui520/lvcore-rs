@@ -15,7 +15,10 @@ impl ReaderBookPackage {
                 )],
             });
         };
-        let parsed = match metadata.parse() {
+        let requested_panel_id = surface_id
+            .strip_prefix("panels:")
+            .filter(|id| !id.is_empty());
+        let parsed = match metadata.parse(self, requested_panel_id) {
             Ok(parsed) => parsed,
             Err(error) => {
                 return Ok(NavigationSurface::Deferred {
@@ -27,9 +30,6 @@ impl ReaderBookPackage {
                 });
             }
         };
-        let requested_panel_id = surface_id
-            .strip_prefix("panels:")
-            .filter(|id| !id.is_empty());
         let root_panel_id = requested_panel_id.or_else(|| {
             parsed
                 .inline_cells
@@ -280,10 +280,31 @@ enum SsedPanelMetadataFormat {
 }
 
 impl SsedPanelMetadata {
-    fn parse(&self) -> Result<crate::ssed_panel::SsedPanelXml> {
+    fn parse(
+        &self,
+        package: &ReaderBookPackage,
+        requested_panel_id: Option<&str>,
+    ) -> Result<crate::ssed_panel::SsedPanelXml> {
         match self.format {
             SsedPanelMetadataFormat::Xml => parse_panel_xml_bytes(&self.bytes),
-            SsedPanelMetadataFormat::Plist => parse_panel_plist_bytes(&self.bytes, &self.label),
+            SsedPanelMetadataFormat::Plist => package
+                .cached_ssed_panel_plist(&self.bytes, &self.label)
+                .and_then(|value| parse_panel_plist_value_for_panel(value, requested_panel_id)),
+        }
+    }
+}
+
+impl ReaderBookPackage {
+    fn cached_ssed_panel_plist(&self, bytes: &[u8], label: &str) -> Result<&PlistValue> {
+        let cached = self.ssed_panel_plist.get_or_init(|| {
+            parse_xml_plist(bytes, label)
+                .map(Some)
+                .map_err(|error| error.to_string())
+        });
+        match cached {
+            Ok(Some(value)) => Ok(value),
+            Ok(None) => Err(Error::Driver("cached panel plist is missing".to_owned())),
+            Err(error) => Err(Error::Driver(error.clone())),
         }
     }
 }
