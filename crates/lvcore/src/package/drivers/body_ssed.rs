@@ -140,7 +140,22 @@ impl ReaderBookPackage {
             } else {
                 None
             };
-        let bounded_length = explicit_bounded_length.or(index_bounded_length);
+        let sidecar_range_bounded_length = if component.role == SsedComponentRole::Honmon {
+            self.ssed_sidecar_range_bound(block, offset)?
+                .and_then(|bound| {
+                    bounded_ssed_stream_length(catalog, component, stream_offset, bound.0, bound.1)
+                })
+        } else {
+            None
+        };
+        let bounded_length = [
+            explicit_bounded_length,
+            index_bounded_length,
+            sidecar_range_bounded_length,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let length = match (inferred_length, bounded_length) {
             (Some(inferred), Some(bound)) => Some(inferred.min(bound)),
             (Some(inferred), None) => Some(inferred),
@@ -180,6 +195,22 @@ impl ReaderBookPackage {
                 source: BodySourceKind::RendererDatabase,
             })),
             SsedSidecarLookup::MissingRow { .. } | SsedSidecarLookup::NoResolver { .. } => Ok(None),
+        }
+    }
+
+    fn ssed_sidecar_range_bound(&self, block: u32, offset: u32) -> Result<Option<(u32, u32)>> {
+        let Some(bound) = lookup_ssed_sidecar_range_bound_with_resolvers(
+            self.ssed_sidecar_range_resolvers()?,
+            block,
+            offset,
+        )?
+        else {
+            return Ok(None);
+        };
+        if (bound.end_block, bound.end_offset) > (block, offset) {
+            Ok(Some((bound.end_block, bound.end_offset)))
+        } else {
+            Ok(None)
         }
     }
 
@@ -416,6 +447,20 @@ impl ReaderBookPackage {
     pub(super) fn ssed_sidecar_body_resolvers(&self) -> Result<&[SsedSidecarBodyResolver]> {
         let resolvers = self.ssed_sidecar_body_resolvers.get_or_init(|| {
             discover_ssed_sidecar_body_resolvers(
+                &self.root,
+                inferred_folder_title(&self.root).as_deref(),
+            )
+            .map_err(|error| error.to_string())
+        });
+        match resolvers {
+            Ok(resolvers) => Ok(resolvers.as_slice()),
+            Err(error) => Err(Error::Driver(error.clone())),
+        }
+    }
+
+    pub(super) fn ssed_sidecar_range_resolvers(&self) -> Result<&[SsedSidecarRangeResolver]> {
+        let resolvers = self.ssed_sidecar_range_resolvers.get_or_init(|| {
+            discover_ssed_sidecar_range_resolvers(
                 &self.root,
                 inferred_folder_title(&self.root).as_deref(),
             )

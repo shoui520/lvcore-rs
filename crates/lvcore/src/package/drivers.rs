@@ -197,10 +197,12 @@ use crate::ssed_screen_menu::{
 };
 use crate::ssed_sidecar::{
     SsedSidecarBody, SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
-    SsedSidecarMediaResolver, SsedSidecarSearchPage, discover_ssed_sidecar_body_resolvers,
-    discover_ssed_sidecar_media_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
+    SsedSidecarMediaResolver, SsedSidecarRangeResolver, SsedSidecarSearchPage,
+    discover_ssed_sidecar_body_resolvers, discover_ssed_sidecar_media_resolvers,
+    discover_ssed_sidecar_range_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
     lookup_ssed_ordered_honbun_body_by_row, lookup_ssed_sidecar_body_by_address_with_resolvers,
-    lookup_ssed_sidecar_media, search_ssed_dense_sidecar_bodies_with_resolvers,
+    lookup_ssed_sidecar_media, lookup_ssed_sidecar_range_bound_with_resolvers,
+    search_ssed_dense_sidecar_bodies_with_resolvers,
 };
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
 use crate::storage::{
@@ -249,6 +251,8 @@ pub struct ReaderBookPackage {
         OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
     ssed_sidecar_media_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarMediaResolver>, String>>,
+    ssed_sidecar_range_resolvers:
+        OnceLock<std::result::Result<Vec<SsedSidecarRangeResolver>, String>>,
     ssed_index_body_boundaries:
         OnceLock<std::result::Result<BTreeMap<String, Vec<SsedIndexPointer>>, String>>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
@@ -328,6 +332,7 @@ impl ReaderBookPackage {
             gaiji_unicode_map: stores.gaiji_unicode_map,
             ssed_sidecar_body_resolvers: OnceLock::new(),
             ssed_sidecar_media_resolvers: OnceLock::new(),
+            ssed_sidecar_range_resolvers: OnceLock::new(),
             ssed_index_body_boundaries: OnceLock::new(),
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),

@@ -401,6 +401,83 @@ fn ssed_hc_renderer_input_uses_marker_entry_length_for_resource_scan() {
 }
 
 #[test]
+fn ssed_hc_renderer_input_uses_sidecar_range_bound_for_sparse_index_targets() {
+    let dir = tempdir().unwrap();
+    let honmon = vec![b'x'; 512];
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+    )
+    .unwrap();
+    let connection = Connection::open(dir.path().join("GENIUSEB.db")).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table GENIUSEB (
+              Block_s integer,
+              Offset_s integer,
+              Block_e integer,
+              Offset_e integer,
+              Title text,
+              JIS_Title text
+            );
+            insert into GENIUSEB values (100, 40, 100, 80, 'next nearby range', '');
+            ",
+        )
+        .unwrap();
+    let catalog = SsedCatalog {
+        title: "Sparse range".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 100,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Sparse range".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let target = TargetToken::new(&InternalTarget::SsedBoundedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 10,
+        end_block: 100,
+        end_offset: 400,
+    })
+    .unwrap();
+
+    let input = package.renderer_input_for_target(&target).unwrap();
+    let RendererInput::HcSsedStream { length, .. } = input else {
+        panic!("SSED bounded address should produce HC renderer input");
+    };
+
+    assert_eq!(length, Some(30));
+}
+
+#[test]
 fn ssed_hc_renderer_input_uses_local_boundary_for_marker_variants() {
     let dir = tempdir().unwrap();
     let mut honmon = Vec::new();

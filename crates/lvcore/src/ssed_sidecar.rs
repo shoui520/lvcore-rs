@@ -48,6 +48,25 @@ pub struct SsedSidecarMediaResolver {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsedSidecarRangeResolver {
+    pub path: PathBuf,
+    pub storage: SsedSidecarStorage,
+    pub table: String,
+    pub start_block_column: String,
+    pub start_offset_column: String,
+    pub end_block_column: String,
+    pub end_offset_column: String,
+    pub title_column: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsedSidecarRangeBound {
+    pub end_block: u32,
+    pub end_offset: u32,
+    pub resolver: SsedSidecarRangeResolver,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SsedSidecarMedia {
     pub name: String,
     pub data: Vec<u8>,
@@ -496,6 +515,47 @@ pub fn discover_ssed_sidecar_media_resolvers(
     Ok(resolvers)
 }
 
+pub fn discover_ssed_sidecar_range_resolvers(
+    root: &Path,
+    dict_id_hint: Option<&str>,
+) -> Result<Vec<SsedSidecarRangeResolver>> {
+    let mut resolvers = Vec::new();
+    for candidate in sidecar_file_candidates(root, dict_id_hint)? {
+        let Some(storage) = sqlite_storage(&candidate)? else {
+            continue;
+        };
+        let connection = open_sidecar_connection(&candidate, storage)?;
+        let tables = sqlite_table_names(&connection)?;
+        for table in tables {
+            let columns = sqlite_columns(&connection, &table)?;
+            let Some(resolver) =
+                range_resolver_for_table(candidate.clone(), storage, &table, &columns)
+            else {
+                continue;
+            };
+            resolvers.push(resolver);
+        }
+    }
+    resolvers.sort_by_key(range_resolver_priority);
+    Ok(resolvers)
+}
+
+pub fn lookup_ssed_sidecar_range_bound_with_resolvers(
+    resolvers: &[SsedSidecarRangeResolver],
+    block: u32,
+    offset: u32,
+) -> Result<Option<SsedSidecarRangeBound>> {
+    for resolver in resolvers {
+        if let Some(bound) = lookup_containing_range_bound(resolver, block, offset)? {
+            return Ok(Some(bound));
+        }
+        if let Some(bound) = lookup_next_range_start_bound(resolver, block, offset)? {
+            return Ok(Some(bound));
+        }
+    }
+    Ok(None)
+}
+
 pub fn lookup_ssed_sidecar_media(
     resolvers: &[SsedSidecarMediaResolver],
     sidecar_hint: Option<&str>,
@@ -898,6 +958,114 @@ fn lookup_block_offset_resolver_body(
     })
 }
 
+fn lookup_containing_range_bound(
+    resolver: &SsedSidecarRangeResolver,
+    block: u32,
+    offset: u32,
+) -> Result<Option<SsedSidecarRangeBound>> {
+    let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
+    let select_sql = range_select_sql_for_resolver(resolver);
+    let sql = format!(
+        "select {select_sql} from {} where ({} < ? or ({} = ? and {} <= ?)) and ({} > ? or ({} = ? and {} > ?)) order by {} desc, {} desc limit 1",
+        quote_sql_identifier(&resolver.table),
+        quote_sql_identifier(&resolver.start_block_column),
+        quote_sql_identifier(&resolver.start_block_column),
+        quote_sql_identifier(&resolver.start_offset_column),
+        quote_sql_identifier(&resolver.end_block_column),
+        quote_sql_identifier(&resolver.end_block_column),
+        quote_sql_identifier(&resolver.end_offset_column),
+        quote_sql_identifier(&resolver.start_block_column),
+        quote_sql_identifier(&resolver.start_offset_column),
+    );
+    Ok(connection
+        .query_row(
+            &sql,
+            [
+                i64::from(block),
+                i64::from(block),
+                i64::from(offset),
+                i64::from(block),
+                i64::from(block),
+                i64::from(offset),
+            ],
+            |row| range_bound_from_row(resolver, row),
+        )
+        .optional()?)
+}
+
+fn lookup_next_range_start_bound(
+    resolver: &SsedSidecarRangeResolver,
+    block: u32,
+    offset: u32,
+) -> Result<Option<SsedSidecarRangeBound>> {
+    let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
+    let select_sql = range_select_sql_for_resolver(resolver);
+    let sql = format!(
+        "select {select_sql} from {} where {} > ? or ({} = ? and {} > ?) order by {} asc, {} asc limit 1",
+        quote_sql_identifier(&resolver.table),
+        quote_sql_identifier(&resolver.start_block_column),
+        quote_sql_identifier(&resolver.start_block_column),
+        quote_sql_identifier(&resolver.start_offset_column),
+        quote_sql_identifier(&resolver.start_block_column),
+        quote_sql_identifier(&resolver.start_offset_column),
+    );
+    Ok(connection
+        .query_row(
+            &sql,
+            [i64::from(block), i64::from(block), i64::from(offset)],
+            |row| {
+                let end_block = sqlite_value_to_u32(row.get_ref("lvcore_range_start_block")?)?;
+                let end_offset = sqlite_value_to_u32(row.get_ref("lvcore_range_start_offset")?)?;
+                Ok(SsedSidecarRangeBound {
+                    end_block,
+                    end_offset,
+                    resolver: resolver.clone(),
+                })
+            },
+        )
+        .optional()?)
+}
+
+fn range_select_sql_for_resolver(resolver: &SsedSidecarRangeResolver) -> String {
+    let mut expressions = vec![
+        format!(
+            "{} as {}",
+            quote_sql_identifier(&resolver.start_block_column),
+            quote_sql_identifier("lvcore_range_start_block")
+        ),
+        format!(
+            "{} as {}",
+            quote_sql_identifier(&resolver.start_offset_column),
+            quote_sql_identifier("lvcore_range_start_offset")
+        ),
+        format!(
+            "{} as {}",
+            quote_sql_identifier(&resolver.end_block_column),
+            quote_sql_identifier("lvcore_range_end_block")
+        ),
+        format!(
+            "{} as {}",
+            quote_sql_identifier(&resolver.end_offset_column),
+            quote_sql_identifier("lvcore_range_end_offset")
+        ),
+    ];
+    if let Some(title_column) = &resolver.title_column {
+        expressions.push(quote_sql_identifier(title_column));
+    }
+    expressions.join(", ")
+}
+
+fn range_bound_from_row(
+    resolver: &SsedSidecarRangeResolver,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SsedSidecarRangeBound> {
+    Ok(SsedSidecarRangeBound {
+        end_block: sqlite_value_to_u32(row.get_ref("lvcore_range_end_block")?)?,
+        end_offset: sqlite_value_to_u32(row.get_ref("lvcore_range_end_offset")?)?,
+        resolver: resolver.clone(),
+    })
+}
+
 fn short_anchor_hash(anchor_id: &str) -> String {
     use sha2::Digest;
     let digest = sha2::Sha256::digest(anchor_id.as_bytes());
@@ -1012,6 +1180,24 @@ fn media_resolver_for_table(
     })
 }
 
+fn range_resolver_for_table(
+    path: PathBuf,
+    storage: SsedSidecarStorage,
+    table: &str,
+    columns: &[String],
+) -> Option<SsedSidecarRangeResolver> {
+    Some(SsedSidecarRangeResolver {
+        path,
+        storage,
+        table: table.to_owned(),
+        start_block_column: find_column(columns, START_BLOCK_COLUMN_ALIASES)?,
+        start_offset_column: find_column(columns, START_OFFSET_COLUMN_ALIASES)?,
+        end_block_column: find_column(columns, END_BLOCK_COLUMN_ALIASES)?,
+        end_offset_column: find_column(columns, END_OFFSET_COLUMN_ALIASES)?,
+        title_column: find_column(columns, TITLE_COLUMN_ALIASES),
+    })
+}
+
 fn sidecar_kind_for_table(table: &str) -> SsedSidecarKind {
     let table = table.casefold();
     if table == "t_contents" || table.starts_with("t_contents_") {
@@ -1057,6 +1243,23 @@ fn resolver_priority(resolver: &SsedSidecarBodyResolver) -> (u8, u8, String, Str
 fn media_resolver_priority(resolver: &SsedSidecarMediaResolver) -> (u8, String, String) {
     let file = display_name(&resolver.path).casefold();
     let table_priority = if resolver.table.eq_ignore_ascii_case("media") {
+        0
+    } else {
+        1
+    };
+    (table_priority, resolver.table.casefold(), file)
+}
+
+fn range_resolver_priority(resolver: &SsedSidecarRangeResolver) -> (u8, String, String) {
+    let file = display_name(&resolver.path).casefold();
+    let table_priority = if resolver.table.eq_ignore_ascii_case(
+        resolver
+            .path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy())
+            .unwrap_or_default()
+            .as_ref(),
+    ) {
         0
     } else {
         1
@@ -1306,6 +1509,19 @@ fn sqlite_value_to_i64(value: ValueRef<'_>) -> Option<i64> {
     }
 }
 
+fn sqlite_value_to_u32(value: ValueRef<'_>) -> rusqlite::Result<u32> {
+    let value = match value {
+        ValueRef::Integer(value) => value,
+        ValueRef::Real(value) => value as i64,
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .unwrap_or(0),
+        ValueRef::Null => 0,
+    };
+    Ok(u32::try_from(value).unwrap_or(0))
+}
+
 fn decode_sqlite_text(bytes: &[u8]) -> String {
     if let Ok(text) = std::str::from_utf8(bytes) {
         return text.to_owned();
@@ -1496,6 +1712,42 @@ const OFFSET_COLUMN_ALIASES: &[&str] = &[
     "body_offset",
     "f_Offset",
     "f_offset",
+];
+
+const START_BLOCK_COLUMN_ALIASES: &[&str] = &[
+    "Block_s",
+    "block_s",
+    "StartBlock",
+    "start_block",
+    "BlockStart",
+    "block_start",
+];
+
+const START_OFFSET_COLUMN_ALIASES: &[&str] = &[
+    "Offset_s",
+    "offset_s",
+    "StartOffset",
+    "start_offset",
+    "OffsetStart",
+    "offset_start",
+];
+
+const END_BLOCK_COLUMN_ALIASES: &[&str] = &[
+    "Block_e",
+    "block_e",
+    "EndBlock",
+    "end_block",
+    "BlockEnd",
+    "block_end",
+];
+
+const END_OFFSET_COLUMN_ALIASES: &[&str] = &[
+    "Offset_e",
+    "offset_e",
+    "EndOffset",
+    "end_offset",
+    "OffsetEnd",
+    "offset_end",
 ];
 
 const MEDIA_NAME_COLUMN_ALIASES: &[&str] = &[
