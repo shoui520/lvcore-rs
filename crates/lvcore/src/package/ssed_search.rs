@@ -65,7 +65,7 @@ pub(super) fn decode_ssed_body_search_text(data: &[u8]) -> String {
 pub(super) fn ssed_body_search_byte_candidates(query: &str) -> Vec<Vec<u8>> {
     let raw_candidates = ssed_raw_search_key_prefilter_candidates(query);
     if raw_candidates.is_empty() {
-        return Vec::new();
+        return ssed_body_search_anchor_candidates(query);
     }
     let mut candidates = raw_candidates;
     let query = query.trim();
@@ -85,6 +85,38 @@ pub(super) fn ssed_raw_search_key_prefilter_candidates(query: &str) -> Vec<Vec<u
         return Vec::new();
     }
     ssed_index_search_key_candidates(query)
+}
+
+fn ssed_body_search_anchor_candidates(query: &str) -> Vec<Vec<u8>> {
+    let query = query.trim();
+    if query.is_empty() || query.chars().any(char::is_whitespace) {
+        return Vec::new();
+    }
+    let mut best = String::new();
+    let mut current = String::new();
+    for ch in query.chars() {
+        if ch.is_ascii_alphabetic() || ch.is_whitespace() {
+            if current.chars().count() > best.chars().count() {
+                best = std::mem::take(&mut current);
+            } else {
+                current.clear();
+            }
+            continue;
+        }
+        current.push(ch);
+    }
+    if current.chars().count() > best.chars().count() {
+        best = current;
+    }
+    if best.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = ssed_index_search_key_candidates(&best);
+    let (encoded, _encoding, had_errors) = SHIFT_JIS.encode(&best);
+    if !had_errors {
+        push_unique_search_key(&mut candidates, encoded.into_owned());
+    }
+    candidates
 }
 
 pub(super) fn ssed_index_page_prefilter_candidates(query: &str) -> Vec<Vec<u8>> {
@@ -289,6 +321,29 @@ mod tests {
         assert!(ssed_body_search_byte_candidates("fulltext").is_empty());
         assert!(ssed_body_search_byte_candidates("two words").is_empty());
         assert!(ssed_raw_search_key_prefilter_candidates("fulltext").is_empty());
+    }
+
+    #[test]
+    fn body_byte_prefilter_uses_non_alpha_anchor_for_mixed_ascii_queries() {
+        let candidates = ssed_body_search_byte_candidates("【c");
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("【"))
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate != &body_jis("【ｃ"))
+        );
+
+        let digit_candidates = ssed_body_search_byte_candidates("O1");
+        assert!(
+            digit_candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("１"))
+        );
+        assert!(digit_candidates.iter().any(|candidate| candidate == b"1"));
     }
 
     #[test]
