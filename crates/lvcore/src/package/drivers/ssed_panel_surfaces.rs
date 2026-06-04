@@ -159,11 +159,13 @@ impl ReaderBookPackage {
                 return Ok(SsedPanelBinLoadStatus::ParseFailed);
             }
         };
-        for record in panel.records {
+        for record in &panel.records {
+            let next_record = nearest_higher_panel_record(&panel.records, record);
             cells.push(ssed_panel_bin_record_to_navigation_cell(
                 self,
                 data_ref,
-                &record,
+                record,
+                next_record,
                 diagnostics,
                 gaiji_policy,
             )?);
@@ -266,6 +268,17 @@ fn ssed_panel_data_ref_is_aggregate(data_ref: &SsedPanelDataRef) -> bool {
     };
     let stem = stem.to_ascii_lowercase();
     stem == "all" || stem.ends_with("_all") || stem.ends_with("-all")
+}
+
+fn nearest_higher_panel_record<'a>(
+    records: &'a [SsedPanelBinRecord],
+    record: &SsedPanelBinRecord,
+) -> Option<&'a SsedPanelBinRecord> {
+    records
+        .iter()
+        .filter(|candidate| candidate.block != 0 || candidate.offset != 0)
+        .filter(|candidate| (candidate.block, candidate.offset) > (record.block, record.offset))
+        .min_by_key(|candidate| (candidate.block, candidate.offset))
 }
 
 struct SsedPanelMetadata {

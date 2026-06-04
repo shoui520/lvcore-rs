@@ -33,6 +33,8 @@ pub struct SsedSidecarBodyResolver {
     pub title_column: Option<String>,
     pub html_column: Option<String>,
     pub plain_column: Option<String>,
+    pub block_column: Option<String>,
+    pub offset_column: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +132,10 @@ impl SsedSidecarBodyResolver {
                 .html_column
                 .as_deref()
                 .is_some_and(|column| column.eq_ignore_ascii_case("Contents_HTML_box"))
+    }
+
+    pub fn has_block_offset_body_address(&self) -> bool {
+        self.block_column.is_some() && self.offset_column.is_some()
     }
 }
 
@@ -236,6 +242,76 @@ pub fn lookup_ssed_ordered_honbun_body_by_row(
         });
     };
     lookup_ordered_honbun_resolver_body(resolver, row_index)
+}
+
+pub fn lookup_ssed_sidecar_body_by_address_with_resolvers(
+    resolvers: &[SsedSidecarBodyResolver],
+    block: u32,
+    offset: u32,
+) -> Result<SsedSidecarLookup> {
+    const OFFSET_FORWARD_TOLERANCE: u32 = 16;
+
+    let candidates = resolvers
+        .iter()
+        .filter(|resolver| resolver.has_block_offset_body_address())
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(SsedSidecarLookup::NoResolver {
+            diagnostics: vec![Diagnostic::warning(
+                "ssed_address_sidecar_not_found",
+                "SSED address could not be mapped because no block/offset sidecar body table was identified",
+            )],
+        });
+    }
+
+    let mut first_missing: Option<SsedSidecarLookup> = None;
+    for resolver in &candidates {
+        match lookup_block_offset_resolver_body(
+            resolver,
+            block,
+            offset,
+            offset.saturating_add(OFFSET_FORWARD_TOLERANCE),
+        )? {
+            resolved @ SsedSidecarLookup::Resolved(_) => return Ok(resolved),
+            missing @ SsedSidecarLookup::MissingRow { .. } => {
+                if first_missing.is_none() {
+                    first_missing = Some(missing);
+                }
+            }
+            no_resolver @ SsedSidecarLookup::NoResolver { .. } => {
+                if first_missing.is_none() {
+                    first_missing = Some(no_resolver);
+                }
+            }
+        }
+    }
+
+    if let Some(SsedSidecarLookup::MissingRow {
+        resolver,
+        query_values,
+        mut diagnostics,
+    }) = first_missing
+    {
+        diagnostics.push(
+            Diagnostic::info(
+                "ssed_address_sidecar_resolver_exhausted",
+                "SSED address was not found in any candidate block/offset sidecar body table",
+            )
+            .with_context("resolver_count", candidates.len().to_string()),
+        );
+        return Ok(SsedSidecarLookup::MissingRow {
+            resolver,
+            query_values,
+            diagnostics,
+        });
+    }
+
+    Ok(SsedSidecarLookup::NoResolver {
+        diagnostics: vec![Diagnostic::warning(
+            "ssed_address_sidecar_not_found",
+            "SSED address could not be mapped because no block/offset sidecar body table was identified",
+        )],
+    })
 }
 
 pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
@@ -615,28 +691,7 @@ fn lookup_resolver_body(
     anchor_id: &str,
 ) -> Result<SsedSidecarLookup> {
     let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
-    let mut select_columns = vec![resolver.id_column.clone()];
-    let mut select_expressions = match resolver.id_rule {
-        SsedSidecarIdRule::DirectColumn => vec![quote_sql_identifier(&resolver.id_column)],
-        SsedSidecarIdRule::RowIdTimesFive => vec![format!(
-            "rowid as {}",
-            quote_sql_identifier(&resolver.id_column)
-        )],
-    };
-    for column in [
-        resolver.title_column.as_ref(),
-        resolver.html_column.as_ref(),
-        resolver.plain_column.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if !select_columns.iter().any(|existing| existing == column) {
-            select_columns.push(column.clone());
-            select_expressions.push(quote_sql_identifier(column));
-        }
-    }
-    let select_sql = select_expressions.join(", ");
+    let (select_sql, _) = body_select_sql_for_resolver(resolver);
     let sql = format!(
         "select {select_sql} from {} where {} = ? limit 1",
         quote_sql_identifier(&resolver.table),
@@ -680,6 +735,33 @@ fn lookup_resolver_body(
             .with_context("id_column", &resolver.id_column),
         ],
     })
+}
+
+fn body_select_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> (String, Vec<String>) {
+    let mut select_columns = vec![resolver.id_column.clone()];
+    let mut select_expressions = match resolver.id_rule {
+        SsedSidecarIdRule::DirectColumn => vec![quote_sql_identifier(&resolver.id_column)],
+        SsedSidecarIdRule::RowIdTimesFive => vec![format!(
+            "rowid as {}",
+            quote_sql_identifier(&resolver.id_column)
+        )],
+    };
+    for column in [
+        resolver.title_column.as_ref(),
+        resolver.html_column.as_ref(),
+        resolver.plain_column.as_ref(),
+        resolver.block_column.as_ref(),
+        resolver.offset_column.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !select_columns.iter().any(|existing| existing == column) {
+            select_columns.push(column.clone());
+            select_expressions.push(quote_sql_identifier(column));
+        }
+    }
+    (select_expressions.join(", "), select_columns)
 }
 
 fn lookup_ordered_honbun_resolver_body(
@@ -743,6 +825,75 @@ fn lookup_ordered_honbun_resolver_body(
             .with_context("sidecar", display_name(&resolver.path))
             .with_context("table", &resolver.table)
             .with_context("id_column", &resolver.id_column),
+        ],
+    })
+}
+
+fn lookup_block_offset_resolver_body(
+    resolver: &SsedSidecarBodyResolver,
+    block: u32,
+    offset_start: u32,
+    offset_end: u32,
+) -> Result<SsedSidecarLookup> {
+    let Some(block_column) = &resolver.block_column else {
+        return Ok(SsedSidecarLookup::NoResolver {
+            diagnostics: vec![Diagnostic::warning(
+                "ssed_address_sidecar_block_column_missing",
+                "block/offset sidecar resolver is missing a block column",
+            )],
+        });
+    };
+    let Some(offset_column) = &resolver.offset_column else {
+        return Ok(SsedSidecarLookup::NoResolver {
+            diagnostics: vec![Diagnostic::warning(
+                "ssed_address_sidecar_offset_column_missing",
+                "block/offset sidecar resolver is missing an offset column",
+            )],
+        });
+    };
+    let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
+    let (select_sql, _) = body_select_sql_for_resolver(resolver);
+    let sql = format!(
+        "select {select_sql} from {} where {} = ? and {} >= ? and {} <= ? order by {} asc limit 1",
+        quote_sql_identifier(&resolver.table),
+        quote_sql_identifier(block_column),
+        quote_sql_identifier(offset_column),
+        quote_sql_identifier(offset_column),
+        quote_sql_identifier(offset_column),
+    );
+    let row = connection
+        .query_row(
+            &sql,
+            [
+                i64::from(block),
+                i64::from(offset_start),
+                i64::from(offset_end),
+            ],
+            |row| sidecar_body_from_row(resolver, row),
+        )
+        .optional()?;
+    if let Some(body) = row {
+        return Ok(SsedSidecarLookup::Resolved(body));
+    }
+    Ok(SsedSidecarLookup::MissingRow {
+        resolver: resolver.clone(),
+        query_values: vec![
+            block.to_string(),
+            offset_start.to_string(),
+            offset_end.to_string(),
+        ],
+        diagnostics: vec![
+            Diagnostic::warning(
+                "ssed_address_sidecar_row_missing",
+                "block/offset sidecar did not contain a row for the SSED address",
+            )
+            .with_context("block", block.to_string())
+            .with_context("offset_start", offset_start.to_string())
+            .with_context("offset_end", offset_end.to_string())
+            .with_context("sidecar", display_name(&resolver.path))
+            .with_context("table", &resolver.table)
+            .with_context("block_column", block_column)
+            .with_context("offset_column", offset_column),
         ],
     })
 }
@@ -834,6 +985,8 @@ fn resolver_for_table(
         title_column: find_column(columns, TITLE_COLUMN_ALIASES),
         html_column,
         plain_column,
+        block_column: find_column(columns, BLOCK_COLUMN_ALIASES),
+        offset_column: find_column(columns, OFFSET_COLUMN_ALIASES),
     })
 }
 
@@ -1325,6 +1478,24 @@ const PLAIN_COLUMN_ALIASES: &[&str] = &[
     "K_text",
     "Pinyin",
     "data",
+];
+
+const BLOCK_COLUMN_ALIASES: &[&str] = &[
+    "Block",
+    "block",
+    "BodyBlock",
+    "body_block",
+    "f_Block",
+    "f_block",
+];
+
+const OFFSET_COLUMN_ALIASES: &[&str] = &[
+    "Offset",
+    "offset",
+    "BodyOffset",
+    "body_offset",
+    "f_Offset",
+    "f_offset",
 ];
 
 const MEDIA_NAME_COLUMN_ALIASES: &[&str] = &[

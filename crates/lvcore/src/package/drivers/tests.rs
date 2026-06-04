@@ -7,7 +7,9 @@ use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use crate::lved_sqlite::apply_sqlcipher_key;
-use crate::render::{HcRendererProfileSource, HcRendererProfileStatus, RenderCapability};
+use crate::render::{
+    HcRendererProfileSource, HcRendererProfileStatus, RenderCapability, RendererInput,
+};
 use crate::ssed::SSEDINFO_MAGIC;
 use crate::target::TargetKind;
 

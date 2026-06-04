@@ -514,10 +514,12 @@ fn ssed_menu_rows_with_many_links_expand_to_entry_nodes() {
     assert_eq!(nodes[1].label_text, "beta");
     assert!(matches!(
         nodes[0].target.as_ref().unwrap().decode().unwrap(),
-        InternalTarget::SsedAddress {
+        InternalTarget::SsedBoundedAddress {
             component,
             block: 10,
             offset: 2,
+            end_block: 10,
+            end_offset: 4,
         } if component == "HONMON.DIC"
     ));
     assert!(matches!(
@@ -730,6 +732,55 @@ fn ssed_menu_and_panel_targets_support_continuous_view_windows() {
     .unwrap();
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let NavigationSurface::SimpleMenu { nodes, .. } = package.open_surface("menu").unwrap() else {
+        panic!("SSED MENU should decode to a simple menu surface");
+    };
+    assert!(matches!(
+        nodes[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block: 10,
+            offset: 0,
+            end_block: 10,
+            end_offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+    assert!(matches!(
+        nodes[1].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block: 10,
+            offset: 2,
+            end_block: 10,
+            end_offset: 4,
+        } if component == "HONMON.DIC"
+    ));
+
+    let NavigationSurface::Panel { cells, .. } = package.open_surface("panels:01010000").unwrap()
+    else {
+        panic!("SSED Panel should decode to panel cells");
+    };
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block: 10,
+            offset: 0,
+            end_block: 10,
+            end_offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+    assert!(matches!(
+        cells[1].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block: 10,
+            offset: 2,
+            end_block: 10,
+            end_offset: 4,
+        } if component == "HONMON.DIC"
+    ));
+
     let target = TargetToken::new(&InternalTarget::SsedAddress {
         component: "HONMON.DIC".to_owned(),
         block: 10,

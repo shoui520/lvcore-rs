@@ -636,7 +636,8 @@ pub(crate) fn ga16_fixture(start_code: u16, count: u16) -> Vec<u8> {
 
 pub(crate) fn ssed_view_offset(view: &lvcore::ResolvedTargetView) -> Option<(u32, u32)> {
     match view.target.decode().ok()? {
-        InternalTarget::SsedAddress { block, offset, .. } => Some((block, offset)),
+        InternalTarget::SsedAddress { block, offset, .. }
+        | InternalTarget::SsedBoundedAddress { block, offset, .. } => Some((block, offset)),
         _ => None,
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::package::drivers::ssed_navigation::ssed_honmon_address_target;
 
 pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
     package: &ReaderBookPackage,
@@ -18,6 +19,7 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
             package,
             block,
             cell.target_offset.unwrap_or(0),
+            None,
             &mut diagnostics,
         )?
     } else {
@@ -39,6 +41,7 @@ pub(super) fn ssed_panel_bin_record_to_navigation_cell(
     package: &ReaderBookPackage,
     data_ref: &SsedPanelDataRef,
     record: &SsedPanelBinRecord,
+    next_record: Option<&SsedPanelBinRecord>,
     diagnostics: &mut Vec<Diagnostic>,
     gaiji_policy: &GaijiPolicy,
 ) -> Result<PanelCell> {
@@ -50,7 +53,7 @@ pub(super) fn ssed_panel_bin_record_to_navigation_cell(
         column: 0,
         label_html: rich_label.html,
         label_text: rich_label.text,
-        target: ssed_panel_record_target(package, record, diagnostics)?,
+        target: ssed_panel_record_target(package, record, next_record, diagnostics)?,
         diagnostics: rich_label.diagnostics,
     })
 }
@@ -58,15 +61,23 @@ pub(super) fn ssed_panel_bin_record_to_navigation_cell(
 fn ssed_panel_record_target(
     package: &ReaderBookPackage,
     record: &SsedPanelBinRecord,
+    next_record: Option<&SsedPanelBinRecord>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
-    ssed_panel_address_target(package, record.block, record.offset, diagnostics)
+    ssed_panel_address_target(
+        package,
+        record.block,
+        record.offset,
+        next_record.map(|next| (next.block, next.offset)),
+        diagnostics,
+    )
 }
 
 fn ssed_panel_address_target(
     package: &ReaderBookPackage,
     block: u32,
     offset: u32,
+    next: Option<(u32, u32)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
     if block == 0 && offset == 0 {
@@ -112,9 +123,11 @@ fn ssed_panel_address_target(
         );
         return Ok(None);
     }
-    Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
-        component: component.filename.clone(),
+    Ok(Some(ssed_honmon_address_target(
+        package,
+        component.filename.clone(),
         block,
         offset,
-    })?))
+        next,
+    )?))
 }

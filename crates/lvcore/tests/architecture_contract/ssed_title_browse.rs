@@ -25,10 +25,11 @@ fn ssed_simple_title_index_surface_resolves_entry_targets() {
     assert_eq!(items[0].label_text, "alpha");
     assert_eq!(
         items[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
+        InternalTarget::SsedIndexAddress {
             component: "HONMON.DIC".to_owned(),
             block: 1,
             offset: 2,
+            index_component: "FHINDEX.DIC".to_owned(),
         }
     );
 }
@@ -129,10 +130,11 @@ fn title_index_browse_does_not_apply_backward_body_bounds() {
     );
     assert_eq!(
         items[1].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
+        InternalTarget::SsedIndexAddress {
             component: "HONMON.DIC".to_owned(),
             block: 1,
             offset: 8,
+            index_component: "FHINDEX.DIC".to_owned(),
         }
     );
 }

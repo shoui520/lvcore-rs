@@ -53,8 +53,14 @@ pub(super) fn ssed_menu_records_to_nodes_from(
 
     for (index, record) in records.iter().enumerate() {
         let global_index = base_index + index;
-        let nodes =
-            ssed_menu_record_nodes(package, record, global_index, diagnostics, gaiji_policy)?;
+        let nodes = ssed_menu_record_nodes(
+            package,
+            records,
+            record,
+            global_index,
+            diagnostics,
+            gaiji_policy,
+        )?;
         let depth = record.depth.max(1);
         for node in nodes {
             attach_ssed_menu_node(
@@ -73,6 +79,7 @@ pub(super) fn ssed_menu_records_to_nodes_from(
 
 fn ssed_menu_record_nodes(
     package: &ReaderBookPackage,
+    records: &[SsedMenuRecord],
     record: &SsedMenuRecord,
     global_index: usize,
     diagnostics: &mut Vec<Diagnostic>,
@@ -95,7 +102,9 @@ fn ssed_menu_record_nodes(
             let Some(destination) = link.destination.as_ref() else {
                 continue;
             };
-            let Some(target) = ssed_menu_destination_target(package, destination, diagnostics)?
+            let next_destination = nearest_higher_menu_destination(records, destination);
+            let Some(target) =
+                ssed_menu_destination_target(package, destination, next_destination, diagnostics)?
             else {
                 continue;
             };
@@ -121,7 +130,7 @@ fn ssed_menu_record_nodes(
     if label.is_empty() {
         return Ok(Vec::new());
     }
-    let target = ssed_menu_record_target(package, record, diagnostics)?;
+    let target = ssed_menu_record_target(package, records, record, diagnostics)?;
     let rich_label = package.ssed_rich_label_with_policy(label, gaiji_policy);
     Ok(vec![NavigationNode {
         href: None,
@@ -445,6 +454,7 @@ fn nearest_higher_aux_target_row<'a>(
 
 fn ssed_menu_record_target(
     package: &ReaderBookPackage,
+    records: &[SsedMenuRecord],
     record: &SsedMenuRecord,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
@@ -456,12 +466,14 @@ fn ssed_menu_record_target(
     else {
         return Ok(None);
     };
-    ssed_menu_destination_target(package, destination, diagnostics)
+    let next_destination = nearest_higher_menu_destination(records, destination);
+    ssed_menu_destination_target(package, destination, next_destination, diagnostics)
 }
 
 fn ssed_menu_destination_target(
     package: &ReaderBookPackage,
     destination: &SsedMenuDestination,
+    next_destination: Option<&SsedMenuDestination>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
     let Some(catalog) = &package.ssed_catalog else {
@@ -507,9 +519,62 @@ fn ssed_menu_destination_target(
         );
         return Ok(None);
     }
-    Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
-        component: component.filename.clone(),
-        block: destination.block,
-        offset: destination.offset,
-    })?))
+    let target = ssed_honmon_address_target(
+        package,
+        component.filename.clone(),
+        destination.block,
+        destination.offset,
+        next_destination.map(|next| (next.block, next.offset)),
+    )?;
+    Ok(Some(target))
+}
+
+fn nearest_higher_menu_destination<'a>(
+    records: &'a [SsedMenuRecord],
+    destination: &SsedMenuDestination,
+) -> Option<&'a SsedMenuDestination> {
+    records
+        .iter()
+        .flat_map(|record| record.links.iter())
+        .filter_map(|link| link.destination.as_ref())
+        .filter(|candidate| !candidate.is_null())
+        .filter(|candidate| {
+            (candidate.block, candidate.offset) > (destination.block, destination.offset)
+        })
+        .min_by_key(|candidate| (candidate.block, candidate.offset))
+}
+
+pub(in crate::package::drivers) fn ssed_honmon_address_target(
+    package: &ReaderBookPackage,
+    component: String,
+    block: u32,
+    offset: u32,
+    next: Option<(u32, u32)>,
+) -> Result<TargetToken> {
+    let bounded = next
+        .filter(|(end_block, end_offset)| (*end_block, *end_offset) > (block, offset))
+        .and_then(|(end_block, end_offset)| {
+            let catalog = package.ssed_catalog.as_ref()?;
+            let end_component = catalog.component_for_address(end_block)?;
+            end_component
+                .filename
+                .eq_ignore_ascii_case(&component)
+                .then_some((end_block, end_offset))
+        });
+    let target = if let Some((end_block, end_offset)) = bounded {
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block,
+            offset,
+            end_block,
+            end_offset,
+        }
+    } else {
+        InternalTarget::SsedAddress {
+            component,
+            block,
+            offset,
+        }
+    };
+    TargetToken::new(&target)
 }

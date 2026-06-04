@@ -196,11 +196,11 @@ use crate::ssed_screen_menu::{
     SsedScreenMenuHotspot, SsedScreenMenuParse, parse_screen_menu_stream,
 };
 use crate::ssed_sidecar::{
-    SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup, SsedSidecarMediaResolver,
-    SsedSidecarSearchPage, discover_ssed_sidecar_body_resolvers,
+    SsedSidecarBody, SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
+    SsedSidecarMediaResolver, SsedSidecarSearchPage, discover_ssed_sidecar_body_resolvers,
     discover_ssed_sidecar_media_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
-    lookup_ssed_ordered_honbun_body_by_row, lookup_ssed_sidecar_media,
-    search_ssed_dense_sidecar_bodies_with_resolvers,
+    lookup_ssed_ordered_honbun_body_by_row, lookup_ssed_sidecar_body_by_address_with_resolvers,
+    lookup_ssed_sidecar_media, search_ssed_dense_sidecar_bodies_with_resolvers,
 };
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
 use crate::storage::{

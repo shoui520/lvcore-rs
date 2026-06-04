@@ -114,6 +114,12 @@ impl ReaderBookPackage {
         {
             return Ok(body);
         }
+        if component.role == SsedComponentRole::Honmon
+            && self.ssed_pdfspread_database()?.is_none()
+            && let Some(body) = self.visual_body_for_ssed_sidecar_address(block, offset)?
+        {
+            return Ok(body);
+        }
         let stream_offset = self.ssed_stream_start_offset(component, component_offset);
         let inferred_length = self.infer_ssed_stream_length(component, stream_offset);
         let explicit_bounded_length = end.and_then(|(end_block, end_offset)| {
@@ -173,6 +179,23 @@ impl ReaderBookPackage {
                 html: body.html.unwrap_or(body.text),
                 source: BodySourceKind::RendererDatabase,
             })),
+            SsedSidecarLookup::MissingRow { .. } | SsedSidecarLookup::NoResolver { .. } => Ok(None),
+        }
+    }
+
+    fn visual_body_for_ssed_sidecar_address(
+        &self,
+        block: u32,
+        offset: u32,
+    ) -> Result<Option<VisualBody>> {
+        match lookup_ssed_sidecar_body_by_address_with_resolvers(
+            self.ssed_sidecar_body_resolvers()?,
+            block,
+            offset,
+        )? {
+            SsedSidecarLookup::Resolved(body) => {
+                Ok(Some(ssed_address_sidecar_body_to_visual(body)))
+            }
             SsedSidecarLookup::MissingRow { .. } | SsedSidecarLookup::NoResolver { .. } => Ok(None),
         }
     }
@@ -454,6 +477,36 @@ fn bounded_ssed_stream_length(
     end_component_offset
         .checked_sub(stream_offset)
         .filter(|length| *length > 0)
+}
+
+fn ssed_address_sidecar_body_to_visual(body: SsedSidecarBody) -> VisualBody {
+    if let Some(html) = body.html {
+        return VisualBody::PreservedHtml {
+            html,
+            source: match body.resolver.kind {
+                SsedSidecarKind::TContents | SsedSidecarKind::Honbun => {
+                    BodySourceKind::RendererDatabase
+                }
+                _ => BodySourceKind::SidecarHtml,
+            },
+        };
+    }
+    VisualBody::PreservedHtml {
+        html: sidecar_plain_text_to_html(&body.text),
+        source: BodySourceKind::SidecarText,
+    }
+}
+
+fn sidecar_plain_text_to_html(text: &str) -> String {
+    let mut html = String::from("<div class=\"lvcore-sidecar-text\">");
+    for (index, line) in text.lines().enumerate() {
+        if index > 0 {
+            html.push_str("<br>");
+        }
+        html.push_str(&escape_plain_label_html(line));
+    }
+    html.push_str("</div>");
+    html
 }
 
 fn ssed_reader_index_boundary_marker_variant_len(
