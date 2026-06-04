@@ -221,6 +221,23 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
     assert_eq!(window.center.title.as_deref(), Some("Alpha"));
     assert_eq!(window.after.len(), 1);
     assert_eq!(window.after[0].title.as_deref(), Some("Beta"));
+    let first_window = package
+        .resolve_target_window(
+            alpha.target.as_ref().unwrap(),
+            Some(&lvcore::SequenceHint::LvedTreeOrder),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert!(first_window.before.is_empty());
+    assert_eq!(first_window.after.len(), 1);
+    assert!(
+        first_window
+            .after
+            .iter()
+            .all(|view| view.kind != ResolvedTargetKind::Unsupported)
+    );
 
     let body_order = package
         .resolve_target_window(

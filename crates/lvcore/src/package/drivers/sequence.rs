@@ -1,3 +1,4 @@
+use super::hourei_navigation::hourei_kana_panel_surface_id;
 use super::*;
 
 impl SequenceProvider for ReaderBookPackage {
@@ -73,6 +74,16 @@ impl SequenceProvider for ReaderBookPackage {
                 )
             })
             && let Some(window) = self.resolve_hourei_law_window(target, before, after, options)?
+        {
+            return Ok(window);
+        }
+        if self.metadata.format_family == FormatFamily::Hourei
+            && matches!(
+                sequence_hint,
+                Some(SequenceHint::PanelOrder { value }) if value == hourei_kana_panel_surface_id()
+            )
+            && let Some(window) =
+                self.resolve_hourei_kana_panel_window(target, before, after, options)?
         {
             return Ok(window);
         }

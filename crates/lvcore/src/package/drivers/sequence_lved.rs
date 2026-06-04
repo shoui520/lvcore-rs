@@ -96,7 +96,7 @@ impl ReaderBookPackage {
         let rows = store.tree_index_items_arc()?;
         let rows = rows
             .iter()
-            .filter(|row| row.data_id >= 0)
+            .filter(|row| row.data_id > 0)
             .collect::<Vec<_>>();
         if rows.is_empty() {
             return Ok(None);

@@ -402,8 +402,9 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     assert_eq!(cells[0].label_text, "");
     assert!(cells[0].target.is_none());
     assert_eq!(cells[1].label_text, "み");
+    let kana_panel_target = cells[1].target.as_ref().unwrap().clone();
     assert_eq!(
-        cells[1].target.as_ref().unwrap().decode().unwrap(),
+        kana_panel_target.decode().unwrap(),
         InternalTarget::MenuItem {
             surface_id: "hourei-kana:み".to_owned(),
             item_id: "root".to_owned(),
@@ -517,6 +518,30 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
         linked_kana_view.surface,
         Some(lvcore::NavigationSurface::TitleIndexBrowse { .. })
     ));
+    let kana_window = package
+        .resolve_target_window(
+            &kana_panel_target,
+            Some(&lvcore::SequenceHint::PanelOrder {
+                value: "kana-panel".to_owned(),
+            }),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        kana_window.center.kind,
+        ResolvedTargetKind::NavigationSurface
+    );
+    assert_eq!(kana_window.center.title.as_deref(), Some("み"));
+    assert_eq!(kana_window.after.len(), 1);
+    assert_eq!(kana_window.after[0].title.as_deref(), Some("し"));
+    assert!(
+        kana_window
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
     assert_eq!(view.resources.len(), 1);
     assert_eq!(view.resources[0].kind, ResourceKind::Image);
     assert_eq!(
