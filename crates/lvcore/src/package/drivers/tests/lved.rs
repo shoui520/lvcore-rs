@@ -270,7 +270,7 @@ fn lved_search_and_list_labels_are_sanitized_for_app_chrome() {
             .execute(
                 "update list set title = ?1, titlesub = ?2 where id = 1",
                 (
-                    r#"<img class="icon lvcore-gaiji" src="AC6E.svg" onerror="bad()"><b>alpha</b><script>alert(1)</script>"#,
+                    r#"<img class="icon lvcore-gaiji" src="AC6E.svg" onerror="bad()"><b>alpha</b><span class="scl_ps hostile">小</span><script>alert(1)</script>"#,
                     r#"<span class="hostile lvcore-subtitle">subtitle</span><img src="javascript:bad()">"#,
                 ),
             )
@@ -291,6 +291,7 @@ fn lved_search_and_list_labels_are_sanitized_for_app_chrome() {
     assert!(!list_html.contains("class=\"icon"));
     assert!(!list_html.contains("hostile"));
     assert!(list_html.contains(r#"<span class="lvcore-subtitle">"#));
+    assert!(list_html.contains(r#"<span class="scl_ps">小</span>"#));
 
     let page = package
         .search(&SearchQuery {
@@ -311,6 +312,8 @@ fn lved_search_and_list_labels_are_sanitized_for_app_chrome() {
     assert!(!hit_html.contains("onerror"));
     assert!(!hit_html.contains("javascript:"));
     assert!(!hit_html.contains("class=\"icon"));
+    assert!(!hit_html.contains("hostile"));
+    assert!(hit_html.contains(r#"<span class="scl_ps">小</span>"#));
 }
 
 #[test]
