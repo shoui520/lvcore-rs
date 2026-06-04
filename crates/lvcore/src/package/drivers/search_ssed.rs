@@ -64,12 +64,12 @@ impl ReaderBookPackage {
         needle: &str,
         on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
     ) -> Result<Vec<Diagnostic>> {
-        let forward_candidates = ssed_raw_search_key_prefilter_candidates(needle);
+        let forward_candidates = ssed_index_page_prefilter_candidates(needle);
         if forward_candidates.is_empty() {
             return self.scan_ssed_simple_index_rows(None, on_row);
         }
         let reversed_needle = reverse_search_match_text(needle);
-        let reverse_candidates = ssed_raw_search_key_prefilter_candidates(&reversed_needle);
+        let reverse_candidates = ssed_index_page_prefilter_candidates(&reversed_needle);
         self.scan_ssed_simple_index_rows_with_page_filter(
             None,
             |component, page| {

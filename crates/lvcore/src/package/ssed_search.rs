@@ -87,6 +87,19 @@ pub(super) fn ssed_raw_search_key_prefilter_candidates(query: &str) -> Vec<Vec<u
     ssed_index_search_key_candidates(query)
 }
 
+pub(super) fn ssed_index_page_prefilter_candidates(query: &str) -> Vec<Vec<u8>> {
+    let query = query.trim();
+    if query.is_empty() || query.chars().any(char::is_whitespace) {
+        return Vec::new();
+    }
+    let mut candidates = ssed_index_search_key_candidates(query);
+    let (encoded, _encoding, had_errors) = SHIFT_JIS.encode(query);
+    if !had_errors {
+        push_unique_search_key(&mut candidates, encoded.into_owned());
+    }
+    candidates
+}
+
 pub(super) fn ssed_body_window_may_contain_query(data: &[u8], candidates: &[Vec<u8>]) -> bool {
     candidates.is_empty()
         || candidates
@@ -276,6 +289,18 @@ mod tests {
         assert!(ssed_body_search_byte_candidates("fulltext").is_empty());
         assert!(ssed_body_search_byte_candidates("two words").is_empty());
         assert!(ssed_raw_search_key_prefilter_candidates("fulltext").is_empty());
+    }
+
+    #[test]
+    fn index_page_prefilter_keeps_ascii_queries() {
+        let candidates = ssed_index_page_prefilter_candidates(".N");
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis(".N"))
+        );
+        assert!(candidates.iter().any(|candidate| candidate == b".N"));
+        assert!(!candidates.is_empty());
     }
 
     fn body_jis(value: &str) -> Vec<u8> {
