@@ -259,7 +259,7 @@ fn validate_deep_exercises_continuous_windows() {
         .and_then(|exercise| exercise.get("window"))
         .expect("search validation should exercise search-result continuous view");
     assert_eq!(search_window["status"], "ok");
-    assert_eq!(search_window["after_count"].as_u64(), Some(1));
+    assert_eq!(search_window["center_kind"], "entry_body");
     assert!(!validate_row_has_failure(&output));
 }
 
@@ -339,6 +339,40 @@ fn validate_deep_exercises_advertised_search_modes() {
     ] {
         assert!(kinds.contains(expected), "missing {expected}");
     }
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
+fn validate_deep_search_probes_use_real_navigation_label_not_book_title() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: false,
+        },
+    );
+    let exercises = output["exercises"].as_array().unwrap();
+    let exact = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_exact")
+        .expect("missing exact validation row");
+    let forward = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_forward")
+        .expect("missing forward validation row");
+    let partial = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_partial")
+        .expect("missing partial validation row");
+
+    assert_eq!(exact["query"], "alpha");
+    assert_eq!(forward["query"], "al");
+    assert_eq!(partial["query"], "al");
+    assert_ne!(exact["query"], "Example Dictionary");
     assert!(!validate_row_has_failure(&output));
 }
 

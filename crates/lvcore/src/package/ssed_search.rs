@@ -126,10 +126,6 @@ pub(super) fn reverse_search_match_text(value: &str) -> String {
     value.chars().rev().collect()
 }
 
-pub(super) fn ssed_ascii_key_needs_linear_safety_net(needle: &str) -> bool {
-    needle.is_ascii() && needle.bytes().any(|byte| byte.is_ascii_alphabetic())
-}
-
 pub(super) fn ssed_index_search_key_candidates(needle: &str) -> Vec<Vec<u8>> {
     let mut candidates = Vec::new();
     push_unique_search_key(&mut candidates, encode_ssed_index_search_key(needle));

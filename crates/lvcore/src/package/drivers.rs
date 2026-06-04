@@ -100,9 +100,9 @@ use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::ssed_payload::file_starts_with_android_wrapped_sseddata;
 use super::ssed_search::{
     decode_ssed_body_search_text, normalize_search_match_text, reverse_search_match_text,
-    ssed_ascii_key_needs_linear_safety_net, ssed_body_search_byte_candidates,
-    ssed_body_window_may_contain_query, ssed_fulltext_snippet_html, ssed_index_row_order_key,
-    ssed_index_search_key_candidates, ssed_raw_search_key_prefilter_candidates,
+    ssed_body_search_byte_candidates, ssed_body_window_may_contain_query,
+    ssed_fulltext_snippet_html, ssed_index_row_order_key, ssed_index_search_key_candidates,
+    ssed_raw_search_key_prefilter_candidates,
 };
 use super::ssed_search_runtime::{
     SSED_FULLTEXT_BODY_WINDOW_BYTES, SSED_FULLTEXT_SCAN_OVERLAP_BYTES,

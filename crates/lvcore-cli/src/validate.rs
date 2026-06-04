@@ -266,6 +266,7 @@ fn exercise_reader_paths(
         library,
         book_id,
         &metadata,
+        surfaces,
         resource_scan_limit,
         include_expensive_search,
     ));
@@ -341,16 +342,20 @@ fn search_mode_exercises(
     library: &BookLibrary,
     book_id: &BookId,
     metadata: &BookMetadata,
+    surfaces: &[HomeSurface],
     resource_scan_limit: usize,
     include_expensive_search: bool,
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
+    let probe_label = search_probe_label(library, book_id, surfaces)
+        .or_else(|| metadata.title.clone())
+        .unwrap_or_else(|| "a".to_owned());
     for mode in validate_search_modes_to_probe(metadata) {
         if should_skip_search_mode_probe(metadata, &mode, include_expensive_search) {
             rows.push(skipped_search_mode_exercise(mode));
             continue;
         }
-        let query = search_probe_query(metadata.title.as_deref(), &mode);
+        let query = search_probe_query(&probe_label, &mode);
         let render_hits = mode == SearchMode::Forward;
         rows.push(search_mode_exercise(
             library,
@@ -825,6 +830,47 @@ fn navigation_surface_kind_name(surface: &NavigationSurface) -> &'static str {
     }
 }
 
+fn search_probe_label(
+    library: &BookLibrary,
+    book_id: &BookId,
+    surfaces: &[HomeSurface],
+) -> Option<String> {
+    let preferred = [
+        NavigationSurfaceKind::TitleIndexBrowse,
+        NavigationSurfaceKind::Menu,
+        NavigationSurfaceKind::MultiSelector,
+        NavigationSurfaceKind::LvedTree,
+        NavigationSurfaceKind::LawTree,
+        NavigationSurfaceKind::MultiviewTree,
+        NavigationSurfaceKind::Panel,
+    ];
+    for kind in preferred {
+        for surface in surfaces {
+            if surface.status != NavigationStatus::Available
+                || surface.surface_id == "search"
+                || surface.kind != kind
+            {
+                continue;
+            }
+            let Ok(opened) = library.open_surface(book_id, &surface.surface_id) else {
+                continue;
+            };
+            if let Some(label) = first_actionable_label(&opened) {
+                return Some(label);
+            }
+        }
+    }
+    None
+}
+
+fn first_actionable_label(surface: &NavigationSurface) -> Option<String> {
+    surface
+        .actionable_targets()
+        .into_iter()
+        .map(|target| target.label_text.trim().to_owned())
+        .find(|label| !label.is_empty())
+}
+
 fn search_probe_prefix(title: &str) -> Option<&str> {
     let trimmed = title.trim();
     if trimmed.is_empty() {
@@ -861,8 +907,7 @@ fn search_probe_suffix(title: &str) -> Option<String> {
     }
 }
 
-fn search_probe_query(title: Option<&str>, mode: &SearchMode) -> String {
-    let title = title.unwrap_or_default();
+fn search_probe_query(title: &str, mode: &SearchMode) -> String {
     match mode {
         SearchMode::Exact => {
             let trimmed = title.trim();

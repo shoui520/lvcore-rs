@@ -36,7 +36,6 @@ impl ReaderBookPackage {
         );
         let mut optimized_scan_components = 0usize;
         let mut scan_needs_linear_fallback = false;
-        let ascii_key_needs_linear_safety_net = ssed_ascii_key_needs_linear_safety_net(&needle);
         if matches!(
             query.mode,
             SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
@@ -50,9 +49,7 @@ impl ReaderBookPackage {
             collector.extend_diagnostics(scan_result.diagnostics);
         }
         if !collector.has_hits()
-            && (optimized_scan_components == 0
-                || scan_needs_linear_fallback
-                || ascii_key_needs_linear_safety_net)
+            && (optimized_scan_components == 0 || scan_needs_linear_fallback)
         {
             let scan_diagnostics = if query.mode == SearchMode::Partial {
                 self.scan_ssed_partial_index_rows(&needle, |row| collector.push_row(row))?

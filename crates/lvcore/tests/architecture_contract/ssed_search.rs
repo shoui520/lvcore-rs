@@ -138,6 +138,79 @@ fn ssed_missing_optional_index_component_is_info_not_warning() {
 }
 
 #[test]
+fn ssed_ascii_exact_miss_does_not_linear_scan_optional_indexes() {
+    let dir = tempdir().unwrap();
+    let record_start = 0x80;
+    let mut catalog = vec![0u8; record_start + 4 * 0x30];
+    catalog[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"ASCII Exact Miss";
+    catalog[0x0c] = title.len() as u8;
+    catalog[0x0d..0x0d + title.len()].copy_from_slice(title);
+    catalog[0x4d] = 4;
+    write_record(
+        &mut catalog[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x30..record_start + 0x60],
+        0x05,
+        13,
+        14,
+        "FHTITLE.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x60..record_start + 0x90],
+        0x91,
+        15,
+        15,
+        "FHINDEX.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x90..record_start + 0xc0],
+        0x92,
+        16,
+        16,
+        "KWINDEX.DIC",
+    );
+    fs::write(dir.path().join("DICT.IDX"), catalog).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "missing".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert!(page.hits.is_empty());
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_index_component_missing"),
+        "ASCII exact miss should not fall back to a full linear scan"
+    );
+}
+
+#[test]
 fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
