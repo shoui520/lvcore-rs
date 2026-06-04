@@ -418,6 +418,9 @@ fn safe_label_class_attr(raw_tag: &str) -> String {
         .unwrap_or_default()
         .split_whitespace()
         .filter(|class| {
+            if class.starts_with("scl_") {
+                return true;
+            }
             matches!(
                 *class,
                 "lvcore-subtitle"
@@ -611,7 +614,7 @@ mod tests {
 
     #[test]
     fn sanitizes_rich_label_html_for_app_chrome() {
-        let html = r#"<b>safe</b><script>alert(1)</script><span class="hostile lvcore-subtitle">sub</span><img class="icon lvcore-gaiji lvcore-gaiji-external" src="lvcore://resource/book/token" onerror="bad()" alt="<A>" title="gaiji"><img src="javascript:alert(1)">"#;
+        let html = r#"<b>safe</b><script>alert(1)</script><span class="hostile lvcore-subtitle">sub</span><span class="scl_ps hostile">小</span><img class="icon lvcore-gaiji lvcore-gaiji-external" src="lvcore://resource/book/token" onerror="bad()" alt="<A>" title="gaiji"><img src="javascript:alert(1)">"#;
         let sanitized = sanitize_rich_label_html(html);
 
         assert!(sanitized.contains("<b>safe</b>"));
@@ -622,6 +625,7 @@ mod tests {
         assert!(!sanitized.contains("hostile"));
         assert!(!sanitized.contains("class=\"icon"));
         assert!(sanitized.contains(r#"<span class="lvcore-subtitle">sub</span>"#));
+        assert!(sanitized.contains(r#"<span class="scl_ps">小</span>"#));
         assert!(sanitized.contains(
             r#"<img class="lvcore-gaiji lvcore-gaiji-external" src="lvcore://resource/book/token" alt="&lt;A&gt;" title="gaiji">"#
         ));
