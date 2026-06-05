@@ -1001,7 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn search_pages_attach_backend_sequence_hint_to_each_hit() {
+    fn search_pages_attach_backend_sequence_once_per_page() {
         let mut page = SearchPage {
             hits: vec![search_hit(0), search_hit(1)],
             next_cursor: None,
@@ -1015,13 +1015,7 @@ mod tests {
             .result_sequence
             .clone()
             .expect("page sequence should be populated");
-        for hit in &page.hits {
-            assert_eq!(
-                hit.sequence_hint,
-                Some(SequenceHint::SearchResults {
-                    value: sequence.clone()
-                })
-            );
-        }
+        assert!(!sequence.is_empty());
+        assert!(page.hits.iter().all(|hit| hit.sequence_hint.is_none()));
     }
 }

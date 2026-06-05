@@ -54,11 +54,10 @@ pub struct SearchHit {
     pub title_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snippet_html: Option<String>,
-    /// Page-owned continuous-view sequence hint for this hit.
+    /// Optional provider-owned sequence hint for this hit.
     ///
-    /// This lets frontend search result lists preserve per-page continuous-view
-    /// context after pagination without reconstructing search result sequences
-    /// from target internals.
+    /// Search-result order is normally carried once by `SearchPage::result_sequence`
+    /// to avoid duplicating large opaque payloads into every hit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence_hint: Option<SequenceHint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -120,11 +119,8 @@ impl SearchPage {
         }
 
         let value = SearchResultSequence::from_search_page(self)?.encode()?;
-        let hint = SequenceHint::SearchResults {
-            value: value.clone(),
-        };
         for hit in &mut self.hits {
-            hit.sequence_hint = Some(hint.clone());
+            hit.sequence_hint = None;
         }
         self.result_sequence = Some(value);
         Ok(())

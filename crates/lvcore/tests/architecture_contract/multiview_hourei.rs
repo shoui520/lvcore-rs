@@ -801,15 +801,18 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
         })
         .unwrap();
     assert_eq!(body_fulltext.hits.len(), 2);
-    assert!(body_fulltext.result_sequence.is_some());
-    assert!(matches!(
-        body_fulltext.hits[0].sequence_hint,
-        Some(lvcore::SequenceHint::SearchResults { .. })
-    ));
+    assert!(body_fulltext.hits[0].sequence_hint.is_none());
+    let body_fulltext_sequence = body_fulltext
+        .result_sequence
+        .clone()
+        .expect("search result sequence should be page-owned");
+    let body_fulltext_hint = lvcore::SequenceHint::SearchResults {
+        value: body_fulltext_sequence,
+    };
     let package_search_window = package
         .resolve_target_window(
             &body_fulltext.hits[0].target,
-            body_fulltext.hits[0].sequence_hint.as_ref(),
+            Some(&body_fulltext_hint),
             0,
             1,
             &RenderOptions::default(),
