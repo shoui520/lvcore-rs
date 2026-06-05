@@ -763,6 +763,63 @@ fn ssed_ios_plist_data_labels_decode_as_title_text() {
 }
 
 #[test]
+fn ssed_ios_plist_surfaces_do_not_share_single_panel_plist_cache() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        root.path().join("indexSearch.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>item</key><string>Alpha</string>
+    <key>block</key><integer>10</integer>
+    <key>offset</key><integer>2</integer>
+    <key>child</key><array/>
+  </dict>
+</array></plist>"#,
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("sakuin.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>item</key><string>Beta</string>
+    <key>block</key><integer>10</integer>
+    <key>offset</key><integer>4</integer>
+    <key>child</key><array/>
+  </dict>
+</array></plist>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let first = package.open_surface("ios-plist:indexSearch.plist").unwrap();
+    let NavigationSurface::Panel { cells, .. } = first else {
+        panic!("first iOS plist should open as a panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "Alpha");
+
+    let second = package.open_surface("ios-plist:sakuin.plist").unwrap();
+    let NavigationSurface::Panel { cells, .. } = second else {
+        panic!("second iOS plist should open as its own panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "Beta");
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 4,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     let root = tempdir().unwrap();
     let package_root = root.path().join("DICT");

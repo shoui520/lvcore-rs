@@ -367,6 +367,7 @@ impl ReaderBookPackage {
                     label: source.label,
                     bytes: source.bytes,
                     format: SsedPanelMetadataFormat::Plist,
+                    cacheable: false,
                 }));
             }
             return Ok(None);
@@ -393,6 +394,7 @@ impl ReaderBookPackage {
                     label: path.clone(),
                     bytes: self.storage.read(relative)?,
                     format: panel_metadata_format(path),
+                    cacheable: true,
                 }));
             }
         }
@@ -407,6 +409,7 @@ impl ReaderBookPackage {
                     label: path.clone(),
                     bytes: parent_storage.read(relative)?,
                     format: panel_metadata_format(path),
+                    cacheable: true,
                 }));
             }
         }
@@ -682,6 +685,7 @@ struct SsedPanelMetadata {
     label: String,
     bytes: Vec<u8>,
     format: SsedPanelMetadataFormat,
+    cacheable: bool,
 }
 
 enum SsedPanelMetadataFormat {
@@ -699,9 +703,11 @@ impl SsedPanelMetadata {
             SsedPanelMetadataFormat::Xml => package
                 .cached_ssed_panel_xml(&self.bytes, &self.label)
                 .cloned(),
-            SsedPanelMetadataFormat::Plist => package
+            SsedPanelMetadataFormat::Plist if self.cacheable => package
                 .cached_ssed_panel_plist(&self.bytes, &self.label)
                 .and_then(|value| parse_panel_plist_value_for_panel(value, requested_panel_id)),
+            SsedPanelMetadataFormat::Plist => parse_xml_plist(&self.bytes, &self.label)
+                .and_then(|value| parse_panel_plist_value_for_panel(&value, requested_panel_id)),
         }
     }
 }
