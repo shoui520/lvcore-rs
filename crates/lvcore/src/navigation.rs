@@ -203,6 +203,36 @@ pub struct NavigationTarget {
 }
 
 impl NavigationSurface {
+    pub fn populate_target_hrefs(&mut self) {
+        match self {
+            Self::SimpleMenu { nodes, .. } | Self::HierarchicalTree { nodes, .. } => {
+                populate_node_target_hrefs(nodes);
+            }
+            Self::ScreenMenu { screens, .. } => {
+                for screen in screens {
+                    for hotspot in &mut screen.hotspots {
+                        if let Some(target) = &hotspot.target {
+                            hotspot.href = Some(target.href());
+                        }
+                    }
+                }
+            }
+            Self::TitleIndexBrowse { items, .. } | Self::InfoPages { pages: items, .. } => {
+                for item in items {
+                    item.href = item.target.href();
+                }
+            }
+            Self::Panel { cells, .. } => {
+                for cell in cells {
+                    if let Some(target) = &cell.target {
+                        cell.href = Some(target.href());
+                    }
+                }
+            }
+            Self::FallbackSearch { .. } | Self::Deferred { .. } => {}
+        }
+    }
+
     pub fn surface_id(&self) -> &str {
         match self {
             Self::SimpleMenu { surface_id, .. }
@@ -368,6 +398,23 @@ impl NavigationSurface {
             Self::InfoPages { pages, .. } => !pages.is_empty(),
             Self::FallbackSearch { .. } | Self::Deferred { .. } => false,
         }
+    }
+}
+
+pub fn populate_home_surface_hrefs(surfaces: &mut [HomeSurface]) {
+    for surface in surfaces {
+        if let Some(target) = &surface.target {
+            surface.href = Some(target.href());
+        }
+    }
+}
+
+fn populate_node_target_hrefs(nodes: &mut [NavigationNode]) {
+    for node in nodes {
+        if let Some(target) = &node.target {
+            node.href = Some(target.href());
+        }
+        populate_node_target_hrefs(&mut node.children);
     }
 }
 

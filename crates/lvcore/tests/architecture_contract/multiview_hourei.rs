@@ -425,6 +425,10 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
             && surface.status == NavigationStatus::Available
             && surface.target.is_some()
     }));
+    for surface in surfaces.iter().filter(|surface| surface.target.is_some()) {
+        let expected_href = surface.target.as_ref().unwrap().href();
+        assert_eq!(surface.href.as_deref(), Some(expected_href.as_str()));
+    }
 
     let kana_surface = package.open_surface("kana-panel").unwrap();
     let lvcore::NavigationSurface::Panel { cells, .. } = kana_surface else {
@@ -434,6 +438,8 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     assert!(cells[0].target.is_none());
     assert_eq!(cells[1].label_text, "み");
     let kana_panel_target = cells[1].target.as_ref().unwrap().clone();
+    let kana_panel_href = kana_panel_target.href();
+    assert_eq!(cells[1].href.as_deref(), Some(kana_panel_href.as_str()));
     assert_eq!(
         kana_panel_target.decode().unwrap(),
         InternalTarget::MenuItem {
@@ -458,6 +464,7 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     };
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].label_text, "民法");
+    assert_eq!(items[0].href, items[0].target.href());
 
     let surface = package.open_surface("law-tree").unwrap();
     let lvcore::NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
@@ -466,6 +473,11 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     assert_eq!(nodes[0].label_text, "民事");
     assert_eq!(nodes[0].children.len(), 2);
     assert_eq!(nodes[0].children[0].label_text, "民法");
+    let node_href = nodes[0].children[0].target.as_ref().unwrap().href();
+    assert_eq!(
+        nodes[0].children[0].href.as_deref(),
+        Some(node_href.as_str())
+    );
     assert_eq!(
         nodes[0].children[0]
             .target

@@ -399,6 +399,7 @@ impl NavigationProvider for ReaderBookPackage {
                 .cmp(&home_surface_reader_priority(right))
                 .then_with(|| left.surface_id.cmp(&right.surface_id))
         });
+        populate_home_surface_hrefs(&mut surfaces);
         Ok(surfaces)
     }
 
@@ -435,7 +436,7 @@ impl NavigationProvider for ReaderBookPackage {
                 surface_id: surface_id.to_owned(),
             });
         }
-        match (self.metadata.format_family, surface_id) {
+        let mut surface = match (self.metadata.format_family, surface_id) {
             (FormatFamily::Ssed, "title-index") => {
                 self.open_ssed_title_index_surface(surface_id, cursor, limit, options)
             }
@@ -529,6 +530,8 @@ impl NavigationProvider for ReaderBookPackage {
                     "surface parsing will be implemented by the matching provider",
                 )],
             }),
-        }
+        }?;
+        surface.populate_target_hrefs();
+        Ok(surface)
     }
 }

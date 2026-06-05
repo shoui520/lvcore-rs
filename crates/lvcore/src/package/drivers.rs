@@ -135,7 +135,7 @@ use crate::multiview::{MultiviewStore, parse_menu_data};
 use crate::navigation::{
     HomeSurface, LabelOptions, NavigationItem, NavigationNode, NavigationProvider,
     NavigationStatus, NavigationSurface, NavigationSurfaceKind, PanelCell, ScreenMenuHotspot,
-    ScreenMenuRect, ScreenMenuScreen,
+    ScreenMenuRect, ScreenMenuScreen, populate_home_surface_hrefs,
 };
 use crate::plist_xml::{PlistValue, parse_xml_plist};
 use crate::render::{
