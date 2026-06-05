@@ -417,6 +417,15 @@ fn component_role(component_type: u8, filename: &str) -> SsedComponentRole {
     if upper == "SCRMENU.DIC" {
         return SsedComponentRole::ScreenMenu;
     }
+    if upper == "MENU.DIC" {
+        return SsedComponentRole::Menu;
+    }
+    if upper == "TOC.DIC" {
+        return SsedComponentRole::Toc;
+    }
+    if upper == "RIGHT.DIC" {
+        return SsedComponentRole::Right;
+    }
     if upper == "MONOSCR.DIC" {
         return SsedComponentRole::MonoScr;
     }
@@ -609,6 +618,13 @@ mod tests {
         let catalog = SsedCatalog::parse_bytes(&data).unwrap();
         assert_eq!(catalog.layout.component_count_offset, 0x4c);
         assert_eq!(catalog.layout.record_start, 0x7f);
+    }
+
+    #[test]
+    fn component_filename_overrides_generic_component_type() {
+        assert_eq!(component_role(0x00, "MENU.DIC"), SsedComponentRole::Menu);
+        assert_eq!(component_role(0x00, "TOC.DIC"), SsedComponentRole::Toc);
+        assert_eq!(component_role(0x00, "RIGHT.DIC"), SsedComponentRole::Right);
     }
 
     #[test]

@@ -557,6 +557,24 @@ fn ssed_aux_index_row_target(
         block: next.block,
         offset: next.offset,
     });
+    if let Some(catalog) = &package.ssed_catalog
+        && let Some(component) = catalog.component_for_address(row.block)
+        && component.relative_offset(row.block, row.offset).is_some()
+        && component.role != SsedComponentRole::Honmon
+    {
+        return ssed_component_address_navigation_target(
+            SsedComponentNavigationTargetRequest {
+                package,
+                component,
+                block: row.block,
+                offset: row.offset,
+                next: next_target_row.map(|next| (next.block, next.offset)),
+                diagnostic_code: "ssed_auxiliary_index_non_body_target_deferred",
+                source_label: "Auxiliary index",
+            },
+            diagnostics,
+        );
+    }
     match package.ssed_target_for_index_pointer_with_bound(pointer, end)? {
         Ok(target) => Ok(Some(target)),
         Err(diagnostic) => {
