@@ -130,7 +130,12 @@ impl ReaderBookPackage {
         })
     }
 
-    pub(super) fn open_lved_tree_surface(&self, surface_id: &str) -> Result<NavigationSurface> {
+    pub(super) fn open_lved_tree_surface(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
         let Some(store) = &self.lved_store else {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -140,6 +145,13 @@ impl ReaderBookPackage {
                 )],
             });
         };
+        if limit == 0 {
+            return Ok(NavigationSurface::HierarchicalTree {
+                surface_id: surface_id.to_owned(),
+                nodes: Vec::new(),
+                next_cursor: None,
+            });
+        }
         let rows = store.tree_index_items_arc()?;
         if rows.is_empty() {
             return Ok(NavigationSurface::Deferred {
@@ -150,10 +162,12 @@ impl ReaderBookPackage {
                 )],
             });
         }
+        let offset = decode_offset_cursor(cursor);
+        let (nodes, next_cursor) = lved_tree_items_to_nodes_page(rows.as_ref(), offset, limit)?;
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
-            nodes: lved_tree_items_to_nodes(rows.as_ref())?,
-            next_cursor: None,
+            nodes,
+            next_cursor,
         })
     }
 }

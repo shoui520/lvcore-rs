@@ -325,6 +325,52 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
 }
 
 #[test]
+fn lved_tree_surface_pages_top_level_nodes() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    fs::write(
+        dir.path().join("res/tree.idx"),
+        "\u{feff}100\t0\tAlpha\r\n105\t0\tBeta\r\n100\t0\tGamma\r\n",
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let first = package.open_surface_page("lved-tree", None, 2).unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = first
+    else {
+        panic!("LVED tree.idx should open as a hierarchical tree");
+    };
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["Alpha", "Beta"]
+    );
+    assert_eq!(next_cursor.as_deref(), Some("2"));
+
+    let second = package
+        .open_surface_page("lved-tree", next_cursor.as_deref(), 2)
+        .unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = second
+    else {
+        panic!("LVED tree.idx should open as a hierarchical tree");
+    };
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["Gamma"]
+    );
+    assert!(next_cursor.is_none());
+}
+
+#[test]
 fn lved_retained_product_idx_opens_as_navigation_tree() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());

@@ -75,8 +75,8 @@ use super::lved_refs::{
 };
 use super::navigation_helpers::{
     OrderedSequenceTarget, collect_navigation_node_targets, collect_panel_cell_ordered_targets,
-    home_surface_reader_priority, lved_list_label_html, lved_tree_items_to_nodes,
-    multiview_menu_item_to_node, navigation_node_mut_at_path,
+    home_surface_reader_priority, lved_list_label_html, lved_tree_items_to_nodes_page,
+    multiview_menu_items_to_nodes_page, navigation_node_mut_at_path,
 };
 use super::render_output::{
     finalize_generic_html_view as finalize_generic_html_display, finalize_resolved_view,

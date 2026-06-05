@@ -62,6 +62,43 @@ pub(super) fn lved_tree_items_to_nodes(
     lved_tree_level_to_nodes(rows, &mut cursor, first.level)
 }
 
+pub(super) fn lved_tree_items_to_nodes_page(
+    rows: &[crate::lved_sqlite::LvedTreeIndexItem],
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<NavigationNode>, Option<String>)> {
+    if rows.is_empty() || limit == 0 {
+        return Ok((Vec::new(), None));
+    }
+    let root_level = rows[0].level;
+    let mut cursor = 0usize;
+    let mut root_index = 0usize;
+    let mut nodes = Vec::new();
+    let mut next_cursor = None;
+
+    while cursor < rows.len() {
+        let start = cursor;
+        cursor += 1;
+        while cursor < rows.len() && rows[cursor].level > root_level {
+            cursor += 1;
+        }
+
+        if root_index >= offset {
+            if nodes.len() >= limit {
+                next_cursor = Some(root_index.to_string());
+                break;
+            }
+            nodes.extend(lved_tree_items_to_nodes(&rows[start..cursor])?);
+        }
+        root_index += 1;
+    }
+    if nodes.len() >= limit && cursor < rows.len() {
+        next_cursor = Some(root_index.to_string());
+    }
+
+    Ok((nodes, next_cursor))
+}
+
 fn lved_tree_level_to_nodes(
     rows: &[crate::lved_sqlite::LvedTreeIndexItem],
     cursor: &mut usize,
@@ -138,6 +175,26 @@ pub(super) fn multiview_menu_item_to_node(
         diagnostics: Vec::new(),
         children,
     })
+}
+
+pub(super) fn multiview_menu_items_to_nodes_page(
+    items: &[MultiviewMenuItem],
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<NavigationNode>, Option<String>)> {
+    if limit == 0 {
+        return Ok((Vec::new(), None));
+    }
+    let nodes = items
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(limit)
+        .map(|(index, item)| multiview_menu_item_to_node(item, &index.to_string()))
+        .collect::<Result<Vec<_>>>()?;
+    let next_cursor = (offset.saturating_add(nodes.len()) < items.len())
+        .then(|| offset.saturating_add(nodes.len()).to_string());
+    Ok((nodes, next_cursor))
 }
 
 pub(super) fn navigation_node_mut_at_path<'a>(

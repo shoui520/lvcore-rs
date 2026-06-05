@@ -27,21 +27,20 @@ impl ReaderBookPackage {
     pub(super) fn open_multiview_menu_surface(
         &self,
         surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
     ) -> Result<NavigationSurface> {
         let menu_file = self.multiview_menu_file_for_surface(surface_id)?;
         let bytes = self.storage.read(Path::new(&menu_file))?;
         let xml = String::from_utf8(bytes)
             .map_err(|error| Error::Driver(format!("{menu_file} is not valid UTF-8: {error}")))?;
         let items = parse_menu_data(&xml)?;
-        let nodes = items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| multiview_menu_item_to_node(item, &index.to_string()))
-            .collect::<Result<Vec<_>>>()?;
+        let offset = decode_offset_cursor(cursor);
+        let (nodes, next_cursor) = multiview_menu_items_to_nodes_page(&items, offset, limit)?;
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
             nodes,
-            next_cursor: None,
+            next_cursor,
         })
     }
 

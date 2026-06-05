@@ -51,7 +51,7 @@ impl ReaderBookPackage {
         let mut ordered = Vec::new();
         for index in 0..self.multiview_menu_surface_files()?.len() {
             let surface_id = super::multiview_navigation::multiview_menu_surface_id(index);
-            let surface = self.open_multiview_menu_surface(&surface_id)?;
+            let surface = self.open_multiview_menu_surface(&surface_id, None, usize::MAX)?;
             let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
                 continue;
             };

@@ -303,6 +303,56 @@ fn multiview_menu_data_opens_as_hierarchical_tree() {
 }
 
 #[test]
+fn multiview_menu_surface_pages_top_level_nodes() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        r#"<list>
+          <item label="Alpha" href="A001" />
+          <item label="Beta" href="B001" />
+          <item label="Gamma" href="G001" />
+        </list>"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("blvdat"), b"payload").unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let first = package.open_surface_page("menuData", None, 2).unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = first
+    else {
+        panic!("menuData should open as a MultiView tree");
+    };
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["Alpha", "Beta"]
+    );
+    assert_eq!(next_cursor.as_deref(), Some("2"));
+
+    let second = package
+        .open_surface_page("menuData", next_cursor.as_deref(), 2)
+        .unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = second
+    else {
+        panic!("menuData should open as a MultiView tree");
+    };
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["Gamma"]
+    );
+    assert!(next_cursor.is_none());
+}
+
+#[test]
 fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     let dir = tempdir().unwrap();
     fs::write(

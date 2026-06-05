@@ -553,7 +553,7 @@ impl NavigationProvider for ReaderBookPackage {
                 self.open_lved_info_surface(surface_id, cursor, limit)
             }
             (FormatFamily::Ssed, "lved-tree") if self.lved_store.is_some() => {
-                self.open_lved_tree_surface(surface_id)
+                self.open_lved_tree_surface(surface_id, cursor, limit)
             }
             (FormatFamily::Ssed, "panels") => {
                 self.open_ssed_panel_surface(surface_id, cursor, limit, options)
@@ -582,9 +582,11 @@ impl NavigationProvider for ReaderBookPackage {
             (FormatFamily::LvedSqlite3, "info") => {
                 self.open_lved_info_surface(surface_id, cursor, limit)
             }
-            (FormatFamily::LvedSqlite3, "lved-tree") => self.open_lved_tree_surface(surface_id),
+            (FormatFamily::LvedSqlite3, "lved-tree") => {
+                self.open_lved_tree_surface(surface_id, cursor, limit)
+            }
             (FormatFamily::LvlMultiView, id) if id == "menuData" || id.starts_with("menuData:") => {
-                self.open_multiview_menu_surface(surface_id)
+                self.open_multiview_menu_surface(surface_id, cursor, limit)
             }
             (FormatFamily::Hourei, "kana-panel") => self.open_hourei_kana_panel_surface(surface_id),
             (FormatFamily::Hourei, id)
