@@ -185,6 +185,11 @@ impl ReaderBookPackage {
             return Ok(None);
         };
         if let Some(component_name) = ssed_direct_menu_component_name(surface_id) {
+            if let Some(window) =
+                self.resolve_ssed_paged_menu_window(surface_id, target, before, after, options, 1)?
+            {
+                return Ok(Some(window));
+            }
             return Ok(Some(self.resolve_ssed_direct_menu_window(
                 surface_id,
                 component_name,
@@ -194,6 +199,25 @@ impl ReaderBookPackage {
                 options,
             )?));
         }
+        self.resolve_ssed_paged_menu_window(
+            surface_id,
+            target,
+            before,
+            after,
+            options,
+            SSED_SEQUENCE_SURFACE_MAX_PAGES,
+        )
+    }
+
+    fn resolve_ssed_paged_menu_window(
+        &self,
+        surface_id: &str,
+        target: &TargetToken,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+        max_pages: usize,
+    ) -> Result<Option<TargetWindow>> {
         let label_options = LabelOptions {
             gaiji_policy: options.gaiji_policy.clone(),
         };
@@ -201,11 +225,13 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let mut cursor = None::<String>;
         let mut reached_page_limit = false;
-        for page_index in 0..SSED_SEQUENCE_SURFACE_MAX_PAGES {
+        let page_limit =
+            SSED_SEQUENCE_SURFACE_PAGE_LIMIT.max(before.saturating_add(after).saturating_add(1));
+        for page_index in 0..SSED_SEQUENCE_SURFACE_MAX_PAGES.min(max_pages) {
             let surface = self.open_surface_page_with_options(
                 surface_id,
                 cursor.as_deref(),
-                SSED_SEQUENCE_SURFACE_PAGE_LIMIT,
+                page_limit,
                 &label_options,
             )?;
             let next_cursor = match surface {
@@ -247,6 +273,9 @@ impl ReaderBookPackage {
                 reached_page_limit = true;
                 break;
             }
+            if page_index + 1 >= max_pages {
+                return Ok(None);
+            }
             if cursor.as_deref() == Some(next_cursor.as_str()) {
                 diagnostics.push(Diagnostic::warning(
                     "sequence_surface_cursor_stalled",
@@ -264,6 +293,9 @@ impl ReaderBookPackage {
         }
         let ordered = collector.into_ordered_context();
         let mut window = if ordered.is_empty() {
+            if max_pages < SSED_SEQUENCE_SURFACE_MAX_PAGES {
+                return Ok(None);
+            }
             TargetWindow {
                 center: self.render_target(target, options)?,
                 before: Vec::new(),

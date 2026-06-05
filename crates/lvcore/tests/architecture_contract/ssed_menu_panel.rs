@@ -1167,6 +1167,54 @@ fn ssed_menu_continuous_view_pages_through_large_menu_surfaces() {
 }
 
 #[test]
+fn ssed_menu_continuous_view_uses_visible_page_before_full_direct_parse() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+    let rows = (0..180u16)
+        .map(|index| ([0x24, 0x22], 10u32, index * 2))
+        .collect::<Vec<_>>();
+    let mut menu = menu_stream_fixture_rows(&rows);
+    menu.extend_from_slice(&[0x1f, 0x77]);
+    fs::write(dir.path().join("MENU.DIC"), sseddata_literal_fixture(&menu)).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 10,
+        offset: 0,
+    })
+    .unwrap();
+
+    let menu_window = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::MenuOrder {
+                value: "menu".to_owned(),
+            }),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(ssed_view_offset(&menu_window.center), Some((10, 0)));
+    assert_eq!(menu_window.after.len(), 1);
+    assert_eq!(ssed_view_offset(&menu_window.after[0]), Some((10, 2)));
+    assert!(
+        menu_window
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_navigation_unknown_controls"),
+        "first-page menu windows should not parse unrelated tail controls"
+    );
+}
+
+#[test]
 fn ssed_panel_surfaces_are_cursor_paged_and_sequence_can_find_later_cells() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
