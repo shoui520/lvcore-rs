@@ -102,6 +102,11 @@ pub(super) fn finalize_resolved_view(
     if view.href.is_empty() {
         view.href = view.target.href();
     }
+    for link in &mut view.links {
+        if link.href.is_empty() {
+            link.href = link.token.href();
+        }
+    }
     update_visual_capabilities(&mut view);
 
     match options.mode {
@@ -213,7 +218,7 @@ fn push_render_capability_once(
 #[cfg(test)]
 mod tests {
     use crate::render::{RenderMode, RenderOptions, ResolvedTargetKind, ResolvedTargetView};
-    use crate::target::{InternalTarget, TargetToken};
+    use crate::target::{InternalTarget, TargetKind, TargetLink, TargetToken};
 
     use super::{finalize_generic_html_view, finalize_resolved_view};
 
@@ -267,8 +272,9 @@ mod tests {
     }
 
     #[test]
-    fn resolved_view_finalizer_populates_public_target_href() {
+    fn resolved_view_finalizer_populates_public_target_and_link_hrefs() {
         let target = token("entry");
+        let link_target = token("link");
         let view = ResolvedTargetView {
             href: String::new(),
             kind: ResolvedTargetKind::EntryBody,
@@ -279,7 +285,14 @@ mod tests {
             scroll_anchor: None,
             surface: None,
             resources: Vec::new(),
-            links: Vec::new(),
+            links: vec![TargetLink {
+                href: String::new(),
+                token: link_target.clone(),
+                label: "link".to_owned(),
+                kind: TargetKind::Unsupported,
+                diagnostics: Vec::new(),
+                attributes: Default::default(),
+            }],
             capabilities: Default::default(),
             diagnostics: Vec::new(),
             debug_trace: None,
@@ -288,6 +301,7 @@ mod tests {
         let view = finalize_resolved_view(view, &RenderOptions::default());
 
         assert_eq!(view.href, target.href());
+        assert_eq!(view.links[0].href, link_target.href());
     }
 
     #[test]
