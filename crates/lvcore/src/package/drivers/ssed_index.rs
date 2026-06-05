@@ -9,6 +9,7 @@ impl ReaderBookPackage {
         mode: &SearchMode,
         needle: &str,
         mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+        mut candidate_satisfied: impl FnMut() -> bool,
     ) -> Result<SsedNearKeyScanResult> {
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(SsedNearKeyScanResult {
@@ -171,6 +172,9 @@ impl ReaderBookPackage {
                     if scanned_leaf_pages >= SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT {
                         break 'pages;
                     }
+                }
+                if candidate_satisfied() {
+                    break 'candidates;
                 }
             }
         }

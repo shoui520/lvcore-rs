@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use super::*;
 
 impl ReaderBookPackage {
@@ -47,10 +49,19 @@ impl ReaderBookPackage {
             query.mode,
             SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
         ) {
-            let scan_result =
-                self.scan_ssed_simple_leaf_index_rows_near_key(&query.mode, &needle, |row| {
-                    collector.push_row(row)
-                })?;
+            let candidate_has_hits = Cell::new(false);
+            let scan_result = self.scan_ssed_simple_leaf_index_rows_near_key(
+                &query.mode,
+                &needle,
+                |row| {
+                    let keep_scanning = collector.push_row(row)?;
+                    if collector.has_hits() {
+                        candidate_has_hits.set(true);
+                    }
+                    Ok(keep_scanning)
+                },
+                || candidate_has_hits.get(),
+            )?;
             optimized_scan_components = scan_result.scanned_components;
             scan_needs_prefilter_fallback = scan_result.needs_prefilter_fallback;
             optimized_diagnostics.extend(scan_result.diagnostics);

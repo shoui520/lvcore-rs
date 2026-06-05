@@ -66,6 +66,79 @@ fn ssed_simple_index_search_returns_title_backed_hits() {
 }
 
 #[test]
+fn ssed_simple_index_search_matches_katakana_query_against_hiragana_key() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    let mut title = body_jis("アカウント");
+    title.extend_from_slice(&[0x1f, 0x0a]);
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(&title),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&leaf_page_fixture(&[simple_japanese_index_record(
+            "あかうんと",
+            1,
+            2,
+            13,
+            0,
+        )])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let forward = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "アカ".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(forward.hits.len(), 1);
+    assert_eq!(forward.hits[0].title_text, "アカウント");
+
+    let exact = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "アカウント".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(exact.hits.len(), 1);
+    assert_eq!(exact.hits[0].title_text, "アカウント");
+}
+
+fn simple_japanese_index_record(
+    key: &str,
+    body_block: u32,
+    body_offset: u16,
+    title_block: u32,
+    title_offset: u16,
+) -> Vec<u8> {
+    let key = body_jis(key);
+    let mut out = Vec::new();
+    out.push(key.len() as u8);
+    out.extend_from_slice(&key);
+    out.extend_from_slice(&body_block.to_be_bytes());
+    out.extend_from_slice(&body_offset.to_be_bytes());
+    out.extend_from_slice(&title_block.to_be_bytes());
+    out.extend_from_slice(&title_offset.to_be_bytes());
+    out
+}
+
+#[test]
 fn ssed_missing_optional_index_component_is_info_not_warning() {
     let dir = tempdir().unwrap();
     let record_start = 0x80;

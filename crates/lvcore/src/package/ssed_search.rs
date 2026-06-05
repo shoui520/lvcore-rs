@@ -164,7 +164,7 @@ pub(super) fn ssed_fulltext_snippet_html(body_text: &str, query: &str) -> Option
 }
 
 pub(super) fn normalize_search_match_text(value: &str) -> String {
-    narrow_fullwidth_ascii_text(value).to_lowercase()
+    katakana_to_hiragana_text(&narrow_fullwidth_ascii_text(value)).to_lowercase()
 }
 
 pub(super) fn reverse_search_match_text(value: &str) -> String {
@@ -173,13 +173,24 @@ pub(super) fn reverse_search_match_text(value: &str) -> String {
 
 pub(super) fn ssed_index_search_key_candidates(needle: &str) -> Vec<Vec<u8>> {
     let mut candidates = Vec::new();
-    push_unique_search_key(&mut candidates, encode_ssed_index_search_key(needle));
-    if needle.is_ascii() {
-        push_unique_search_key(&mut candidates, needle.as_bytes().to_vec());
-        push_unique_search_key(&mut candidates, needle.to_ascii_uppercase().into_bytes());
-        push_unique_search_key(&mut candidates, needle.to_ascii_lowercase().into_bytes());
+    let mut values = vec![needle.to_owned()];
+    push_unique_search_value(&mut values, katakana_to_hiragana_text(needle));
+    push_unique_search_value(&mut values, hiragana_to_katakana_text(needle));
+    for value in values {
+        push_unique_search_key(&mut candidates, encode_ssed_index_search_key(&value));
+        if value.is_ascii() {
+            push_unique_search_key(&mut candidates, value.as_bytes().to_vec());
+            push_unique_search_key(&mut candidates, value.to_ascii_uppercase().into_bytes());
+            push_unique_search_key(&mut candidates, value.to_ascii_lowercase().into_bytes());
+        }
     }
     candidates
+}
+
+fn push_unique_search_value(values: &mut Vec<String>, value: String) {
+    if !value.is_empty() && !values.iter().any(|candidate| candidate == &value) {
+        values.push(value);
+    }
 }
 
 fn push_unique_search_key(candidates: &mut Vec<Vec<u8>>, key: Vec<u8>) {
@@ -280,6 +291,30 @@ fn narrow_fullwidth_ascii_text(value: &str) -> String {
         .collect()
 }
 
+fn katakana_to_hiragana_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch as u32 {
+            0x30a1..=0x30f6 => char::from_u32(ch as u32 - 0x60).unwrap_or(ch),
+            0x30fd => '\u{309d}',
+            0x30fe => '\u{309e}',
+            _ => ch,
+        })
+        .collect()
+}
+
+fn hiragana_to_katakana_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch as u32 {
+            0x3041..=0x3096 => char::from_u32(ch as u32 + 0x60).unwrap_or(ch),
+            0x309d => '\u{30fd}',
+            0x309e => '\u{30fe}',
+            _ => ch,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +324,25 @@ mod tests {
         assert_eq!(encode_ssed_index_search_key(".c"), body_jis(".c"));
         assert_eq!(encode_ssed_index_search_key("30"), body_jis("30"));
         assert_eq!(encode_ssed_index_search_key("３０"), body_jis("30"));
+    }
+
+    #[test]
+    fn search_match_normalization_is_kana_insensitive() {
+        assert_eq!(
+            normalize_search_match_text("アカウンタビリティー"),
+            "あかうんたびりてぃー"
+        );
+        assert_eq!(
+            normalize_search_match_text("ＡＣＴＡ アクタ"),
+            "acta あくた"
+        );
+    }
+
+    #[test]
+    fn index_search_key_candidates_include_both_kana_forms() {
+        let candidates = ssed_index_search_key_candidates("あか");
+        assert!(candidates.contains(&encode_ssed_index_search_key("あか")));
+        assert!(candidates.contains(&encode_ssed_index_search_key("アカ")));
     }
 
     #[test]
