@@ -211,6 +211,97 @@ fn ssed_ascii_exact_miss_does_not_linear_scan_optional_indexes() {
 }
 
 #[test]
+fn ssed_exact_search_prefilter_fallback_recovers_secondary_index_rows() {
+    let dir = tempdir().unwrap();
+    let record_start = 0x80;
+    let mut catalog = vec![0u8; record_start + 5 * 0x30];
+    catalog[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Secondary Index Fallback";
+    catalog[0x0c] = title.len() as u8;
+    catalog[0x0d..0x0d + title.len()].copy_from_slice(title);
+    catalog[0x4d] = 5;
+    write_record(
+        &mut catalog[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x30..record_start + 0x60],
+        0x05,
+        13,
+        14,
+        "FHTITLE.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x60..record_start + 0x90],
+        0x06,
+        15,
+        16,
+        "FKTITLE.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x90..record_start + 0xc0],
+        0x91,
+        17,
+        17,
+        "FHINDEX.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0xc0..record_start + 0xf0],
+        0x91,
+        18,
+        19,
+        "FKINDEX.DIC",
+    );
+    fs::write(dir.path().join("DICT.IDX"), catalog).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"zeta\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FKTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[("zeta", 1, 4, 13, 0)])),
+    )
+    .unwrap();
+    let fk_index = [
+        internal_page_fixture(&[("\u{10ffff}", 1)]),
+        simple_index_fixture_rows(&[("alpha", 1, 2, 15, 0)]),
+    ]
+    .concat();
+    fs::write(
+        dir.path().join("FKINDEX.DIC"),
+        sseddata_literal_fixture(&fk_index),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+    assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, 2);
+}
+
+#[test]
 fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

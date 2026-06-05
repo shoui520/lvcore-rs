@@ -24,6 +24,7 @@ pub(super) struct SsedFulltextRow {
 pub(super) struct SsedNearKeyScanResult {
     pub(super) scanned_components: usize,
     pub(super) needs_linear_fallback: bool,
+    pub(super) needs_prefilter_fallback: bool,
     pub(super) diagnostics: Vec<Diagnostic>,
 }
 
@@ -133,7 +134,11 @@ impl<'a> SsedIndexSearchCollector<'a> {
     }
 
     pub(super) fn has_hits(&self) -> bool {
-        !self.hits.is_empty()
+        !self.hits.is_empty() || self.pending_row.is_some()
+    }
+
+    pub(super) fn needs_more_hits(&self) -> bool {
+        self.hits.len() + usize::from(self.pending_row.is_some()) < self.page_limit
     }
 
     pub(super) fn extend_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) {

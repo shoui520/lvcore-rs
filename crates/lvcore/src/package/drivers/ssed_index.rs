@@ -13,6 +13,7 @@ impl ReaderBookPackage {
             return Ok(SsedNearKeyScanResult {
                 scanned_components: 0,
                 needs_linear_fallback: true,
+                needs_prefilter_fallback: false,
                 diagnostics: vec![Diagnostic::error(
                     "ssed_catalog_missing",
                     "SSED index scanning requires a parsed SSEDINFO catalog",
@@ -22,6 +23,7 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let mut scanned_components = 0usize;
         let mut needs_linear_fallback = false;
+        let mut needs_prefilter_fallback = false;
         let probe = if *mode == SearchMode::Backward {
             reverse_search_match_text(needle)
         } else {
@@ -32,6 +34,7 @@ impl ReaderBookPackage {
             return Ok(SsedNearKeyScanResult {
                 scanned_components: 0,
                 needs_linear_fallback: true,
+                needs_prefilter_fallback: false,
                 diagnostics,
             });
         }
@@ -73,7 +76,10 @@ impl ReaderBookPackage {
                     &needle_key,
                 )? {
                     Some(page_index) => page_index,
-                    None => continue,
+                    None => {
+                        needs_prefilter_fallback = true;
+                        continue;
+                    }
                 };
                 scanned_components = scanned_components.saturating_add(1);
                 let mut last_key = None::<Vec<u8>>;
@@ -161,6 +167,7 @@ impl ReaderBookPackage {
         Ok(SsedNearKeyScanResult {
             scanned_components,
             needs_linear_fallback,
+            needs_prefilter_fallback,
             diagnostics,
         })
     }
@@ -330,6 +337,93 @@ impl ReaderBookPackage {
                         break 'components;
                     }
                     row_count = row_count.saturating_add(1);
+                    if !on_row(row)? {
+                        break 'components;
+                    }
+                }
+            }
+        }
+        Ok(diagnostics)
+    }
+
+    pub(super) fn scan_existing_ssed_simple_index_rows_with_filters(
+        &self,
+        mut component_may_match: impl FnMut(&SsedComponent) -> bool,
+        mut page_may_match: impl FnMut(&SsedComponent, &[u8]) -> bool,
+        mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<Vec<Diagnostic>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(vec![Diagnostic::error(
+                "ssed_catalog_missing",
+                "SSED index scanning requires a parsed SSEDINFO catalog",
+            )]);
+        };
+        let mut diagnostics = Vec::new();
+        'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
+            if !component_may_match(component) {
+                continue;
+            }
+            if !is_supported_index_type(component.component_type) {
+                continue;
+            }
+            let path = match self.resolve_readable_ssed_component_path(component) {
+                Ok(Some(path)) => path,
+                Ok(None) => continue,
+                Err(error) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+            };
+            let mut reader = SsedDataFile::open(&path)?;
+            let component_read_base = ssed_component_read_base(component, &reader);
+            let page_count = component.block_count() as usize;
+            let mut scan_state = SsedIndexScanState::default();
+            for page_index in 0..page_count {
+                let page = reader.read_range(
+                    component_page_offset(component_read_base, page_index),
+                    INDEX_PAGE_SIZE,
+                )?;
+                if page.len() < 4 {
+                    break;
+                }
+                let word = u16::from_be_bytes([page[0], page[1]]);
+                if !is_leaf_page(word) {
+                    continue;
+                }
+                if !page_may_match(component, &page) {
+                    continue;
+                }
+                let logical_block = component.start_block + page_index as u32;
+                let (page_rows, unknown) = parse_supported_leaf_page(
+                    &component.filename,
+                    component.component_type,
+                    &page,
+                    page_index as u32,
+                    logical_block,
+                    &mut scan_state,
+                );
+                if unknown > 0 {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_unknown_leaf_bytes",
+                            format!(
+                                "{} had {unknown} unknown simple leaf row(s)",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                }
+                for row in page_rows {
                     if !on_row(row)? {
                         break 'components;
                     }

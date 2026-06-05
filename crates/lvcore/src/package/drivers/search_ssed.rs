@@ -41,6 +41,8 @@ impl ReaderBookPackage {
         );
         let mut optimized_scan_components = 0usize;
         let mut scan_needs_linear_fallback = false;
+        let mut scan_needs_prefilter_fallback = false;
+        let mut optimized_diagnostics = Vec::new();
         if matches!(
             query.mode,
             SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
@@ -51,7 +53,9 @@ impl ReaderBookPackage {
                 })?;
             optimized_scan_components = scan_result.scanned_components;
             scan_needs_linear_fallback = scan_result.needs_linear_fallback;
-            collector.extend_diagnostics(scan_result.diagnostics);
+            scan_needs_prefilter_fallback = scan_result.needs_prefilter_fallback;
+            optimized_diagnostics.extend(scan_result.diagnostics);
+            collector.extend_diagnostics(optimized_diagnostics.clone());
         }
         if !collector.has_hits() && (optimized_scan_components == 0 || scan_needs_linear_fallback) {
             let scan_diagnostics = if query.mode == SearchMode::Partial {
@@ -60,8 +64,66 @@ impl ReaderBookPackage {
                 self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?
             };
             collector.extend_diagnostics(scan_diagnostics);
+        } else if matches!(
+            query.mode,
+            SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+        ) && collector.needs_more_hits()
+            && !scan_needs_linear_fallback
+            && (scan_needs_prefilter_fallback || !collector.has_hits() || !needle.is_ascii())
+        {
+            let include_simple_indexes = scan_needs_prefilter_fallback || !needle.is_ascii();
+            let mut fallback_collector = SsedIndexSearchCollector::new(
+                self,
+                &query.mode,
+                &needle,
+                offset,
+                page_limit,
+                query.label_gaiji_policy(),
+            );
+            fallback_collector.extend_diagnostics(optimized_diagnostics);
+            let scan_diagnostics = self.scan_ssed_prefiltered_existing_index_rows(
+                &query.mode,
+                &needle,
+                include_simple_indexes,
+                |row| fallback_collector.push_row(row),
+            )?;
+            fallback_collector.extend_diagnostics(scan_diagnostics);
+            collector = fallback_collector;
         }
         Ok(collector.into_search_page(query.limit))
+    }
+
+    fn scan_ssed_prefiltered_existing_index_rows(
+        &self,
+        mode: &SearchMode,
+        needle: &str,
+        include_simple_indexes: bool,
+        on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<Vec<Diagnostic>> {
+        let probe = if *mode == SearchMode::Backward {
+            reverse_search_match_text(needle)
+        } else {
+            needle.to_owned()
+        };
+        let candidates = ssed_index_page_prefilter_candidates(&probe);
+        if candidates.is_empty() {
+            return self.scan_ssed_simple_index_rows(None, on_row);
+        }
+        self.scan_existing_ssed_simple_index_rows_with_filters(
+            |component| {
+                if !include_simple_indexes && is_simple_leaf_index_type(component.component_type) {
+                    return false;
+                }
+                let is_backward_index = ssed_index_component_name_is_backward(&component.filename);
+                match mode {
+                    SearchMode::Exact | SearchMode::Forward => !is_backward_index,
+                    SearchMode::Backward => is_backward_index,
+                    _ => true,
+                }
+            },
+            |_, page| ssed_body_window_may_contain_query(page, &candidates),
+            on_row,
+        )
     }
 
     fn scan_ssed_partial_index_rows(
