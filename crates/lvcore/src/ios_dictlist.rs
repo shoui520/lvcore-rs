@@ -11,6 +11,7 @@ pub(crate) struct IosDictListInfo {
     pub fts_payloads: Vec<IosDictFtsPayload>,
     pub full_db_payloads: Vec<IosDictFullDbPayload>,
     pub search_payloads: Vec<IosDictSearchPayload>,
+    pub convert_addr_payloads: Vec<IosDictConvertAddrPayload>,
     pub search_modes: Vec<SearchMode>,
 }
 
@@ -33,6 +34,14 @@ pub(crate) struct IosDictFullDbPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IosDictSearchPayload {
+    pub relative_path: String,
+    pub absolute_path: PathBuf,
+    pub dict_code: String,
+    pub dictionary_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IosDictConvertAddrPayload {
     pub relative_path: String,
     pub absolute_path: PathBuf,
     pub dict_code: String,
@@ -76,6 +85,7 @@ fn ios_dictlist_info_from_plist(
     let mut fts_payloads = Vec::new();
     let mut full_db_payloads = Vec::new();
     let mut search_payloads = Vec::new();
+    let mut convert_addr_payloads = Vec::new();
     if let Some(items) = dict.get("ItemArray").and_then(PlistValue::as_array) {
         for item in items.iter().filter_map(PlistValue::as_dict) {
             let dict_code = item
@@ -120,6 +130,26 @@ fn ios_dictlist_info_from_plist(
                             dict_code.clone()
                         };
                         search_payloads.push(IosDictSearchPayload {
+                            relative_path: relative_path.to_owned(),
+                            absolute_path,
+                            dict_code,
+                            dictionary_name: dictionary_name.clone(),
+                        });
+                    }
+                }
+            }
+            if let Some(relative_path) = item.get("DictConvertAddrDB").and_then(PlistValue::as_str)
+            {
+                let relative_path = relative_path.trim();
+                if !relative_path.is_empty() {
+                    let absolute_path = plist_dir.join(relative_path);
+                    if regular_file_inside_root(plist_dir, &absolute_path)? {
+                        let dict_code = if dict_code.is_empty() {
+                            ios_dict_code_from_path(relative_path).unwrap_or_default()
+                        } else {
+                            dict_code.clone()
+                        };
+                        convert_addr_payloads.push(IosDictConvertAddrPayload {
                             relative_path: relative_path.to_owned(),
                             absolute_path,
                             dict_code,
@@ -177,6 +207,7 @@ fn ios_dictlist_info_from_plist(
     if fts_payloads.is_empty()
         && full_db_payloads.is_empty()
         && search_payloads.is_empty()
+        && convert_addr_payloads.is_empty()
         && modes.is_empty()
     {
         return Ok(None);
@@ -185,6 +216,7 @@ fn ios_dictlist_info_from_plist(
         fts_payloads,
         full_db_payloads,
         search_payloads,
+        convert_addr_payloads,
         search_modes: modes.into_iter().collect(),
     }))
 }
@@ -302,6 +334,7 @@ mod tests {
         assert_eq!(info.fts_payloads[0].relative_path, "DICT/DICT.dbc");
         assert!(info.full_db_payloads.is_empty());
         assert!(info.search_payloads.is_empty());
+        assert!(info.convert_addr_payloads.is_empty());
         assert_eq!(
             info.fts_payloads[0].dictionary_name.as_deref(),
             Some("Sample Dictionary")
@@ -384,6 +417,42 @@ mod tests {
         assert_eq!(
             info.search_modes,
             vec![SearchMode::Advanced("example".to_owned())]
+        );
+    }
+
+    #[test]
+    fn parses_ios_dictlist_convert_addr_payload() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("DICT");
+        fs::create_dir(&package).unwrap();
+        fs::write(package.join("DICT_on.sql"), b"SQLite format 3\0").unwrap();
+        fs::write(
+            root.path().join("DictList.plist"),
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>ItemArray</key><array><dict>
+    <key>DictName</key><string>Sample ConvertAddr</string>
+    <key>DictFolder</key><string>DICT</string>
+    <key>DictConvertAddrDB</key><string>DICT/DICT_on.sql</string>
+  </dict></array>
+</dict></plist>"#,
+        )
+        .unwrap();
+
+        let info = discover_ios_dictlist_info(&package).unwrap().unwrap();
+
+        assert!(info.fts_payloads.is_empty());
+        assert!(info.full_db_payloads.is_empty());
+        assert!(info.search_payloads.is_empty());
+        assert_eq!(info.convert_addr_payloads.len(), 1);
+        assert_eq!(
+            info.convert_addr_payloads[0].relative_path,
+            "DICT/DICT_on.sql"
+        );
+        assert_eq!(info.convert_addr_payloads[0].dict_code, "DICT");
+        assert_eq!(
+            info.convert_addr_payloads[0].dictionary_name.as_deref(),
+            Some("Sample ConvertAddr")
         );
     }
 

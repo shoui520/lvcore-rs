@@ -68,6 +68,15 @@ impl ReaderBookPackage {
                 )],
             });
         };
+        let (block, offset) = self.convert_ios_ssed_address(block, offset)?;
+        let end = match end {
+            Some((end_block, end_offset)) => {
+                let (end_block, end_offset) =
+                    self.convert_ios_ssed_address(end_block, end_offset)?;
+                Some((end_block, end_offset))
+            }
+            None => None,
+        };
         let component = catalog
             .component_named(requested_component)
             .or_else(|| catalog.component_for_address(block));

@@ -88,10 +88,8 @@ impl ReaderBookPackage {
                     continue;
                 }
                 let label = self.ssed_rich_label_with_policy(&row.label, &label_policy);
-                let pointer = SsedIndexPointer {
-                    block: row.block,
-                    offset: row.offset,
-                };
+                let (block, offset) = self.convert_ios_ssed_address(row.block, row.offset)?;
+                let pointer = SsedIndexPointer { block, offset };
                 let end = self
                     .ssed_next_index_body_pointer_after(pointer)?
                     .filter(|end| ssed_index_bound_is_plausible(pointer, *end));
