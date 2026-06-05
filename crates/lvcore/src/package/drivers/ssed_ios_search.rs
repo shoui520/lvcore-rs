@@ -5,6 +5,7 @@ use rusqlite::{Connection, OpenFlags, params_from_iter};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SsedIosSearchResolver {
     path: PathBuf,
+    source: SsedIosSearchResolverSource,
     table: String,
     block_column: String,
     offset_column: String,
@@ -13,12 +14,43 @@ pub(super) struct SsedIosSearchResolver {
     mode_hints: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SsedIosSearchResolverSource {
+    DictSearchDb,
+    DictFullDb,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SsedIosSearchRow {
     block: u32,
     offset: u32,
     label: String,
     snippet: String,
+}
+
+impl SsedIosSearchResolverSource {
+    fn sort_key(self) -> u8 {
+        match self {
+            Self::DictSearchDb => 0,
+            Self::DictFullDb => 1,
+        }
+    }
+
+    fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::DictSearchDb => "ssed_ios_dictsearchdb_scan",
+            Self::DictFullDb => "ssed_ios_fulldb_search_scan",
+        }
+    }
+
+    fn diagnostic_message(self) -> &'static str {
+        match self {
+            Self::DictSearchDb => {
+                "SSED search included an iOS DictSearchDB block/offset helper table"
+            }
+            Self::DictFullDb => "SSED search included an iOS DictFULLDB block/offset body table",
+        }
+    }
 }
 
 impl ReaderBookPackage {
@@ -76,8 +108,8 @@ impl ReaderBookPackage {
             }
             diagnostics.push(
                 Diagnostic::info(
-                    "ssed_ios_dictsearchdb_scan",
-                    "SSED search included an iOS DictSearchDB block/offset helper table",
+                    resolver.source.diagnostic_code(),
+                    resolver.source.diagnostic_message(),
                 )
                 .with_context("sidecar", display_name(&resolver.path))
                 .with_context("table", &resolver.table),
@@ -135,8 +167,11 @@ impl ReaderBookPackage {
 
     pub(super) fn ssed_ios_search_resolvers(&self) -> Result<&[SsedIosSearchResolver]> {
         let resolvers = self.ssed_ios_search_resolvers.get_or_init(|| {
-            discover_ios_search_resolvers(&self.retained_ios_search_payloads)
-                .map_err(|error| error.to_string())
+            discover_ios_search_resolvers(
+                &self.retained_ios_search_payloads,
+                &self.retained_ios_full_db_payloads,
+            )
+            .map_err(|error| error.to_string())
         });
         match resolvers {
             Ok(resolvers) => Ok(resolvers.as_slice()),
@@ -147,6 +182,7 @@ impl ReaderBookPackage {
 
 fn discover_ios_search_resolvers(
     payloads: &[IosDictSearchPayload],
+    full_db_payloads: &[IosDictFullDbPayload],
 ) -> Result<Vec<SsedIosSearchResolver>> {
     let mut resolvers = Vec::new();
     for payload in payloads {
@@ -156,9 +192,30 @@ fn discover_ios_search_resolvers(
         let connection = open_ios_search_connection(&payload.absolute_path)?;
         for table in sqlite_table_names(&connection)? {
             let columns = sqlite_columns(&connection, &table)?;
-            let Some(resolver) =
-                resolver_for_ios_search_table(payload.absolute_path.clone(), &table, &columns)
-            else {
+            let Some(resolver) = resolver_for_ios_search_table(
+                payload.absolute_path.clone(),
+                SsedIosSearchResolverSource::DictSearchDb,
+                &table,
+                &columns,
+            ) else {
+                continue;
+            };
+            resolvers.push(resolver);
+        }
+    }
+    for payload in full_db_payloads {
+        if !payload.absolute_path.is_file() {
+            continue;
+        }
+        let connection = open_ios_search_connection(&payload.absolute_path)?;
+        for table in sqlite_table_names(&connection)? {
+            let columns = sqlite_columns(&connection, &table)?;
+            let Some(resolver) = resolver_for_ios_search_table(
+                payload.absolute_path.clone(),
+                SsedIosSearchResolverSource::DictFullDb,
+                &table,
+                &columns,
+            ) else {
                 continue;
             };
             resolvers.push(resolver);
@@ -167,6 +224,7 @@ fn discover_ios_search_resolvers(
     resolvers.sort_by_key(|resolver| {
         (
             display_name(&resolver.path).to_ascii_lowercase(),
+            resolver.source.sort_key(),
             resolver.table.to_ascii_lowercase(),
         )
     });
@@ -175,21 +233,33 @@ fn discover_ios_search_resolvers(
 
 fn resolver_for_ios_search_table(
     path: PathBuf,
+    source: SsedIosSearchResolverSource,
     table: &str,
     columns: &[String],
 ) -> Option<SsedIosSearchResolver> {
     let (block_column, offset_column) = find_block_offset_pair(columns)?;
-    let search_columns = ios_search_columns(columns, &block_column, &offset_column);
+    let search_columns = match source {
+        SsedIosSearchResolverSource::DictSearchDb => {
+            ios_search_columns(columns, &block_column, &offset_column)
+        }
+        SsedIosSearchResolverSource::DictFullDb => {
+            ios_full_db_search_columns(columns, &block_column, &offset_column)
+        }
+    };
     if search_columns.is_empty() {
         return None;
     }
     let label_columns = ios_label_columns(columns, &search_columns);
-    let mode_hints = ios_search_mode_hints(&path, table, columns);
+    let mode_hints = match source {
+        SsedIosSearchResolverSource::DictSearchDb => ios_search_mode_hints(&path, table, columns),
+        SsedIosSearchResolverSource::DictFullDb => ios_full_db_mode_hints(columns),
+    };
     if mode_hints.is_empty() {
         return None;
     }
     Some(SsedIosSearchResolver {
         path,
+        source,
         table: table.to_owned(),
         block_column,
         offset_column,
@@ -344,6 +414,25 @@ fn ios_search_columns(columns: &[String], block_column: &str, offset_column: &st
         .collect()
 }
 
+fn ios_full_db_search_columns(
+    columns: &[String],
+    block_column: &str,
+    offset_column: &str,
+) -> Vec<String> {
+    let mut search_columns = Vec::new();
+    for alias in ["Body", "BodyText", "Contents", "Content", "Text", "Plain"] {
+        if let Some(column) = find_column(columns, alias) {
+            push_nonempty_unique(&mut search_columns, column);
+        }
+    }
+    search_columns.retain(|column| {
+        !column.eq_ignore_ascii_case(block_column)
+            && !column.eq_ignore_ascii_case(offset_column)
+            && ios_search_column_name_is_textual(column)
+    });
+    search_columns
+}
+
 fn ios_label_columns(columns: &[String], search_columns: &[String]) -> Vec<String> {
     let mut labels = Vec::new();
     for alias in [
@@ -395,6 +484,17 @@ fn ios_search_mode_hints(path: &Path, table: &str, columns: &[String]) -> BTreeS
     }
     if table_name == "koro" {
         hints.insert("gyaku".to_owned());
+    }
+    hints
+}
+
+fn ios_full_db_mode_hints(columns: &[String]) -> BTreeSet<String> {
+    let mut hints = BTreeSet::new();
+    if ["Body", "BodyText", "Contents", "Content", "Text", "Plain"]
+        .iter()
+        .any(|alias| find_column(columns, alias).is_some())
+    {
+        hints.insert("example".to_owned());
     }
     hints
 }

@@ -607,6 +607,117 @@ fn ios_dictsearchdb_advanced_example_search_returns_ssed_address_target() {
 }
 
 #[test]
+fn ios_fulldb_advanced_example_search_returns_ssed_address_target() {
+    let dir = tempdir().unwrap();
+    let full_db = dir.path().join("DICT_Full.sql");
+    let connection = Connection::open(&full_db).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table DICT_1 (
+              No integer primary key,
+              Block integer,
+              Offset integer,
+              Title text,
+              Body text,
+              TitleJIS text
+            );
+            insert into DICT_1 values (
+              1,
+              100,
+              48,
+              'full title',
+              'loan example phrase from DictFULLDB',
+              '1F042361236223631F05'
+            );
+            ",
+        )
+        .unwrap();
+    let catalog = SsedCatalog {
+        title: "iOS full DB search sidecar".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 100,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("iOS full DB search sidecar".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            retained_ios_dictlist: Some(crate::ios_dictlist::IosDictListInfo {
+                fts_payloads: Vec::new(),
+                full_db_payloads: vec![crate::ios_dictlist::IosDictFullDbPayload {
+                    relative_path: "DICT/DICT_Full.sql".to_owned(),
+                    absolute_path: full_db,
+                    dict_code: "DICT".to_owned(),
+                    dictionary_name: Some("iOS DictFULLDB".to_owned()),
+                }],
+                search_payloads: Vec::new(),
+                convert_addr_payloads: Vec::new(),
+                search_modes: vec![SearchMode::Advanced("example".to_owned())],
+            }),
+            search_modes: vec![SearchMode::Advanced("example".to_owned())],
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Advanced("example".to_owned()),
+            query: "loan".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "full title");
+    assert!(
+        page.hits[0]
+            .snippet_html
+            .as_deref()
+            .is_some_and(|snippet| snippet.contains("loan example phrase from DictFULLDB"))
+    );
+    assert!(page.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_ios_fulldb_search_scan"
+            && diagnostic
+                .context
+                .get("table")
+                .is_some_and(|value| value == "DICT_1")
+    }));
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress { component, block: 100, offset: 48 }
+            if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn ios_dictsearchdb_hits_use_index_boundary_when_available() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
