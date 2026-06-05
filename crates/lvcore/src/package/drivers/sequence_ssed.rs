@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 
 const SSED_SEQUENCE_SURFACE_PAGE_LIMIT: usize = 128;
 const SSED_SEQUENCE_SURFACE_MAX_PAGES: usize = 4096;
+const SSED_SEQUENCE_CURSOR_PAGE_MIN: usize = 16;
 
 struct SsedPagedMenuWindowRequest<'a> {
     surface_id: &'a str,
@@ -328,12 +329,15 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let mut cursor = ssed_menu_sequence_start_cursor(request.cursor_hint, request.before);
         let mut reached_page_limit = false;
-        let page_limit = SSED_SEQUENCE_SURFACE_PAGE_LIMIT.max(
-            request
-                .before
-                .saturating_add(request.after)
-                .saturating_add(1),
-        );
+        let context_limit = request
+            .before
+            .saturating_add(request.after)
+            .saturating_add(1);
+        let page_limit = if request.cursor_hint.is_some() {
+            SSED_SEQUENCE_CURSOR_PAGE_MIN.max(context_limit)
+        } else {
+            SSED_SEQUENCE_SURFACE_PAGE_LIMIT.max(context_limit)
+        };
         for page_index in 0..SSED_SEQUENCE_SURFACE_MAX_PAGES.min(request.max_pages) {
             let surface = self.open_surface_page_with_options(
                 request.surface_id,
