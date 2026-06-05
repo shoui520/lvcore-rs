@@ -510,6 +510,7 @@ fn media_blob_uses_rowid_index_for_indexless_media_tables() {
 fn title_probe_rejects_common_false_positive_shapes() {
     assert!(normalize_title_candidate("外国語は片仮名で表記した．").is_none());
     assert!(title_score("和英小辞典") < 100);
+    assert!(title_score("和英小辞典あ") < 100);
     assert_eq!(
         normalize_title_candidate("『広辞苑 第七版』　　&copy;2018年").as_deref(),
         Some("広辞苑 第七版")

@@ -577,7 +577,7 @@ pub(crate) fn title_score(value: &str) -> i32 {
     if matches!(value, "Index" | "LVED") {
         score -= 200;
     }
-    if value.ends_with("小辞典") && !value.contains('第') {
+    if value.contains("小辞典") && !value.contains('第') {
         score -= 80;
     }
     if value.chars().count() > 50 {
