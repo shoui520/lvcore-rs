@@ -93,6 +93,7 @@ pub(super) fn ssed_menu_records_to_nodes_page_from(
     let mut path = Vec::<usize>::new();
     let mut emitted = 0usize;
     let mut next_cursor = None;
+    let destination_index = SsedMenuDestinationIndex::new(request.records);
 
     for (index, record) in request.records.iter().enumerate() {
         if emitted >= request.limit {
@@ -108,11 +109,11 @@ pub(super) fn ssed_menu_records_to_nodes_page_from(
         let page = ssed_menu_record_nodes_page(
             SsedMenuRecordNodeRequest {
                 package: request.package,
-                records: request.records,
                 global_index,
                 link_offset,
                 limit: request.limit.saturating_sub(emitted),
                 gaiji_policy: request.gaiji_policy,
+                destination_index: &destination_index,
             },
             record,
             diagnostics,
@@ -151,11 +152,11 @@ struct SsedMenuRecordNodePage {
 
 struct SsedMenuRecordNodeRequest<'a> {
     package: &'a ReaderBookPackage,
-    records: &'a [SsedMenuRecord],
     global_index: usize,
     link_offset: usize,
     limit: usize,
     gaiji_policy: &'a GaijiPolicy,
+    destination_index: &'a SsedMenuDestinationIndex<'a>,
 }
 
 fn ssed_menu_record_nodes_page(
@@ -169,22 +170,22 @@ fn ssed_menu_record_nodes_page(
             next_link_offset: None,
         });
     }
-    let target_links = record
+    let target_link_count = record
         .links
         .iter()
-        .enumerate()
-        .filter(|(_, link)| {
-            link.destination
-                .as_ref()
-                .is_some_and(|destination| !destination.is_null())
-                && !link.label.trim().is_empty()
-        })
-        .collect::<Vec<_>>();
-    if target_links.len() > 1 {
+        .filter(|link| ssed_menu_link_is_visible_target(link))
+        .count();
+    if target_link_count > 1 {
         let mut nodes = Vec::new();
         let mut consumed_links = 0usize;
         let mut next_link_offset = None;
-        for (position, (link_index, link)) in target_links.into_iter().enumerate() {
+        for (position, (link_index, link)) in record
+            .links
+            .iter()
+            .enumerate()
+            .filter(|(_, link)| ssed_menu_link_is_visible_target(link))
+            .enumerate()
+        {
             if position < request.link_offset {
                 continue;
             }
@@ -196,7 +197,7 @@ fn ssed_menu_record_nodes_page(
             let Some(destination) = link.destination.as_ref() else {
                 continue;
             };
-            let next_destination = nearest_higher_menu_destination(request.records, destination);
+            let next_destination = request.destination_index.next_after(destination);
             let Some(target) = ssed_menu_destination_target(
                 request.package,
                 destination,
@@ -236,7 +237,12 @@ fn ssed_menu_record_nodes_page(
             next_link_offset: None,
         });
     }
-    let target = ssed_menu_record_target(request.package, request.records, record, diagnostics)?;
+    let target = ssed_menu_record_target_with_destination_index(
+        request.package,
+        record,
+        request.destination_index,
+        diagnostics,
+    )?;
     let rich_label = request
         .package
         .ssed_rich_label_with_policy(label, request.gaiji_policy);
@@ -252,6 +258,13 @@ fn ssed_menu_record_nodes_page(
         }],
         next_link_offset: None,
     })
+}
+
+fn ssed_menu_link_is_visible_target(link: &SsedMenuLink) -> bool {
+    link.destination
+        .as_ref()
+        .is_some_and(|destination| !destination.is_null())
+        && !link.label.trim().is_empty()
 }
 
 fn attach_ssed_menu_node(
@@ -569,6 +582,16 @@ pub(in crate::package::drivers) fn ssed_menu_record_target(
     record: &SsedMenuRecord,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
+    let destination_index = SsedMenuDestinationIndex::new(records);
+    ssed_menu_record_target_with_destination_index(package, record, &destination_index, diagnostics)
+}
+
+fn ssed_menu_record_target_with_destination_index(
+    package: &ReaderBookPackage,
+    record: &SsedMenuRecord,
+    destination_index: &SsedMenuDestinationIndex<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<TargetToken>> {
     let Some(destination) = record
         .links
         .iter()
@@ -577,7 +600,7 @@ pub(in crate::package::drivers) fn ssed_menu_record_target(
     else {
         return Ok(None);
     };
-    let next_destination = nearest_higher_menu_destination(records, destination);
+    let next_destination = destination_index.next_after(destination);
     ssed_menu_destination_target(package, destination, next_destination, diagnostics)
 }
 
@@ -644,15 +667,34 @@ pub(in crate::package::drivers) fn nearest_higher_menu_destination<'a>(
     records: &'a [SsedMenuRecord],
     destination: &SsedMenuDestination,
 ) -> Option<&'a SsedMenuDestination> {
-    records
-        .iter()
-        .flat_map(|record| record.links.iter())
-        .filter_map(|link| link.destination.as_ref())
-        .filter(|candidate| !candidate.is_null())
-        .filter(|candidate| {
-            (candidate.block, candidate.offset) > (destination.block, destination.offset)
-        })
-        .min_by_key(|candidate| (candidate.block, candidate.offset))
+    let destination_index = SsedMenuDestinationIndex::new(records);
+    destination_index.next_after(destination)
+}
+
+struct SsedMenuDestinationIndex<'a> {
+    destinations: Vec<&'a SsedMenuDestination>,
+}
+
+impl<'a> SsedMenuDestinationIndex<'a> {
+    fn new(records: &'a [SsedMenuRecord]) -> Self {
+        let mut destinations = records
+            .iter()
+            .flat_map(|record| record.links.iter())
+            .filter_map(|link| link.destination.as_ref())
+            .filter(|destination| !destination.is_null())
+            .collect::<Vec<_>>();
+        destinations.sort_by_key(|destination| (destination.block, destination.offset));
+        destinations.dedup_by_key(|destination| (destination.block, destination.offset));
+        Self { destinations }
+    }
+
+    fn next_after(&self, destination: &SsedMenuDestination) -> Option<&'a SsedMenuDestination> {
+        let key = (destination.block, destination.offset);
+        let index = self
+            .destinations
+            .partition_point(|candidate| (candidate.block, candidate.offset) <= key);
+        self.destinations.get(index).copied()
+    }
 }
 
 pub(in crate::package::drivers) fn ssed_honmon_address_target(

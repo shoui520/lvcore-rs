@@ -176,7 +176,7 @@ use crate::ssed_loose_media::{
     search_britannica_chronology_records,
 };
 use crate::ssed_menu::{
-    SsedMenuDestination, SsedMenuRecord, parse_menu_stream, parse_menu_stream_page,
+    SsedMenuDestination, SsedMenuLink, SsedMenuRecord, parse_menu_stream, parse_menu_stream_page,
 };
 use crate::ssed_multi::{
     SsedMultiComponentRef, SsedMultiDescriptor, SsedMultiRecord, parse_multi_descriptor,
