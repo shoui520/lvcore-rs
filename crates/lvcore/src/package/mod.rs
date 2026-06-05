@@ -92,6 +92,7 @@ pub struct BookMetadata {
     pub book_id: BookId,
     pub format_family: FormatFamily,
     pub format_label: String,
+    pub package_root: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub root_fingerprint: String,

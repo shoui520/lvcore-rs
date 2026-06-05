@@ -306,6 +306,7 @@ impl ReaderBookPackage {
             book_id,
             format_family: detected.format_family,
             format_label,
+            package_root: root.to_path_buf(),
             title: detected.title,
             root_fingerprint,
             capabilities,

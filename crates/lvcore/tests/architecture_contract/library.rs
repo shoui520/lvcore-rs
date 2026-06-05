@@ -22,7 +22,13 @@ fn library_opens_discovered_package_roots_for_frontend_library_import() {
 
     assert_eq!(opened.len(), 1);
     assert_eq!(library.len(), 1);
-    assert_eq!(library.metadata_snapshot().len(), 1);
+    let metadata = library.metadata_snapshot();
+    assert_eq!(metadata.len(), 1);
+    assert!(metadata[0].package_root.starts_with(root.path()));
+    assert!(
+        metadata[0].package_root.ends_with("FirstBook")
+            || metadata[0].package_root.ends_with("SecondBook")
+    );
 }
 
 #[test]

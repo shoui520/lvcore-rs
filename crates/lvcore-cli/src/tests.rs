@@ -641,6 +641,10 @@ fn library_import_command_returns_cacheable_book_metadata() {
         output["books"][0]["format_label"].as_str(),
         Some("LVED_SQLITE3")
     );
+    let package_root = output["books"][0]["package_root"].as_str().unwrap();
+    assert!(
+        package_root.ends_with("FirstDictionary") || package_root.ends_with("SecondDictionary")
+    );
 }
 
 #[test]
