@@ -24,6 +24,24 @@ fn lved_book_id_uses_package_code_without_windows_folder_wrapper() {
 }
 
 #[test]
+fn lved_preserved_html_packages_do_not_advertise_deferred_rendering() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvedSqlite3);
+    assert!(metadata.capabilities.contains(&Capability::PreservedHtml));
+    assert!(
+        !metadata
+            .capabilities
+            .contains(&Capability::DeferredRendering),
+        "LVED_SQLITE3 bodies are preserved HTML inputs; deferred rendering is a diagnostic state, not a positive format capability"
+    );
+}
+
+#[test]
 fn lved_book_id_does_not_expose_arbitrary_folder_names() {
     let dir = tempdir().unwrap();
     let first_root = dir.path().join("FirstBook");

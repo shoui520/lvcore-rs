@@ -15,7 +15,6 @@ pub(super) fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> 
         Capability::Gaiji,
         Capability::PreservedHtml,
         Capability::ContinuousView,
-        Capability::DeferredRendering,
     ];
     if !search_modes.is_empty() {
         capabilities.push(Capability::NativeSearch);
@@ -37,7 +36,6 @@ pub(super) fn multiview_capabilities() -> Vec<Capability> {
         Capability::PreservedHtml,
         Capability::ContinuousView,
         Capability::LawNavigation,
-        Capability::DeferredRendering,
     ]
 }
 
@@ -50,7 +48,6 @@ pub(super) fn hourei_capabilities() -> Vec<Capability> {
         Capability::PreservedHtml,
         Capability::ContinuousView,
         Capability::LawNavigation,
-        Capability::DeferredRendering,
     ]
 }
 

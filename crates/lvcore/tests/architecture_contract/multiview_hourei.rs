@@ -29,6 +29,29 @@ fn multiview_book_id_uses_package_code_without_windows_folder_wrapper() {
 }
 
 #[test]
+fn multiview_preserved_html_packages_do_not_advertise_deferred_rendering() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        r#"<list><item label="Book"><item label="前" href="000001" /></item></list>"#,
+    )
+    .unwrap();
+    write_minimal_multiview_content_fixture(&dir.path().join("blvdat"));
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvlMultiView);
+    assert!(metadata.capabilities.contains(&Capability::PreservedHtml));
+    assert!(
+        !metadata
+            .capabilities
+            .contains(&Capability::DeferredRendering),
+        "LVLMultiView bodies are preserved HTML inputs; deferred rendering is a diagnostic state, not a positive format capability"
+    );
+}
+
+#[test]
 fn multiview_menu_data_opens_as_hierarchical_tree() {
     let dir = tempdir().unwrap();
     fs::write(
@@ -411,6 +434,24 @@ fn hourei_book_id_uses_stable_product_identity_not_folder_name() {
         !metadata.book_id.0.contains("user_named_hourei_folder"),
         "{}",
         metadata.book_id.0
+    );
+}
+
+#[test]
+fn hourei_preserved_html_packages_do_not_advertise_deferred_rendering() {
+    let dir = tempdir().unwrap();
+    write_minimal_hourei_fixture(dir.path());
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::Hourei);
+    assert!(metadata.capabilities.contains(&Capability::PreservedHtml));
+    assert!(
+        !metadata
+            .capabilities
+            .contains(&Capability::DeferredRendering),
+        "Hourei cached/law bodies are preserved HTML inputs; deferred rendering is a diagnostic state, not a positive format capability"
     );
 }
 

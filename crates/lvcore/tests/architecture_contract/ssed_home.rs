@@ -321,6 +321,12 @@ fn ssed_home_surfaces_are_capability_based() {
         metadata.book_id.0
     );
     assert!(metadata.capabilities.contains(&Capability::HcRenderInput));
+    assert!(
+        metadata
+            .capabilities
+            .contains(&Capability::DeferredRendering),
+        "SSED streams must keep deferred rendering visible until product HC rendering is implemented in Rust"
+    );
     assert!(metadata.capabilities.contains(&Capability::NativeSearch));
     assert!(metadata.capabilities.contains(&Capability::Hanrei));
     assert!(metadata.capabilities.contains(&Capability::Panels));
