@@ -69,12 +69,6 @@ fn ssed_hanrei_surface_lists_chm_and_mac_help_pages() {
         .unwrap();
     assert_eq!(hanrei_home.status, NavigationStatus::Available);
     assert!(hanrei_home.target.is_some());
-    assert!(
-        hanrei_home
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "ssed_hanrei_chm_deferred")
-    );
 
     let surface = package.open_surface("hanrei").unwrap();
     let NavigationSurface::InfoPages { pages, .. } = surface else {

@@ -247,6 +247,9 @@ pub(crate) fn regular_file_inside_root(root: &Path, path: &Path) -> Result<bool>
     if path_has_symlink_component(root, path)? {
         return Ok(false);
     }
+    if path_stays_inside_declared_root(root, path) {
+        return Ok(true);
+    }
     path_stays_inside_root(root, path)
 }
 
@@ -260,7 +263,22 @@ pub(crate) fn regular_directory_inside_root(root: &Path, path: &Path) -> Result<
     if path_has_symlink_component(root, path)? {
         return Ok(false);
     }
+    if path_stays_inside_declared_root(root, path) {
+        return Ok(true);
+    }
     path_stays_inside_root(root, path)
+}
+
+fn path_stays_inside_declared_root(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    relative.components().all(|component| {
+        matches!(
+            component,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    })
 }
 
 fn path_has_symlink_component(root: &Path, path: &Path) -> Result<bool> {

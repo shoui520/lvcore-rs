@@ -236,12 +236,7 @@ impl NavigationProvider for ReaderBookPackage {
                         )],
                     });
                 }
-                let hanrei_pages = self.discover_ssed_hanrei_pages()?;
-                if !hanrei_pages.is_empty() {
-                    let diagnostics = hanrei_pages
-                        .iter()
-                        .flat_map(|page| page.diagnostics.clone())
-                        .collect::<Vec<_>>();
+                if self.has_ssed_hanrei_surface()? {
                     surfaces.push(HomeSurface {
                         href: None,
                         surface_id: "hanrei".to_owned(),
@@ -253,7 +248,7 @@ impl NavigationProvider for ReaderBookPackage {
                             surface_id: "hanrei".to_owned(),
                             item_id: "root".to_owned(),
                         })?),
-                        diagnostics,
+                        diagnostics: Vec::new(),
                     });
                 }
                 if self.lved_store.is_some() {

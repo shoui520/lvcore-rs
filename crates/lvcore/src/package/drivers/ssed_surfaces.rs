@@ -1,5 +1,7 @@
 use super::*;
 
+const SSED_HOME_NAVIGATION_EMPTY_CHECK_MAX_BYTES: u64 = 64 * 1024;
+
 impl ReaderBookPackage {
     pub(super) fn decoded_ssed_navigation_component_data(
         &self,
@@ -362,6 +364,11 @@ impl ReaderBookPackage {
         else {
             return Ok(None);
         };
+        if u64::from(component.block_count()) * u64::from(BLOCK_SIZE)
+            > SSED_HOME_NAVIGATION_EMPTY_CHECK_MAX_BYTES
+        {
+            return Ok(None);
+        }
         let path = match self.resolve_readable_ssed_component_path(component) {
             Ok(Some(path)) => path,
             Ok(None) | Err(_) => return Ok(None),

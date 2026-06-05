@@ -380,12 +380,6 @@ fn ssed_home_surfaces_are_capability_based() {
         .find(|surface| surface.kind == NavigationSurfaceKind::Hanrei)
         .unwrap();
     assert_eq!(hanrei_surface.status, NavigationStatus::Available);
-    assert!(
-        hanrei_surface
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "ssed_hanrei_chm_deferred")
-    );
     let menu_surface = package.open_surface("menu").unwrap();
     let lvcore::NavigationSurface::SimpleMenu { nodes, .. } = menu_surface else {
         panic!("SSED MENU should decode to a simple menu surface");

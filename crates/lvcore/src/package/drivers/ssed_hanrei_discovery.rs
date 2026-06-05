@@ -1,6 +1,55 @@
 use super::*;
 
 impl ReaderBookPackage {
+    pub(super) fn has_ssed_hanrei_surface(&self) -> Result<bool> {
+        for candidate in [
+            "hanrei.html",
+            "HANREI.html",
+            "HANREI/index.html",
+            "HANREI/index.htm",
+            "HANREI/hanrei.html",
+            "HANREI/hanrei.htm",
+            "HANREI.chm",
+        ] {
+            if self.ssed_hanrei_regular_file_exists(candidate)? {
+                return Ok(true);
+            }
+        }
+        if self.ssed_hanrei_folder_has_html("HANREI", 0)? {
+            return Ok(true);
+        }
+        for path in self.storage.list_dir(Path::new(""))? {
+            if !regular_directory_inside_root(&self.root, &path)? {
+                continue;
+            }
+            let Some(name) = path.file_name().map(|value| value.to_string_lossy()) else {
+                continue;
+            };
+            if name.starts_with("._") || !name.to_ascii_lowercase().ends_with("_help.localized") {
+                continue;
+            }
+            let root = name.replace('\\', "/");
+            for candidate in [
+                format!("{root}/index.html"),
+                format!("{root}/index.htm"),
+                format!("{root}/menu.html"),
+                format!("{root}/top.html"),
+                format!("{root}/contents/hanrei.html"),
+                format!("{root}/contents/hanrei.htm"),
+                format!("{root}/contents/copyright.html"),
+                format!("{root}/contents/copyright.htm"),
+            ] {
+                if self.ssed_hanrei_regular_file_exists(&candidate)? {
+                    return Ok(true);
+                }
+            }
+            if self.ssed_hanrei_folder_has_html(&format!("{root}/contents"), 0)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(super) fn discover_ssed_hanrei_pages(&self) -> Result<Vec<SsedHanreiPage>> {
         let mut pages = Vec::new();
         let mut seen = BTreeSet::new();
@@ -63,6 +112,48 @@ impl ReaderBookPackage {
         }
 
         Ok(pages)
+    }
+
+    fn ssed_hanrei_regular_file_exists(&self, relative: &str) -> Result<bool> {
+        let normalized = relative.replace('\\', "/");
+        if normalized
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+        {
+            return Ok(false);
+        }
+        if !self.storage.exists(Path::new(&normalized))? {
+            return Ok(false);
+        }
+        let Some(path) = self.storage.resolve_casefolded(Path::new(&normalized))? else {
+            return Ok(false);
+        };
+        regular_file_inside_root(&self.root, &path)
+    }
+
+    fn ssed_hanrei_folder_has_html(&self, relative_dir: &str, depth: usize) -> Result<bool> {
+        if depth > 8 || !self.storage.exists(Path::new(relative_dir))? {
+            return Ok(false);
+        }
+        for child in self.storage.list_dir(Path::new(relative_dir))? {
+            let Some(file_name) = child.file_name().map(|value| value.to_string_lossy()) else {
+                continue;
+            };
+            if file_name.starts_with("._") {
+                continue;
+            }
+            let candidate = format!("{relative_dir}/{file_name}");
+            if regular_directory_inside_root(&self.root, &child)? {
+                if self.ssed_hanrei_folder_has_html(&candidate, depth + 1)? {
+                    return Ok(true);
+                }
+            } else if regular_file_inside_root(&self.root, &child)?
+                && path_has_extension(&file_name, &["html", "htm"])
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(super) fn push_ssed_hanrei_folder_pages(
