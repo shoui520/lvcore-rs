@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
     BookId, BookLibrary, BookMetadata, DriverRegistry, Error, LibraryImportReport,
     LibraryImportResult, PackageDiscoveryOptions, RenderMode, RenderOptions, ResourceToken, Result,
-    SearchMode, SearchQuery, SearchResultSequence, SearchScope, SequenceHint, TargetToken,
+    SearchMode, SearchQuery, SearchScope, SequenceHint, TargetToken,
 };
 use serde_json::json;
 
@@ -622,10 +622,10 @@ fn library_search_command_json(
         limit,
         gaiji_policy: Some(render_options.gaiji_policy.clone()),
     })?;
-    let search_result_sequence = SearchResultSequence::from_search_page(&page)?.encode()?;
-    let sequence_hint = SequenceHint::SearchResults {
-        value: search_result_sequence.clone(),
-    };
+    let search_result_sequence = page.result_sequence.clone();
+    let sequence_hint = search_result_sequence
+        .clone()
+        .map(|value| SequenceHint::SearchResults { value });
     let rendered_first = if render_first {
         page.hits
             .first()
@@ -635,19 +635,17 @@ fn library_search_command_json(
         None
     };
     let target_window = if window_before > 0 || window_after > 0 {
-        page.hits
-            .first()
-            .map(|hit| {
-                library.resolve_search_result_window_routed(
-                    &hit.book_id,
-                    &hit.target,
-                    &search_result_sequence,
-                    window_before,
-                    window_after,
-                    &render_options,
-                )
-            })
-            .transpose()?
+        match (page.hits.first(), search_result_sequence.as_deref()) {
+            (Some(hit), Some(sequence)) => Some(library.resolve_search_result_window_routed(
+                &hit.book_id,
+                &hit.target,
+                sequence,
+                window_before,
+                window_after,
+                &render_options,
+            )?),
+            _ => None,
+        }
     } else {
         None
     };
@@ -691,7 +689,10 @@ fn search_command_json(
         limit,
         gaiji_policy: Some(render_options.gaiji_policy.clone()),
     })?;
-    let search_result_sequence = SearchResultSequence::from_search_page(&page)?.encode()?;
+    let search_result_sequence = page.result_sequence.clone();
+    let sequence_hint = search_result_sequence
+        .clone()
+        .map(|value| SequenceHint::SearchResults { value });
     let first_target = page.hits.first().map(|hit| hit.target.clone());
     let rendered_first = if render_first {
         first_target
@@ -708,7 +709,7 @@ fn search_command_json(
                 library.resolve_target_window(
                     &book_id,
                     target,
-                    None,
+                    sequence_hint.as_ref(),
                     window_before,
                     window_after,
                     &render_options,
@@ -722,8 +723,8 @@ fn search_command_json(
         "metadata": metadata,
         "hits": page.hits,
         "next_cursor": page.next_cursor,
-        "search_result_sequence": search_result_sequence.clone(),
-        "sequence_hint": SequenceHint::SearchResults { value: search_result_sequence },
+        "search_result_sequence": search_result_sequence,
+        "sequence_hint": sequence_hint,
         "diagnostics": page.diagnostics,
         "rendered_first": rendered_first,
         "target_window": target_window,

@@ -559,6 +559,64 @@ fn library_search_command_uses_all_books_scope_and_routed_rendering() {
 }
 
 #[test]
+fn search_command_uses_backend_search_result_sequence_for_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+
+    let output = search_command_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        "Example Dictionary".to_owned(),
+        SearchMode::Forward,
+        10,
+        None,
+        RenderOptions::default(),
+        false,
+        0,
+        1,
+    )
+    .unwrap();
+
+    assert!(output["search_result_sequence"].as_str().is_some());
+    assert_eq!(
+        output["sequence_hint"]["kind"].as_str(),
+        Some("search_results")
+    );
+    assert_eq!(output["target_window"]["center"]["title"], "alpha");
+    assert_eq!(
+        output["target_window"]["after"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(output["target_window"]["after"][0]["title"], "beta");
+    assert!(output["target_window"]["diagnostics"].is_null());
+}
+
+#[test]
+fn search_command_does_not_emit_fake_sequence_for_empty_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+
+    let output = search_command_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        "definitely-missing".to_owned(),
+        SearchMode::Forward,
+        10,
+        None,
+        RenderOptions::default(),
+        false,
+        0,
+        1,
+    )
+    .unwrap();
+
+    assert!(output["hits"].as_array().unwrap().is_empty());
+    assert!(output["search_result_sequence"].is_null());
+    assert!(output["sequence_hint"].is_null());
+    assert!(output["target_window"].is_null());
+}
+
+#[test]
 fn library_import_command_returns_cacheable_book_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("FirstDictionary");
