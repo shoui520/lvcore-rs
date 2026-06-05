@@ -263,7 +263,10 @@ impl ReaderBookPackage {
                 return Ok(deferred_component_surface_warning(
                     surface_id,
                     "ssed_navigation_component_decode_failed",
-                    format!("{} is not readable as SSEDDATA: {error}", component.filename),
+                    format!(
+                        "{} is not readable as SSEDDATA: {error}",
+                        component.filename
+                    ),
                     component,
                 ));
             }

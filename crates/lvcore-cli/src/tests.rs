@@ -124,6 +124,26 @@ fn cli_search_mode_accepts_fulltext_aliases() {
 }
 
 #[test]
+fn cli_search_mode_accepts_advanced_mode_shorthand() {
+    let args = Args::try_parse_from([
+        "lvcore",
+        "search",
+        "/tmp/dict",
+        "needle",
+        "--mode",
+        "advanced:phrase",
+    ])
+    .unwrap();
+    let Command::Search { mode, .. } = args.command else {
+        panic!("expected search command");
+    };
+    assert_eq!(
+        SearchMode::from(mode),
+        SearchMode::Advanced("phrase".to_owned())
+    );
+}
+
+#[test]
 fn cli_render_mode_maps_to_reader_render_options() {
     assert_eq!(
         cli_render_options(CliRenderMode::GenericHtml, true),

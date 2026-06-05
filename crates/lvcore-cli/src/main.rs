@@ -201,14 +201,14 @@ enum Command {
     },
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CliSearchMode {
     Exact,
     Forward,
     Backward,
     Partial,
-    #[value(alias = "full-text", alias = "full_text")]
     Fulltext,
+    Advanced(String),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -240,6 +240,41 @@ impl From<CliSearchMode> for SearchMode {
             CliSearchMode::Backward => Self::Backward,
             CliSearchMode::Partial => Self::Partial,
             CliSearchMode::Fulltext => Self::FullText,
+            CliSearchMode::Advanced(name) => Self::Advanced(name),
+        }
+    }
+}
+
+impl std::str::FromStr for CliSearchMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let trimmed = value.trim();
+        let normalized = trimmed.to_ascii_lowercase();
+        match normalized.as_str() {
+            "exact" => Ok(Self::Exact),
+            "forward" => Ok(Self::Forward),
+            "backward" => Ok(Self::Backward),
+            "partial" => Ok(Self::Partial),
+            "fulltext" | "full-text" | "full_text" | "full-text-search" | "full_text_search" => {
+                Ok(Self::Fulltext)
+            }
+            _ => {
+                let Some(name) = trimmed
+                    .strip_prefix("advanced:")
+                    .or_else(|| trimmed.strip_prefix("advanced="))
+                else {
+                    return Err(format!(
+                        "unknown search mode {trimmed:?}; use exact, forward, backward, partial, fulltext, or advanced:<name>"
+                    ));
+                };
+                let name = name.trim();
+                if name.is_empty() {
+                    Err("advanced search mode name is empty".to_owned())
+                } else {
+                    Ok(Self::Advanced(name.to_owned()))
+                }
+            }
         }
     }
 }

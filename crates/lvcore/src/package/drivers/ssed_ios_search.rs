@@ -28,6 +28,14 @@ struct SsedIosSearchRow {
     snippet: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SsedIosAddressOnlySearchPage {
+    rows: Vec<SsedIosSearchRow>,
+    checked_rows: usize,
+    byte_candidate_rows: usize,
+    decoded_candidate_rows: usize,
+}
+
 impl SsedIosSearchResolverSource {
     fn sort_key(self) -> u8 {
         match self {
@@ -107,12 +115,29 @@ impl ReaderBookPackage {
         }
         let page_offset = decode_offset_cursor(query.cursor.as_deref());
         let page_limit = query.limit.saturating_add(1);
+        let needle = normalize_search_match_text(&query.query);
         let label_policy = query.label_gaiji_policy();
         let mut hits = Vec::new();
         let mut matched = 0usize;
         let mut diagnostics = Vec::new();
         for resolver in mode_resolvers {
-            let rows = search_ios_resolver(resolver, &query.query, page_offset, page_limit)?;
+            let address_only_page = if resolver.search_columns.is_empty() {
+                Some(search_ios_address_only_resolver(
+                    self,
+                    catalog,
+                    resolver,
+                    &needle,
+                    &ssed_body_search_byte_candidates(&query.query),
+                    page_offset,
+                    page_limit,
+                )?)
+            } else {
+                None
+            };
+            let rows = match &address_only_page {
+                Some(page) => page.rows.clone(),
+                None => search_ios_resolver(resolver, &query.query, page_offset, page_limit)?,
+            };
             if rows.is_empty() {
                 continue;
             }
@@ -124,6 +149,19 @@ impl ReaderBookPackage {
                 .with_context("sidecar", display_name(&resolver.path))
                 .with_context("table", &resolver.table),
             );
+            if let Some(page) = &address_only_page {
+                diagnostics.push(
+                    Diagnostic::info(
+                        "ssed_ios_address_only_body_scan",
+                        "SSED iOS address-only search scanned bounded HONMON windows behind DictSearchDB rows",
+                    )
+                    .with_context("sidecar", display_name(&resolver.path))
+                    .with_context("table", &resolver.table)
+                    .with_context("checked_rows", page.checked_rows.to_string())
+                    .with_context("byte_candidate_rows", page.byte_candidate_rows.to_string())
+                    .with_context("decoded_candidate_rows", page.decoded_candidate_rows.to_string()),
+                );
+            }
             for row in rows {
                 if matched < page_offset {
                     matched = matched.saturating_add(1);
@@ -250,10 +288,6 @@ fn resolver_for_ios_search_table(
             ios_full_db_search_columns(columns, &block_column, &offset_column)
         }
     };
-    if search_columns.is_empty() {
-        return None;
-    }
-    let label_columns = ios_label_columns(columns, &search_columns);
     let mode_hints = match source {
         SsedIosSearchResolverSource::DictSearchDb => ios_search_mode_hints(&path, table, columns),
         SsedIosSearchResolverSource::DictFullDb => ios_full_db_mode_hints(columns),
@@ -261,6 +295,10 @@ fn resolver_for_ios_search_table(
     if mode_hints.is_empty() {
         return None;
     }
+    if search_columns.is_empty() && source != SsedIosSearchResolverSource::DictSearchDb {
+        return None;
+    }
+    let label_columns = ios_label_columns(columns, &search_columns);
     Some(SsedIosSearchResolver {
         path,
         source,
@@ -336,6 +374,106 @@ fn search_ios_resolver(
     Ok(out)
 }
 
+fn search_ios_address_only_resolver(
+    package: &ReaderBookPackage,
+    catalog: &SsedCatalog,
+    resolver: &SsedIosSearchResolver,
+    needle: &str,
+    byte_candidates: &[Vec<u8>],
+    page_offset: usize,
+    page_limit: usize,
+) -> Result<SsedIosAddressOnlySearchPage> {
+    if page_limit == 0 {
+        return Ok(SsedIosAddressOnlySearchPage {
+            rows: Vec::new(),
+            checked_rows: 0,
+            byte_candidate_rows: 0,
+            decoded_candidate_rows: 0,
+        });
+    }
+    let connection = open_ios_search_connection(&resolver.path)?;
+    let sql = format!(
+        "select {}, {} from {} order by rowid",
+        quote_sql_identifier(&resolver.block_column),
+        quote_sql_identifier(&resolver.offset_column),
+        quote_sql_identifier(&resolver.table),
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let mut rows = statement.query([])?;
+    let mut readers: BTreeMap<String, SsedDataFile> = BTreeMap::new();
+    let mut out = Vec::new();
+    let mut matched = 0usize;
+    let mut checked_rows = 0usize;
+    let mut byte_candidate_rows = 0usize;
+    let mut decoded_candidate_rows = 0usize;
+    while let Some(row) = rows.next()? {
+        checked_rows = checked_rows.saturating_add(1);
+        let raw_block = sqlite_value_to_u32(row.get_ref(0)?)?;
+        let raw_offset = sqlite_value_to_u32(row.get_ref(1)?)?;
+        let (block, offset) = package.convert_ios_ssed_address(raw_block, raw_offset)?;
+        let Some(component) = catalog.component_for_address(block) else {
+            continue;
+        };
+        if component.role != SsedComponentRole::Honmon {
+            continue;
+        }
+        let Some(component_offset) = component.relative_offset(block, offset) else {
+            continue;
+        };
+        let reader = if readers.contains_key(&component.filename) {
+            readers.get_mut(&component.filename).ok_or_else(|| {
+                Error::Driver(format!("{} reader cache lookup failed", component.filename))
+            })?
+        } else {
+            let Some(path) = package.resolve_readable_ssed_component_path(component)? else {
+                continue;
+            };
+            let reader = SsedDataFile::open(&path)?;
+            readers.insert(component.filename.clone(), reader);
+            readers.get_mut(&component.filename).ok_or_else(|| {
+                Error::Driver(format!(
+                    "{} reader cache insert did not persist",
+                    component.filename
+                ))
+            })?
+        };
+        let body_data = reader.read_range(
+            usize::try_from(component_offset)
+                .map_err(|_| Error::Driver("SSED body offset does not fit in usize".to_owned()))?,
+            SSED_FULLTEXT_BODY_WINDOW_BYTES,
+        )?;
+        if !ssed_body_window_may_contain_query(&body_data, byte_candidates) {
+            continue;
+        }
+        byte_candidate_rows = byte_candidate_rows.saturating_add(1);
+        let body_text = decode_ssed_body_search_text(&body_data);
+        if !normalize_search_match_text(&body_text).contains(needle) {
+            continue;
+        }
+        decoded_candidate_rows = decoded_candidate_rows.saturating_add(1);
+        if matched < page_offset {
+            matched = matched.saturating_add(1);
+            continue;
+        }
+        out.push(SsedIosSearchRow {
+            block: raw_block,
+            offset: raw_offset,
+            label: ios_address_only_label(&body_text, raw_block, raw_offset),
+            snippet: body_text,
+        });
+        matched = matched.saturating_add(1);
+        if out.len() >= page_limit {
+            break;
+        }
+    }
+    Ok(SsedIosAddressOnlySearchPage {
+        rows: out,
+        checked_rows,
+        byte_candidate_rows,
+        decoded_candidate_rows,
+    })
+}
+
 fn ios_search_row_from_sqlite_row(
     resolver: &SsedIosSearchResolver,
     select_columns: &[String],
@@ -386,6 +524,19 @@ fn ios_search_row_from_sqlite_row(
         label,
         snippet: snippets.join(" / "),
     })
+}
+
+fn ios_address_only_label(body_text: &str, block: u32, offset: u32) -> String {
+    let label = body_text
+        .split_whitespace()
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if label.is_empty() {
+        format!("{block}:{offset:04x}")
+    } else {
+        label.chars().take(80).collect()
+    }
 }
 
 fn find_block_offset_pair(columns: &[String]) -> Option<(String, String)> {

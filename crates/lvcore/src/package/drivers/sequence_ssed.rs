@@ -600,7 +600,10 @@ impl ReaderBookPackage {
             Err(error) => {
                 diagnostics.push(Diagnostic::warning(
                     "ssed_navigation_component_decode_failed",
-                    format!("{} is not readable as SSEDDATA: {error}", component.filename),
+                    format!(
+                        "{} is not readable as SSEDDATA: {error}",
+                        component.filename
+                    ),
                 ));
                 return Ok(TargetWindow {
                     center: self.render_target(target, options)?,
