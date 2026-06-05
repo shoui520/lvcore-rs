@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use encoding_rs::SHIFT_JIS;
 use serde::{Deserialize, Serialize};
@@ -73,6 +73,7 @@ pub struct HcBasicTextGaiji {
 pub struct HcMarkerProfile {
     pub renderer_code: Option<String>,
     pub nonliteral_gaiji_codes: BTreeSet<String>,
+    pub gaiji_aliases: BTreeMap<String, String>,
 }
 
 impl HcMarkerProfile {
@@ -80,25 +81,62 @@ impl HcMarkerProfile {
         let normalized = normalize_gaiji_code(code);
         !normalized.is_empty() && self.nonliteral_gaiji_codes.contains(&normalized)
     }
+
+    pub fn gaiji_lookup_code(&self, code: &str) -> String {
+        let normalized = normalize_gaiji_code(code);
+        self.gaiji_aliases
+            .get(&normalized)
+            .cloned()
+            .unwrap_or(normalized)
+    }
 }
 
 pub fn hc_marker_profile_for_renderer(renderer_code: Option<&str>) -> HcMarkerProfile {
     let code = normalize_renderer_code(renderer_code);
-    let nonliteral_gaiji_codes = match code.as_deref() {
-        Some("013A") => ["A225", "A226", "B261", "B262", "B265", "B26A", "B26B"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-        Some("013F") => ["B15B", "B15C", "B15E", "B162", "B163"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-        _ => BTreeSet::new(),
-    };
+    let mut nonliteral_gaiji_codes = BTreeSet::new();
+    let mut gaiji_aliases = BTreeMap::new();
+
+    match code.as_deref() {
+        Some("00A3") => {
+            gaiji_aliases.insert("B261".to_owned(), "B167".to_owned());
+        }
+        Some("009F") => {
+            gaiji_aliases.insert("B261".to_owned(), "B167".to_owned());
+        }
+        Some("013A") => {
+            extend_codes(
+                &mut nonliteral_gaiji_codes,
+                [
+                    "A225", "A226", "B261", "B262", "B264", "B265", "B26A", "B26B",
+                ],
+            );
+        }
+        Some("013C") => {
+            extend_codes(&mut nonliteral_gaiji_codes, ["B121", "B122"]);
+        }
+        Some("013F") => {
+            extend_codes(
+                &mut nonliteral_gaiji_codes,
+                ["B15B", "B15C", "B15E", "B162", "B163"],
+            );
+        }
+        Some("0158") => {
+            for marker in 0xB353_u16..=0xB37E {
+                nonliteral_gaiji_codes.insert(format!("{marker:04X}"));
+            }
+        }
+        _ => {}
+    }
+
     HcMarkerProfile {
         renderer_code: code,
         nonliteral_gaiji_codes,
+        gaiji_aliases,
     }
+}
+
+fn extend_codes<const N: usize>(set: &mut BTreeSet<String>, codes: [&str; N]) {
+    set.extend(codes.into_iter().map(str::to_owned));
 }
 
 const STYLE_START_OPS: &[(u8, HcTextStyle)] = &[
@@ -1083,7 +1121,7 @@ mod tests {
     fn basic_text_suppresses_profile_nonliteral_gaiji_markers_before_resolution() {
         let marker_profile = hc_marker_profile_for_renderer(Some("HC013A.dll"));
         let mut data = body_jis("前");
-        data.extend_from_slice(&[0xb2, 0x61]);
+        data.extend_from_slice(&[0xb2, 0x64]);
         data.extend_from_slice(&body_jis("後"));
 
         let rendered = decode_hc_stream_basic_text_with_gaiji_policy(
@@ -1106,6 +1144,22 @@ mod tests {
                 .iter()
                 .all(|diagnostic| diagnostic.code != "hc_basic_text_gaiji_placeholders")
         );
+    }
+
+    #[test]
+    fn marker_profiles_capture_known_renderer_gaiji_controls_and_aliases() {
+        let hc013c = hc_marker_profile_for_renderer(Some("HC013C.dll"));
+        assert!(hc013c.suppresses_gaiji_code("B121"));
+        assert!(hc013c.suppresses_gaiji_code("b122"));
+
+        let hc0158 = hc_marker_profile_for_renderer(Some("HC0158.dll"));
+        assert!(hc0158.suppresses_gaiji_code("B353"));
+        assert!(hc0158.suppresses_gaiji_code("B37E"));
+        assert!(!hc0158.suppresses_gaiji_code("B352"));
+
+        let hc00a3 = hc_marker_profile_for_renderer(Some("HC00A3.dll"));
+        assert_eq!(hc00a3.gaiji_lookup_code("B261"), "B167");
+        assert_eq!(hc00a3.gaiji_lookup_code("B121"), "B121");
     }
 
     #[test]

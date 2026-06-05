@@ -290,6 +290,97 @@ fn hc_renderer_profile_suppresses_known_nonliteral_gaiji_markers() {
 }
 
 #[test]
+fn hc0158_profile_suppresses_inline_style_gaiji_markers() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("HC0158.dll"), b"").unwrap();
+    let mut honmon = body_jis("前");
+    honmon.extend_from_slice(&[0xb3, 0x53, 0xb3, 0x7e]);
+    honmon.extend_from_slice(&body_jis("後"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(&honmon),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(
+            &token,
+            &RenderOptions {
+                include_debug_trace: true,
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(view.basic_text.as_deref(), Some("前後"));
+    assert!(
+        view.display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("前後") && !html.contains('〓'))
+    );
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "gaiji_unresolved")
+    );
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "hc_basic_text_gaiji_placeholders")
+    );
+    assert!(
+        view.debug_trace
+            .as_deref()
+            .unwrap_or_default()
+            .contains("\"suppressed_gaiji_pairs\":2")
+    );
+}
+
+#[test]
+fn hc00a3_profile_aliases_b261_to_available_b167_ga16_glyph() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("HC00A3.dll"), b"").unwrap();
+    fs::write(dir.path().join("GA16FULL"), ga16_fixture(0xB121, 80)).unwrap();
+    let mut honmon = body_jis("前");
+    honmon.extend_from_slice(&[0xb2, 0x61]);
+    honmon.extend_from_slice(&body_jis("後"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(&honmon),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(&token, &RenderOptions::default())
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(view.basic_text.as_deref(), Some("前〓後"));
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "gaiji_unresolved")
+    );
+}
+
+#[test]
 fn native_hc_common_html_fallback_exposes_ssed_address_links_as_targets() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

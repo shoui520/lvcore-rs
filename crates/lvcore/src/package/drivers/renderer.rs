@@ -167,7 +167,9 @@ impl ReaderBookPackage {
                     let rendered = decode_hc_stream_basic_text_with_gaiji_policy(
                         &data,
                         |code| {
-                            let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
+                            let lookup_code = marker_profile.gaiji_lookup_code(code);
+                            let resolution =
+                                self.resolve_gaiji(&lookup_code, &options.gaiji_policy);
                             let resolved = resolution.unicode.is_some();
                             let text = resolution
                                 .unicode
@@ -240,7 +242,8 @@ impl ReaderBookPackage {
                 let rendered = decode_hc_stream_common_html_with_gaiji_policy(
                     &data,
                     |code| {
-                        let resolution = self.resolve_gaiji(code, &options.gaiji_policy);
+                        let lookup_code = marker_profile.gaiji_lookup_code(code);
+                        let resolution = self.resolve_gaiji(&lookup_code, &options.gaiji_policy);
                         let resolved = resolution.unicode.is_some();
                         let text = resolution
                             .unicode
