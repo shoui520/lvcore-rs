@@ -156,11 +156,9 @@ impl ReaderBookPackage {
             let Some(block) = plist_u32(dict, "block").filter(|value| *value > 0) else {
                 continue;
             };
-            let target = self.ssed_target_for_loose_address(
-                block,
-                plist_u32(dict, "offset").unwrap_or(0),
-                &mut diagnostics,
-            )?;
+            let (block, offset) =
+                self.convert_ios_ssed_address(block, plist_u32(dict, "offset").unwrap_or(0))?;
+            let target = self.ssed_target_for_loose_address(block, offset, &mut diagnostics)?;
             let Some(target) = target else {
                 continue;
             };

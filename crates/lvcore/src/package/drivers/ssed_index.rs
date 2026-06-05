@@ -667,6 +667,20 @@ impl ReaderBookPackage {
             return Ok(None);
         };
         let Some(component) = catalog.component_for_address(block) else {
+            if self
+                .visual_body_for_ssed_sidecar_address(block, offset)?
+                .is_some()
+                && let Some(honmon_component) = catalog
+                    .components
+                    .iter()
+                    .find(|component| component.role == SsedComponentRole::Honmon)
+            {
+                return Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
+                    component: honmon_component.filename.clone(),
+                    block,
+                    offset,
+                })?));
+            }
             diagnostics.push(Diagnostic::warning(
                 "ssed_loose_address_unresolved",
                 format!(
@@ -677,6 +691,16 @@ impl ReaderBookPackage {
             return Ok(None);
         };
         if component.relative_offset(block, offset).is_none() {
+            if self
+                .visual_body_for_ssed_sidecar_address(block, offset)?
+                .is_some()
+            {
+                return Ok(Some(TargetToken::new(&InternalTarget::SsedAddress {
+                    component: component.filename.clone(),
+                    block,
+                    offset,
+                })?));
+            }
             diagnostics.push(
                 Diagnostic::warning(
                     "ssed_loose_address_invalid",

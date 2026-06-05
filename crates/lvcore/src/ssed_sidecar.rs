@@ -35,6 +35,8 @@ pub struct SsedSidecarBodyResolver {
     pub plain_column: Option<String>,
     pub block_column: Option<String>,
     pub offset_column: Option<String>,
+    pub block_min: Option<u32>,
+    pub block_max: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +158,13 @@ impl SsedSidecarBodyResolver {
     pub fn has_block_offset_body_address(&self) -> bool {
         self.block_column.is_some() && self.offset_column.is_some()
     }
+
+    fn block_range_may_contain(&self, block: u32) -> bool {
+        match (self.block_min, self.block_max) {
+            (Some(min), Some(max)) => block >= min && block <= max,
+            _ => true,
+        }
+    }
 }
 
 impl SsedSidecarIdRule {
@@ -272,7 +281,9 @@ pub fn lookup_ssed_sidecar_body_by_address_with_resolvers(
 
     let candidates = resolvers
         .iter()
-        .filter(|resolver| resolver.has_block_offset_body_address())
+        .filter(|resolver| {
+            resolver.has_block_offset_body_address() && resolver.block_range_may_contain(block)
+        })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
         return Ok(SsedSidecarLookup::NoResolver {
@@ -486,11 +497,16 @@ pub fn discover_ssed_sidecar_body_resolvers_with_candidates(
         let tables = sqlite_table_names(&connection)?;
         for table in tables {
             let columns = sqlite_columns(&connection, &table)?;
-            let Some(resolver) =
+            let Some(mut resolver) =
                 resolver_for_table(candidate.clone(), storage, &table, &columns, dict_id_hint)
             else {
                 continue;
             };
+            if resolver.has_block_offset_body_address() {
+                let (block_min, block_max) = block_range_for_resolver(&connection, &resolver)?;
+                resolver.block_min = block_min;
+                resolver.block_max = block_max;
+            }
             resolvers.push(resolver);
         }
     }
@@ -1174,7 +1190,31 @@ fn resolver_for_table(
         plain_column,
         block_column: find_column(columns, BLOCK_COLUMN_ALIASES),
         offset_column: find_column(columns, OFFSET_COLUMN_ALIASES),
+        block_min: None,
+        block_max: None,
     })
+}
+
+fn block_range_for_resolver(
+    connection: &Connection,
+    resolver: &SsedSidecarBodyResolver,
+) -> Result<(Option<u32>, Option<u32>)> {
+    let Some(block_column) = &resolver.block_column else {
+        return Ok((None, None));
+    };
+    let sql = format!(
+        "select min({}), max({}) from {}",
+        quote_sql_identifier(block_column),
+        quote_sql_identifier(block_column),
+        quote_sql_identifier(&resolver.table),
+    );
+    let range = connection.query_row(&sql, [], |row| {
+        Ok((
+            sqlite_value_to_optional_u32(row.get_ref(0)?)?,
+            sqlite_value_to_optional_u32(row.get_ref(1)?)?,
+        ))
+    })?;
+    Ok(range)
 }
 
 fn media_resolver_for_table(
@@ -1607,6 +1647,22 @@ fn sqlite_value_to_u32(value: ValueRef<'_>) -> rusqlite::Result<u32> {
         ValueRef::Null => 0,
     };
     Ok(u32::try_from(value).unwrap_or(0))
+}
+
+fn sqlite_value_to_optional_u32(value: ValueRef<'_>) -> rusqlite::Result<Option<u32>> {
+    let value = match value {
+        ValueRef::Null => return Ok(None),
+        ValueRef::Integer(value) => value,
+        ValueRef::Real(value) => value as i64,
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => match std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+        {
+            Some(value) => value,
+            None => return Ok(None),
+        },
+    };
+    Ok(u32::try_from(value).ok())
 }
 
 fn decode_sqlite_text(bytes: &[u8]) -> String {

@@ -799,12 +799,67 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
 <plist version="1.0"><array>
   <dict>
     <key>name</key><string>United States</string>
-    <key>block</key><real>10.0</real>
-    <key>offset</key><integer>6</integer>
+    <key>block</key><real>11.0</real>
+    <key>offset</key><integer>60</integer>
+  </dict>
+  <dict>
+    <key>name</key><string>Sidecar Only</string>
+    <key>block</key><integer>231605</integer>
+    <key>offset</key><integer>1770</integer>
   </dict>
 </array></plist>"#,
     )
     .unwrap();
+    fs::write(
+        root.path().join("DictList.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>ItemArray</key><array><dict>
+    <key>DictName</key><string>Sample ConvertAddr</string>
+    <key>DictFolder</key><string>DICT</string>
+    <key>DictFULLDB</key><string>DICT/DICT_Full.sql</string>
+    <key>DictConvertAddrDB</key><string>DICT/DICT_on.sql</string>
+  </dict></array>
+</dict></plist>"#,
+    )
+    .unwrap();
+    let convert_connection = Connection::open(package_root.join("DICT_on.sql")).unwrap();
+    convert_connection
+        .execute_batch(
+            "
+            create table DICT (
+              o_Block text,
+              o_Offset text,
+              n_Block text,
+              n_Offset text
+            );
+            insert into DICT values ('11', '60', '10', '6');
+            ",
+        )
+        .unwrap();
+    let full_db_connection = Connection::open(package_root.join("DICT_Full.sql")).unwrap();
+    full_db_connection
+        .execute_batch(
+            "
+            create table DICT_1 (
+              No integer primary key,
+              Block integer,
+              Offset integer,
+              Title text,
+              Body text,
+              TitleJIS text
+            );
+            insert into DICT_1 values (
+              1,
+              231605,
+              1770,
+              'Sidecar Only',
+              'Preserved sidecar body',
+              ''
+            );
+            ",
+        )
+        .unwrap();
 
     let package = DriverRegistry::default().open_best(&package_root).unwrap();
     let home = package.home_surfaces().unwrap();
@@ -921,7 +976,7 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     let NavigationSurface::TitleIndexBrowse { items, .. } = table_surface else {
         panic!("tableList.plist should expose title/index rows");
     };
-    assert_eq!(items.len(), 1);
+    assert_eq!(items.len(), 2);
     assert_eq!(items[0].label_text, "United States");
     assert!(matches!(
         items[0].target.decode().unwrap(),
@@ -931,6 +986,26 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
             offset: 6,
         } if component == "HONMON.DIC"
     ));
+    assert_eq!(items[1].label_text, "Sidecar Only");
+    assert!(matches!(
+        items[1].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 231605,
+            offset: 1770,
+        } if component == "HONMON.DIC"
+    ));
+    let sidecar_view = package
+        .render_target(&items[1].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(sidecar_view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        sidecar_view
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("Preserved sidecar body")
+    );
 }
 
 #[test]

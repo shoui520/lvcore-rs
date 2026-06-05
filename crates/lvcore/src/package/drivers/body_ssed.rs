@@ -81,6 +81,11 @@ impl ReaderBookPackage {
             .component_named(requested_component)
             .or_else(|| catalog.component_for_address(block));
         let Some(component) = component else {
+            if self.ssed_pdfspread_database()?.is_none()
+                && let Some(body) = self.visual_body_for_ssed_sidecar_address(block, offset)?
+            {
+                return Ok(body);
+            }
             return Ok(VisualBody::Unsupported {
                 reason: "SSED address does not resolve to a catalog component".to_owned(),
                 diagnostics: vec![Diagnostic::warning(
@@ -90,6 +95,11 @@ impl ReaderBookPackage {
             });
         };
         let Some(component_offset) = component.relative_offset(block, offset) else {
+            if self.ssed_pdfspread_database()?.is_none()
+                && let Some(body) = self.visual_body_for_ssed_sidecar_address(block, offset)?
+            {
+                return Ok(body);
+            }
             return Ok(VisualBody::Unsupported {
                 reason: "SSED address is outside the resolved component".to_owned(),
                 diagnostics: vec![Diagnostic::warning(
@@ -226,7 +236,7 @@ impl ReaderBookPackage {
         }
     }
 
-    fn visual_body_for_ssed_sidecar_address(
+    pub(super) fn visual_body_for_ssed_sidecar_address(
         &self,
         block: u32,
         offset: u32,
