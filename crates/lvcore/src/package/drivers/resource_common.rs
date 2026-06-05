@@ -30,6 +30,10 @@ impl ReaderBookPackage {
             label,
             href,
             mime_type: resource_mime_type(resource_kind, Some(path)).map(str::to_owned),
+            byte_len: resolved
+                .as_ref()
+                .and_then(|path| path.metadata().ok())
+                .map(|metadata| metadata.len()),
             diagnostics,
         })
     }
@@ -63,6 +67,7 @@ impl ReaderBookPackage {
             label,
             href,
             mime_type: resource_mime_type(resource_kind, Some(entry_path)).map(str::to_owned),
+            byte_len: None,
             diagnostics,
         })
     }
@@ -87,9 +92,14 @@ impl ReaderBookPackage {
     pub(super) fn resolve_media_blob_resource(
         &self,
         token: &ResourceToken,
+        store: &str,
         key: &str,
         resource_kind: ResourceKind,
     ) -> Result<ResourceRef> {
+        let byte_len = self
+            .lved_store
+            .as_ref()
+            .and_then(|lved_store| lved_store.media_blob_len(store, key).ok().flatten());
         Ok(ResourceRef {
             token: token.clone(),
             kind: resource_kind,
@@ -99,6 +109,7 @@ impl ReaderBookPackage {
                 .is_some()
                 .then(|| format!("lvcore://resource/{}", token.as_str())),
             mime_type: resource_mime_type(resource_kind, Some(key)).map(str::to_owned),
+            byte_len,
             diagnostics: if self.lved_store.is_some() {
                 Vec::new()
             } else {
@@ -135,6 +146,7 @@ impl ReaderBookPackage {
             label: None,
             href: None,
             mime_type: None,
+            byte_len: None,
             diagnostics: vec![Diagnostic::warning("resource_unsupported", reason)],
         })
     }

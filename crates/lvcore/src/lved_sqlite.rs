@@ -661,6 +661,50 @@ impl LvedSqliteStore {
         })
     }
 
+    pub fn media_blob_len(&self, store: &str, key: &str) -> Result<Option<u64>> {
+        self.with_connection(|connection| {
+            let tables: &[&str] = match store {
+                "lved.media" | "media" => &["media"],
+                "lved.mediasub" | "mediasub" => &["mediasub", "sound", "media"],
+                "lved.sound" | "sound" => &["sound", "mediasub", "media"],
+                _ => return Ok(None),
+            };
+            let schema = self.schema(connection)?;
+            let names = lved_media_lookup_names(key);
+            let ids = lved_media_lookup_ids(key);
+            for table in tables {
+                if !schema.table_has_columns(table, &["name", "main"]) {
+                    continue;
+                }
+                let name_uses_index =
+                    sqlite_equality_lookup_uses_search(connection, table, "name")?;
+                if name_uses_index
+                    && let Some(byte_len) =
+                        media_blob_len_by_indexed_name(connection, table, &names)?
+                {
+                    return Ok(Some(byte_len));
+                }
+                let has_id = has_column(schema.columns(table), "id");
+                let id_uses_index =
+                    has_id && sqlite_equality_lookup_uses_search(connection, table, "id")?;
+                if id_uses_index
+                    && let Some(byte_len) = media_blob_len_by_indexed_id(connection, table, &ids)?
+                {
+                    return Ok(Some(byte_len));
+                }
+                if name_uses_index && (!has_id || id_uses_index || ids.is_empty()) {
+                    continue;
+                }
+                if let Some(byte_len) =
+                    self.media_blob_len_from_index(connection, &schema, table, &names, &ids)?
+                {
+                    return Ok(Some(byte_len));
+                }
+            }
+            Ok(None)
+        })
+    }
+
     fn media_blob_from_index(
         &self,
         connection: &Connection,
@@ -695,6 +739,47 @@ impl LvedSqliteStore {
                 .optional()?
             {
                 return Ok(Some(bytes));
+            }
+        }
+        Ok(None)
+    }
+
+    fn media_blob_len_from_index(
+        &self,
+        connection: &Connection,
+        schema: &LvedSqliteSchema,
+        table: &str,
+        names: &[String],
+        ids: &[i64],
+    ) -> Result<Option<u64>> {
+        let index = self.media_index(connection, schema, table)?;
+        let mut rowids = Vec::new();
+        for name in names {
+            if let Some(rowid) = index.by_name.get(name) {
+                push_unique_i64(&mut rowids, *rowid);
+            }
+        }
+        for id in ids {
+            if let Some(rowid) = index.by_id.get(id) {
+                push_unique_i64(&mut rowids, *rowid);
+            }
+        }
+        if rowids.is_empty() {
+            return Ok(None);
+        }
+        let sql = format!(
+            "select length(main) from {} where rowid = ? limit 1",
+            quote_identifier(table)
+        );
+        let mut statement = connection.prepare(&sql)?;
+        for rowid in rowids {
+            if let Some(byte_len) = statement
+                .query_row([rowid], |row| row.get::<_, Option<i64>>(0))
+                .optional()?
+                .flatten()
+                .and_then(nonnegative_i64_to_u64)
+            {
+                return Ok(Some(byte_len));
             }
         }
         Ok(None)
@@ -903,6 +988,30 @@ fn media_blob_by_indexed_name(
     Ok(None)
 }
 
+fn media_blob_len_by_indexed_name(
+    connection: &Connection,
+    table: &str,
+    names: &[String],
+) -> Result<Option<u64>> {
+    let sql = format!(
+        "select length(main) from {} where {} = ? limit 1",
+        quote_identifier(table),
+        quote_identifier("name")
+    );
+    let mut statement = connection.prepare(&sql)?;
+    for name in names {
+        if let Some(byte_len) = statement
+            .query_row([name], |row| row.get::<_, Option<i64>>(0))
+            .optional()?
+            .flatten()
+            .and_then(nonnegative_i64_to_u64)
+        {
+            return Ok(Some(byte_len));
+        }
+    }
+    Ok(None)
+}
+
 fn media_blob_by_indexed_id(
     connection: &Connection,
     table: &str,
@@ -923,6 +1032,34 @@ fn media_blob_by_indexed_id(
         }
     }
     Ok(None)
+}
+
+fn media_blob_len_by_indexed_id(
+    connection: &Connection,
+    table: &str,
+    ids: &[i64],
+) -> Result<Option<u64>> {
+    let sql = format!(
+        "select length(main) from {} where {} = ? limit 1",
+        quote_identifier(table),
+        quote_identifier("id")
+    );
+    let mut statement = connection.prepare(&sql)?;
+    for id in ids {
+        if let Some(byte_len) = statement
+            .query_row([id], |row| row.get::<_, Option<i64>>(0))
+            .optional()?
+            .flatten()
+            .and_then(nonnegative_i64_to_u64)
+        {
+            return Ok(Some(byte_len));
+        }
+    }
+    Ok(None)
+}
+
+fn nonnegative_i64_to_u64(value: i64) -> Option<u64> {
+    u64::try_from(value).ok()
 }
 
 fn sqlite_value_to_optional_i64(value: ValueRef<'_>) -> rusqlite::Result<Option<i64>> {

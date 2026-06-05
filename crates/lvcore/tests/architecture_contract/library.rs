@@ -222,6 +222,7 @@ fn library_scopes_resource_hrefs_in_search_result_labels() {
     );
     let resource = library.resolve_scoped_resource_href(href).unwrap();
     assert_eq!(resource.mime_type.as_deref(), Some("image/png"));
+    assert_eq!(resource.byte_len, Some(3));
     assert_eq!(resource.href.as_deref(), Some(*href));
 }
 

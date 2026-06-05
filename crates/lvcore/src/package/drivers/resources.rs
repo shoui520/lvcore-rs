@@ -63,8 +63,10 @@ impl ResourceProvider for ReaderBookPackage {
                 resource_kind,
             } => self.resolve_chm_file_resource(token, &chm_path, &entry_path, resource_kind),
             InternalResource::MediaBlob {
-                key, resource_kind, ..
-            } => self.resolve_media_blob_resource(token, &key, resource_kind),
+                store,
+                key,
+                resource_kind,
+            } => self.resolve_media_blob_resource(token, &store, &key, resource_kind),
             InternalResource::SsedSidecarMedia {
                 sidecar,
                 table,

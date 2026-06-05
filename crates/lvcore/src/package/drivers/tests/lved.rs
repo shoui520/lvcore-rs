@@ -268,6 +268,7 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
         .find(|resource| resource.kind == ResourceKind::Audio)
         .unwrap();
     assert_eq!(audio.mime_type.as_deref(), Some("audio/mpeg"));
+    assert_eq!(audio.byte_len, Some(4));
     assert_eq!(
         package.read_resource(&audio.token).unwrap(),
         b"ID3\x03".to_vec()
@@ -278,6 +279,7 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
         .find(|resource| resource.kind == ResourceKind::Image)
         .unwrap();
     assert_eq!(image.mime_type.as_deref(), Some("image/svg+xml"));
+    assert_eq!(image.byte_len, Some(6));
     assert_eq!(
         package.read_resource(&image.token).unwrap(),
         b"<svg/>".to_vec()
@@ -578,6 +580,7 @@ fn visual_capabilities_are_derived_from_html_and_resources() {
                 label: None,
                 href: None,
                 mime_type: Some("audio/mpeg".to_owned()),
+                byte_len: Some(3),
                 diagnostics: Vec::new(),
             }],
             links: Vec::new(),

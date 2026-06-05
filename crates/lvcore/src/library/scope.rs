@@ -296,6 +296,7 @@ mod tests {
                 label: None,
                 href: Some("lvcore://resource/resource-token".to_owned()),
                 mime_type: Some("image/svg+xml".to_owned()),
+                byte_len: Some(6),
                 diagnostics: Vec::new(),
             }],
             diagnostics: Vec::new(),

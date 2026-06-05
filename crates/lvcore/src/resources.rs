@@ -182,6 +182,8 @@ pub struct ResourceRef {
     pub href: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_len: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }

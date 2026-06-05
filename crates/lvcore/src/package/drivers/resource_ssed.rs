@@ -73,6 +73,7 @@ impl ReaderBookPackage {
             label: Some(label.to_owned()),
             href,
             mime_type: resource_mime_type(resource_kind, Some(label)).map(str::to_owned),
+            byte_len: media.as_ref().map(|media| media.data.len() as u64),
             diagnostics,
         })
     }
@@ -121,6 +122,10 @@ impl ReaderBookPackage {
             label: Some(path.to_owned()),
             href,
             mime_type: resource_mime_type(resource_kind, Some(path)).map(str::to_owned),
+            byte_len: resolved
+                .as_ref()
+                .and_then(|path| path.metadata().ok())
+                .map(|metadata| metadata.len()),
             diagnostics,
         })
     }
@@ -155,6 +160,7 @@ impl ReaderBookPackage {
                 label: Some(format!("_PCM_U/{}", record.stem)),
                 href: Some(format!("lvcore://resource/{}", token.as_str())),
                 mime_type: Some("audio/mpeg".to_owned()),
+                byte_len: None,
                 diagnostics: Vec::new(),
             });
         }
@@ -178,6 +184,7 @@ impl ReaderBookPackage {
             label: Some(format!("{component}:{block:08}:{offset:04}")),
             href,
             mime_type: resource_mime_type(resource_kind, Some(component)).map(str::to_owned),
+            byte_len: None,
             diagnostics,
         })
     }
@@ -239,6 +246,7 @@ impl ReaderBookPackage {
             )),
             href,
             mime_type: Some("image/png".to_owned()),
+            byte_len: None,
             diagnostics,
         })
     }
@@ -283,6 +291,7 @@ impl ReaderBookPackage {
             label: Some(format!("{path}:{code}")),
             href,
             mime_type: Some("image/png".to_owned()),
+            byte_len: None,
             diagnostics,
         })
     }
@@ -311,6 +320,7 @@ impl ReaderBookPackage {
                 label: Some(format!("_PCM_U/{}", record.stem)),
                 href: Some(format!("lvcore://resource/{}", token.as_str())),
                 mime_type: Some("audio/mpeg".to_owned()),
+                byte_len: None,
                 diagnostics: Vec::new(),
             });
         }
@@ -356,6 +366,7 @@ impl ReaderBookPackage {
             )),
             href,
             mime_type,
+            byte_len: None,
             diagnostics,
         })
     }
@@ -396,6 +407,10 @@ impl ReaderBookPackage {
             label: Some(movie_id.to_owned()),
             href,
             mime_type: Some("video/mpeg".to_owned()),
+            byte_len: resolved
+                .as_ref()
+                .and_then(|path| path.metadata().ok())
+                .map(|metadata| metadata.len()),
             diagnostics,
         })
     }
@@ -429,6 +444,7 @@ impl ReaderBookPackage {
             label: Some(format!("PDFSpread/{page_id}")),
             href,
             mime_type: Some("application/pdf".to_owned()),
+            byte_len: lookup.as_ref().map(|lookup| lookup.pdf.len() as u64),
             diagnostics,
         })
     }
@@ -466,6 +482,7 @@ impl ReaderBookPackage {
             label: Some(format!("SoundData/{sound_id:08x}")),
             href,
             mime_type: Some("audio/wav".to_owned()),
+            byte_len: None,
             diagnostics,
         })
     }

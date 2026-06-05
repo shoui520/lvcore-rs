@@ -295,7 +295,7 @@ impl NavigationProvider for ReaderBookPackage {
                     .is_some_and(|catalog| has_decodable_ssed_index_rows(catalog, &self.storage))
                 {
                     surfaces.push(HomeSurface {
-            href: None,
+                        href: None,
                         surface_id: "title-index".to_owned(),
                         kind: NavigationSurfaceKind::TitleIndexBrowse,
                         status: NavigationStatus::Available,

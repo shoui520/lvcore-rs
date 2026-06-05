@@ -31,6 +31,7 @@ fn loose_movie_resource_resolves_and_reads_movie_file() {
     let resource = package.resolve_resource(&token).unwrap();
     assert_eq!(resource.kind, ResourceKind::Video);
     assert_eq!(resource.mime_type.as_deref(), Some("video/mpeg"));
+    assert_eq!(resource.byte_len, Some(11));
     assert!(resource.href.is_some());
     assert!(resource.diagnostics.is_empty());
     assert_eq!(package.read_resource(&token).unwrap(), b"movie bytes");
