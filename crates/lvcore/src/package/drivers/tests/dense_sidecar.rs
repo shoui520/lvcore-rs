@@ -410,6 +410,90 @@ second line',
 }
 
 #[test]
+fn ios_dictlist_declared_fulldb_is_preferred_for_block_offset_body() {
+    let dir = tempdir().unwrap();
+    let body = {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0x1f, 0x09, 0x00, 0x02]);
+        body.extend_from_slice(&body_jis("raw body anchor"));
+        body
+    };
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&body], 100, 100),
+    )
+    .unwrap();
+    write_block_offset_body_db(
+        dir.path().join("A_HELPER.sql"),
+        "HELPER_1",
+        "wrong helper body",
+    );
+    let declared = dir.path().join("Z_DECLARED.sql");
+    write_block_offset_body_db(declared.clone(), "DECLARED_1", "declared DictFULLDB body");
+    let catalog = SsedCatalog {
+        title: "iOS sidecar".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 100,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("iOS sidecar".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            retained_ios_dictlist: Some(crate::ios_dictlist::IosDictListInfo {
+                fts_payloads: Vec::new(),
+                full_db_payloads: vec![crate::ios_dictlist::IosDictFullDbPayload {
+                    relative_path: "DICT/Z_DECLARED.sql".to_owned(),
+                    absolute_path: declared,
+                    dict_code: "DICT".to_owned(),
+                    dictionary_name: Some("iOS DictFULLDB".to_owned()),
+                }],
+                search_modes: Vec::new(),
+            }),
+            ..Default::default()
+        },
+    );
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 0,
+    })
+    .unwrap();
+
+    let body = package.visual_body_for_target(&target).unwrap();
+
+    assert_eq!(
+        body,
+        VisualBody::PreservedHtml {
+            html: "<div class=\"lvcore-sidecar-text\">declared DictFULLDB body</div>".to_owned(),
+            source: BodySourceKind::SidecarText,
+        }
+    );
+}
+
+#[test]
 fn dense_honmon_search_hit_target_resolves_sidecar_html() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);

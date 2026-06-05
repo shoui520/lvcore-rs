@@ -469,8 +469,16 @@ pub fn discover_ssed_sidecar_body_resolvers(
     root: &Path,
     dict_id_hint: Option<&str>,
 ) -> Result<Vec<SsedSidecarBodyResolver>> {
+    discover_ssed_sidecar_body_resolvers_with_candidates(root, dict_id_hint, &[])
+}
+
+pub fn discover_ssed_sidecar_body_resolvers_with_candidates(
+    root: &Path,
+    dict_id_hint: Option<&str>,
+    explicit_candidates: &[PathBuf],
+) -> Result<Vec<SsedSidecarBodyResolver>> {
     let mut resolvers = Vec::new();
-    for candidate in sidecar_file_candidates(root, dict_id_hint)? {
+    for candidate in sidecar_file_candidates(root, dict_id_hint, explicit_candidates)? {
         let Some(storage) = sqlite_storage(&candidate)? else {
             continue;
         };
@@ -486,7 +494,8 @@ pub fn discover_ssed_sidecar_body_resolvers(
             resolvers.push(resolver);
         }
     }
-    resolvers.sort_by_key(resolver_priority);
+    resolvers
+        .sort_by_key(|resolver| resolver_priority_with_explicit(resolver, explicit_candidates));
     Ok(resolvers)
 }
 
@@ -495,7 +504,7 @@ pub fn discover_ssed_sidecar_media_resolvers(
     dict_id_hint: Option<&str>,
 ) -> Result<Vec<SsedSidecarMediaResolver>> {
     let mut resolvers = Vec::new();
-    for candidate in sidecar_file_candidates(root, dict_id_hint)? {
+    for candidate in sidecar_file_candidates(root, dict_id_hint, &[])? {
         let Some(storage) = sqlite_storage(&candidate)? else {
             continue;
         };
@@ -519,8 +528,16 @@ pub fn discover_ssed_sidecar_range_resolvers(
     root: &Path,
     dict_id_hint: Option<&str>,
 ) -> Result<Vec<SsedSidecarRangeResolver>> {
+    discover_ssed_sidecar_range_resolvers_with_candidates(root, dict_id_hint, &[])
+}
+
+pub fn discover_ssed_sidecar_range_resolvers_with_candidates(
+    root: &Path,
+    dict_id_hint: Option<&str>,
+    explicit_candidates: &[PathBuf],
+) -> Result<Vec<SsedSidecarRangeResolver>> {
     let mut resolvers = Vec::new();
-    for candidate in sidecar_file_candidates(root, dict_id_hint)? {
+    for candidate in sidecar_file_candidates(root, dict_id_hint, explicit_candidates)? {
         let Some(storage) = sqlite_storage(&candidate)? else {
             continue;
         };
@@ -536,7 +553,9 @@ pub fn discover_ssed_sidecar_range_resolvers(
             resolvers.push(resolver);
         }
     }
-    resolvers.sort_by_key(range_resolver_priority);
+    resolvers.sort_by_key(|resolver| {
+        range_resolver_priority_with_explicit(resolver, explicit_candidates)
+    });
     Ok(resolvers)
 }
 
@@ -1240,6 +1259,28 @@ fn resolver_priority(resolver: &SsedSidecarBodyResolver) -> (u8, u8, String, Str
     )
 }
 
+fn resolver_priority_with_explicit(
+    resolver: &SsedSidecarBodyResolver,
+    explicit_candidates: &[PathBuf],
+) -> (u8, u8, u8, String, String) {
+    let explicit_priority = if explicit_candidates
+        .iter()
+        .any(|candidate| candidate == &resolver.path)
+    {
+        0
+    } else {
+        1
+    };
+    let (sidecar_priority, kind_priority, table, file) = resolver_priority(resolver);
+    (
+        explicit_priority,
+        sidecar_priority,
+        kind_priority,
+        table,
+        file,
+    )
+}
+
 fn media_resolver_priority(resolver: &SsedSidecarMediaResolver) -> (u8, String, String) {
     let file = display_name(&resolver.path).casefold();
     let table_priority = if resolver.table.eq_ignore_ascii_case("media") {
@@ -1265,6 +1306,22 @@ fn range_resolver_priority(resolver: &SsedSidecarRangeResolver) -> (u8, String, 
         1
     };
     (table_priority, resolver.table.casefold(), file)
+}
+
+fn range_resolver_priority_with_explicit(
+    resolver: &SsedSidecarRangeResolver,
+    explicit_candidates: &[PathBuf],
+) -> (u8, u8, String, String) {
+    let explicit_priority = if explicit_candidates
+        .iter()
+        .any(|candidate| candidate == &resolver.path)
+    {
+        0
+    } else {
+        1
+    };
+    let (table_priority, table, file) = range_resolver_priority(resolver);
+    (explicit_priority, table_priority, table, file)
 }
 
 fn media_resolver_matches_hint(
@@ -1335,10 +1392,25 @@ fn is_android_rowid_body_table(
         .unwrap_or(false)
 }
 
-fn sidecar_file_candidates(root: &Path, dict_id_hint: Option<&str>) -> Result<Vec<PathBuf>> {
+fn sidecar_file_candidates(
+    root: &Path,
+    dict_id_hint: Option<&str>,
+    explicit_candidates: &[PathBuf],
+) -> Result<Vec<PathBuf>> {
     let mut candidates = Vec::new();
     if !root.is_dir() {
         return Ok(candidates);
+    }
+    for path in explicit_candidates {
+        if regular_file_inside_root(root, path)?
+            && !is_metadata_noise_path(path)
+            && path.is_file()
+            && !candidates
+                .iter()
+                .any(|candidate: &PathBuf| candidate == path)
+        {
+            candidates.push(path.clone());
+        }
     }
     let dict_id = dict_id_hint.map(str::casefold);
     for entry in fs::read_dir(root)? {
@@ -1360,38 +1432,53 @@ fn sidecar_file_candidates(root: &Path, dict_id_hint: Option<&str>) -> Result<Ve
         if lower == "vlpljbl.bin" {
             continue;
         }
-        if lower.starts_with("vlpljbl")
+        if (lower.starts_with("vlpljbl")
             || matches!(suffix.as_str(), "db" | "sqlite" | "sqlite3" | "sql")
-            || is_dict_id_payload
+            || is_dict_id_payload)
+            && !candidates.iter().any(|candidate| candidate == &path)
         {
             candidates.push(path);
         }
     }
     candidates.sort_by(|a, b| {
-        candidate_priority(a, dict_id_hint).cmp(&candidate_priority(b, dict_id_hint))
+        candidate_priority(a, dict_id_hint, explicit_candidates).cmp(&candidate_priority(
+            b,
+            dict_id_hint,
+            explicit_candidates,
+        ))
     });
     Ok(candidates)
 }
 
-fn candidate_priority(path: &Path, dict_id_hint: Option<&str>) -> (u8, String) {
+fn candidate_priority(
+    path: &Path,
+    dict_id_hint: Option<&str>,
+    explicit_candidates: &[PathBuf],
+) -> (u8, String) {
     let name = display_name(path).casefold();
-    if dict_id_hint.is_some_and(|dict_id| name == dict_id.casefold()) {
+    if explicit_candidates
+        .iter()
+        .any(|candidate| candidate == path)
+    {
         return (0, name);
+    }
+    if dict_id_hint.is_some_and(|dict_id| name == dict_id.casefold()) {
+        return (1, name);
     }
     if name.starts_with("vlpljbl") {
         let suffix = name.trim_start_matches("vlpljbl");
         if matches!(suffix, "f" | "b" | "h") {
-            return (1, name);
+            return (2, name);
         }
         if matches!(suffix, "m" | "n" | "s") {
-            return (4, name);
+            return (5, name);
         }
-        return (2, name);
-    }
-    if path.extension().is_some() {
         return (3, name);
     }
-    (5, name)
+    if path.extension().is_some() {
+        return (4, name);
+    }
+    (6, name)
 }
 
 fn sqlite_storage(path: &Path) -> Result<Option<SsedSidecarStorage>> {

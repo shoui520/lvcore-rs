@@ -449,9 +449,10 @@ impl ReaderBookPackage {
 
     pub(super) fn ssed_sidecar_body_resolvers(&self) -> Result<&[SsedSidecarBodyResolver]> {
         let resolvers = self.ssed_sidecar_body_resolvers.get_or_init(|| {
-            discover_ssed_sidecar_body_resolvers(
+            discover_ssed_sidecar_body_resolvers_with_candidates(
                 &self.root,
                 inferred_folder_title(&self.root).as_deref(),
+                &self.retained_ios_full_db_sidecar_paths(),
             )
             .map_err(|error| error.to_string())
         });
@@ -463,9 +464,10 @@ impl ReaderBookPackage {
 
     pub(super) fn ssed_sidecar_range_resolvers(&self) -> Result<&[SsedSidecarRangeResolver]> {
         let resolvers = self.ssed_sidecar_range_resolvers.get_or_init(|| {
-            discover_ssed_sidecar_range_resolvers(
+            discover_ssed_sidecar_range_resolvers_with_candidates(
                 &self.root,
                 inferred_folder_title(&self.root).as_deref(),
+                &self.retained_ios_full_db_sidecar_paths(),
             )
             .map_err(|error| error.to_string())
         });
@@ -504,6 +506,13 @@ impl ReaderBookPackage {
         } else {
             Ok(None)
         }
+    }
+
+    fn retained_ios_full_db_sidecar_paths(&self) -> Vec<PathBuf> {
+        self.retained_ios_full_db_payloads
+            .iter()
+            .map(|payload| payload.absolute_path.clone())
+            .collect()
     }
 }
 

@@ -368,6 +368,35 @@ fn write_ordered_honbun_db(path: PathBuf) {
         .unwrap();
 }
 
+fn write_block_offset_body_db(path: PathBuf, table: &str, body: &str) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(&format!(
+            "
+            create table {} (
+              No integer primary key,
+              Block integer,
+              Offset integer,
+              Title text,
+              Body text,
+              TitleJIS text
+            );
+            insert into {} values (
+              1,
+              100,
+              4,
+              'sidecar title',
+              '{}',
+              'sidecar title'
+            );
+            ",
+            quote_fixture_sql_identifier(table),
+            quote_fixture_sql_identifier(table),
+            body.replace('\'', "''")
+        ))
+        .unwrap();
+}
+
 fn quote_fixture_sql_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }

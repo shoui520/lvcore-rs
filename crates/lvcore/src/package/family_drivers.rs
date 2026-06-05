@@ -68,7 +68,7 @@ impl SsedDriver {
             search_modes = modes;
             lved_summary = Some(summary);
             lved_store = Some(store);
-            retained_ios_unresolved = None;
+            retained_ios_unresolved = retained_ios_dictlist_full_db_only(info);
         }
         if search_modes.is_empty()
             && let Some(info) = &retained_ios_dictlist
@@ -91,6 +91,19 @@ impl SsedDriver {
             },
         )))
     }
+}
+
+fn retained_ios_dictlist_full_db_only(
+    info: &crate::ios_dictlist::IosDictListInfo,
+) -> Option<crate::ios_dictlist::IosDictListInfo> {
+    if info.full_db_payloads.is_empty() {
+        return None;
+    }
+    Some(crate::ios_dictlist::IosDictListInfo {
+        fts_payloads: Vec::new(),
+        full_db_payloads: info.full_db_payloads.clone(),
+        search_modes: Vec::new(),
+    })
 }
 
 fn open_retained_ios_lved_store(

@@ -130,7 +130,7 @@ use crate::gaiji::{
 };
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
 use crate::image::encode_png_rgba;
-use crate::ios_dictlist::{IosDictFtsPayload, IosDictListInfo};
+use crate::ios_dictlist::{IosDictFtsPayload, IosDictFullDbPayload, IosDictListInfo};
 use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
 use crate::multiview::{MultiviewStore, parse_menu_data};
 use crate::navigation::{
@@ -198,10 +198,11 @@ use crate::ssed_screen_menu::{
 use crate::ssed_sidecar::{
     SsedSidecarBody, SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
     SsedSidecarMediaResolver, SsedSidecarRangeResolver, SsedSidecarSearchPage,
-    discover_ssed_sidecar_body_resolvers, discover_ssed_sidecar_media_resolvers,
-    discover_ssed_sidecar_range_resolvers, lookup_ssed_dense_sidecar_body_with_resolvers,
-    lookup_ssed_ordered_honbun_body_by_row, lookup_ssed_sidecar_body_by_address_with_resolvers,
-    lookup_ssed_sidecar_media, lookup_ssed_sidecar_range_bound_with_resolvers,
+    discover_ssed_sidecar_body_resolvers_with_candidates, discover_ssed_sidecar_media_resolvers,
+    discover_ssed_sidecar_range_resolvers_with_candidates,
+    lookup_ssed_dense_sidecar_body_with_resolvers, lookup_ssed_ordered_honbun_body_by_row,
+    lookup_ssed_sidecar_body_by_address_with_resolvers, lookup_ssed_sidecar_media,
+    lookup_ssed_sidecar_range_bound_with_resolvers,
     search_ssed_dense_sidecar_bodies_with_resolvers,
 };
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
@@ -248,6 +249,7 @@ pub struct ReaderBookPackage {
     multiview_store: Option<MultiviewStore>,
     hourei_store: Option<HoureiStore>,
     retained_ios_fts_payloads: Vec<IosDictFtsPayload>,
+    retained_ios_full_db_payloads: Vec<IosDictFullDbPayload>,
     gaiji_unicode_map: BTreeMap<String, String>,
     ssed_sidecar_body_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
@@ -322,6 +324,11 @@ impl ReaderBookPackage {
             .as_ref()
             .map(|info| info.fts_payloads.clone())
             .unwrap_or_default();
+        let retained_ios_full_db_payloads = stores
+            .retained_ios_dictlist
+            .as_ref()
+            .map(|info| info.full_db_payloads.clone())
+            .unwrap_or_default();
         Self {
             root: root.to_path_buf(),
             storage: DirectoryStorage::new(root),
@@ -333,6 +340,7 @@ impl ReaderBookPackage {
             multiview_store: stores.multiview_store,
             hourei_store: stores.hourei_store,
             retained_ios_fts_payloads,
+            retained_ios_full_db_payloads,
             gaiji_unicode_map: stores.gaiji_unicode_map,
             ssed_sidecar_body_resolvers: OnceLock::new(),
             ssed_sidecar_media_resolvers: OnceLock::new(),
