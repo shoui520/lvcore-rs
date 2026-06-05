@@ -11,6 +11,7 @@ use crate::ssed_index::{SsedIndexPointer, SsedIndexRow};
 pub(super) const SSED_FULLTEXT_BODY_WINDOW_BYTES: usize = 16 * 1024;
 pub(super) const SSED_FULLTEXT_SCAN_WINDOW_BYTES: usize = 256 * 1024;
 pub(super) const SSED_FULLTEXT_SCAN_OVERLAP_BYTES: usize = 512;
+pub(super) const SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET: usize = 8;
 
 #[derive(Debug, Clone)]
 pub(super) struct SsedFulltextRow {
@@ -25,6 +26,38 @@ pub(super) struct SsedNearKeyScanResult {
     pub(super) scanned_components: usize,
     pub(super) needs_prefilter_fallback: bool,
     pub(super) diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SsedPartialIndexScanCursor {
+    pub(super) component_index: u8,
+    pub(super) page_index: usize,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct SsedPartialIndexScanResult {
+    pub(super) diagnostics: Vec<Diagnostic>,
+    pub(super) next_cursor: Option<String>,
+}
+
+const SSED_PARTIAL_INDEX_SCAN_CURSOR_PREFIX: &str = "ssed-partial-index:";
+
+pub(super) fn decode_ssed_partial_index_scan_cursor(
+    cursor: Option<&str>,
+) -> Option<SsedPartialIndexScanCursor> {
+    let cursor = cursor?.strip_prefix(SSED_PARTIAL_INDEX_SCAN_CURSOR_PREFIX)?;
+    let (component_index, page_index) = cursor.split_once(':')?;
+    Some(SsedPartialIndexScanCursor {
+        component_index: component_index.parse().ok()?,
+        page_index: page_index.parse().ok()?,
+    })
+}
+
+pub(super) fn encode_ssed_partial_index_scan_cursor(cursor: SsedPartialIndexScanCursor) -> String {
+    format!(
+        "{SSED_PARTIAL_INDEX_SCAN_CURSOR_PREFIX}{}:{}",
+        cursor.component_index, cursor.page_index
+    )
 }
 
 pub(super) struct SsedIndexSearchCollector<'a> {

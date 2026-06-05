@@ -350,6 +350,152 @@ impl ReaderBookPackage {
         Ok(diagnostics)
     }
 
+    pub(super) fn scan_ssed_partial_index_rows_paged(
+        &self,
+        needle: &str,
+        cursor: Option<SsedPartialIndexScanCursor>,
+        mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<SsedPartialIndexScanResult> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(SsedPartialIndexScanResult {
+                diagnostics: vec![Diagnostic::error(
+                    "ssed_catalog_missing",
+                    "SSED index scanning requires a parsed SSEDINFO catalog",
+                )],
+                next_cursor: None,
+            });
+        };
+        let forward_candidates = ssed_index_page_prefilter_candidates(needle);
+        if forward_candidates.is_empty() {
+            let diagnostics = self.scan_ssed_simple_index_rows(None, on_row)?;
+            return Ok(SsedPartialIndexScanResult {
+                diagnostics,
+                next_cursor: None,
+            });
+        }
+        let reversed_needle = reverse_search_match_text(needle);
+        let reverse_candidates = ssed_index_page_prefilter_candidates(&reversed_needle);
+        let skip_backward_rows = self.ssed_has_forward_browse_index();
+        let start_component_index = cursor.map(|cursor| cursor.component_index).unwrap_or(0);
+        let mut diagnostics = Vec::new();
+        let mut scanned_leaf_pages = 0usize;
+
+        'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
+            if component.index < start_component_index {
+                continue;
+            }
+            if skip_backward_rows && ssed_index_component_name_is_backward(&component.filename) {
+                continue;
+            }
+            if !is_supported_index_type(component.component_type) {
+                diagnostics.push(
+                    Diagnostic::info(
+                        "ssed_index_variant_deferred",
+                        format!("{} is not a supported index component", component.filename),
+                    )
+                    .with_context("component", &component.filename),
+                );
+                continue;
+            }
+            let path = match self.resolve_readable_ssed_component_path(component) {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    diagnostics.push(
+                        Diagnostic::info(
+                            "ssed_index_component_missing",
+                            format!("{} is declared but not present on disk", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+            };
+            let mut reader = SsedDataFile::open(&path)?;
+            let component_read_base = ssed_component_read_base(component, &reader);
+            let page_count = component.block_count() as usize;
+            let start_page =
+                if cursor.is_some_and(|cursor| cursor.component_index == component.index) {
+                    cursor.map(|cursor| cursor.page_index).unwrap_or(0)
+                } else {
+                    0
+                };
+            let mut scan_state = SsedIndexScanState::default();
+            for page_index in start_page..page_count {
+                let page = read_index_page(&mut reader, component_read_base, page_index)?;
+                if page.len() < 4 {
+                    break;
+                }
+                let word = u16::from_be_bytes([page[0], page[1]]);
+                if !is_leaf_page(word) {
+                    continue;
+                }
+                scanned_leaf_pages = scanned_leaf_pages.saturating_add(1);
+                let page_candidates = if ssed_index_component_name_is_backward(&component.filename)
+                {
+                    &reverse_candidates
+                } else {
+                    &forward_candidates
+                };
+                if ssed_body_window_may_contain_query(page, page_candidates) {
+                    let logical_block = component.start_block + page_index as u32;
+                    let (page_rows, unknown) = parse_supported_leaf_page(
+                        &component.filename,
+                        component.component_type,
+                        page,
+                        page_index as u32,
+                        logical_block,
+                        &mut scan_state,
+                    );
+                    if unknown > 0 {
+                        diagnostics.push(
+                            Diagnostic::warning(
+                                "ssed_index_unknown_leaf_bytes",
+                                format!(
+                                    "{} had {unknown} unknown simple leaf row(s)",
+                                    component.filename
+                                ),
+                            )
+                            .with_context("component", &component.filename),
+                        );
+                    }
+                    for row in page_rows {
+                        if !on_row(row)? {
+                            break 'components;
+                        }
+                    }
+                }
+                if scanned_leaf_pages >= SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET {
+                    let next_cursor = next_ssed_partial_index_scan_cursor(
+                        catalog,
+                        component.index,
+                        page_index.saturating_add(1),
+                    );
+                    return Ok(SsedPartialIndexScanResult {
+                        diagnostics,
+                        next_cursor: next_cursor.map(encode_ssed_partial_index_scan_cursor),
+                    });
+                }
+            }
+        }
+        Ok(SsedPartialIndexScanResult {
+            diagnostics,
+            next_cursor: None,
+        })
+    }
+
     pub(super) fn scan_existing_ssed_simple_index_rows_with_filters(
         &self,
         mut component_may_match: impl FnMut(&SsedComponent) -> bool,
@@ -991,6 +1137,38 @@ impl ReaderBookPackage {
             .and_then(|catalog| catalog.component_for_address(pointer.block))
             .map(|component| component.filename.as_str())
     }
+}
+
+fn next_ssed_partial_index_scan_cursor(
+    catalog: &SsedCatalog,
+    component_index: u8,
+    page_index: usize,
+) -> Option<SsedPartialIndexScanCursor> {
+    let mut components = catalog
+        .components_by_role(SsedComponentRole::Index)
+        .filter(|component| {
+            component.index >= component_index
+                && component.has_positive_range()
+                && is_supported_index_type(component.component_type)
+        });
+    let current = components.find(|component| component.index == component_index)?;
+    if page_index < current.block_count() as usize {
+        return Some(SsedPartialIndexScanCursor {
+            component_index,
+            page_index,
+        });
+    }
+    catalog
+        .components_by_role(SsedComponentRole::Index)
+        .find(|component| {
+            component.index > component_index
+                && component.has_positive_range()
+                && is_supported_index_type(component.component_type)
+        })
+        .map(|component| SsedPartialIndexScanCursor {
+            component_index: component.index,
+            page_index: 0,
+        })
 }
 
 pub(in crate::package::drivers) fn ssed_index_bound_is_plausible(

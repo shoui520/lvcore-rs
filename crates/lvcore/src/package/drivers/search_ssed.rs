@@ -30,7 +30,16 @@ impl ReaderBookPackage {
             ));
         }
 
-        let offset = decode_offset_cursor(query.cursor.as_deref());
+        let partial_scan_cursor = if query.mode == SearchMode::Partial {
+            decode_ssed_partial_index_scan_cursor(query.cursor.as_deref())
+        } else {
+            None
+        };
+        let offset = if partial_scan_cursor.is_some() {
+            0
+        } else {
+            decode_offset_cursor(query.cursor.as_deref())
+        };
         let page_limit = query.limit.saturating_add(1);
         let needle = normalize_search_match_text(&query.query);
         let gaiji_policy = query.label_gaiji_policy();
@@ -45,6 +54,7 @@ impl ReaderBookPackage {
         let mut optimized_scan_components = 0usize;
         let mut scan_needs_prefilter_fallback = false;
         let mut optimized_diagnostics = Vec::new();
+        let mut physical_next_cursor = None;
         if matches!(
             query.mode,
             SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
@@ -69,7 +79,12 @@ impl ReaderBookPackage {
         }
         if !collector.has_hits() && optimized_scan_components == 0 {
             let scan_diagnostics = if query.mode == SearchMode::Partial {
-                self.scan_ssed_partial_index_rows(&needle, |row| collector.push_row(row))?
+                let scan_result =
+                    self.scan_ssed_partial_index_rows_paged(&needle, partial_scan_cursor, |row| {
+                        collector.push_row(row)
+                    })?;
+                physical_next_cursor = scan_result.next_cursor;
+                scan_result.diagnostics
             } else {
                 self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?
             };
@@ -98,7 +113,11 @@ impl ReaderBookPackage {
             fallback_collector.extend_diagnostics(scan_diagnostics);
             collector = fallback_collector;
         }
-        Ok(collector.into_search_page(query.limit))
+        let mut page = collector.into_search_page(query.limit);
+        if page.next_cursor.is_none() {
+            page.next_cursor = physical_next_cursor;
+        }
+        Ok(page)
     }
 
     fn scan_ssed_prefiltered_existing_index_rows(

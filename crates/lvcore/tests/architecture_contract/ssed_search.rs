@@ -1079,6 +1079,110 @@ fn ssed_simple_index_search_uses_cursor_pagination() {
 }
 
 #[test]
+fn ssed_partial_search_uses_physical_scan_cursor_for_sparse_indexes() {
+    let dir = tempdir().unwrap();
+    let record_start = 0x80;
+    let index_pages = 12usize;
+    let mut catalog = vec![0u8; record_start + 3 * 0x30];
+    catalog[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Sparse Partial";
+    catalog[0x0c] = title.len() as u8;
+    catalog[0x0d..0x0d + title.len()].copy_from_slice(title);
+    catalog[0x4d] = 3;
+    write_record(
+        &mut catalog[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x30..record_start + 0x60],
+        0x05,
+        13,
+        14,
+        "FHTITLE.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x60..record_start + 0x90],
+        0x91,
+        15,
+        15 + index_pages as u32 - 1,
+        "FHINDEX.DIC",
+    );
+    fs::write(dir.path().join("DICT.IDX"), catalog).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"needle one\x1f\x0aneedle two\x1f\x0a"),
+    )
+    .unwrap();
+
+    let mut index = Vec::new();
+    for page_index in 0..index_pages {
+        let page = match page_index {
+            0 => simple_index_fixture_rows(&[("needle-one", 1, 2, 13, 0)]),
+            11 => simple_index_fixture_rows(&[("needle-two", 1, 4, 13, 12)]),
+            _ => leaf_page_fixture(&[]),
+        };
+        index.extend_from_slice(&page);
+    }
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&index),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let first = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "needle".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(
+        first
+            .hits
+            .iter()
+            .map(|hit| hit.title_text.as_str())
+            .collect::<Vec<_>>(),
+        ["needle one"]
+    );
+    let next_cursor = first
+        .next_cursor
+        .as_deref()
+        .expect("sparse scan should return a physical continuation cursor");
+    assert!(next_cursor.starts_with("ssed-partial-index:"));
+
+    let second = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "needle".to_owned(),
+            cursor: Some(next_cursor.to_owned()),
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(
+        second
+            .hits
+            .iter()
+            .map(|hit| hit.title_text.as_str())
+            .collect::<Vec<_>>(),
+        ["needle two"]
+    );
+    assert!(second.next_cursor.is_none());
+}
+
+#[test]
 fn ssed_simple_index_search_does_not_limit_candidates_before_filtering() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
