@@ -439,6 +439,67 @@ fn native_hc_common_html_fallback_embeds_resource_backed_template_gaiji() {
 }
 
 #[test]
+fn hc_common_html_fallback_honors_frontend_gaiji_source_priority() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("DICT.uni"), uni_fixture()).unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    fs::write(dir.path().join("Templates/B123.svg"), b"<svg/>").unwrap();
+    let mut honmon = body_jis("前");
+    honmon.extend_from_slice(&[0xb1, 0x23]);
+    honmon.extend_from_slice(&body_jis("後"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(&honmon),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    let unicode_view = package
+        .render_target(&token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(unicode_view.basic_text.as_deref(), Some("前一後"));
+    assert!(
+        unicode_view
+            .display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("前一後") && !html.contains("lvcore-gaiji"))
+    );
+
+    let image_view = package
+        .render_target(
+            &token,
+            &RenderOptions {
+                gaiji_policy: GaijiPolicy {
+                    priority: vec![
+                        GaijiSourcePreference::ExternalResource,
+                        GaijiSourcePreference::Unicode,
+                        GaijiSourcePreference::Ga16Bitmap,
+                        GaijiSourcePreference::Unresolved,
+                    ],
+                },
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(image_view.basic_text.as_deref(), Some("前一後"));
+    assert_eq!(image_view.resources.len(), 1);
+    assert!(
+        image_view
+            .display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("lvcore-gaiji-external") && !html.contains("前一後"))
+    );
+}
+
+#[test]
 fn native_hc_common_html_fallback_exposes_ssed_address_links_as_targets() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
