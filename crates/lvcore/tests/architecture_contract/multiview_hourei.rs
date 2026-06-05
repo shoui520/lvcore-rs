@@ -29,6 +29,79 @@ fn multiview_book_id_uses_package_code_without_windows_folder_wrapper() {
 }
 
 #[test]
+fn multiview_book_id_uses_legacy_root_idx_product_code() {
+    let dir = tempdir().unwrap();
+    let package_root = dir.path().join("_MOROKU16");
+    fs::create_dir_all(&package_root).unwrap();
+    fs::write(
+        package_root.join("menuData.xml"),
+        r#"<list><item label="模範六法" href=""/></list>"#,
+    )
+    .unwrap();
+    fs::write(package_root.join("blvdat"), b"payload").unwrap();
+    fs::write(package_root.join("MOROKU16.IDX"), b"legacy product index").unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvlMultiView);
+    assert!(
+        metadata.book_id.0.starts_with("LVLMultiView:MOROKU16:"),
+        "{}",
+        metadata.book_id.0
+    );
+    assert!(
+        !metadata.book_id.0.contains("_MOROKU16"),
+        "{}",
+        metadata.book_id.0
+    );
+}
+
+#[test]
+fn multiview_title_prefers_native_menu_over_retained_ssed_facade() {
+    let dir = tempdir().unwrap();
+    let package_root = dir.path().join("_MOROKU18");
+    fs::create_dir_all(&package_root).unwrap();
+    fs::write(
+        package_root.join("menuData.xml"),
+        r#"<list><item label="模範六法 2018" href=""/></list>"#,
+    )
+    .unwrap();
+    fs::write(package_root.join("blvdat"), b"payload").unwrap();
+    fs::write(package_root.join("MOROKU18.IDX"), ssedinfo_fixture()).unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvlMultiView);
+    assert_eq!(metadata.title.as_deref(), Some("模範六法 2018"));
+}
+
+#[test]
+fn multiview_title_uses_longer_retained_title_when_compatible_with_menu() {
+    let dir = tempdir().unwrap();
+    let package_root = dir.path().join("_MOROKU16");
+    fs::create_dir_all(&package_root).unwrap();
+    fs::write(
+        package_root.join("menuData.xml"),
+        r#"<list><item label="Menu Book" href=""/></list>"#,
+    )
+    .unwrap();
+    fs::write(package_root.join("blvdat"), b"payload").unwrap();
+    let mut facade = ssedinfo_fixture();
+    let title = b"Menu Book Full Title";
+    facade[0x0c] = title.len() as u8;
+    facade[0x0d..0x0d + title.len()].copy_from_slice(title);
+    fs::write(package_root.join("MOROKU16.IDX"), facade).unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvlMultiView);
+    assert_eq!(metadata.title.as_deref(), Some("Menu Book Full Title"));
+}
+
+#[test]
 fn multiview_preserved_html_packages_do_not_advertise_deferred_rendering() {
     let dir = tempdir().unwrap();
     fs::write(

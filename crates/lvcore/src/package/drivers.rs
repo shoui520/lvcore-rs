@@ -385,7 +385,7 @@ fn package_identity_hint(
     match detected.format_family {
         FormatFamily::Ssed => ssed_identity_hint(root, detected),
         FormatFamily::LvedSqlite3 => lved_identity_hint(root, stores),
-        FormatFamily::LvlMultiView => logovista_package_folder_code(root)
+        FormatFamily::LvlMultiView => multiview_identity_hint(root)
             .unwrap_or_else(|| hashed_folder_identity(root, "LVLMULTIVIEW_PACKAGE")),
         FormatFamily::Hourei => "LOGOVISTA_HOUREI_PROFESSIONAL".to_owned(),
         FormatFamily::Unknown => "UNKNOWN_PACKAGE".to_owned(),
@@ -436,11 +436,46 @@ fn lved_identity_hint(root: &Path, stores: &PackageStores) -> String {
         .unwrap_or_else(|| hashed_folder_identity(root, "LVED_SQLITE3_PACKAGE"))
 }
 
+fn multiview_identity_hint(root: &Path) -> Option<String> {
+    logovista_package_folder_code(root).or_else(|| root_level_product_idx_code(root))
+}
+
 fn logovista_package_folder_code(root: &Path) -> Option<String> {
     let folder = root.file_name()?.to_string_lossy();
     let trimmed = folder.trim();
     let code = trimmed.strip_prefix("_DCT_")?.trim();
     (!code.is_empty()).then(|| code.to_ascii_uppercase())
+}
+
+fn root_level_product_idx_code(root: &Path) -> Option<String> {
+    let mut candidates = BTreeSet::new();
+    for entry in fs::read_dir(root).ok()?.filter_map(std::result::Result::ok) {
+        let path = entry.path();
+        if !crate::storage::regular_file_inside_root(root, &path).unwrap_or(false) {
+            continue;
+        }
+        let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !extension.eq_ignore_ascii_case("idx") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let code = stem.trim().to_ascii_uppercase();
+        if is_product_code_like(&code) {
+            candidates.insert(code);
+        }
+    }
+    (candidates.len() == 1)
+        .then(|| candidates.into_iter().next())
+        .flatten()
+}
+
+fn is_product_code_like(value: &str) -> bool {
+    let len = value.len();
+    (4..=16).contains(&len) && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 fn hashed_folder_identity(root: &Path, prefix: &str) -> String {

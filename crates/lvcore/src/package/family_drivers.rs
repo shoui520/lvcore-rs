@@ -138,6 +138,29 @@ fn extend_unique_capabilities(
     }
 }
 
+fn multiview_title(
+    menu_title: Option<String>,
+    retained_ssed_title: Option<String>,
+) -> Option<String> {
+    match (menu_title, retained_ssed_title) {
+        (Some(menu), Some(retained))
+            if retained.chars().count() > menu.chars().count()
+                && compact_title(&retained).starts_with(&compact_title(&menu)) =>
+        {
+            Some(retained)
+        }
+        (Some(menu), _) => Some(menu),
+        (None, retained) => retained,
+    }
+}
+
+fn compact_title(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '　')
+        .collect()
+}
+
 impl PackageDriver for LvedSqliteDriver {
     fn family(&self) -> FormatFamily {
         FormatFamily::LvedSqlite3
@@ -267,16 +290,15 @@ impl PackageDriver for LvlMultiViewDriver {
         if payloads == 0 {
             return Ok(None);
         }
+        let menu_title = multiview_menu_title(root)?;
         let retained_ssed_title = ssed_catalog_for_root(root)
             .ok()
             .and_then(|catalog| usable_multiview_title(&catalog.title));
-        let menu_title = multiview_menu_title(root)?;
         Ok(Some(DetectedPackage {
             root: root.to_path_buf(),
             format_family: FormatFamily::LvlMultiView,
             confidence: 98,
-            title: retained_ssed_title
-                .or(menu_title)
+            title: multiview_title(menu_title, retained_ssed_title)
                 .or_else(|| inferred_folder_title(root)),
             evidence: vec!["menuData.xml".to_owned(), "*lvbat/*lvdat".to_owned()],
         }))
