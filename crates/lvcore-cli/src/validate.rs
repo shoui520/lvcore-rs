@@ -955,7 +955,23 @@ fn is_search_probe_leading_decoration(ch: char) -> bool {
 fn is_search_probe_label_boundary(ch: char) -> bool {
     matches!(
         ch,
-        '【' | '（' | '(' | '［' | '[' | '〖' | '〘' | '<' | '＜' | ':' | '：'
+        '【' | '（'
+            | '('
+            | '［'
+            | '['
+            | '〖'
+            | '〘'
+            | '<'
+            | '＜'
+            | ':'
+            | '：'
+            | ','
+            | '，'
+            | '、'
+            | ';'
+            | '；'
+            | '/'
+            | '／'
     )
 }
 
@@ -1040,6 +1056,8 @@ mod tests {
         assert_eq!(search_probe_query("read1小", &SearchMode::Exact), "read");
         assert_eq!(search_probe_query("0＜sze zro＞", &SearchMode::Exact), "0");
         assert_eq!(search_probe_query("3D", &SearchMode::Exact), "3D");
+        assert_eq!(search_probe_query("a, A", &SearchMode::Exact), "a");
+        assert_eq!(search_probe_query("А, а1", &SearchMode::Exact), "А");
     }
 
     #[test]
