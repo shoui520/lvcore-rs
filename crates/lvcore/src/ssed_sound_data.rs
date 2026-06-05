@@ -4,9 +4,13 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::ssed_index::decode_jis_pair;
 use crate::storage::{
     path_stays_inside_root, regular_directory_inside_root, regular_file_inside_root,
 };
+
+const SOUNDDATA_START_MARKER: [u8; 2] = [0xa4, 0x27];
+const SOUNDDATA_END_MARKER: [u8; 2] = [0xa4, 0x28];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoundDataMapRecord {
@@ -24,6 +28,13 @@ pub struct SoundDataIndex {
     pub map_path: PathBuf,
     pub rows: Vec<SoundDataMapRecord>,
     records: BTreeMap<u32, SoundDataMapRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoundDataReference {
+    pub sound_id: u32,
+    pub code_hex: String,
+    pub end: usize,
 }
 
 impl SoundDataIndex {
@@ -57,6 +68,30 @@ impl SoundDataIndex {
         file.read_exact(&mut raw)?;
         Ok(Some(portable_sounddata_audio_bytes(raw)))
     }
+}
+
+pub fn parse_sounddata_marker_at(data: &[u8], offset: usize) -> Option<SoundDataReference> {
+    if data.get(offset..offset + 2)? != SOUNDDATA_START_MARKER {
+        return None;
+    }
+    let mut cursor = offset + 2;
+    let mut code_hex = String::with_capacity(8);
+    for _ in 0..8 {
+        let first = *data.get(cursor)?;
+        let second = *data.get(cursor + 1)?;
+        let digit = ascii_hex_digit_from_body_pair(first, second)?;
+        code_hex.push(digit);
+        cursor += 2;
+    }
+    if data.get(cursor..cursor + 2)? != SOUNDDATA_END_MARKER {
+        return None;
+    }
+    let sound_id = u32::from_str_radix(&code_hex, 16).ok()?;
+    Some(SoundDataReference {
+        sound_id,
+        code_hex,
+        end: cursor + 2,
+    })
 }
 
 pub fn load_sounddata_index(package_root: &Path) -> Result<Option<SoundDataIndex>> {
@@ -107,6 +142,18 @@ pub fn read_sounddata_record(package_root: &Path, sound_id: u32) -> Result<Optio
         return Ok(None);
     };
     index.read_record(sound_id)
+}
+
+fn ascii_hex_digit_from_body_pair(first: u8, second: u8) -> Option<char> {
+    let ch = decode_jis_pair(first, second)?;
+    let ascii = match ch {
+        '0'..='9' | 'A'..='F' | 'a'..='f' => ch,
+        '０'..='９' => char::from_u32(ch as u32 - '０' as u32 + '0' as u32)?,
+        'Ａ'..='Ｆ' => char::from_u32(ch as u32 - 'Ａ' as u32 + 'A' as u32)?,
+        'ａ'..='ｆ' => char::from_u32(ch as u32 - 'ａ' as u32 + 'a' as u32)?,
+        _ => return None,
+    };
+    Some(ascii.to_ascii_uppercase())
 }
 
 fn parse_wavefile_map(text: &str) -> Vec<SoundDataMapRecord> {
@@ -203,6 +250,20 @@ mod tests {
         assert_eq!(rows[0].sound_id, 32767);
         assert_eq!(rows[1].sound_id, 32768);
         assert_eq!(rows[1].raw_sound_id, -3276);
+    }
+
+    #[test]
+    fn sounddata_marker_decodes_eight_digit_body_hex_reference() {
+        let marker = [
+            0xa4, 0x27, 0x23, 0x30, 0x23, 0x30, 0x23, 0x30, 0x23, 0x30, 0x23, 0x37, 0x23, 0x46,
+            0x23, 0x39, 0x23, 0x33, 0xa4, 0x28,
+        ];
+
+        let reference = parse_sounddata_marker_at(&marker, 0).unwrap();
+
+        assert_eq!(reference.sound_id, 0x0000_7f93);
+        assert_eq!(reference.code_hex, "00007F93");
+        assert_eq!(reference.end, marker.len());
     }
 
     #[test]

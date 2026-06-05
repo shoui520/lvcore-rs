@@ -107,6 +107,13 @@ impl ReaderBookPackage {
         let mut latest_figure_descriptor: Option<Vec<u8>> = None;
         let mut pos = 0usize;
         while pos + 2 <= data.len() {
+            if let Some(reference) = parse_sounddata_marker_at(data, pos) {
+                candidates.push(InternalResource::SoundData {
+                    sound_id: reference.sound_id,
+                });
+                pos = reference.end;
+                continue;
+            }
             if data[pos] != 0x1f {
                 pos += 1;
                 continue;

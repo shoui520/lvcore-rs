@@ -211,7 +211,7 @@ use crate::ssed_sidecar::{
     lookup_ssed_sidecar_range_bound_with_resolvers,
     search_ssed_dense_sidecar_bodies_with_resolvers,
 };
-use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index};
+use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index, parse_sounddata_marker_at};
 use crate::storage::{
     DirectoryStorage, StorageBackend, path_stays_inside_root, private_cache_dir,
     regular_directory_inside_root, regular_file_inside_root,

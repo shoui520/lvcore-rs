@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::Diagnostic;
 use crate::ssed_index::decode_jis_pair;
+use crate::ssed_sound_data::parse_sounddata_marker_at;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HcTextRender {
@@ -212,6 +213,17 @@ pub fn decode_hc_stream_common_html_with_gaiji_policy(
                 continue;
             }
 
+            if op == 0x0b
+                && let Some((decoded, end)) = decode_unicode_scalar_run(data, next)
+            {
+                push_html_text(&mut html, &decoded);
+                text.push_str(&decoded);
+                stats.controls += 1;
+                stats.style_controls += 2;
+                offset = end;
+                continue;
+            }
+
             if let Some((tag, attrs)) = html_style_start_spec(op) {
                 stats.style_controls += 1;
                 html.push('<');
@@ -326,6 +338,24 @@ pub fn decode_hc_stream_common_html_with_gaiji_policy(
             stats.unknown_controls += 1;
             unknown_ops.insert(op);
             offset = next;
+            continue;
+        }
+
+        if let Some(reference) = parse_sounddata_marker_at(data, offset) {
+            stats.media_controls += 1;
+            let media_index = media.len();
+            media.push(HcCommonHtmlMedia {
+                index: media_index,
+                control: "sounddata".to_owned(),
+                payload_hex: reference.code_hex.to_ascii_lowercase(),
+            });
+            append_media_placeholder_for_control(
+                &mut html,
+                "sounddata",
+                &reference.code_hex.to_ascii_lowercase(),
+                media_index,
+            );
+            offset = reference.end;
             continue;
         }
 
@@ -484,6 +514,16 @@ pub fn decode_hc_stream_basic_text_with_gaiji_policy(
                 continue;
             }
 
+            if op == 0x0b
+                && let Some((decoded, end)) = decode_unicode_scalar_run(data, next)
+            {
+                text.push_str(&decoded);
+                stats.controls += 1;
+                stats.style_controls += 2;
+                offset = end;
+                continue;
+            }
+
             if let Some(style) = style_start(op) {
                 stats.style_controls += 1;
                 if style == HcTextStyle::HalfWidth {
@@ -533,6 +573,12 @@ pub fn decode_hc_stream_basic_text_with_gaiji_policy(
             stats.unknown_controls += 1;
             unknown_ops.insert(op);
             offset = next;
+            continue;
+        }
+
+        if let Some(reference) = parse_sounddata_marker_at(data, offset) {
+            stats.media_controls += 1;
+            offset = reference.end;
             continue;
         }
 
@@ -832,15 +878,29 @@ fn lvaddr_href(block: u32, offset: u32) -> String {
 }
 
 fn append_media_placeholder(html: &mut String, op: u8, payload: &[u8], media_index: usize) {
-    html.push_str("<span class=\"lv-hc-media-placeholder\" data-lv-control=\"1f");
-    push_html_attr(html, &format!("{op:02x}"));
+    append_media_placeholder_for_control(
+        html,
+        &format!("1f{op:02x}"),
+        &hex_lower(payload),
+        media_index,
+    );
+}
+
+fn append_media_placeholder_for_control(
+    html: &mut String,
+    control: &str,
+    payload_hex: &str,
+    media_index: usize,
+) {
+    html.push_str("<span class=\"lv-hc-media-placeholder\" data-lv-control=\"");
+    push_html_attr(html, control);
     html.push('"');
     html.push_str(" data-lv-media-index=\"");
     push_html_attr(html, &media_index.to_string());
     html.push('"');
-    if !payload.is_empty() {
+    if !payload_hex.is_empty() {
         html.push_str(" data-lv-payload=\"");
-        push_html_attr(html, &hex_lower(payload));
+        push_html_attr(html, payload_hex);
         html.push('"');
     }
     html.push_str("></span>");
@@ -862,6 +922,44 @@ fn narrow_fullwidth_ascii(text: &str) -> String {
             _ => ch,
         })
         .collect()
+}
+
+fn decode_unicode_scalar_run(data: &[u8], start: usize) -> Option<(String, usize)> {
+    let mut cursor = start;
+    let mut digits = String::new();
+    while cursor + 1 < data.len() {
+        if data[cursor] == 0x1f && data[cursor + 1] == 0x0c {
+            if digits.is_empty() || !digits.len().is_multiple_of(4) {
+                return None;
+            }
+            let mut decoded = String::new();
+            for chunk in digits.as_bytes().chunks_exact(4) {
+                let scalar = std::str::from_utf8(chunk).ok()?;
+                let codepoint = u32::from_str_radix(scalar, 16).ok()?;
+                let ch = char::from_u32(codepoint)?;
+                decoded.push(ch);
+            }
+            return Some((decoded, cursor + 2));
+        }
+        if data[cursor] == 0x1f {
+            return None;
+        }
+        let ch = decode_jis_pair(data[cursor], data[cursor + 1])?;
+        digits.push(ascii_hex_digit(ch)?);
+        cursor += 2;
+    }
+    None
+}
+
+fn ascii_hex_digit(ch: char) -> Option<char> {
+    let ascii = match ch {
+        '0'..='9' | 'A'..='F' | 'a'..='f' => ch,
+        '０'..='９' => char::from_u32(ch as u32 - '０' as u32 + '0' as u32)?,
+        'Ａ'..='Ｆ' => char::from_u32(ch as u32 - 'Ａ' as u32 + 'A' as u32)?,
+        'ａ'..='ｆ' => char::from_u32(ch as u32 - 'ａ' as u32 + 'a' as u32)?,
+        _ => return None,
+    };
+    Some(ascii.to_ascii_uppercase())
 }
 
 fn hc_control_arg_length(data: &[u8], offset: usize) -> usize {
@@ -1080,6 +1178,65 @@ mod tests {
     }
 
     #[test]
+    fn common_html_decodes_unicode_scalar_runs_between_1f0b_and_1f0c() {
+        let mut data = body_jis("前");
+        data.extend_from_slice(&[0x1f, 0x0b]);
+        data.extend_from_slice(&body_jis("00B7201302C803B5"));
+        data.extend_from_slice(&[0x1f, 0x0c]);
+        data.extend_from_slice(&body_jis("後"));
+
+        let rendered = decode_hc_stream_common_html(&data);
+
+        assert_eq!(rendered.text, "前·–ˈε後");
+        assert!(rendered.html.contains("前·–ˈε後"));
+        assert!(!rendered.html.contains("00B7"));
+        assert_eq!(rendered.stats.style_controls, 2);
+    }
+
+    #[test]
+    fn basic_text_decodes_unicode_scalar_runs_between_1f0b_and_1f0c() {
+        let mut data = body_jis("前");
+        data.extend_from_slice(&[0x1f, 0x0b]);
+        data.extend_from_slice(&body_jis("257102C8"));
+        data.extend_from_slice(&[0x1f, 0x0c]);
+        data.extend_from_slice(&body_jis("後"));
+
+        let rendered = decode_hc_stream_basic_text(&data);
+
+        assert_eq!(rendered.text, "前╱ˈ後");
+        assert_eq!(rendered.stats.style_controls, 2);
+    }
+
+    #[test]
+    fn common_html_records_sounddata_marker_as_media_without_leaking_id() {
+        let mut data = body_jis("音");
+        data.extend_from_slice(&sounddata_marker("00007F93"));
+        data.extend_from_slice(&body_jis("声"));
+
+        let rendered = decode_hc_stream_common_html(&data);
+
+        assert_eq!(rendered.text, "音声");
+        assert_eq!(rendered.media.len(), 1);
+        assert_eq!(rendered.media[0].control, "sounddata");
+        assert_eq!(rendered.media[0].payload_hex, "00007f93");
+        assert!(rendered.html.contains("data-lv-control=\"sounddata\""));
+        assert!(!rendered.html.contains("00007F93"));
+        assert_eq!(rendered.stats.media_controls, 1);
+    }
+
+    #[test]
+    fn basic_text_suppresses_sounddata_marker_without_leaking_id() {
+        let mut data = body_jis("音");
+        data.extend_from_slice(&sounddata_marker("00007F93"));
+        data.extend_from_slice(&body_jis("声"));
+
+        let rendered = decode_hc_stream_basic_text(&data);
+
+        assert_eq!(rendered.text, "音声");
+        assert_eq!(rendered.stats.media_controls, 1);
+    }
+
+    #[test]
     fn common_html_resolves_gaiji_without_python_bytes_repr_or_raw_codes() {
         let mut data = body_jis("本文");
         data.extend_from_slice(&[0xb1, 0x23]);
@@ -1124,6 +1281,13 @@ mod tests {
                     .unwrap_or_default()
             })
             .collect()
+    }
+
+    fn sounddata_marker(code_hex: &str) -> Vec<u8> {
+        let mut data = vec![0xa4, 0x27];
+        data.extend_from_slice(&body_jis(code_hex));
+        data.extend_from_slice(&[0xa4, 0x28]);
+        data
     }
 
     fn cp932(value: &str) -> Vec<u8> {

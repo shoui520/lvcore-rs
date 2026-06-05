@@ -510,7 +510,10 @@ fn rewrite_hc_common_html_media_placeholders(
 }
 
 fn hc_common_media_control_uses_resource(media: &crate::ssed_hc::HcCommonHtmlMedia) -> bool {
-    matches!(media.control.as_str(), "1f3c" | "1f4a" | "1f4d" | "1f64")
+    matches!(
+        media.control.as_str(),
+        "1f3c" | "1f4a" | "1f4d" | "1f64" | "sounddata"
+    )
 }
 
 fn hc_common_media_placeholder_html(media: &crate::ssed_hc::HcCommonHtmlMedia) -> String {

@@ -78,3 +78,33 @@ fn sounddata_resource_resolves_and_reads_wave_record() {
         b"RIFF\x04\x00\x00\x00WAVE"
     );
 }
+
+#[test]
+fn ssed_renderer_resource_candidates_include_sounddata_marker() {
+    let dir = tempdir().unwrap();
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Sample".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+    let marker = [
+        0xa4, 0x27, 0x23, 0x30, 0x23, 0x30, 0x23, 0x30, 0x23, 0x30, 0x23, 0x37, 0x23, 0x46, 0x23,
+        0x39, 0x23, 0x33, 0xa4, 0x28,
+    ];
+
+    let candidates = package.ssed_renderer_resource_candidates(&marker);
+
+    assert_eq!(
+        candidates,
+        vec![InternalResource::SoundData {
+            sound_id: 0x0000_7f93
+        }]
+    );
+}
