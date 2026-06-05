@@ -441,6 +441,8 @@ fn is_obvious_resource_only_dir(path: &Path) -> bool {
         || name.ends_with("_sound_files")
         || name.ends_with("_mathjax")
         || name.ends_with("_templates")
+        || name == "res"
+        || name == "resource"
         || name == "templates"
         || name == "template"
         || name == "img"

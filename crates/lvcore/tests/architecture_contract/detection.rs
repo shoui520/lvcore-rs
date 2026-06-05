@@ -51,6 +51,39 @@ fn driver_registry_discovers_packages_from_library_roots() {
     assert_eq!(detections[0].format_family, FormatFamily::LvedSqlite3);
 }
 
+#[test]
+fn driver_registry_does_not_treat_resource_stores_as_packages() {
+    let root = tempdir().unwrap();
+    let package = root.path().join("BookWithResources");
+    fs::create_dir_all(&package).unwrap();
+    write_minimal_lved_sqlite_fixture(&package);
+
+    let nested_resource_store = package.join("resource");
+    fs::create_dir_all(&nested_resource_store).unwrap();
+    fs::write(
+        nested_resource_store.join("retained.IDX"),
+        ssedinfo_fixture(),
+    )
+    .unwrap();
+
+    let sibling_resource_store = root.path().join("res");
+    fs::create_dir_all(&sibling_resource_store).unwrap();
+    fs::write(
+        sibling_resource_store.join("retained.IDX"),
+        ssedinfo_fixture(),
+    )
+    .unwrap();
+
+    let registry = DriverRegistry::default();
+    let detections = registry
+        .detect_all(root.path(), PackageDiscoveryOptions::default())
+        .unwrap();
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].root, package);
+    assert_eq!(detections[0].format_family, FormatFamily::LvedSqlite3);
+}
+
 #[cfg(unix)]
 #[test]
 fn driver_registry_discovery_skips_symlink_cycles() {
