@@ -297,6 +297,7 @@ fn cli_sequence_hint(
         CliSequenceHint::BodyOrder => SequenceHint::BodyOrder,
         CliSequenceHint::MenuOrder => SequenceHint::MenuOrder {
             value: required_value("menu-order", value)?,
+            cursor: None,
         },
         CliSequenceHint::PanelOrder => SequenceHint::PanelOrder {
             value: required_value("panel-order", value)?,

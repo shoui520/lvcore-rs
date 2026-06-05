@@ -238,6 +238,7 @@ impl NavigationSurface {
             }),
             Self::SimpleMenu { surface_id, .. } => Some(SequenceHint::MenuOrder {
                 value: surface_id.clone(),
+                cursor: None,
             }),
             Self::HierarchicalTree { surface_id, .. } if surface_id == "lved-tree" => {
                 Some(SequenceHint::LvedTreeOrder)
@@ -250,6 +251,7 @@ impl NavigationSurface {
             }
             Self::HierarchicalTree { surface_id, .. } => Some(SequenceHint::MenuOrder {
                 value: surface_id.clone(),
+                cursor: None,
             }),
             Self::Panel { surface_id, .. } => Some(SequenceHint::PanelOrder {
                 value: surface_id.clone(),
@@ -408,6 +410,7 @@ fn collect_node_targets(
 ) {
     for node in nodes {
         if let Some(target) = &node.target {
+            let sequence_hint = node_sequence_hint(sequence_hint, &node.node_id);
             targets.push(NavigationTarget {
                 href: String::new(),
                 surface_id: surface_id.to_owned(),
@@ -415,11 +418,36 @@ fn collect_node_targets(
                 label_html: node.label_html.clone(),
                 label_text: node.label_text.clone(),
                 target: target.clone(),
-                sequence_hint: sequence_hint.cloned(),
+                sequence_hint,
                 diagnostics: node.diagnostics.clone(),
             });
         }
         collect_node_targets(surface_id, &node.children, sequence_hint, targets);
+    }
+}
+
+fn node_sequence_hint(sequence_hint: Option<&SequenceHint>, node_id: &str) -> Option<SequenceHint> {
+    match sequence_hint {
+        Some(SequenceHint::MenuOrder { value, .. }) => Some(SequenceHint::MenuOrder {
+            value: value.clone(),
+            cursor: ssed_menu_node_cursor(node_id),
+        }),
+        Some(hint) => Some(hint.clone()),
+        None => None,
+    }
+}
+
+fn ssed_menu_node_cursor(node_id: &str) -> Option<String> {
+    let rest = node_id.strip_prefix("ssed-menu:")?;
+    let mut parts = rest.split(':');
+    let record = parts.next()?.parse::<usize>().ok()?;
+    match (parts.next(), parts.next(), parts.next()) {
+        (None, None, None) => Some(record.to_string()),
+        (Some("link"), Some(link), None) => {
+            let link = link.parse::<usize>().ok()?;
+            Some(format!("link:{record}:{link}"))
+        }
+        _ => None,
     }
 }
 
@@ -517,7 +545,8 @@ mod tests {
         assert_eq!(
             menu.sequence_hint(),
             Some(SequenceHint::MenuOrder {
-                value: "menu".to_owned()
+                value: "menu".to_owned(),
+                cursor: None
             })
         );
 

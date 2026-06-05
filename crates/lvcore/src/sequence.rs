@@ -15,11 +15,21 @@ pub const SEARCH_RESULT_SEQUENCE_MAX_TARGETS: usize = 2048;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SequenceHint {
-    TitleIndexOrder { value: String },
-    SearchResults { value: String },
+    TitleIndexOrder {
+        value: String,
+    },
+    SearchResults {
+        value: String,
+    },
     BodyOrder,
-    MenuOrder { value: String },
-    PanelOrder { value: String },
+    MenuOrder {
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+    },
+    PanelOrder {
+        value: String,
+    },
     LvedListOrder,
     LvedTreeOrder,
     HoureiLawArticleOrder,

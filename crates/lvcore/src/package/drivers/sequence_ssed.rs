@@ -1,13 +1,23 @@
 use super::sequence::sequence_targets_match;
 use super::ssed_navigation::{
-    nearest_higher_menu_destination, ssed_menu_destination_target, ssed_menu_link_display_label,
-    ssed_menu_record_target,
+    decode_ssed_menu_node_cursor, nearest_higher_menu_destination, ssed_menu_destination_target,
+    ssed_menu_link_display_label, ssed_menu_record_target,
 };
 use super::*;
 use std::collections::VecDeque;
 
 const SSED_SEQUENCE_SURFACE_PAGE_LIMIT: usize = 128;
 const SSED_SEQUENCE_SURFACE_MAX_PAGES: usize = 4096;
+
+struct SsedPagedMenuWindowRequest<'a> {
+    surface_id: &'a str,
+    cursor_hint: Option<&'a str>,
+    target: &'a TargetToken,
+    before: usize,
+    after: usize,
+    options: &'a RenderOptions,
+    max_pages: usize,
+}
 
 impl ReaderBookPackage {
     pub(super) fn resolve_ssed_title_index_window(
@@ -181,12 +191,24 @@ impl ReaderBookPackage {
         after: usize,
         options: &RenderOptions,
     ) -> Result<Option<TargetWindow>> {
-        let Some(SequenceHint::MenuOrder { value: surface_id }) = sequence_hint else {
+        let Some(SequenceHint::MenuOrder {
+            value: surface_id,
+            cursor,
+        }) = sequence_hint
+        else {
             return Ok(None);
         };
         if let Some(component_name) = ssed_direct_menu_component_name(surface_id) {
             if let Some(window) =
-                self.resolve_ssed_paged_menu_window(surface_id, target, before, after, options, 1)?
+                self.resolve_ssed_paged_menu_window(SsedPagedMenuWindowRequest {
+                    surface_id,
+                    cursor_hint: cursor.as_deref(),
+                    target,
+                    before,
+                    after,
+                    options,
+                    max_pages: 1,
+                })?
             {
                 return Ok(Some(window));
             }
@@ -199,37 +221,37 @@ impl ReaderBookPackage {
                 options,
             )?));
         }
-        self.resolve_ssed_paged_menu_window(
+        self.resolve_ssed_paged_menu_window(SsedPagedMenuWindowRequest {
             surface_id,
+            cursor_hint: cursor.as_deref(),
             target,
             before,
             after,
             options,
-            SSED_SEQUENCE_SURFACE_MAX_PAGES,
-        )
+            max_pages: SSED_SEQUENCE_SURFACE_MAX_PAGES,
+        })
     }
 
     fn resolve_ssed_paged_menu_window(
         &self,
-        surface_id: &str,
-        target: &TargetToken,
-        before: usize,
-        after: usize,
-        options: &RenderOptions,
-        max_pages: usize,
+        request: SsedPagedMenuWindowRequest<'_>,
     ) -> Result<Option<TargetWindow>> {
         let label_options = LabelOptions {
-            gaiji_policy: options.gaiji_policy.clone(),
+            gaiji_policy: request.options.gaiji_policy.clone(),
         };
-        let mut collector = SsedMenuSequenceWindowCollector::new(before, after);
+        let mut collector = SsedMenuSequenceWindowCollector::new(request.before, request.after);
         let mut diagnostics = Vec::new();
-        let mut cursor = None::<String>;
+        let mut cursor = ssed_menu_sequence_start_cursor(request.cursor_hint, request.before);
         let mut reached_page_limit = false;
-        let page_limit =
-            SSED_SEQUENCE_SURFACE_PAGE_LIMIT.max(before.saturating_add(after).saturating_add(1));
-        for page_index in 0..SSED_SEQUENCE_SURFACE_MAX_PAGES.min(max_pages) {
+        let page_limit = SSED_SEQUENCE_SURFACE_PAGE_LIMIT.max(
+            request
+                .before
+                .saturating_add(request.after)
+                .saturating_add(1),
+        );
+        for page_index in 0..SSED_SEQUENCE_SURFACE_MAX_PAGES.min(request.max_pages) {
             let surface = self.open_surface_page_with_options(
-                surface_id,
+                request.surface_id,
                 cursor.as_deref(),
                 page_limit,
                 &label_options,
@@ -241,7 +263,7 @@ impl ReaderBookPackage {
                 | NavigationSurface::HierarchicalTree {
                     nodes, next_cursor, ..
                 } => {
-                    collector.collect_nodes(&nodes, target);
+                    collector.collect_nodes(&nodes, request.target);
                     next_cursor
                 }
                 NavigationSurface::Deferred {
@@ -253,12 +275,15 @@ impl ReaderBookPackage {
                 }
                 _ => {
                     return Ok(Some(TargetWindow {
-                        center: self.render_target(target, options)?,
+                        center: self.render_target(request.target, request.options)?,
                         before: Vec::new(),
                         after: Vec::new(),
                         diagnostics: vec![Diagnostic::info(
                             "sequence_surface_not_ordered",
-                            format!("{surface_id} is not an ordered SSED navigation surface"),
+                            format!(
+                                "{} is not an ordered SSED navigation surface",
+                                request.surface_id
+                            ),
                         )],
                     }));
                 }
@@ -273,13 +298,16 @@ impl ReaderBookPackage {
                 reached_page_limit = true;
                 break;
             }
-            if page_index + 1 >= max_pages {
+            if page_index + 1 >= request.max_pages {
                 return Ok(None);
             }
             if cursor.as_deref() == Some(next_cursor.as_str()) {
                 diagnostics.push(Diagnostic::warning(
                     "sequence_surface_cursor_stalled",
-                    format!("{surface_id} returned a repeated pagination cursor"),
+                    format!(
+                        "{} returned a repeated pagination cursor",
+                        request.surface_id
+                    ),
                 ));
                 break;
             }
@@ -288,16 +316,19 @@ impl ReaderBookPackage {
         if reached_page_limit {
             diagnostics.push(Diagnostic::warning(
                 "sequence_surface_page_limit_reached",
-                format!("{surface_id} sequence lookup stopped at the page limit"),
+                format!(
+                    "{} sequence lookup stopped at the page limit",
+                    request.surface_id
+                ),
             ));
         }
         let ordered = collector.into_ordered_context();
         let mut window = if ordered.is_empty() {
-            if max_pages < SSED_SEQUENCE_SURFACE_MAX_PAGES {
+            if request.max_pages < SSED_SEQUENCE_SURFACE_MAX_PAGES {
                 return Ok(None);
             }
             TargetWindow {
-                center: self.render_target(target, options)?,
+                center: self.render_target(request.target, request.options)?,
                 before: Vec::new(),
                 after: Vec::new(),
                 diagnostics: vec![Diagnostic::info(
@@ -307,11 +338,11 @@ impl ReaderBookPackage {
             }
         } else {
             self.resolve_ordered_target_window(
-                target,
+                request.target,
                 &ordered,
-                before,
-                after,
-                options,
+                request.before,
+                request.after,
+                request.options,
                 Diagnostic::info(
                     "sequence_target_not_in_ssed_menu",
                     "target is not present in the requested SSED MENU/TOC order",
@@ -441,6 +472,17 @@ fn ssed_direct_menu_component_name(surface_id: &str) -> Option<&'static str> {
         "toc" => Some("TOC.DIC"),
         _ => None,
     }
+}
+
+fn ssed_menu_sequence_start_cursor(cursor: Option<&str>, before: usize) -> Option<String> {
+    let cursor = cursor.map(str::trim).filter(|cursor| !cursor.is_empty())?;
+    let parsed = decode_ssed_menu_node_cursor(Some(cursor));
+    if parsed.link_offset > 0 {
+        let link_offset = parsed.link_offset.saturating_sub(before);
+        return Some(format!("link:{}:{link_offset}", parsed.record_offset));
+    }
+    let record_offset = parsed.record_offset.saturating_sub(before);
+    (record_offset > 0).then(|| record_offset.to_string())
 }
 
 impl ReaderBookPackage {

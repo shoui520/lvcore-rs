@@ -397,6 +397,7 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
             &center,
             Some(&SequenceHint::MenuOrder {
                 value: "aux-index:0".to_owned(),
+                cursor: None,
             }),
             1,
             0,

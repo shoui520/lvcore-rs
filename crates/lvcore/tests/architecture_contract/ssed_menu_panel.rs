@@ -1088,6 +1088,7 @@ fn ssed_menu_and_panel_targets_support_continuous_view_windows() {
             &target,
             Some(&lvcore::SequenceHint::MenuOrder {
                 value: "menu".to_owned(),
+                cursor: None,
             }),
             1,
             1,
@@ -1151,6 +1152,7 @@ fn ssed_menu_continuous_view_pages_through_large_menu_surfaces() {
             &target,
             Some(&lvcore::SequenceHint::MenuOrder {
                 value: "menu".to_owned(),
+                cursor: None,
             }),
             1,
             1,
@@ -1164,6 +1166,29 @@ fn ssed_menu_continuous_view_pages_through_large_menu_surfaces() {
     assert_eq!(menu_window.after.len(), 1);
     assert_eq!(ssed_view_offset(&menu_window.before[0]), Some((10, 298)));
     assert_eq!(ssed_view_offset(&menu_window.after[0]), Some((10, 302)));
+
+    let page = package.open_surface_page("menu", Some("150"), 10).unwrap();
+    let targets = page.actionable_targets();
+    assert!(matches!(
+        targets[0].sequence_hint.as_ref(),
+        Some(lvcore::SequenceHint::MenuOrder {
+            value,
+            cursor: Some(cursor),
+        }) if value == "menu" && cursor == "150"
+    ));
+    let hinted_window = package
+        .resolve_target_window(
+            &targets[0].target,
+            targets[0].sequence_hint.as_ref(),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert!(hinted_window.diagnostics.is_empty());
+    assert_eq!(ssed_view_offset(&hinted_window.center), Some((10, 300)));
+    assert_eq!(ssed_view_offset(&hinted_window.before[0]), Some((10, 298)));
+    assert_eq!(ssed_view_offset(&hinted_window.after[0]), Some((10, 302)));
 }
 
 #[test]
@@ -1195,6 +1220,7 @@ fn ssed_menu_continuous_view_uses_visible_page_before_full_direct_parse() {
             &target,
             Some(&lvcore::SequenceHint::MenuOrder {
                 value: "menu".to_owned(),
+                cursor: None,
             }),
             0,
             1,
