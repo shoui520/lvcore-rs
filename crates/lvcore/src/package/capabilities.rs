@@ -29,7 +29,6 @@ pub(super) fn multiview_capabilities(has_law_navigation: bool) -> Vec<Capability
     let mut capabilities = vec![
         Capability::NativeSearch,
         Capability::FullTextSearch,
-        Capability::TitleIndexBrowse,
         Capability::Menu,
         Capability::Resources,
         Capability::Gaiji,
@@ -37,6 +36,7 @@ pub(super) fn multiview_capabilities(has_law_navigation: bool) -> Vec<Capability
         Capability::ContinuousView,
     ];
     if has_law_navigation {
+        capabilities.push(Capability::TitleIndexBrowse);
         capabilities.push(Capability::LawNavigation);
     }
     capabilities

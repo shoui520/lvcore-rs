@@ -72,6 +72,13 @@ fn multiview_law_navigation_capability_is_payload_based() {
             .contains(&Capability::LawNavigation),
         "non-law MultiView dictionaries must not look like law books to the frontend"
     );
+    assert!(
+        !simple_package
+            .metadata()
+            .capabilities
+            .contains(&Capability::TitleIndexBrowse),
+        "simple MultiView packages do not expose a dedicated title/index browse surface yet"
+    );
 
     let law = tempdir().unwrap();
     write_minimal_multiview_law_fixture(law.path());
@@ -91,6 +98,13 @@ fn multiview_law_navigation_capability_is_payload_based() {
             .capabilities
             .contains(&Capability::LawNavigation),
         "law MultiView payloads should advertise law navigation"
+    );
+    assert!(
+        law_package
+            .metadata()
+            .capabilities
+            .contains(&Capability::TitleIndexBrowse),
+        "law-list navigation targets expose title/index browse surfaces"
     );
 }
 
