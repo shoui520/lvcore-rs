@@ -287,16 +287,20 @@ fn searches_lved_list_rows_and_preserves_content_html() {
                     insert into content values (100, 1, '<article><h1>Alpha</h1><p>body</p></article>', '');
                     insert into content values (101, 1, '<article><h1>Beta</h1></article>', '');
                     insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
+                    insert into content values (103, 1, '<article><h1>Alpha Beta</h1></article>', '');
                     insert into mediasub values (1, '00010033', 5, X'49443303');
                     insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
                     insert into list values (2, 101, 1, '', '<b>beta</b>', '');
                     insert into list values (3, 102, 1, '', '<b>gamma</b>', '');
+                    insert into list values (4, 103, 1, '', '<b>alpha beta</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', 'topic marker', '', '∥alpha∥');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (2, 'a, a', 'a ,a', 'a, a', 'letter article', '', '', '∥a, a∥');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (3, '(gamma)', ')ammag(', '(gamma)', 'gamma article', '', '', '∥(gamma)∥');
+                    insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                      values (4, 'alpha beta', 'ateb ahpla', 'alpha beta', 'alpha beta article', '', '', '∥alpha beta∥');
                     ",
                 )
                 .unwrap();
@@ -318,7 +322,7 @@ fn searches_lved_list_rows_and_preserves_content_html() {
 
     let hits = store.search("alp", &SearchMode::Forward, 10).unwrap();
 
-    assert_eq!(hits.len(), 1);
+    assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].content_id, 100);
     let exact_hits = store.search("alpha", &SearchMode::Exact, 10).unwrap();
     assert_eq!(exact_hits.len(), 1);

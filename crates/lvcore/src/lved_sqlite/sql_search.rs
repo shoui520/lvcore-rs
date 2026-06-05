@@ -121,19 +121,7 @@ fn lved_search_where(
     search_columns: &[String],
 ) -> Option<(String, Vec<String>)> {
     match mode {
-        SearchMode::Exact => {
-            if has_column(search_columns, "filter") {
-                let like_parameter = format!("%∥{}∥%", escape_sql_like(normalized));
-                Some((
-                    "s.filter like ? escape '\\'".to_owned(),
-                    vec![like_parameter],
-                ))
-            } else if has_column(search_columns, "forward") {
-                Some(("s.forward = ?".to_owned(), vec![normalized.to_owned()]))
-            } else {
-                None
-            }
-        }
+        SearchMode::Exact => exact_lved_search_where(normalized, search_columns),
         SearchMode::Forward => one_parameter_where(fts_match(
             "forward",
             normalized,
@@ -163,6 +151,23 @@ fn lved_search_where(
             should_split_chars(normalized),
         )),
     }
+}
+
+fn exact_lved_search_where(
+    normalized: &str,
+    search_columns: &[String],
+) -> Option<(String, Vec<String>)> {
+    if has_column(search_columns, "filter") {
+        let like_parameter = format!("%∥{}∥%", escape_sql_like(normalized));
+        return Some((
+            "s.filter like ? escape '\\'".to_owned(),
+            vec![like_parameter],
+        ));
+    }
+    if has_column(search_columns, "forward") {
+        return Some(("s.forward = ?".to_owned(), vec![normalized.to_owned()]));
+    }
+    None
 }
 
 pub(super) fn lved_available_search_modes(schema: &LvedSqliteSchema) -> Vec<SearchMode> {
