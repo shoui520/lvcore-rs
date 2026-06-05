@@ -55,6 +55,16 @@ impl SequenceProvider for ReaderBookPackage {
             return Ok(window);
         }
         if self.metadata.format_family == FormatFamily::LvlMultiView
+            && matches!(
+                sequence_hint,
+                Some(SequenceHint::TitleIndexOrder { value, .. }) if value.starts_with("multiview:")
+            )
+            && let Some(window) =
+                self.resolve_multiview_list_window(target, sequence_hint, before, after, options)?
+        {
+            return Ok(window);
+        }
+        if self.metadata.format_family == FormatFamily::LvlMultiView
             && sequence_hint.is_none_or(|hint| {
                 matches!(
                     hint,

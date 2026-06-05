@@ -1,6 +1,43 @@
 use super::*;
 
 impl ReaderBookPackage {
+    pub(super) fn resolve_multiview_list_window(
+        &self,
+        target: &TargetToken,
+        sequence_hint: Option<&SequenceHint>,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        let Some(href) = multiview_list_href_from_sequence_hint(sequence_hint) else {
+            return Ok(None);
+        };
+        let Some((_title, surface)) = self.multiview_navigation_surface_for_href(href)? else {
+            return Ok(None);
+        };
+        let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+            return Ok(None);
+        };
+        let ordered = items
+            .into_iter()
+            .map(|item| OrderedSequenceTarget {
+                target: item.target,
+                title: Some(item.label_text),
+            })
+            .collect::<Vec<_>>();
+        Ok(Some(self.resolve_ordered_target_window(
+            target,
+            &ordered,
+            before,
+            after,
+            options,
+            Diagnostic::info(
+                "sequence_target_not_in_multiview_list",
+                "target is not present in the MultiView list order",
+            ),
+        )?))
+    }
+
     pub(super) fn resolve_multiview_menu_window(
         &self,
         target: &TargetToken,
@@ -45,4 +82,13 @@ impl ReaderBookPackage {
             diagnostics: Vec::new(),
         }))
     }
+}
+
+fn multiview_list_href_from_sequence_hint(sequence_hint: Option<&SequenceHint>) -> Option<&str> {
+    let Some(SequenceHint::TitleIndexOrder { value, .. }) = sequence_hint else {
+        return None;
+    };
+    value
+        .strip_prefix("multiview:")
+        .filter(|href| !href.trim().is_empty())
 }

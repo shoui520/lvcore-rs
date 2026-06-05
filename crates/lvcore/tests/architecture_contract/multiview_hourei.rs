@@ -284,6 +284,37 @@ fn multiview_law_list_targets_resolve_to_navigation_and_law_bodies() {
     assert_eq!(items[0].item_id, "111S21K1");
     assert_eq!(items[0].label_text, "日本国憲法 (にほんこくけんぽう)");
 
+    let actionable = list_view.surface.as_ref().unwrap().actionable_targets();
+    assert_eq!(actionable.len(), 2);
+    assert_eq!(
+        actionable[0].sequence_hint,
+        Some(lvcore::SequenceHint::TitleIndexOrder {
+            value: "multiview:50on".to_owned(),
+            cursor: Some("111S21K1".to_owned()),
+        })
+    );
+    let hinted_window = package
+        .resolve_target_window(
+            &actionable[0].target,
+            actionable[0].sequence_hint.as_ref(),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(hinted_window.center.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(hinted_window.after.len(), 1);
+    assert_eq!(
+        hinted_window.after[0].title.as_deref(),
+        Some("民法 (みんぽう)")
+    );
+    assert!(
+        hinted_window
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
+
     let law_view = package
         .render_target(&items[0].target, &RenderOptions::default())
         .unwrap();
