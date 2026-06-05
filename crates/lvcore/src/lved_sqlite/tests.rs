@@ -519,6 +519,14 @@ fn title_probe_rejects_common_false_positive_shapes() {
         normalize_title_candidate("書籍版『岩波 日本史辞典』序").as_deref(),
         Some("岩波 日本史辞典")
     );
+    assert_eq!(
+        normalize_title_candidate("ライトハウス和英辞典 第5版 付録").as_deref(),
+        Some("ライトハウス和英辞典 第5版")
+    );
+    assert_eq!(
+        normalize_title_candidate("ライトハウス和英辞典 第5版 著作権").as_deref(),
+        Some("ライトハウス和英辞典 第5版")
+    );
 }
 
 #[test]

@@ -443,7 +443,18 @@ pub(crate) fn normalize_title_candidate(value: &str) -> Option<String> {
             value = head.trim().to_owned();
         }
     }
-    for marker in [" 凡例", "　凡例", " 目次", "　目次", " ●", "　●"] {
+    for marker in [
+        " 凡例",
+        "　凡例",
+        " 目次",
+        "　目次",
+        " 付録",
+        "　付録",
+        " 著作権",
+        "　著作権",
+        " ●",
+        "　●",
+    ] {
         if let Some((head, _tail)) = value.split_once(marker) {
             value = head.trim().to_owned();
         }
