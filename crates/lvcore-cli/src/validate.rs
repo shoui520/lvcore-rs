@@ -929,6 +929,26 @@ fn search_probe_suffix(title: &str) -> Option<String> {
     }
 }
 
+fn search_probe_partial_text(title: &str) -> Option<String> {
+    let normalized = search_probe_lookup_text(title)?;
+    let mut current = String::new();
+    for ch in normalized.chars().chain(std::iter::once(' ')) {
+        if ch.is_alphanumeric() {
+            current.push(ch);
+            continue;
+        }
+        if search_probe_run_is_useful(&current) {
+            return Some(current.chars().take(2).collect());
+        }
+        current.clear();
+    }
+    search_probe_prefix(title)
+}
+
+fn search_probe_run_is_useful(value: &str) -> bool {
+    value.chars().count() >= 2 && !value.chars().all(|ch| ch.is_numeric())
+}
+
 fn search_probe_lookup_text(title: &str) -> Option<String> {
     let mut started = false;
     let mut out = String::new();
@@ -1005,10 +1025,10 @@ fn search_probe_query(title: &str, mode: &SearchMode) -> String {
             }
         }
         SearchMode::Backward => search_probe_suffix(title).unwrap_or_else(|| "a".to_owned()),
-        SearchMode::Forward
-        | SearchMode::Partial
-        | SearchMode::FullText
-        | SearchMode::Advanced(_) => search_probe_prefix(title).unwrap_or_else(|| "a".to_owned()),
+        SearchMode::Forward => search_probe_prefix(title).unwrap_or_else(|| "a".to_owned()),
+        SearchMode::Partial | SearchMode::FullText | SearchMode::Advanced(_) => {
+            search_probe_partial_text(title).unwrap_or_else(|| "a".to_owned())
+        }
     }
 }
 
@@ -1093,6 +1113,14 @@ mod tests {
         assert_eq!(
             search_probe_query("関係 関係がある 〖0001.01〗", &SearchMode::Partial),
             "関係"
+        );
+        assert_eq!(
+            search_probe_query("０°人工歯(zero degree teeth)", &SearchMode::Partial),
+            "人工"
+        );
+        assert_eq!(
+            search_probe_query("０°人工歯(zero degree teeth)", &SearchMode::FullText),
+            "人工"
         );
     }
 }
