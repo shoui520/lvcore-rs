@@ -4,7 +4,7 @@ use crate::diagnostics::Diagnostic;
 use crate::error::Result;
 use crate::gaiji::GaijiPolicy;
 use crate::package::BookId;
-use crate::sequence::SequenceHint;
+use crate::sequence::{SEARCH_RESULT_SEQUENCE_MAX_TARGETS, SearchResultSequence, SequenceHint};
 use crate::target::TargetToken;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +91,43 @@ impl SearchPage {
             result_sequence: None,
             diagnostics: vec![Diagnostic::info("search_deferred", message)],
         }
+    }
+
+    pub fn attach_result_sequence(&mut self) -> Result<()> {
+        self.diagnostics
+            .retain(|diagnostic| diagnostic.code != "search_result_sequence_omitted");
+        if self.hits.is_empty() {
+            self.result_sequence = None;
+            return Ok(());
+        }
+        if self.hits.len() > SEARCH_RESULT_SEQUENCE_MAX_TARGETS {
+            self.result_sequence = None;
+            for hit in &mut self.hits {
+                hit.sequence_hint = None;
+            }
+            self.diagnostics.push(
+                Diagnostic::info(
+                    "search_result_sequence_omitted",
+                    "search result page is larger than the maximum continuous-view sequence payload",
+                )
+                .with_context("hit_count", self.hits.len().to_string())
+                .with_context(
+                    "max_targets",
+                    SEARCH_RESULT_SEQUENCE_MAX_TARGETS.to_string(),
+                ),
+            );
+            return Ok(());
+        }
+
+        let value = SearchResultSequence::from_search_page(self)?.encode()?;
+        let hint = SequenceHint::SearchResults {
+            value: value.clone(),
+        };
+        for hit in &mut self.hits {
+            hit.sequence_hint = Some(hint.clone());
+        }
+        self.result_sequence = Some(value);
+        Ok(())
     }
 }
 

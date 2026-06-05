@@ -17,8 +17,7 @@ use crate::render::{RenderOptions, RendererInput, ResolvedTargetKind, ResolvedTa
 use crate::resources::{ResourceRef, ResourceToken};
 use crate::search::{SearchPage, SearchQuery, SearchScope};
 use crate::sequence::{
-    SEARCH_RESULT_SEQUENCE_MAX_TARGETS, SearchResultSequence, SearchResultSequenceTarget,
-    SequenceHint, TargetWindow,
+    SearchResultSequence, SearchResultSequenceTarget, SequenceHint, TargetWindow,
 };
 use crate::target::{InternalTarget, TargetToken};
 
@@ -873,37 +872,7 @@ impl BookLibrary {
 }
 
 fn populate_search_result_sequence(page: &mut SearchPage) -> Result<()> {
-    if page.hits.is_empty() {
-        page.result_sequence = None;
-        return Ok(());
-    }
-    if page.hits.len() > SEARCH_RESULT_SEQUENCE_MAX_TARGETS {
-        page.result_sequence = None;
-        for hit in &mut page.hits {
-            hit.sequence_hint = None;
-        }
-        page.diagnostics.push(
-            Diagnostic::info(
-                "search_result_sequence_omitted",
-                "search result page is larger than the maximum continuous-view sequence payload",
-            )
-            .with_context("hit_count", page.hits.len().to_string())
-            .with_context(
-                "max_targets",
-                SEARCH_RESULT_SEQUENCE_MAX_TARGETS.to_string(),
-            ),
-        );
-        return Ok(());
-    }
-    let value = SearchResultSequence::from_search_page(page)?.encode()?;
-    let hint = SequenceHint::SearchResults {
-        value: value.clone(),
-    };
-    for hit in &mut page.hits {
-        hit.sequence_hint = Some(hint.clone());
-    }
-    page.result_sequence = Some(value);
-    Ok(())
+    page.attach_result_sequence()
 }
 
 fn library_search_sequence_target_matches(
@@ -990,6 +959,7 @@ fn library_search_cursor_fingerprint(book_ids: &[&BookId], query: &SearchQuery) 
 mod tests {
     use super::*;
     use crate::search::SearchHit;
+    use crate::sequence::SEARCH_RESULT_SEQUENCE_MAX_TARGETS;
 
     fn search_hit(index: usize) -> SearchHit {
         let target = TargetToken::new(&InternalTarget::Unsupported {

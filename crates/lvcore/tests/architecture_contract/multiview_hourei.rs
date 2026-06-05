@@ -536,6 +536,32 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
         })
         .unwrap();
     assert_eq!(body_fulltext.hits.len(), 2);
+    assert!(body_fulltext.result_sequence.is_some());
+    assert!(matches!(
+        body_fulltext.hits[0].sequence_hint,
+        Some(lvcore::SequenceHint::SearchResults { .. })
+    ));
+    let package_search_window = package
+        .resolve_target_window(
+            &body_fulltext.hits[0].target,
+            body_fulltext.hits[0].sequence_hint.as_ref(),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(package_search_window.center.title.as_deref(), Some("民法"));
+    assert_eq!(package_search_window.after.len(), 1);
+    assert_eq!(
+        package_search_window.after[0].title.as_deref(),
+        Some("商法")
+    );
+    assert!(
+        package_search_window
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
 
     let first = package
         .search(&SearchQuery {
