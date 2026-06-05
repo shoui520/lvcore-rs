@@ -46,6 +46,55 @@ fn ssed_panels_can_read_package_adjacent_panel_sidecar_directory() {
 }
 
 #[test]
+fn ssed_panel_bin_compressed_gaiji_labels_resolve_to_sibling_templates() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    let sibling_panel_root = root.path().join("DICT_Panel");
+    let sibling_templates_root = root.path().join("DICT_Templates");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(&sibling_panel_root).unwrap();
+    fs::create_dir(&sibling_templates_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("Panels.xml"),
+        r#"<panels>
+  <panel index="01000000" paneltype="menu" count_x="1">
+    <title>五十音</title>
+    <data><cell ref="01010000">あ</cell></data>
+  </panel>
+  <panel index="01010000" paneltype="contents">
+    <title>あ</title>
+    <data type="bin" filename="Panel\All-A.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    fs::write(
+        sibling_panel_root.join("All-A.bin"),
+        panel_bin_fixture_rows(&[(10, 2, [0xb1, 0x54]), (10, 4, [0xb2, 0x54])]),
+    )
+    .unwrap();
+    fs::write(sibling_templates_root.join("B540.png"), b"png").unwrap();
+    fs::write(sibling_templates_root.join("B541.png"), b"png").unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let child_panel = package.open_surface("panels:01010000").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
+        panic!("SSED child Panel should decode from the sibling sidecar directory");
+    };
+
+    assert_eq!(cells.len(), 2);
+    assert!(cells[0].diagnostics.is_empty());
+    assert!(cells[1].diagnostics.is_empty());
+    assert!(cells[0].label_html.contains("lvcore-gaiji-external"));
+    assert!(cells[0].label_html.contains(r#"title="B540""#));
+    assert!(cells[1].label_html.contains("lvcore-gaiji-external"));
+    assert!(cells[1].label_html.contains(r#"title="B541""#));
+    assert!(!cells[0].label_html.contains("zB54"));
+    assert!(!cells[1].label_html.contains("zB54"));
+}
+
+#[test]
 fn ssed_missing_aggregate_panel_bin_synthesizes_from_available_content_bins() {
     let root = tempdir().unwrap();
     let package_root = root.path().join("DICT");

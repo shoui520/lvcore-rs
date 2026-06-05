@@ -825,17 +825,35 @@ fn decode_panel_text(data: &[u8]) -> String {
             continue;
         }
         if i + 1 < data.len() && (0xa1..=0xfe).contains(&data[i]) {
-            out.push_str(&format!(
-                "<z{}{:02X}>",
-                if data[i] < 0xb0 { "A" } else { "B" },
-                data[i + 1]
-            ));
+            if let Some(identity) = panel_compressed_gaiji_identity(data[i], data[i + 1]) {
+                out.push_str("<z");
+                out.push_str(&identity);
+                out.push('>');
+            } else {
+                out.push_str(&format!(
+                    "<z{}{:02X}>",
+                    if data[i] < 0xb0 { "A" } else { "B" },
+                    data[i + 1]
+                ));
+            }
             i += 2;
             continue;
         }
         i += 1;
     }
     out
+}
+
+fn panel_compressed_gaiji_identity(first: u8, second: u8) -> Option<String> {
+    let (plane, base) = if (0xa1..=0xaf).contains(&first) {
+        ('A', 0xa1)
+    } else if (0xb1..=0xbf).contains(&first) {
+        ('B', 0xb1)
+    } else {
+        return None;
+    };
+    let variant = first.checked_sub(base)?;
+    (variant <= 0x0f).then(|| format!("{plane}{second:02X}{variant:X}"))
 }
 
 fn decode_jis_pair(first: u8, second: u8) -> Option<char> {
