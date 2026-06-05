@@ -111,9 +111,11 @@ use super::ssed_search_runtime::{
     SSED_FULLTEXT_BODY_WINDOW_BYTES, SSED_FULLTEXT_SCAN_OVERLAP_BYTES,
     SSED_FULLTEXT_SCAN_WINDOW_BYTES, SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET, SsedFulltextRow,
     SsedIndexSearchCollector, SsedNearKeyScanResult, SsedPartialIndexScanCursor,
-    SsedPartialIndexScanResult, decode_ssed_partial_index_scan_cursor,
-    encode_ssed_partial_index_scan_cursor, ssed_fulltext_body_window_len,
-    ssed_index_component_name_is_backward, ssed_index_row_match_text,
+    SsedPartialIndexScanResult, SsedPrefilteredIndexScanCursor, SsedPrefilteredIndexScanResult,
+    decode_ssed_partial_index_scan_cursor, decode_ssed_prefiltered_index_scan_cursor,
+    encode_ssed_partial_index_scan_cursor, encode_ssed_prefiltered_index_scan_cursor,
+    ssed_fulltext_body_window_len, ssed_index_component_name_is_backward,
+    ssed_index_row_match_text,
 };
 use super::ssed_zip::{
     copy_zip_member_with_size_limit, looks_like_zip_file, ssed_component_filename_aliases,

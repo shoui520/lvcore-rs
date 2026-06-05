@@ -1,7 +1,7 @@
 use super::*;
 
 const SSED_ADJACENT_INDEX_BODY_BOUND_MAX_BYTES: u64 = 256 * 1024;
-const SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT: usize = 256;
+const SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT: usize = 32;
 
 impl ReaderBookPackage {
     pub(super) fn scan_ssed_simple_leaf_index_rows_near_key(
@@ -496,21 +496,46 @@ impl ReaderBookPackage {
         })
     }
 
-    pub(super) fn scan_existing_ssed_simple_index_rows_with_filters(
+    pub(super) fn scan_ssed_prefiltered_index_rows_paged(
         &self,
-        mut component_may_match: impl FnMut(&SsedComponent) -> bool,
-        mut page_may_match: impl FnMut(&SsedComponent, &[u8]) -> bool,
+        mode: &SearchMode,
+        needle: &str,
+        include_simple_indexes: bool,
+        cursor: Option<SsedPrefilteredIndexScanCursor>,
         mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
-    ) -> Result<Vec<Diagnostic>> {
+    ) -> Result<SsedPrefilteredIndexScanResult> {
         let Some(catalog) = &self.ssed_catalog else {
-            return Ok(vec![Diagnostic::error(
-                "ssed_catalog_missing",
-                "SSED index scanning requires a parsed SSEDINFO catalog",
-            )]);
+            return Ok(SsedPrefilteredIndexScanResult {
+                diagnostics: vec![Diagnostic::error(
+                    "ssed_catalog_missing",
+                    "SSED index scanning requires a parsed SSEDINFO catalog",
+                )],
+                next_cursor: None,
+            });
         };
+        let probe = if *mode == SearchMode::Backward {
+            reverse_search_match_text(needle)
+        } else {
+            needle.to_owned()
+        };
+        let candidates = ssed_index_page_prefilter_candidates(&probe);
+        if candidates.is_empty() {
+            let diagnostics = self.scan_ssed_simple_index_rows(None, on_row)?;
+            return Ok(SsedPrefilteredIndexScanResult {
+                diagnostics,
+                next_cursor: None,
+            });
+        }
+        let start_component_index = cursor.map(|cursor| cursor.component_index).unwrap_or(0);
         let mut diagnostics = Vec::new();
+        let mut scanned_leaf_pages = 0usize;
+
         'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
-            if !component_may_match(component) {
+            if component.index < start_component_index {
+                continue;
+            }
+            if !ssed_prefiltered_index_component_may_match(mode, include_simple_indexes, component)
+            {
                 continue;
             }
             if !is_supported_index_type(component.component_type) {
@@ -536,8 +561,14 @@ impl ReaderBookPackage {
             let mut reader = SsedDataFile::open(&path)?;
             let component_read_base = ssed_component_read_base(component, &reader);
             let page_count = component.block_count() as usize;
+            let start_page =
+                if cursor.is_some_and(|cursor| cursor.component_index == component.index) {
+                    cursor.map(|cursor| cursor.page_index).unwrap_or(0)
+                } else {
+                    0
+                };
             let mut scan_state = SsedIndexScanState::default();
-            for page_index in 0..page_count {
+            for page_index in start_page..page_count {
                 let page = read_index_page(&mut reader, component_read_base, page_index)?;
                 if page.len() < 4 {
                     break;
@@ -546,38 +577,54 @@ impl ReaderBookPackage {
                 if !is_leaf_page(word) {
                     continue;
                 }
-                if !page_may_match(component, page) {
-                    continue;
-                }
-                let logical_block = component.start_block + page_index as u32;
-                let (page_rows, unknown) = parse_supported_leaf_page(
-                    &component.filename,
-                    component.component_type,
-                    page,
-                    page_index as u32,
-                    logical_block,
-                    &mut scan_state,
-                );
-                if unknown > 0 {
-                    diagnostics.push(
-                        Diagnostic::warning(
-                            "ssed_index_unknown_leaf_bytes",
-                            format!(
-                                "{} had {unknown} unknown simple leaf row(s)",
-                                component.filename
-                            ),
-                        )
-                        .with_context("component", &component.filename),
+                scanned_leaf_pages = scanned_leaf_pages.saturating_add(1);
+                if ssed_body_window_may_contain_query(page, &candidates) {
+                    let logical_block = component.start_block + page_index as u32;
+                    let (page_rows, unknown) = parse_supported_leaf_page(
+                        &component.filename,
+                        component.component_type,
+                        page,
+                        page_index as u32,
+                        logical_block,
+                        &mut scan_state,
                     );
-                }
-                for row in page_rows {
-                    if !on_row(row)? {
-                        break 'components;
+                    if unknown > 0 {
+                        diagnostics.push(
+                            Diagnostic::warning(
+                                "ssed_index_unknown_leaf_bytes",
+                                format!(
+                                    "{} had {unknown} unknown simple leaf row(s)",
+                                    component.filename
+                                ),
+                            )
+                            .with_context("component", &component.filename),
+                        );
                     }
+                    for row in page_rows {
+                        if !on_row(row)? {
+                            break 'components;
+                        }
+                    }
+                }
+                if scanned_leaf_pages >= SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET {
+                    let next_cursor = next_ssed_prefiltered_index_scan_cursor(
+                        catalog,
+                        mode,
+                        include_simple_indexes,
+                        component.index,
+                        page_index.saturating_add(1),
+                    );
+                    return Ok(SsedPrefilteredIndexScanResult {
+                        diagnostics,
+                        next_cursor: next_cursor.map(encode_ssed_prefiltered_index_scan_cursor),
+                    });
                 }
             }
         }
-        Ok(diagnostics)
+        Ok(SsedPrefilteredIndexScanResult {
+            diagnostics,
+            next_cursor: None,
+        })
     }
 
     pub(super) fn scan_ssed_index_component_rows(
@@ -1169,6 +1216,69 @@ fn next_ssed_partial_index_scan_cursor(
             component_index: component.index,
             page_index: 0,
         })
+}
+
+fn next_ssed_prefiltered_index_scan_cursor(
+    catalog: &SsedCatalog,
+    mode: &SearchMode,
+    include_simple_indexes: bool,
+    component_index: u8,
+    page_index: usize,
+) -> Option<SsedPrefilteredIndexScanCursor> {
+    let mut components = catalog
+        .components_by_role(SsedComponentRole::Index)
+        .filter(|component| {
+            component.index >= component_index
+                && component.has_positive_range()
+                && is_supported_index_type(component.component_type)
+                && ssed_prefiltered_index_component_may_match(
+                    mode,
+                    include_simple_indexes,
+                    component,
+                )
+        });
+    let current = components.find(|component| component.index == component_index)?;
+    if page_index < current.block_count() as usize {
+        return Some(SsedPrefilteredIndexScanCursor {
+            component_index,
+            page_index,
+        });
+    }
+    catalog
+        .components_by_role(SsedComponentRole::Index)
+        .find(|component| {
+            component.index > component_index
+                && component.has_positive_range()
+                && is_supported_index_type(component.component_type)
+                && ssed_prefiltered_index_component_may_match(
+                    mode,
+                    include_simple_indexes,
+                    component,
+                )
+        })
+        .map(|component| SsedPrefilteredIndexScanCursor {
+            component_index: component.index,
+            page_index: 0,
+        })
+}
+
+fn ssed_prefiltered_index_component_may_match(
+    mode: &SearchMode,
+    include_simple_indexes: bool,
+    component: &SsedComponent,
+) -> bool {
+    if component.multi == 0xff {
+        return false;
+    }
+    if !include_simple_indexes && is_simple_leaf_index_type(component.component_type) {
+        return false;
+    }
+    let is_backward_index = ssed_index_component_name_is_backward(&component.filename);
+    match mode {
+        SearchMode::Exact | SearchMode::Forward => !is_backward_index,
+        SearchMode::Backward => is_backward_index,
+        _ => true,
+    }
 }
 
 pub(in crate::package::drivers) fn ssed_index_bound_is_plausible(

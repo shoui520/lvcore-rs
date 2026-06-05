@@ -34,13 +34,26 @@ pub(super) struct SsedPartialIndexScanCursor {
     pub(super) page_index: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SsedPrefilteredIndexScanCursor {
+    pub(super) component_index: u8,
+    pub(super) page_index: usize,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct SsedPartialIndexScanResult {
     pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) next_cursor: Option<String>,
 }
 
+#[derive(Debug, Default)]
+pub(super) struct SsedPrefilteredIndexScanResult {
+    pub(super) diagnostics: Vec<Diagnostic>,
+    pub(super) next_cursor: Option<String>,
+}
+
 const SSED_PARTIAL_INDEX_SCAN_CURSOR_PREFIX: &str = "ssed-partial-index:";
+const SSED_PREFILTERED_INDEX_SCAN_CURSOR_PREFIX: &str = "ssed-prefiltered-index:";
 
 pub(super) fn decode_ssed_partial_index_scan_cursor(
     cursor: Option<&str>,
@@ -56,6 +69,26 @@ pub(super) fn decode_ssed_partial_index_scan_cursor(
 pub(super) fn encode_ssed_partial_index_scan_cursor(cursor: SsedPartialIndexScanCursor) -> String {
     format!(
         "{SSED_PARTIAL_INDEX_SCAN_CURSOR_PREFIX}{}:{}",
+        cursor.component_index, cursor.page_index
+    )
+}
+
+pub(super) fn decode_ssed_prefiltered_index_scan_cursor(
+    cursor: Option<&str>,
+) -> Option<SsedPrefilteredIndexScanCursor> {
+    let cursor = cursor?.strip_prefix(SSED_PREFILTERED_INDEX_SCAN_CURSOR_PREFIX)?;
+    let (component_index, page_index) = cursor.split_once(':')?;
+    Some(SsedPrefilteredIndexScanCursor {
+        component_index: component_index.parse().ok()?,
+        page_index: page_index.parse().ok()?,
+    })
+}
+
+pub(super) fn encode_ssed_prefiltered_index_scan_cursor(
+    cursor: SsedPrefilteredIndexScanCursor,
+) -> String {
+    format!(
+        "{SSED_PREFILTERED_INDEX_SCAN_CURSOR_PREFIX}{}:{}",
         cursor.component_index, cursor.page_index
     )
 }

@@ -35,7 +35,15 @@ impl ReaderBookPackage {
         } else {
             None
         };
-        let offset = if partial_scan_cursor.is_some() {
+        let prefiltered_scan_cursor = if matches!(
+            query.mode,
+            SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+        ) {
+            decode_ssed_prefiltered_index_scan_cursor(query.cursor.as_deref())
+        } else {
+            None
+        };
+        let offset = if partial_scan_cursor.is_some() || prefiltered_scan_cursor.is_some() {
             0
         } else {
             decode_offset_cursor(query.cursor.as_deref())
@@ -55,7 +63,17 @@ impl ReaderBookPackage {
         let mut scan_needs_prefilter_fallback = false;
         let mut optimized_diagnostics = Vec::new();
         let mut physical_next_cursor = None;
-        if matches!(
+        if prefiltered_scan_cursor.is_some() {
+            let scan_result = self.scan_ssed_prefiltered_index_rows_paged(
+                &query.mode,
+                &needle,
+                true,
+                prefiltered_scan_cursor,
+                |row| collector.push_row(row),
+            )?;
+            physical_next_cursor = scan_result.next_cursor;
+            collector.extend_diagnostics(scan_result.diagnostics);
+        } else if matches!(
             query.mode,
             SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
         ) {
@@ -85,6 +103,20 @@ impl ReaderBookPackage {
                     })?;
                 physical_next_cursor = scan_result.next_cursor;
                 scan_result.diagnostics
+            } else if matches!(
+                query.mode,
+                SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+            ) && scan_needs_prefilter_fallback
+            {
+                let scan_result = self.scan_ssed_prefiltered_index_rows_paged(
+                    &query.mode,
+                    &needle,
+                    true,
+                    None,
+                    |row| collector.push_row(row),
+                )?;
+                physical_next_cursor = scan_result.next_cursor;
+                scan_result.diagnostics
             } else {
                 self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?
             };
@@ -104,13 +136,15 @@ impl ReaderBookPackage {
                 query.label_gaiji_policy(),
             );
             fallback_collector.extend_diagnostics(optimized_diagnostics);
-            let scan_diagnostics = self.scan_ssed_prefiltered_existing_index_rows(
+            let scan_result = self.scan_ssed_prefiltered_index_rows_paged(
                 &query.mode,
                 &needle,
                 true,
+                None,
                 |row| fallback_collector.push_row(row),
             )?;
-            fallback_collector.extend_diagnostics(scan_diagnostics);
+            physical_next_cursor = scan_result.next_cursor;
+            fallback_collector.extend_diagnostics(scan_result.diagnostics);
             collector = fallback_collector;
         }
         let mut page = collector.into_search_page(query.limit);
@@ -118,42 +152,6 @@ impl ReaderBookPackage {
             page.next_cursor = physical_next_cursor;
         }
         Ok(page)
-    }
-
-    fn scan_ssed_prefiltered_existing_index_rows(
-        &self,
-        mode: &SearchMode,
-        needle: &str,
-        include_simple_indexes: bool,
-        on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
-    ) -> Result<Vec<Diagnostic>> {
-        let probe = if *mode == SearchMode::Backward {
-            reverse_search_match_text(needle)
-        } else {
-            needle.to_owned()
-        };
-        let candidates = ssed_index_page_prefilter_candidates(&probe);
-        if candidates.is_empty() {
-            return self.scan_ssed_simple_index_rows(None, on_row);
-        }
-        self.scan_existing_ssed_simple_index_rows_with_filters(
-            |component| {
-                if component.multi == 0xff {
-                    return false;
-                }
-                if !include_simple_indexes && is_simple_leaf_index_type(component.component_type) {
-                    return false;
-                }
-                let is_backward_index = ssed_index_component_name_is_backward(&component.filename);
-                match mode {
-                    SearchMode::Exact | SearchMode::Forward => !is_backward_index,
-                    SearchMode::Backward => is_backward_index,
-                    _ => true,
-                }
-            },
-            |_, page| ssed_body_window_may_contain_query(page, &candidates),
-            on_row,
-        )
     }
 
     fn scan_ssed_partial_index_rows(
