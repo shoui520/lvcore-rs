@@ -189,6 +189,22 @@ impl HoureiStore {
             .into_iter()
             .filter(|column| has_column(&columns, column))
             .collect::<Vec<_>>();
+            if matches!(
+                mode,
+                SearchMode::Exact
+                    | SearchMode::Forward
+                    | SearchMode::Backward
+                    | SearchMode::Partial
+            ) {
+                return hourei_title_search_page(
+                    connection,
+                    query,
+                    mode,
+                    offset,
+                    limit,
+                    &title_columns,
+                );
+            }
             let mut search_columns = title_columns.clone();
             if has_column(&columns, "f_text_plane") {
                 search_columns.push("f_text_plane");
@@ -556,6 +572,62 @@ impl HoureiStore {
                 .map_err(Error::from)
         })
     }
+}
+
+fn hourei_title_search_page(
+    connection: &Connection,
+    query: &str,
+    mode: &SearchMode,
+    offset: usize,
+    limit: usize,
+    title_columns: &[&str],
+) -> Result<Vec<HoureiSearchHit>> {
+    if title_columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (where_clause, params) = hourei_search_where(query, mode, title_columns);
+    let exact_order = title_columns
+        .iter()
+        .map(|column| format!("{} = ?", quote_identifier(column)))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    let forward_order = title_columns
+        .iter()
+        .map(|column| format!("{} like ? escape '\\'", quote_identifier(column)))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    let order_prefix =
+        format!("case when {exact_order} then 0 when {forward_order} then 1 else 2 end, ");
+    let mut sql_params = params;
+    for _ in title_columns {
+        sql_params.push(query.to_owned());
+    }
+    for _ in title_columns {
+        sql_params.push(format!("{}%", escape_sql_like(query)));
+    }
+    sql_params.push(limit.to_string());
+    sql_params.push(offset.to_string());
+
+    let sql = format!(
+        "select f_hore_id, f_name, f_name_sub, f_abbr1 \
+         from t_hore where {where_clause} order by {order_prefix}f_kana_order, f_hore_id limit ? offset ?"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(sql_params.iter()), |row| {
+        let hore_id = sqlite_value_to_string(row.get_ref(0)?)?;
+        let name = sqlite_value_to_string(row.get_ref(1)?)?;
+        let name_sub = sqlite_value_to_string(row.get_ref(2)?)?;
+        let abbr1 = sqlite_value_to_string(row.get_ref(3)?)?;
+        let title_text = hourei_law_label(&name, &name_sub, &abbr1, &hore_id);
+        Ok(HoureiSearchHit {
+            hore_id,
+            title_html: escape_plain_label_html(&title_text),
+            title_text,
+            snippet_html: None,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
 }
 
 fn is_valid_hourei_law_id(hore_id: &str) -> bool {

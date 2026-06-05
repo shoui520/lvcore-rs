@@ -455,12 +455,54 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     assert_eq!(page.hits[0].title_text, "民法");
     assert_eq!(page.hits[0].href, page.hits[0].target.href());
 
-    let first = package
+    let body_only_forward = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "本文".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert!(body_only_forward.hits.is_empty());
+
+    let body_only_partial = package
         .search(&SearchQuery {
             scope: SearchScope::CurrentBook {
                 book_id: package.metadata().book_id.clone(),
             },
             mode: SearchMode::Partial,
+            query: "本文".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert!(body_only_partial.hits.is_empty());
+
+    let body_fulltext = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "本文".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(body_fulltext.hits.len(), 2);
+
+    let first = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
             query: "本文".to_owned(),
             cursor: None,
             limit: 1,
@@ -474,7 +516,7 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
             scope: SearchScope::CurrentBook {
                 book_id: package.metadata().book_id.clone(),
             },
-            mode: SearchMode::Partial,
+            mode: SearchMode::FullText,
             query: "本文".to_owned(),
             cursor: first.next_cursor,
             limit: 1,
