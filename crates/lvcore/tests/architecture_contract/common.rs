@@ -212,7 +212,7 @@ pub(crate) fn write_minimal_multiview_content_fixture(path: &Path) {
               f_All text
             );
             insert into t_contents values
-              (1, '<b>まえがき</b>', '<article><h1>まえがき</h1><p>body</p><a href="lved_ref:entry:000002">next</a><img src="pic.png"></article>');
+              (1, '<b>まえがき</b>', '<article><h1>まえがき</h1><p>body</p><a href="lved_ref:entry:000002">next</a><img src="pic.png"><img src="javascript:bad()"><object data="file:///tmp/outside.bin"></object><img src="lvcore://resource/already-normalized"></article>');
             insert into t_contents values
               (2, '<b>本文</b>', '<article><h1>本文</h1><p>body</p></article>');
             insert into t_contents values

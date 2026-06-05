@@ -101,8 +101,16 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     assert!(html.contains("<article><h1>まえがき</h1><p>body</p>"));
     assert!(html.contains(r#"<a href="lvcore://target/"#));
     assert!(html.contains(r#"<img src="lvcore://resource/"#));
+    assert!(html.contains(r#"src="javascript:bad()""#));
+    assert!(html.contains(r#"data="file:///tmp/outside.bin""#));
+    assert!(html.contains(r#"src="lvcore://resource/already-normalized""#));
     assert_eq!(view.links.len(), 1);
     assert_eq!(view.resources.len(), 1);
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "resource_missing")
+    );
     let basic_view = package
         .render_target(
             &target,

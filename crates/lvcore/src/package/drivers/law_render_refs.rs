@@ -172,10 +172,14 @@ impl ReaderBookPackage {
     }
 
     fn hourei_package_resource(&self, raw_value: &str) -> Result<Option<InternalResource>> {
+        let value = html_unescape_minimal(raw_value).trim().replace('\\', "/");
+        if html_resource_ref_is_not_package_owned(&value) {
+            return Ok(None);
+        }
         let Some(store) = &self.hourei_store else {
             return Ok(None);
         };
-        let Some(path) = store.resource_path_by_reference(raw_value)? else {
+        let Some(path) = store.resource_path_by_reference(&value)? else {
             return Ok(None);
         };
         let path = path.to_string_lossy().replace('\\', "/");
@@ -224,12 +228,7 @@ impl ReaderBookPackage {
 
     fn multiview_package_resource(&self, raw_value: &str) -> Result<Option<InternalResource>> {
         let value = html_unescape_minimal(raw_value).trim().replace('\\', "/");
-        if value.is_empty()
-            || value.starts_with('#')
-            || value.starts_with("http://")
-            || value.starts_with("https://")
-            || value.starts_with("data:")
-        {
+        if html_resource_ref_is_not_package_owned(&value) {
             return Ok(None);
         }
         let relative = value.split(['#', '?']).next().unwrap_or("").trim();
@@ -255,4 +254,19 @@ impl ReaderBookPackage {
             path: relative.to_owned(),
         }))
     }
+}
+
+fn html_resource_ref_is_not_package_owned(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.starts_with('#') || value.starts_with('/') {
+        return true;
+    }
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("javascript:")
+        || lower.starts_with("data:")
+        || lower.starts_with("file:")
+        || lower.starts_with("lvcore://")
 }
