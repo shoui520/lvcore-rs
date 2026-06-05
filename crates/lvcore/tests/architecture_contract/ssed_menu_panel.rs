@@ -746,6 +746,27 @@ fn ssed_ios_plist_data_labels_decode_as_title_text() {
 
     let package = DriverRegistry::default().open_best(&package_root).unwrap();
     let panel = package.open_surface("ios-plist:indexSearch.plist").unwrap();
+    let targets = panel.actionable_targets();
+    assert_eq!(targets.len(), 1);
+    assert!(matches!(
+        targets[0].sequence_hint.as_ref(),
+        Some(lvcore::SequenceHint::PanelOrder { value })
+            if value == "ios-plist:indexSearch.plist"
+    ));
+    let window = package
+        .resolve_target_window(
+            &targets[0].target,
+            targets[0].sequence_hint.as_ref(),
+            0,
+            0,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert!(window.diagnostics.iter().all(|diagnostic| {
+        diagnostic.code != "sequence_surface_not_ordered"
+            && diagnostic.code != "sequence_target_not_in_ssed_panel"
+    }));
+
     let NavigationSurface::Panel { cells, .. } = panel else {
         panic!("iOS plist data labels should open as a panel surface");
     };

@@ -453,7 +453,10 @@ impl ReaderBookPackage {
         let Some(SequenceHint::PanelOrder { value: panel_id }) = sequence_hint else {
             return Ok(None);
         };
-        let surface_id = if panel_id == "panels" || panel_id.starts_with("panels:") {
+        let surface_id = if panel_id == "panels"
+            || panel_id.starts_with("panels:")
+            || super::ssed_ios_plist_surfaces::is_ssed_ios_panel_surface_id(panel_id)
+        {
             panel_id.clone()
         } else {
             format!("panels:{panel_id}")
