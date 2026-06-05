@@ -128,6 +128,9 @@ impl ReaderBookPackage {
         let index_bounded_length =
             if allow_index_boundary && end.is_none() && inferred_length.is_none() {
                 self.ssed_next_index_body_pointer_after(SsedIndexPointer { block, offset })?
+                    .filter(|end| {
+                        ssed_index_bound_is_plausible(SsedIndexPointer { block, offset }, *end)
+                    })
                     .and_then(|end| {
                         bounded_ssed_stream_length(
                             catalog,

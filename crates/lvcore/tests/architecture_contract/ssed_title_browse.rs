@@ -37,10 +37,11 @@ fn ssed_simple_title_index_surface_resolves_entry_targets() {
     assert_eq!(items[0].label_text, "alpha");
     assert_eq!(
         items[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
+        InternalTarget::SsedIndexAddress {
             component: "HONMON.DIC".to_owned(),
             block: 1,
             offset: 2,
+            index_component: "FHINDEX.DIC".to_owned(),
         }
     );
 }
@@ -141,10 +142,11 @@ fn title_index_browse_does_not_apply_backward_body_bounds() {
     );
     assert_eq!(
         items[1].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
+        InternalTarget::SsedIndexAddress {
             component: "HONMON.DIC".to_owned(),
             block: 1,
             offset: 8,
+            index_component: "FHINDEX.DIC".to_owned(),
         }
     );
 }
@@ -181,6 +183,13 @@ fn title_index_browse_does_not_apply_huge_sparse_body_bounds() {
         "FHINDEX.DIC",
     );
     fs::write(dir.path().join("DICT.IDX"), catalog).unwrap();
+    let mut honmon = vec![b'x'; 300 * 2048 + 16];
+    honmon[2..6].copy_from_slice(b"body");
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(&honmon),
+    )
+    .unwrap();
     fs::write(
         dir.path().join("FHTITLE.DIC"),
         sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0a"),
@@ -203,12 +212,18 @@ fn title_index_browse_does_not_apply_huge_sparse_body_bounds() {
 
     assert_eq!(
         items[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
+        InternalTarget::SsedIndexAddress {
             component: "HONMON.DIC".to_owned(),
             block: 1,
             offset: 2,
+            index_component: "FHINDEX.DIC".to_owned(),
         }
     );
+    let body = package.visual_body_for_target(&items[0].target).unwrap();
+    let VisualBody::SsedStream { length, .. } = body else {
+        panic!("sparse title/index item should resolve to an SSED stream");
+    };
+    assert_eq!(length, None);
 }
 
 #[test]

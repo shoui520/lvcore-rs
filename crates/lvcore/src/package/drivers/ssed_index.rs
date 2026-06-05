@@ -475,10 +475,10 @@ impl ReaderBookPackage {
         row: &SsedIndexRow,
         next_row: Option<&SsedIndexRow>,
     ) -> Result<std::result::Result<TargetToken, Diagnostic>> {
-        self.ssed_target_for_index_pointer_with_bound(
-            row.body,
-            ssed_plausible_adjacent_index_bound(row, next_row),
-        )
+        if let Some(end) = ssed_plausible_adjacent_index_bound(row, next_row) {
+            return self.ssed_target_for_index_pointer_with_bound(row.body, Some(end));
+        }
+        self.ssed_target_for_search_index_row(row)
     }
 
     pub(in crate::package) fn ssed_target_for_search_index_row(
@@ -732,7 +732,10 @@ impl ReaderBookPackage {
     }
 }
 
-fn ssed_adjacent_index_bound_is_plausible(start: SsedIndexPointer, end: SsedIndexPointer) -> bool {
+pub(in crate::package::drivers) fn ssed_index_bound_is_plausible(
+    start: SsedIndexPointer,
+    end: SsedIndexPointer,
+) -> bool {
     ssed_index_pointer_distance(start, end)
         .is_some_and(|distance| distance <= SSED_ADJACENT_INDEX_BODY_BOUND_MAX_BYTES)
 }
@@ -744,7 +747,7 @@ fn ssed_plausible_adjacent_index_bound(
     next_row
         .filter(|next| next.body != row.body)
         .filter(|next| (next.body.block, next.body.offset) > (row.body.block, row.body.offset))
-        .filter(|next| ssed_adjacent_index_bound_is_plausible(row.body, next.body))
+        .filter(|next| ssed_index_bound_is_plausible(row.body, next.body))
         .map(|next| next.body)
 }
 

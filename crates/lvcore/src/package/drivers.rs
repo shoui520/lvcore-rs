@@ -211,6 +211,7 @@ use crate::storage::{
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
 use self::hourei_labels::hourei_law_node_label;
+use self::ssed_index::ssed_index_bound_is_plausible;
 use self::ssed_multi_ids::{
     parse_ssed_multi_surface_id, ssed_multi_record_index_ref, ssed_multi_record_menu_ref,
     ssed_multi_record_surface_id, ssed_multi_root_surface_id,
