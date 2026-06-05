@@ -102,7 +102,7 @@ impl SearchPage {
         if self.hits.len() > SEARCH_RESULT_SEQUENCE_MAX_TARGETS {
             self.result_sequence = None;
             for hit in &mut self.hits {
-                hit.sequence_hint = None;
+                clear_page_owned_sequence_hint(hit);
             }
             self.diagnostics.push(
                 Diagnostic::info(
@@ -120,10 +120,16 @@ impl SearchPage {
 
         let value = SearchResultSequence::from_search_page(self)?.encode()?;
         for hit in &mut self.hits {
-            hit.sequence_hint = None;
+            clear_page_owned_sequence_hint(hit);
         }
         self.result_sequence = Some(value);
         Ok(())
+    }
+}
+
+fn clear_page_owned_sequence_hint(hit: &mut SearchHit) {
+    if matches!(hit.sequence_hint, Some(SequenceHint::SearchResults { .. })) {
+        hit.sequence_hint = None;
     }
 }
 

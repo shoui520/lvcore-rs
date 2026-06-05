@@ -1018,4 +1018,35 @@ mod tests {
         assert!(!sequence.is_empty());
         assert!(page.hits.iter().all(|hit| hit.sequence_hint.is_none()));
     }
+
+    #[test]
+    fn search_pages_keep_provider_owned_hit_sequence_hints() {
+        let mut provider_owned_hit = search_hit(0);
+        provider_owned_hit.sequence_hint = Some(SequenceHint::MenuOrder {
+            value: "menu:main".to_owned(),
+            cursor: Some("node:1".to_owned()),
+        });
+        let mut duplicated_search_hint = search_hit(1);
+        duplicated_search_hint.sequence_hint = Some(SequenceHint::SearchResults {
+            value: "legacy-page-owned-duplicate".to_owned(),
+        });
+        let mut page = SearchPage {
+            hits: vec![provider_owned_hit, duplicated_search_hint],
+            next_cursor: None,
+            result_sequence: None,
+            diagnostics: Vec::new(),
+        };
+
+        populate_search_result_sequence(&mut page).unwrap();
+
+        assert!(page.result_sequence.is_some());
+        assert_eq!(
+            page.hits[0].sequence_hint,
+            Some(SequenceHint::MenuOrder {
+                value: "menu:main".to_owned(),
+                cursor: Some("node:1".to_owned()),
+            })
+        );
+        assert!(page.hits[1].sequence_hint.is_none());
+    }
 }
