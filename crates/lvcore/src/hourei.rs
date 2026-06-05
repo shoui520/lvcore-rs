@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use encoding_rs::SHIFT_JIS;
 use rusqlite::types::ValueRef;
@@ -11,10 +12,32 @@ use crate::error::{Error, Result};
 use crate::search::SearchMode;
 use crate::storage::regular_file_inside_root;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HoureiStore {
     pub root: PathBuf,
+    #[serde(skip, default = "default_hourei_core_db_cache")]
+    core_db_cache: Arc<Mutex<BTreeMap<String, Connection>>>,
 }
+
+fn default_hourei_core_db_cache() -> Arc<Mutex<BTreeMap<String, Connection>>> {
+    Arc::new(Mutex::new(BTreeMap::new()))
+}
+
+impl std::fmt::Debug for HoureiStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HoureiStore")
+            .field("root", &self.root)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for HoureiStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root
+    }
+}
+
+impl Eq for HoureiStore {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HoureiCategory {
@@ -49,6 +72,13 @@ pub struct HoureiLawWindow {
 }
 
 impl HoureiStore {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            core_db_cache: default_hourei_core_db_cache(),
+        }
+    }
+
     pub fn discover(root: &Path) -> Result<Option<Self>> {
         let required = [
             "_DataBase/hore_base.db",
@@ -59,67 +89,66 @@ impl HoureiStore {
             .iter()
             .all(|path| regular_file_inside_root(root, &root.join(path)).unwrap_or(false))
         {
-            Ok(Some(Self {
-                root: root.to_path_buf(),
-            }))
+            Ok(Some(Self::new(root.to_path_buf())))
         } else {
             Ok(None)
         }
     }
 
     pub fn categories_with_laws(&self) -> Result<Vec<HoureiCategory>> {
-        let connection = self.open_core_db("hore_base.db")?;
-        let mut categories = BTreeMap::<i64, HoureiCategory>::new();
-        if sqlite_table_has_columns(
-            &connection,
-            "t_category",
-            &["f_category_id", "f_category_name"],
-        )? {
-            let mut statement = connection.prepare(
-                "select f_category_id, f_category_name from t_category order by f_category_id",
-            )?;
-            let rows = statement.query_map([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    sqlite_value_to_string(row.get_ref(1)?)?,
-                ))
-            })?;
-            for row in rows {
-                let (id, name) = row?;
-                categories.insert(
-                    id,
-                    HoureiCategory {
+        self.with_core_db("hore_base.db", |connection| {
+            let mut categories = BTreeMap::<i64, HoureiCategory>::new();
+            if sqlite_table_has_columns(
+                connection,
+                "t_category",
+                &["f_category_id", "f_category_name"],
+            )? {
+                let mut statement = connection.prepare(
+                    "select f_category_id, f_category_name from t_category order by f_category_id",
+                )?;
+                let rows = statement.query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        sqlite_value_to_string(row.get_ref(1)?)?,
+                    ))
+                })?;
+                for row in rows {
+                    let (id, name) = row?;
+                    categories.insert(
                         id,
-                        name,
-                        laws: Vec::new(),
-                    },
-                );
+                        HoureiCategory {
+                            id,
+                            name,
+                            laws: Vec::new(),
+                        },
+                    );
+                }
             }
-        }
 
-        let mut statement = connection.prepare(
-            "select f_hore_id, f_name, f_name_sub, f_abbr1, f_category_id, f_kana_order \
-             from t_hore order by f_category_id, f_kana_order, f_hore_id",
-        )?;
-        let rows = statement.query_map([], hourei_law_entry_from_row)?;
-        for law in rows {
-            let law = law?;
-            let category_id = law.category_id.unwrap_or(-1);
-            let category = categories
-                .entry(category_id)
-                .or_insert_with(|| HoureiCategory {
-                    id: category_id,
-                    name: if category_id == -1 {
-                        "未分類".to_owned()
-                    } else {
-                        format!("Category {category_id}")
-                    },
-                    laws: Vec::new(),
-                });
-            category.laws.push(law);
-        }
+            let mut statement = connection.prepare(
+                "select f_hore_id, f_name, f_name_sub, f_abbr1, f_category_id, f_kana_order \
+                 from t_hore order by f_category_id, f_kana_order, f_hore_id",
+            )?;
+            let rows = statement.query_map([], hourei_law_entry_from_row)?;
+            for law in rows {
+                let law = law?;
+                let category_id = law.category_id.unwrap_or(-1);
+                let category = categories
+                    .entry(category_id)
+                    .or_insert_with(|| HoureiCategory {
+                        id: category_id,
+                        name: if category_id == -1 {
+                            "未分類".to_owned()
+                        } else {
+                            format!("Category {category_id}")
+                        },
+                        laws: Vec::new(),
+                    });
+                category.laws.push(law);
+            }
 
-        Ok(categories.into_values().collect())
+            Ok(categories.into_values().collect())
+        })
     }
 
     pub fn search(
@@ -141,97 +170,99 @@ impl HoureiStore {
         if limit == 0 || query.is_empty() {
             return Ok(Vec::new());
         }
-        let connection = self.open_core_db("hore_search_a.db")?;
-        if !sqlite_table_has_columns(&connection, "t_hore", &["f_hore_id", "f_name"])? {
-            return Ok(Vec::new());
-        }
-        let columns = sqlite_columns(&connection, "t_hore")?;
-        let title_columns = [
-            "f_name",
-            "f_name_sub",
-            "f_abbr1",
-            "f_abbr2",
-            "f_abbr3",
-            "f_abbr4",
-            "f_abbr5",
-            "f_abbr6",
-            "f_abbr7",
-        ]
-        .into_iter()
-        .filter(|column| has_column(&columns, column))
-        .collect::<Vec<_>>();
-        let mut search_columns = title_columns.clone();
-        if has_column(&columns, "f_text_plane") {
-            search_columns.push("f_text_plane");
-        }
-        if search_columns.is_empty() {
-            return Ok(Vec::new());
-        }
+        self.with_core_db("hore_search_a.db", |connection| {
+            if !sqlite_table_has_columns(connection, "t_hore", &["f_hore_id", "f_name"])? {
+                return Ok(Vec::new());
+            }
+            let columns = sqlite_columns(connection, "t_hore")?;
+            let title_columns = [
+                "f_name",
+                "f_name_sub",
+                "f_abbr1",
+                "f_abbr2",
+                "f_abbr3",
+                "f_abbr4",
+                "f_abbr5",
+                "f_abbr6",
+                "f_abbr7",
+            ]
+            .into_iter()
+            .filter(|column| has_column(&columns, column))
+            .collect::<Vec<_>>();
+            let mut search_columns = title_columns.clone();
+            if has_column(&columns, "f_text_plane") {
+                search_columns.push("f_text_plane");
+            }
+            if search_columns.is_empty() {
+                return Ok(Vec::new());
+            }
 
-        let (where_clause, params) = hourei_search_where(query, mode, &search_columns);
-        let exact_order = title_columns
-            .iter()
-            .map(|column| format!("{} = ?", quote_identifier(column)))
-            .collect::<Vec<_>>()
-            .join(" or ");
-        let forward_order = title_columns
-            .iter()
-            .map(|column| format!("{} like ? escape '\\'", quote_identifier(column)))
-            .collect::<Vec<_>>()
-            .join(" or ");
-        let order_prefix = if title_columns.is_empty() {
-            String::new()
-        } else {
-            format!("case when {exact_order} then 0 when {forward_order} then 1 else 2 end, ")
-        };
-        let mut sql_params = params;
-        for _ in &title_columns {
-            sql_params.push(query.to_owned());
-        }
-        for _ in &title_columns {
-            sql_params.push(format!("{}%", escape_sql_like(query)));
-        }
-        sql_params.push(limit.to_string());
-        sql_params.push(offset.to_string());
+            let (where_clause, params) = hourei_search_where(query, mode, &search_columns);
+            let exact_order = title_columns
+                .iter()
+                .map(|column| format!("{} = ?", quote_identifier(column)))
+                .collect::<Vec<_>>()
+                .join(" or ");
+            let forward_order = title_columns
+                .iter()
+                .map(|column| format!("{} like ? escape '\\'", quote_identifier(column)))
+                .collect::<Vec<_>>()
+                .join(" or ");
+            let order_prefix = if title_columns.is_empty() {
+                String::new()
+            } else {
+                format!("case when {exact_order} then 0 when {forward_order} then 1 else 2 end, ")
+            };
+            let mut sql_params = params;
+            for _ in &title_columns {
+                sql_params.push(query.to_owned());
+            }
+            for _ in &title_columns {
+                sql_params.push(format!("{}%", escape_sql_like(query)));
+            }
+            sql_params.push(limit.to_string());
+            sql_params.push(offset.to_string());
 
-        let sql = format!(
-            "select f_hore_id, f_name, f_name_sub, f_abbr1, f_text_plane \
-             from t_hore where {where_clause} order by {order_prefix}f_kana_order, f_hore_id limit ? offset ?"
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let rows = statement.query_map(params_from_iter(sql_params.iter()), |row| {
-            let hore_id = sqlite_value_to_string(row.get_ref(0)?)?;
-            let name = sqlite_value_to_string(row.get_ref(1)?)?;
-            let name_sub = sqlite_value_to_string(row.get_ref(2)?)?;
-            let abbr1 = sqlite_value_to_string(row.get_ref(3)?)?;
-            let text = sqlite_value_to_string(row.get_ref(4)?)?;
-            let title_text = hourei_law_label(&name, &name_sub, &abbr1, &hore_id);
-            Ok(HoureiSearchHit {
-                hore_id,
-                title_html: escape_plain_label_html(&title_text),
-                title_text,
-                snippet_html: nonempty_string(snippet(&text, 180))
-                    .map(|value| escape_plain_label_html(&value)),
-            })
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Error::from)
+            let sql = format!(
+                "select f_hore_id, f_name, f_name_sub, f_abbr1, f_text_plane \
+                 from t_hore where {where_clause} order by {order_prefix}f_kana_order, f_hore_id limit ? offset ?"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map(params_from_iter(sql_params.iter()), |row| {
+                let hore_id = sqlite_value_to_string(row.get_ref(0)?)?;
+                let name = sqlite_value_to_string(row.get_ref(1)?)?;
+                let name_sub = sqlite_value_to_string(row.get_ref(2)?)?;
+                let abbr1 = sqlite_value_to_string(row.get_ref(3)?)?;
+                let text = sqlite_value_to_string(row.get_ref(4)?)?;
+                let title_text = hourei_law_label(&name, &name_sub, &abbr1, &hore_id);
+                Ok(HoureiSearchHit {
+                    hore_id,
+                    title_html: escape_plain_label_html(&title_text),
+                    title_text,
+                    snippet_html: nonempty_string(snippet(&text, 180))
+                        .map(|value| escape_plain_label_html(&value)),
+                })
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::from)
+        })
     }
 
     pub fn law_entry(&self, hore_id: &str) -> Result<Option<HoureiLawEntry>> {
         if !is_valid_hourei_law_id(hore_id) {
             return Ok(None);
         }
-        let connection = self.open_core_db("hore_base.db")?;
-        connection
-            .query_row(
-                "select f_hore_id, f_name, f_name_sub, f_abbr1, f_category_id, f_kana_order \
-                 from t_hore where f_hore_id = ? limit 1",
-                [hore_id],
-                hourei_law_entry_from_row,
-            )
-            .optional()
-            .map_err(Error::from)
+        self.with_core_db("hore_base.db", |connection| {
+            connection
+                .query_row(
+                    "select f_hore_id, f_name, f_name_sub, f_abbr1, f_category_id, f_kana_order \
+                     from t_hore where f_hore_id = ? limit 1",
+                    [hore_id],
+                    hourei_law_entry_from_row,
+                )
+                .optional()
+                .map_err(Error::from)
+        })
     }
 
     pub fn laws_by_kana_initial(
@@ -244,44 +275,45 @@ impl HoureiStore {
         if kana_initial.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        let connection = self.open_core_db("hore_base.db")?;
-        let columns = sqlite_columns(&connection, "t_hore")?;
-        let Some(kana_column) = ["f_kana_ini", "f_temp_kana_ini"]
-            .into_iter()
-            .find(|column| has_column(&columns, column))
-        else {
-            return Ok(Vec::new());
-        };
-        let category_expr = if has_column(&columns, "f_category_id") {
-            quote_identifier("f_category_id")
-        } else {
-            "null".to_owned()
-        };
-        let kana_order_expr = if has_column(&columns, "f_kana_order") {
-            quote_identifier("f_kana_order")
-        } else {
-            "null".to_owned()
-        };
-        let order_expr = if has_column(&columns, "f_kana_order") {
-            format!("{}, f_hore_id", quote_identifier("f_kana_order"))
-        } else {
-            "f_hore_id".to_owned()
-        };
-        let sql = format!(
-            "select f_hore_id, f_name, f_name_sub, f_abbr1, {category_expr}, {kana_order_expr} \
-             from t_hore where {} = ? order by {order_expr} limit ? offset ?",
-            quote_identifier(kana_column)
-        );
-        let params = [
-            kana_initial.to_owned(),
-            limit.to_string(),
-            offset.to_string(),
-        ];
-        let mut statement = connection.prepare(&sql)?;
-        let rows =
-            statement.query_map(params_from_iter(params.iter()), hourei_law_entry_from_row)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Error::from)
+        self.with_core_db("hore_base.db", |connection| {
+            let columns = sqlite_columns(connection, "t_hore")?;
+            let Some(kana_column) = ["f_kana_ini", "f_temp_kana_ini"]
+                .into_iter()
+                .find(|column| has_column(&columns, column))
+            else {
+                return Ok(Vec::new());
+            };
+            let category_expr = if has_column(&columns, "f_category_id") {
+                quote_identifier("f_category_id")
+            } else {
+                "null".to_owned()
+            };
+            let kana_order_expr = if has_column(&columns, "f_kana_order") {
+                quote_identifier("f_kana_order")
+            } else {
+                "null".to_owned()
+            };
+            let order_expr = if has_column(&columns, "f_kana_order") {
+                format!("{}, f_hore_id", quote_identifier("f_kana_order"))
+            } else {
+                "f_hore_id".to_owned()
+            };
+            let sql = format!(
+                "select f_hore_id, f_name, f_name_sub, f_abbr1, {category_expr}, {kana_order_expr} \
+                 from t_hore where {} = ? order by {order_expr} limit ? offset ?",
+                quote_identifier(kana_column)
+            );
+            let params = [
+                kana_initial.to_owned(),
+                limit.to_string(),
+                offset.to_string(),
+            ];
+            let mut statement = connection.prepare(&sql)?;
+            let rows =
+                statement.query_map(params_from_iter(params.iter()), hourei_law_entry_from_row)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::from)
+        })
     }
 
     pub fn law_html(&self, hore_id: &str) -> Result<Option<String>> {
@@ -320,20 +352,23 @@ impl HoureiStore {
         if !is_valid_hourei_law_id(hore_id) {
             return Ok(None);
         }
-        let connection = self.open_core_db("hore_base.db")?;
-        let center_order = connection
-            .query_row(
-                "select f_kana_order from t_hore where f_hore_id = ? limit 1",
-                [hore_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
-        let Some(center_order) = center_order else {
+        let center = self.with_core_db("hore_base.db", |connection| {
+            connection
+                .query_row(
+                    "select f_hore_id, f_name, f_name_sub, f_abbr1, f_category_id, f_kana_order \
+                     from t_hore where f_hore_id = ? limit 1",
+                    [hore_id],
+                    hourei_law_entry_from_row,
+                )
+                .optional()
+                .map_err(Error::from)
+        })?;
+        let Some(center) = center else {
             return Ok(None);
         };
-        let center = self.law_entry(hore_id)?.ok_or_else(|| {
-            Error::Driver(format!("Hourei law metadata disappeared for {hore_id}"))
-        })?;
+        let center_order = center
+            .kana_order
+            .ok_or_else(|| Error::Driver(format!("Hourei law order is missing for {hore_id}")))?;
         let before_rows = self.laws_by_order_clause(
             "f_kana_order < ?",
             "f_kana_order desc, f_hore_id desc",
@@ -402,35 +437,50 @@ impl HoureiStore {
         Ok(Some(PathBuf::from(relative)))
     }
 
-    fn open_core_db(&self, name: &str) -> Result<Connection> {
-        let Some(path) = self.core_db_path(name)? else {
-            return Err(Error::Driver(format!(
-                "Hourei core database is missing or outside the package: {name}"
-            )));
-        };
-        open_readonly_sqlite(&path)
+    fn with_core_db<T>(
+        &self,
+        name: &str,
+        read: impl FnOnce(&Connection) -> Result<T>,
+    ) -> Result<T> {
+        let mut cache = self
+            .core_db_cache
+            .lock()
+            .map_err(|_| Error::Driver("Hourei core database cache is poisoned".to_owned()))?;
+        if !cache.contains_key(name) {
+            let Some(path) = self.core_db_path(name)? else {
+                return Err(Error::Driver(format!(
+                    "Hourei core database is missing or outside the package: {name}"
+                )));
+            };
+            cache.insert(name.to_owned(), open_readonly_sqlite(&path)?);
+        }
+        let connection = cache
+            .get(name)
+            .ok_or_else(|| Error::Driver(format!("Hourei core database cache missed {name}")))?;
+        read(connection)
     }
 
     fn law_id_exists(&self, hore_id: &str) -> Result<bool> {
         if !is_valid_hourei_law_id(hore_id) {
             return Ok(false);
         }
-        let Some(path) = self.core_db_path("hore_base.db")? else {
-            return Ok(false);
-        };
-        let connection = open_readonly_sqlite(&path)?;
-        if !sqlite_table_has_columns(&connection, "t_hore", &["f_hore_id"])? {
+        if self.core_db_path("hore_base.db")?.is_none() {
             return Ok(false);
         }
-        let exists = connection
-            .query_row(
-                "select 1 from t_hore where f_hore_id = ? limit 1",
-                [hore_id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
-        Ok(exists)
+        self.with_core_db("hore_base.db", |connection| {
+            if !sqlite_table_has_columns(connection, "t_hore", &["f_hore_id"])? {
+                return Ok(false);
+            }
+            let exists = connection
+                .query_row(
+                    "select 1 from t_hore where f_hore_id = ? limit 1",
+                    [hore_id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            Ok(exists)
+        })
     }
 
     fn core_db_path(&self, name: &str) -> Result<Option<PathBuf>> {
@@ -495,15 +545,16 @@ impl HoureiStore {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let connection = self.open_core_db("hore_base.db")?;
-        let sql = format!(
-            "select f_hore_id, f_name, f_name_sub, f_abbr1, f_category_id, f_kana_order \
-             from t_hore where {where_clause} order by {order_clause} limit ?"
-        );
-        let mut statement = connection.prepare(&sql)?;
-        let rows = statement.query_map((order, limit as i64), hourei_law_entry_from_row)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Error::from)
+        self.with_core_db("hore_base.db", |connection| {
+            let sql = format!(
+                "select f_hore_id, f_name, f_name_sub, f_abbr1, f_category_id, f_kana_order \
+                 from t_hore where {where_clause} order by {order_clause} limit ?"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map((order, limit as i64), hourei_law_entry_from_row)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::from)
+        })
     }
 }
 
@@ -730,9 +781,7 @@ mod tests {
     #[test]
     fn law_html_rejects_non_canonical_law_ids() {
         let root = tempdir().unwrap();
-        let store = HoureiStore {
-            root: root.path().to_path_buf(),
-        };
+        let store = HoureiStore::new(root.path().to_path_buf());
 
         for id in ["", "../outside", "123/../../outside", "123.db", "１２３"] {
             assert!(store.law_html(id).unwrap().is_none(), "{id}");
@@ -756,9 +805,7 @@ mod tests {
             html_dir.join("123_H.html"),
         )
         .unwrap();
-        let store = HoureiStore {
-            root: root.path().to_path_buf(),
-        };
+        let store = HoureiStore::new(root.path().to_path_buf());
 
         assert!(store.law_html("123").unwrap().is_none());
     }
@@ -781,9 +828,7 @@ mod tests {
             )
             .unwrap();
         symlink(outside_db, shard_dir.join("123.db")).unwrap();
-        let store = HoureiStore {
-            root: root.path().to_path_buf(),
-        };
+        let store = HoureiStore::new(root.path().to_path_buf());
 
         assert!(store.law_html("123").unwrap().is_none());
     }
@@ -801,9 +846,7 @@ mod tests {
             root.path().join("icon.png"),
         )
         .unwrap();
-        let store = HoureiStore {
-            root: root.path().to_path_buf(),
-        };
+        let store = HoureiStore::new(root.path().to_path_buf());
 
         assert!(
             store
@@ -818,9 +861,7 @@ mod tests {
         let root = tempdir().unwrap();
         let outside = tempdir().unwrap();
         fs::write(outside.path().join("outside.png"), b"outside").unwrap();
-        let store = HoureiStore {
-            root: root.path().to_path_buf(),
-        };
+        let store = HoureiStore::new(root.path().to_path_buf());
 
         assert!(
             store
