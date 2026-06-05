@@ -292,10 +292,15 @@ impl PackageDriver for LvlMultiViewDriver {
     fn open_detected(&self, detection: DetectedPackage) -> Result<Box<dyn BookPackage>> {
         let package_root = detection.root.clone();
         let store = MultiviewStore::discover(&package_root)?;
+        let has_law_navigation = store
+            .as_ref()
+            .map(MultiviewStore::has_law_navigation)
+            .transpose()?
+            .unwrap_or(false);
         Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
-            multiview_capabilities(),
+            multiview_capabilities(has_law_navigation),
             PackageStores {
                 multiview_store: store,
                 search_modes: standard_search_modes(),

@@ -52,6 +52,49 @@ fn multiview_preserved_html_packages_do_not_advertise_deferred_rendering() {
 }
 
 #[test]
+fn multiview_law_navigation_capability_is_payload_based() {
+    let simple = tempdir().unwrap();
+    fs::write(
+        simple.path().join("menuData.xml"),
+        r#"<list><item label="Book"><item label="前" href="000001" /></item></list>"#,
+    )
+    .unwrap();
+    write_minimal_multiview_content_fixture(&simple.path().join("blvdat"));
+    let simple_package = DriverRegistry::default().open_best(simple.path()).unwrap();
+    assert_eq!(
+        simple_package.metadata().format_family,
+        FormatFamily::LvlMultiView
+    );
+    assert!(
+        !simple_package
+            .metadata()
+            .capabilities
+            .contains(&Capability::LawNavigation),
+        "non-law MultiView dictionaries must not look like law books to the frontend"
+    );
+
+    let law = tempdir().unwrap();
+    write_minimal_multiview_law_fixture(law.path());
+    fs::write(
+        law.path().join("menuData.xml"),
+        r#"<list><item label="法令"><item label="五十音順法令一覧" href="list:kana:み" /></item></list>"#,
+    )
+    .unwrap();
+    let law_package = DriverRegistry::default().open_best(law.path()).unwrap();
+    assert_eq!(
+        law_package.metadata().format_family,
+        FormatFamily::LvlMultiView
+    );
+    assert!(
+        law_package
+            .metadata()
+            .capabilities
+            .contains(&Capability::LawNavigation),
+        "law MultiView payloads should advertise law navigation"
+    );
+}
+
+#[test]
 fn multiview_menu_data_opens_as_hierarchical_tree() {
     let dir = tempdir().unwrap();
     fs::write(

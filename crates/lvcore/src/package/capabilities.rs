@@ -25,8 +25,8 @@ pub(super) fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> 
     capabilities
 }
 
-pub(super) fn multiview_capabilities() -> Vec<Capability> {
-    vec![
+pub(super) fn multiview_capabilities(has_law_navigation: bool) -> Vec<Capability> {
+    let mut capabilities = vec![
         Capability::NativeSearch,
         Capability::FullTextSearch,
         Capability::TitleIndexBrowse,
@@ -35,8 +35,11 @@ pub(super) fn multiview_capabilities() -> Vec<Capability> {
         Capability::Gaiji,
         Capability::PreservedHtml,
         Capability::ContinuousView,
-        Capability::LawNavigation,
-    ]
+    ];
+    if has_law_navigation {
+        capabilities.push(Capability::LawNavigation);
+    }
+    capabilities
 }
 
 pub(super) fn hourei_capabilities() -> Vec<Capability> {

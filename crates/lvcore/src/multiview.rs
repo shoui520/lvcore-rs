@@ -147,6 +147,15 @@ impl MultiviewStore {
         self.law_search_page(query, mode, offset, limit)
     }
 
+    pub fn has_law_navigation(&self) -> Result<bool> {
+        Ok(self
+            .first_payload_by_role(MultiviewPayloadRole::LawMetadata)?
+            .is_some()
+            || self
+                .first_payload_by_role(MultiviewPayloadRole::LawBody)?
+                .is_some())
+    }
+
     fn content_search_page(
         &self,
         query: &str,
