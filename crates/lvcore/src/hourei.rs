@@ -205,62 +205,37 @@ impl HoureiStore {
                     &title_columns,
                 );
             }
-            let mut search_columns = title_columns.clone();
-            if has_column(&columns, "f_text_plane") {
-                search_columns.push("f_text_plane");
+            let title_count = hourei_title_match_count(connection, query, mode, &title_columns)?;
+            let mut hits = Vec::new();
+            if offset < title_count {
+                hits.extend(hourei_title_search_page(
+                    connection,
+                    query,
+                    mode,
+                    offset,
+                    limit,
+                    &title_columns,
+                )?);
             }
-            if search_columns.is_empty() {
-                return Ok(Vec::new());
+            if hits.len() >= limit {
+                hits.truncate(limit);
+                return Ok(hits);
             }
-
-            let (where_clause, params) = hourei_search_where(query, mode, &search_columns);
-            let exact_order = title_columns
-                .iter()
-                .map(|column| format!("{} = ?", quote_identifier(column)))
-                .collect::<Vec<_>>()
-                .join(" or ");
-            let forward_order = title_columns
-                .iter()
-                .map(|column| format!("{} like ? escape '\\'", quote_identifier(column)))
-                .collect::<Vec<_>>()
-                .join(" or ");
-            let order_prefix = if title_columns.is_empty() {
-                String::new()
-            } else {
-                format!("case when {exact_order} then 0 when {forward_order} then 1 else 2 end, ")
-            };
-            let mut sql_params = params;
-            for _ in &title_columns {
-                sql_params.push(query.to_owned());
+            if !has_column(&columns, "f_text_plane") {
+                return Ok(hits);
             }
-            for _ in &title_columns {
-                sql_params.push(format!("{}%", escape_sql_like(query)));
-            }
-            sql_params.push(limit.to_string());
-            sql_params.push(offset.to_string());
-
-            let sql = format!(
-                "select f_hore_id, f_name, f_name_sub, f_abbr1, f_text_plane \
-                 from t_hore where {where_clause} order by {order_prefix}f_kana_order, f_hore_id limit ? offset ?"
-            );
-            let mut statement = connection.prepare(&sql)?;
-            let rows = statement.query_map(params_from_iter(sql_params.iter()), |row| {
-                let hore_id = sqlite_value_to_string(row.get_ref(0)?)?;
-                let name = sqlite_value_to_string(row.get_ref(1)?)?;
-                let name_sub = sqlite_value_to_string(row.get_ref(2)?)?;
-                let abbr1 = sqlite_value_to_string(row.get_ref(3)?)?;
-                let text = sqlite_value_to_string(row.get_ref(4)?)?;
-                let title_text = hourei_law_label(&name, &name_sub, &abbr1, &hore_id);
-                Ok(HoureiSearchHit {
-                    hore_id,
-                    title_html: escape_plain_label_html(&title_text),
-                    title_text,
-                    snippet_html: nonempty_string(snippet(&text, 180))
-                        .map(|value| escape_plain_label_html(&value)),
-                })
-            })?;
-            rows.collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(Error::from)
+            let body_offset = offset.saturating_sub(title_count);
+            let body_limit = limit.saturating_sub(hits.len());
+            hits.extend(hourei_body_search_page(
+                connection,
+                query,
+                mode,
+                body_offset,
+                body_limit,
+                &title_columns,
+            )?);
+            hits.truncate(limit);
+            Ok(hits)
         })
     }
 
@@ -630,6 +605,68 @@ fn hourei_title_search_page(
         .map_err(Error::from)
 }
 
+fn hourei_title_match_count(
+    connection: &Connection,
+    query: &str,
+    mode: &SearchMode,
+    title_columns: &[&str],
+) -> Result<usize> {
+    if title_columns.is_empty() {
+        return Ok(0);
+    }
+    let (where_clause, params) = hourei_search_where(query, mode, title_columns);
+    let sql = format!("select count(*) from t_hore where {where_clause}");
+    let count = connection.query_row(&sql, params_from_iter(params.iter()), |row| {
+        row.get::<_, i64>(0)
+    })?;
+    Ok(count.max(0) as usize)
+}
+
+fn hourei_body_search_page(
+    connection: &Connection,
+    query: &str,
+    mode: &SearchMode,
+    offset: usize,
+    limit: usize,
+    title_columns: &[&str],
+) -> Result<Vec<HoureiSearchHit>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let (body_where, mut params) = hourei_search_where(query, mode, &["f_text_plane"]);
+    let where_clause = if title_columns.is_empty() {
+        body_where
+    } else {
+        let (title_where, title_params) = hourei_search_where(query, mode, title_columns);
+        params.extend(title_params);
+        format!("({body_where}) and not ({title_where})")
+    };
+    params.push(limit.to_string());
+    params.push(offset.to_string());
+    let sql = format!(
+        "select f_hore_id, f_name, f_name_sub, f_abbr1, f_text_plane \
+         from t_hore where {where_clause} order by f_kana_order, f_hore_id limit ? offset ?"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(params.iter()), |row| {
+        let hore_id = sqlite_value_to_string(row.get_ref(0)?)?;
+        let name = sqlite_value_to_string(row.get_ref(1)?)?;
+        let name_sub = sqlite_value_to_string(row.get_ref(2)?)?;
+        let abbr1 = sqlite_value_to_string(row.get_ref(3)?)?;
+        let text = sqlite_value_to_string(row.get_ref(4)?)?;
+        let title_text = hourei_law_label(&name, &name_sub, &abbr1, &hore_id);
+        Ok(HoureiSearchHit {
+            hore_id,
+            title_html: escape_plain_label_html(&title_text),
+            title_text,
+            snippet_html: nonempty_string(snippet(&text, 180))
+                .map(|value| escape_plain_label_html(&value)),
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
 fn is_valid_hourei_law_id(hore_id: &str) -> bool {
     !hore_id.is_empty() && hore_id.bytes().all(|byte| byte.is_ascii_digit())
 }
@@ -941,5 +978,55 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn fulltext_search_returns_title_matches_before_body_only_matches() {
+        let root = tempdir().unwrap();
+        let db_dir = root.path().join("_DataBase");
+        fs::create_dir_all(&db_dir).unwrap();
+        let connection = Connection::open(db_dir.join("hore_search_a.db")).unwrap();
+        connection
+            .execute_batch(
+                "create table t_hore (
+                    f_hore_id text primary key,
+                    f_name text,
+                    f_name_sub text,
+                    f_abbr1 text,
+                    f_kana_order integer,
+                    f_text_plane text
+                );
+                insert into t_hore values ('1', '憲法A', '', '', 10, '本文にも憲法がある');
+                insert into t_hore values ('2', '憲法B', '', '', 20, '本文にも憲法がある');
+                insert into t_hore values ('3', '民法', '', '', 1, '本文だけに憲法がある');
+                insert into t_hore values ('4', '商法', '', '', 30, '本文だけにも憲法がある');",
+            )
+            .unwrap();
+        drop(connection);
+        let store = HoureiStore::new(root.path().to_path_buf());
+
+        let first_page = store
+            .search_page("憲法", &SearchMode::FullText, 0, 2)
+            .unwrap();
+        assert_eq!(
+            first_page
+                .iter()
+                .map(|hit| hit.hore_id.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "2"]
+        );
+        assert!(first_page.iter().all(|hit| hit.snippet_html.is_none()));
+
+        let second_page = store
+            .search_page("憲法", &SearchMode::FullText, 2, 2)
+            .unwrap();
+        assert_eq!(
+            second_page
+                .iter()
+                .map(|hit| hit.hore_id.as_str())
+                .collect::<Vec<_>>(),
+            ["3", "4"]
+        );
+        assert!(second_page.iter().all(|hit| hit.snippet_html.is_some()));
     }
 }
