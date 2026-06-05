@@ -89,10 +89,7 @@ impl ReaderBookPackage {
                 let mut scan_state = SsedIndexScanState::default();
                 let mut scanned_leaf_pages = 0usize;
                 'pages: for page_index in start_page..page_count {
-                    let page = reader.read_range(
-                        component_page_offset(component_read_base, page_index),
-                        INDEX_PAGE_SIZE,
-                    )?;
+                    let page = read_index_page(&mut reader, component_read_base, page_index)?;
                     if page.len() < 4 {
                         break;
                     }
@@ -105,7 +102,7 @@ impl ReaderBookPackage {
                     let (rows, unknown) = parse_supported_leaf_page(
                         &component.filename,
                         component.component_type,
-                        &page,
+                        page,
                         page_index as u32,
                         logical_block,
                         &mut scan_state,
@@ -200,10 +197,7 @@ impl ReaderBookPackage {
         let mut guard = 0usize;
         while page_index < page_count && guard <= page_count {
             guard = guard.saturating_add(1);
-            let page = reader.read_range(
-                component_page_offset(component_read_base, page_index),
-                INDEX_PAGE_SIZE,
-            )?;
+            let page = read_index_page(reader, component_read_base, page_index)?;
             if page.len() < 4 {
                 return Ok(None);
             }
@@ -213,7 +207,7 @@ impl ReaderBookPackage {
             }
             let rows = parse_internal_page(
                 &component.filename,
-                &page,
+                page,
                 page_index as u32,
                 component.start_block + page_index as u32,
             );
@@ -310,10 +304,7 @@ impl ReaderBookPackage {
                 if row_limit.is_some_and(|limit| row_count >= limit) {
                     break;
                 }
-                let page = reader.read_range(
-                    component_page_offset(component_read_base, page_index),
-                    INDEX_PAGE_SIZE,
-                )?;
+                let page = read_index_page(&mut reader, component_read_base, page_index)?;
                 if page.len() < 4 {
                     break;
                 }
@@ -321,14 +312,14 @@ impl ReaderBookPackage {
                 if !is_leaf_page(word) {
                     continue;
                 }
-                if !page_may_match(component, &page) {
+                if !page_may_match(component, page) {
                     continue;
                 }
                 let logical_block = component.start_block + page_index as u32;
                 let (page_rows, unknown) = parse_supported_leaf_page(
                     &component.filename,
                     component.component_type,
-                    &page,
+                    page,
                     page_index as u32,
                     logical_block,
                     &mut scan_state,
@@ -401,10 +392,7 @@ impl ReaderBookPackage {
             let page_count = component.block_count() as usize;
             let mut scan_state = SsedIndexScanState::default();
             for page_index in 0..page_count {
-                let page = reader.read_range(
-                    component_page_offset(component_read_base, page_index),
-                    INDEX_PAGE_SIZE,
-                )?;
+                let page = read_index_page(&mut reader, component_read_base, page_index)?;
                 if page.len() < 4 {
                     break;
                 }
@@ -412,14 +400,14 @@ impl ReaderBookPackage {
                 if !is_leaf_page(word) {
                     continue;
                 }
-                if !page_may_match(component, &page) {
+                if !page_may_match(component, page) {
                     continue;
                 }
                 let logical_block = component.start_block + page_index as u32;
                 let (page_rows, unknown) = parse_supported_leaf_page(
                     &component.filename,
                     component.component_type,
-                    &page,
+                    page,
                     page_index as u32,
                     logical_block,
                     &mut scan_state,
@@ -498,10 +486,7 @@ impl ReaderBookPackage {
             if row_limit.is_some_and(|limit| row_count >= limit) {
                 break;
             }
-            let page = reader.read_range(
-                component_page_offset(component_read_base, page_index),
-                INDEX_PAGE_SIZE,
-            )?;
+            let page = read_index_page(&mut reader, component_read_base, page_index)?;
             if page.len() < 4 {
                 break;
             }
@@ -513,7 +498,7 @@ impl ReaderBookPackage {
             let (page_rows, unknown) = parse_supported_leaf_page(
                 &component.filename,
                 component.component_type,
-                &page,
+                page,
                 page_index as u32,
                 logical_block,
                 &mut scan_state,
@@ -590,10 +575,7 @@ impl ReaderBookPackage {
         let page_count = component.block_count() as usize;
         let mut scan_state = SsedIndexScanState::default();
         'pages: for page_index in 0..page_count {
-            let page = reader.read_range(
-                component_page_offset(component_read_base, page_index),
-                INDEX_PAGE_SIZE,
-            )?;
+            let page = read_index_page(&mut reader, component_read_base, page_index)?;
             if page.len() < 4 {
                 break;
             }
@@ -602,7 +584,7 @@ impl ReaderBookPackage {
                 continue;
             }
             if let Some((pointers, unknown)) =
-                parse_supported_leaf_page_body_pointers(component.component_type, &page)
+                parse_supported_leaf_page_body_pointers(component.component_type, page)
             {
                 if unknown > 0 {
                     diagnostics.push(
@@ -627,7 +609,7 @@ impl ReaderBookPackage {
             let (page_rows, unknown) = parse_supported_leaf_page(
                 &component.filename,
                 component.component_type,
-                &page,
+                page,
                 page_index as u32,
                 logical_block,
                 &mut scan_state,
@@ -1053,4 +1035,23 @@ fn component_page_offset(component_read_base: usize, page_index: usize) -> usize
     component_read_base
         .saturating_add(page_index)
         .saturating_mul(INDEX_PAGE_SIZE)
+}
+
+fn read_index_page(
+    reader: &mut SsedDataFile,
+    component_read_base: usize,
+    page_index: usize,
+) -> Result<&[u8]> {
+    let offset = component_page_offset(component_read_base, page_index);
+    if offset >= reader.header().expanded_size() {
+        return Ok(&[]);
+    }
+    let chunk_index = offset / CHUNK_SIZE;
+    let start = offset % CHUNK_SIZE;
+    let chunk = reader.read_expanded_chunk(chunk_index)?;
+    if start >= chunk.len() {
+        return Ok(&[]);
+    }
+    let end = start.saturating_add(INDEX_PAGE_SIZE).min(chunk.len());
+    Ok(&chunk[start..end])
 }

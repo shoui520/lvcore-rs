@@ -155,8 +155,8 @@ use crate::resources::{
 use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQuery};
 use crate::sequence::{SearchResultSequence, SequenceHint, SequenceProvider, TargetWindow};
 use crate::ssed::{
-    BLOCK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole, SsedDataFile,
-    SsedDataHeader,
+    BLOCK_SIZE, CHUNK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole,
+    SsedDataFile, SsedDataHeader,
 };
 use crate::ssed_aux_index::{
     SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,

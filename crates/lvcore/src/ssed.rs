@@ -225,7 +225,7 @@ impl SsedDataFile {
         Ok(out)
     }
 
-    fn read_expanded_chunk(&mut self, chunk_index: usize) -> Result<&[u8]> {
+    pub(crate) fn read_expanded_chunk(&mut self, chunk_index: usize) -> Result<&[u8]> {
         if self.cached_chunk_index != Some(chunk_index) {
             let start =
                 *self.header.chunk_offsets.get(chunk_index).ok_or_else(|| {
