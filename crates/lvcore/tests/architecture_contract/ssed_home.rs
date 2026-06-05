@@ -146,6 +146,7 @@ fn ios_ssed_shell_with_known_retained_fts_dbc_opens_lved_search_payload() {
             &page.hits[0].target,
             Some(&lvcore::SequenceHint::TitleIndexOrder {
                 value: "lved-list".to_owned(),
+                cursor: None,
             }),
             0,
             1,

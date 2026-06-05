@@ -1,5 +1,7 @@
 use super::*;
 
+const SSED_ADJACENT_INDEX_BODY_BOUND_MAX_BYTES: u64 = 256 * 1024;
+
 impl ReaderBookPackage {
     pub(super) fn scan_ssed_simple_leaf_index_rows_near_key(
         &self,
@@ -477,20 +479,15 @@ impl ReaderBookPackage {
         self.ssed_target_for_index_pointer_with_bound(pointer, None)
     }
 
-    pub(in crate::package) fn ssed_target_for_index_row(
+    pub(in crate::package) fn ssed_browse_target_for_index_row(
         &self,
         row: &SsedIndexRow,
         next_row: Option<&SsedIndexRow>,
     ) -> Result<std::result::Result<TargetToken, Diagnostic>> {
-        let end = next_row
-            .filter(|next| next.body != row.body)
-            .filter(|next| (next.body.block, next.body.offset) > (row.body.block, row.body.offset))
-            .map(|next| next.body);
-        if end.is_some() {
-            self.ssed_target_for_index_pointer_with_bound(row.body, end)
-        } else {
-            self.ssed_target_for_search_index_row(row)
-        }
+        self.ssed_target_for_index_pointer_with_bound(
+            row.body,
+            ssed_plausible_adjacent_index_bound(row, next_row),
+        )
     }
 
     pub(in crate::package) fn ssed_target_for_search_index_row(
@@ -742,6 +739,32 @@ impl ReaderBookPackage {
             .and_then(|catalog| catalog.component_for_address(pointer.block))
             .map(|component| component.filename.as_str())
     }
+}
+
+fn ssed_adjacent_index_bound_is_plausible(start: SsedIndexPointer, end: SsedIndexPointer) -> bool {
+    ssed_index_pointer_distance(start, end)
+        .is_some_and(|distance| distance <= SSED_ADJACENT_INDEX_BODY_BOUND_MAX_BYTES)
+}
+
+fn ssed_plausible_adjacent_index_bound(
+    row: &SsedIndexRow,
+    next_row: Option<&SsedIndexRow>,
+) -> Option<SsedIndexPointer> {
+    next_row
+        .filter(|next| next.body != row.body)
+        .filter(|next| (next.body.block, next.body.offset) > (row.body.block, row.body.offset))
+        .filter(|next| ssed_adjacent_index_bound_is_plausible(row.body, next.body))
+        .map(|next| next.body)
+}
+
+fn ssed_index_pointer_distance(start: SsedIndexPointer, end: SsedIndexPointer) -> Option<u64> {
+    let start_abs = u64::from(start.block)
+        .checked_mul(u64::from(BLOCK_SIZE))?
+        .checked_add(u64::from(start.offset))?;
+    let end_abs = u64::from(end.block)
+        .checked_mul(u64::from(BLOCK_SIZE))?
+        .checked_add(u64::from(end.offset))?;
+    end_abs.checked_sub(start_abs)
 }
 
 fn ssed_component_read_base(component: &SsedComponent, reader: &SsedDataFile) -> usize {

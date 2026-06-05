@@ -111,7 +111,7 @@ impl ReaderBookPackage {
                 .ssed_title_text(row.title)
                 .unwrap_or_else(|| row.key.clone());
             let label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
-            let target = match self.ssed_target_for_index_row(
+            let target = match self.ssed_browse_target_for_index_row(
                 row,
                 rows.iter()
                     .skip(index + 1)

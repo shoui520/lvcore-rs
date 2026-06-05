@@ -290,6 +290,7 @@ fn cli_sequence_hint(
     Ok(Some(match hint {
         CliSequenceHint::TitleIndexOrder => SequenceHint::TitleIndexOrder {
             value: required_value("title-index-order", value)?,
+            cursor: None,
         },
         CliSequenceHint::SearchResults => SequenceHint::SearchResults {
             value: required_value("search-results", value)?,

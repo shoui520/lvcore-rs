@@ -19,10 +19,24 @@ struct SsedPagedMenuWindowRequest<'a> {
     max_pages: usize,
 }
 
+struct SsedTitleIndexWindowScanRequest<'a> {
+    target: &'a TargetToken,
+    component: &'a str,
+    block: u32,
+    offset: u32,
+    before: usize,
+    after: usize,
+    options: &'a RenderOptions,
+    component_filter: Option<&'a str>,
+    start_offset: Option<usize>,
+    allow_miss: bool,
+}
+
 impl ReaderBookPackage {
     pub(super) fn resolve_ssed_title_index_window(
         &self,
         target: &TargetToken,
+        sequence_hint: Option<&SequenceHint>,
         before: usize,
         after: usize,
         options: &RenderOptions,
@@ -48,35 +62,87 @@ impl ReaderBookPackage {
             _ => return Ok(None),
         };
 
+        if let Some(cursor) = ssed_title_index_cursor(sequence_hint, before)
+            && let Some(window) =
+                self.resolve_ssed_title_index_window_scan(SsedTitleIndexWindowScanRequest {
+                    target,
+                    component: &component,
+                    block,
+                    offset,
+                    before,
+                    after,
+                    options,
+                    component_filter: Some(cursor.component.as_str()),
+                    start_offset: Some(cursor.start_offset),
+                    allow_miss: true,
+                })?
+        {
+            return Ok(Some(window));
+        }
+
+        self.resolve_ssed_title_index_window_scan(SsedTitleIndexWindowScanRequest {
+            target,
+            component: &component,
+            block,
+            offset,
+            before,
+            after,
+            options,
+            component_filter: None,
+            start_offset: None,
+            allow_miss: false,
+        })
+    }
+
+    fn resolve_ssed_title_index_window_scan(
+        &self,
+        request: SsedTitleIndexWindowScanRequest<'_>,
+    ) -> Result<Option<TargetWindow>> {
         let skip_backward_rows = self.ssed_has_forward_browse_index();
         let mut scanned_any = false;
-        let mut before_rows = VecDeque::<SsedIndexRow>::with_capacity(before);
+        let mut row_ordinal = 0usize;
+        let mut before_rows = VecDeque::<SsedIndexRow>::with_capacity(request.before);
         let mut center_row = None::<SsedIndexRow>;
-        let mut tail_rows = Vec::<SsedIndexRow>::with_capacity(after.saturating_add(1));
+        let mut tail_rows = Vec::<SsedIndexRow>::with_capacity(request.after.saturating_add(1));
         let mut diagnostics = self.scan_ssed_simple_index_rows_with_filters(
             None,
             |component| {
-                !(skip_backward_rows && ssed_index_component_name_is_backward(&component.filename))
+                if skip_backward_rows && ssed_index_component_name_is_backward(&component.filename)
+                {
+                    return false;
+                }
+                if let Some(filter) = request.component_filter {
+                    return component.filename.eq_ignore_ascii_case(filter);
+                }
+                true
             },
             |_, _| true,
             |row| {
+                let current_ordinal = row_ordinal;
+                row_ordinal = row_ordinal.saturating_add(1);
+                if request
+                    .start_offset
+                    .is_some_and(|start| current_ordinal < start)
+                {
+                    return Ok(true);
+                }
                 scanned_any = true;
                 let Some(row_component) = self.ssed_component_for_index_pointer(row.body) else {
                     return Ok(true);
                 };
-                let row_matches = row.body.block == block
-                    && row.body.offset == offset
-                    && row_component.eq_ignore_ascii_case(&component);
+                let row_matches = row.body.block == request.block
+                    && row.body.offset == request.offset
+                    && row_component.eq_ignore_ascii_case(request.component);
                 if center_row.is_some() {
                     tail_rows.push(row);
-                    return Ok(tail_rows.len() <= after);
+                    return Ok(tail_rows.len() <= request.after);
                 }
                 if row_matches {
                     center_row = Some(row);
                     return Ok(true);
                 }
-                if before > 0 {
-                    if before_rows.len() >= before {
+                if request.before > 0 {
+                    if before_rows.len() >= request.before {
                         before_rows.pop_front();
                     }
                     before_rows.push_back(row);
@@ -85,12 +151,15 @@ impl ReaderBookPackage {
             },
         )?;
         if !scanned_any {
+            if request.allow_miss {
+                return Ok(None);
+            }
             diagnostics.push(Diagnostic::info(
                 "sequence_deferred",
                 "SSED title/index order is unavailable for this target",
             ));
             return Ok(Some(TargetWindow {
-                center: self.render_target(target, options)?,
+                center: self.render_target(request.target, request.options)?,
                 before: Vec::new(),
                 after: Vec::new(),
                 diagnostics,
@@ -98,12 +167,15 @@ impl ReaderBookPackage {
         }
 
         let Some(center_row) = center_row else {
+            if request.allow_miss {
+                return Ok(None);
+            }
             diagnostics.push(Diagnostic::info(
                 "sequence_target_not_in_title_index",
                 "target is not present in the simple SSED title/index order",
             ));
             return Ok(Some(TargetWindow {
-                center: self.render_target(target, options)?,
+                center: self.render_target(request.target, request.options)?,
                 before: Vec::new(),
                 after: Vec::new(),
                 diagnostics,
@@ -124,11 +196,11 @@ impl ReaderBookPackage {
         let center = match self.render_ssed_index_row(
             &center_row,
             next_distinct_index_row(&context_rows, center_index),
-            options,
+            request.options,
             &mut diagnostics,
         )? {
             Some(view) => view,
-            None => self.render_target(target, options)?,
+            None => self.render_target(request.target, request.options)?,
         };
 
         let mut before_views = Vec::new();
@@ -136,18 +208,18 @@ impl ReaderBookPackage {
             if let Some(view) = self.render_ssed_index_row(
                 &context_rows[index],
                 next_distinct_index_row(&context_rows, index),
-                options,
+                request.options,
                 &mut diagnostics,
             )? {
                 before_views.push(view);
             }
         }
         let mut after_views = Vec::new();
-        for index in center_index + 1..context_rows.len().min(center_index + 1 + after) {
+        for index in center_index + 1..context_rows.len().min(center_index + 1 + request.after) {
             if let Some(view) = self.render_ssed_index_row(
                 &context_rows[index],
                 next_distinct_index_row(&context_rows, index),
-                options,
+                request.options,
                 &mut diagnostics,
             )? {
                 after_views.push(view);
@@ -169,7 +241,7 @@ impl ReaderBookPackage {
         options: &RenderOptions,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<Option<ResolvedTargetView>> {
-        let target = match self.ssed_target_for_index_row(row, next_row)? {
+        let target = match self.ssed_browse_target_for_index_row(row, next_row)? {
             Ok(target) => target,
             Err(diagnostic) => {
                 diagnostics.push(diagnostic);
@@ -799,6 +871,33 @@ fn next_distinct_index_row(rows: &[SsedIndexRow], index: usize) -> Option<&SsedI
     rows.iter()
         .skip(index + 1)
         .find(|next| next.body != row.body)
+}
+
+struct SsedTitleIndexCursor {
+    component: String,
+    start_offset: usize,
+}
+
+fn ssed_title_index_cursor(
+    sequence_hint: Option<&SequenceHint>,
+    before: usize,
+) -> Option<SsedTitleIndexCursor> {
+    let Some(SequenceHint::TitleIndexOrder {
+        cursor: Some(cursor),
+        ..
+    }) = sequence_hint
+    else {
+        return None;
+    };
+    let (component, offset) = cursor.rsplit_once(':')?;
+    let offset = offset.parse::<usize>().ok()?;
+    if component.is_empty() {
+        return None;
+    }
+    Some(SsedTitleIndexCursor {
+        component: component.to_owned(),
+        start_offset: offset.saturating_sub(before),
+    })
 }
 
 #[cfg(test)]

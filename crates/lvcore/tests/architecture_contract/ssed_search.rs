@@ -323,6 +323,7 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
             &hit.target,
             Some(&lvcore::SequenceHint::TitleIndexOrder {
                 value: "title-index".to_owned(),
+                cursor: None,
             }),
             0,
             0,
@@ -620,11 +621,10 @@ fn ssed_keyless_pointer_table_simple_leaf_is_supported() {
     assert_eq!(items[0].label_text, "keyless");
     assert_eq!(
         items[0].target.decode().unwrap(),
-        InternalTarget::SsedIndexAddress {
+        InternalTarget::SsedAddress {
             component: "HONMON.DIC".to_owned(),
             block: 1,
             offset: 14,
-            index_component: "FHINDEX.DIC".to_owned(),
         }
     );
 }
@@ -881,6 +881,7 @@ fn ssed_title_index_sequence_returns_before_and_after_views() {
             &target,
             Some(&lvcore::SequenceHint::TitleIndexOrder {
                 value: "title-index".to_owned(),
+                cursor: None,
             }),
             1,
             1,

@@ -24,7 +24,7 @@ impl SequenceProvider for ReaderBookPackage {
                 )
             })
             && let Some(window) =
-                self.resolve_ssed_title_index_window(target, before, after, options)?
+                self.resolve_ssed_title_index_window(target, sequence_hint, before, after, options)?
         {
             return Ok(window);
         }
@@ -103,7 +103,7 @@ fn is_lved_tree_sequence_hint(hint: &SequenceHint) -> bool {
     matches!(hint, SequenceHint::LvedTreeOrder)
         || matches!(
             hint,
-            SequenceHint::TitleIndexOrder { value } if value == "lved-tree"
+            SequenceHint::TitleIndexOrder { value, .. } if value == "lved-tree"
         )
 }
 
@@ -111,7 +111,7 @@ fn is_lved_list_sequence_hint(hint: &SequenceHint) -> bool {
     matches!(hint, SequenceHint::LvedListOrder | SequenceHint::BodyOrder)
         || matches!(
             hint,
-            SequenceHint::TitleIndexOrder { value } if value == "lved-list"
+            SequenceHint::TitleIndexOrder { value, .. } if value == "lved-list"
         )
 }
 

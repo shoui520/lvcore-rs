@@ -17,6 +17,8 @@ pub const SEARCH_RESULT_SEQUENCE_MAX_TARGETS: usize = 2048;
 pub enum SequenceHint {
     TitleIndexOrder {
         value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
     },
     SearchResults {
         value: String,
@@ -148,7 +150,8 @@ mod tests {
     fn sequence_hint_has_frontend_safe_tagged_json_shape() {
         assert_eq!(
             serde_json::to_value(SequenceHint::TitleIndexOrder {
-                value: "title-index".to_owned()
+                value: "title-index".to_owned(),
+                cursor: None
             })
             .unwrap(),
             serde_json::json!({ "kind": "title_index_order", "value": "title-index" })

@@ -235,6 +235,7 @@ impl NavigationSurface {
             }
             Self::TitleIndexBrowse { surface_id, .. } => Some(SequenceHint::TitleIndexOrder {
                 value: surface_id.clone(),
+                cursor: None,
             }),
             Self::SimpleMenu { surface_id, .. } => Some(SequenceHint::MenuOrder {
                 value: surface_id.clone(),
@@ -308,7 +309,10 @@ impl NavigationSurface {
                     label_html: item.label_html.clone(),
                     label_text: item.label_text.clone(),
                     target: item.target.clone(),
-                    sequence_hint: sequence_hint.clone(),
+                    sequence_hint: title_index_item_sequence_hint(
+                        sequence_hint.as_ref(),
+                        &item.item_id,
+                    ),
                     diagnostics: item.diagnostics.clone(),
                 })
                 .collect(),
@@ -437,6 +441,20 @@ fn node_sequence_hint(sequence_hint: Option<&SequenceHint>, node_id: &str) -> Op
     }
 }
 
+fn title_index_item_sequence_hint(
+    sequence_hint: Option<&SequenceHint>,
+    item_id: &str,
+) -> Option<SequenceHint> {
+    match sequence_hint {
+        Some(SequenceHint::TitleIndexOrder { value, .. }) => Some(SequenceHint::TitleIndexOrder {
+            value: value.clone(),
+            cursor: Some(item_id.to_owned()),
+        }),
+        Some(hint) => Some(hint.clone()),
+        None => None,
+    }
+}
+
 fn ssed_menu_node_cursor(node_id: &str) -> Option<String> {
     let rest = node_id.strip_prefix("ssed-menu:")?;
     let mut parts = rest.split(':');
@@ -533,7 +551,8 @@ mod tests {
         assert_eq!(
             title.sequence_hint(),
             Some(SequenceHint::TitleIndexOrder {
-                value: "FHTITLE".to_owned()
+                value: "FHTITLE".to_owned(),
+                cursor: None
             })
         );
 

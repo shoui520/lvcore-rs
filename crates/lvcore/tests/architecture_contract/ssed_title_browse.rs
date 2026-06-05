@@ -17,6 +17,18 @@ fn ssed_simple_title_index_surface_resolves_entry_targets() {
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
     let surface = package.open_surface("title-index").unwrap();
+    let targets = surface.actionable_targets();
+    assert_eq!(targets.len(), 1);
+    assert!(
+        matches!(
+            targets[0].sequence_hint.as_ref(),
+            Some(lvcore::SequenceHint::TitleIndexOrder {
+                value,
+                cursor: Some(cursor),
+            }) if value == "title-index" && cursor == "FHINDEX.DIC:0"
+        ),
+        "title/index items should carry a cursor for fast continuous windows"
+    );
     let lvcore::NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
         panic!("title-index should open as a title/index browse surface");
     };
@@ -25,11 +37,10 @@ fn ssed_simple_title_index_surface_resolves_entry_targets() {
     assert_eq!(items[0].label_text, "alpha");
     assert_eq!(
         items[0].target.decode().unwrap(),
-        InternalTarget::SsedIndexAddress {
+        InternalTarget::SsedAddress {
             component: "HONMON.DIC".to_owned(),
             block: 1,
             offset: 2,
-            index_component: "FHINDEX.DIC".to_owned(),
         }
     );
 }
@@ -130,11 +141,72 @@ fn title_index_browse_does_not_apply_backward_body_bounds() {
     );
     assert_eq!(
         items[1].target.decode().unwrap(),
-        InternalTarget::SsedIndexAddress {
+        InternalTarget::SsedAddress {
             component: "HONMON.DIC".to_owned(),
             block: 1,
             offset: 8,
-            index_component: "FHINDEX.DIC".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn title_index_browse_does_not_apply_huge_sparse_body_bounds() {
+    let dir = tempdir().unwrap();
+    let record_start = 0x80;
+    let mut catalog = vec![0u8; record_start + 3 * 0x30];
+    catalog[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Sparse Bounds Fixture";
+    catalog[0x0c] = title.len() as u8;
+    catalog[0x0d..0x0d + title.len()].copy_from_slice(title);
+    catalog[0x4d] = 3;
+    write_record(
+        &mut catalog[record_start..record_start + 0x30],
+        0x00,
+        1,
+        400,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x30..record_start + 0x60],
+        0x05,
+        13,
+        14,
+        "FHTITLE.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x60..record_start + 0x90],
+        0x91,
+        15,
+        15,
+        "FHINDEX.DIC",
+    );
+    fs::write(dir.path().join("DICT.IDX"), catalog).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0abeta\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("beta", 300, 0, 13, 7),
+        ])),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("expected SSED title/index browse");
+    };
+
+    assert_eq!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 2,
         }
     );
 }
@@ -333,6 +405,7 @@ fn title_index_browse_skips_backward_components_before_opening_them() {
             &items[0].target,
             Some(&lvcore::SequenceHint::TitleIndexOrder {
                 value: "title-index".to_owned(),
+                cursor: None,
             }),
             0,
             0,
