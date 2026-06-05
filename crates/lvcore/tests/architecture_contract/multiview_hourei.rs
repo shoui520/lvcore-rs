@@ -102,6 +102,80 @@ fn multiview_title_uses_longer_retained_title_when_compatible_with_menu() {
 }
 
 #[test]
+fn legacy_multiview_menu_xml_detects_as_multiview_and_exposes_all_menus() {
+    let dir = tempdir().unwrap();
+    let package_root = dir.path().join("_MOROKU15");
+    fs::create_dir_all(&package_root).unwrap();
+    fs::write(
+        package_root.join("MOROKU15_menu.xml"),
+        r#"<list>
+  <group category="genre">
+    <item genre="A1" ref="A010" name="日本国憲法" />
+    <menu ref="A010_ZEN" name="前文" />
+  </group>
+</list>"#,
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("MOROKU15_menu2.xml"),
+        r#"<list>
+  <updated ver="1">
+    <group category="O01">
+      <item type="none" ref="O0001" name="青色申告" />
+    </group>
+  </updated>
+</list>"#,
+    )
+    .unwrap();
+    fs::write(package_root.join("blvdat"), b"payload").unwrap();
+    let mut facade = ssedinfo_fixture();
+    let title = b"Legacy MultiView 2015";
+    facade[0x0c] = title.len() as u8;
+    facade[0x0d..0x0d + title.len()].copy_from_slice(title);
+    fs::write(package_root.join("MOROKU15.IDX"), facade).unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvlMultiView);
+    assert_eq!(metadata.title.as_deref(), Some("Legacy MultiView 2015"));
+    assert!(
+        metadata.book_id.0.starts_with("LVLMultiView:MOROKU15:"),
+        "{}",
+        metadata.book_id.0
+    );
+
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "menuData" && surface.kind == NavigationSurfaceKind::MultiviewTree
+    }));
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "menuData:1" && surface.kind == NavigationSurfaceKind::MultiviewTree
+    }));
+
+    let first_menu = package.open_surface("menuData").unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = first_menu else {
+        panic!("legacy law menu should open as a MultiView tree");
+    };
+    assert_eq!(nodes[0].label_text, "日本国憲法");
+    assert!(matches!(
+        nodes[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::MultiviewHref { href, anchor: None } if href == "A010"
+    ));
+    assert_eq!(nodes[1].label_text, "前文");
+
+    let second_menu = package.open_surface("menuData:1").unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = second_menu else {
+        panic!("legacy word menu should open as a MultiView tree");
+    };
+    assert_eq!(nodes[0].label_text, "青色申告");
+    assert!(matches!(
+        nodes[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::MultiviewHref { href, anchor: None } if href == "O0001"
+    ));
+}
+
+#[test]
 fn multiview_preserved_html_packages_do_not_advertise_deferred_rendering() {
     let dir = tempdir().unwrap();
     fs::write(

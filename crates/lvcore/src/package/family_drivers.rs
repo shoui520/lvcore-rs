@@ -10,8 +10,9 @@ use super::drivers::{
     SsedDriver,
 };
 use super::ssed_detection::{
-    detect_ssed_package, inferred_folder_title, load_package_uni_gaiji_maps, multiview_menu_title,
-    package_root_for_detection, ssed_capabilities, ssed_catalog_for_root, usable_multiview_title,
+    detect_ssed_package, inferred_folder_title, load_package_uni_gaiji_maps, multiview_menu_files,
+    multiview_menu_title, package_root_for_detection, ssed_capabilities, ssed_catalog_for_root,
+    usable_multiview_title,
 };
 use super::{BookPackage, DetectedPackage, FormatFamily, PackageDriver};
 use crate::error::{Error, Result};
@@ -269,8 +270,8 @@ impl PackageDriver for LvlMultiViewDriver {
     }
 
     fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>> {
-        let storage = DirectoryStorage::new(root);
-        if !storage.exists(Path::new("menuData.xml"))? {
+        let menu_files = multiview_menu_files(root)?;
+        if menu_files.is_empty() {
             return Ok(None);
         }
         let payloads = fs::read_dir(root)?
@@ -300,7 +301,10 @@ impl PackageDriver for LvlMultiViewDriver {
             confidence: 98,
             title: multiview_title(menu_title, retained_ssed_title)
                 .or_else(|| inferred_folder_title(root)),
-            evidence: vec!["menuData.xml".to_owned(), "*lvbat/*lvdat".to_owned()],
+            evidence: vec![
+                format!("menu_xml:{}", menu_files.join(",")),
+                "*lvbat/*lvdat".to_owned(),
+            ],
         }))
     }
 

@@ -31,20 +31,20 @@ pub fn parse_menu_data(xml: &str) -> Result<Vec<MultiviewMenuItem>> {
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(event)) if event.name().as_ref() == b"item" => {
+            Ok(Event::Start(event)) if is_menu_node(event.name().as_ref()) => {
                 stack.push(menu_item_from_event(&reader, &event)?);
             }
-            Ok(Event::Empty(event)) if event.name().as_ref() == b"item" => {
+            Ok(Event::Empty(event)) if is_menu_node(event.name().as_ref()) => {
                 push_menu_item(
                     &mut roots,
                     &mut stack,
                     menu_item_from_event(&reader, &event)?,
                 );
             }
-            Ok(Event::End(event)) if event.name().as_ref() == b"item" => {
+            Ok(Event::End(event)) if is_menu_node(event.name().as_ref()) => {
                 let Some(item) = stack.pop() else {
                     return Err(Error::Driver(
-                        "menuData.xml has an unmatched </item>".to_owned(),
+                        "MultiView menu XML has an unmatched item/menu close tag".to_owned(),
                     ));
                 };
                 push_menu_item(&mut roots, &mut stack, item);
@@ -62,11 +62,15 @@ pub fn parse_menu_data(xml: &str) -> Result<Vec<MultiviewMenuItem>> {
 
     if !stack.is_empty() {
         return Err(Error::Driver(
-            "menuData.xml ended with unclosed <item> elements".to_owned(),
+            "MultiView menu XML ended with unclosed item/menu elements".to_owned(),
         ));
     }
 
     Ok(roots)
+}
+
+fn is_menu_node(name: &[u8]) -> bool {
+    matches!(name, b"item" | b"menu")
 }
 
 fn menu_item_from_event(
@@ -94,8 +98,8 @@ fn menu_item_from_event(
             })?
             .into_owned();
         match attribute.key.as_ref() {
-            b"label" => label = value,
-            b"href" => href = nonempty_value(value),
+            b"label" | b"name" => label = value,
+            b"href" | b"ref" => href = nonempty_value(value),
             b"anchor" => anchor = nonempty_value(value),
             _ => {}
         }
@@ -105,7 +109,8 @@ fn menu_item_from_event(
 }
 
 fn nonempty_value(value: String) -> Option<String> {
-    (!value.is_empty()).then_some(value)
+    let value = value.trim();
+    (!value.is_empty() && !value.eq_ignore_ascii_case("none")).then(|| value.to_owned())
 }
 
 fn push_menu_item(

@@ -403,9 +403,7 @@ fn is_obvious_package_candidate(path: &Path) -> Result<bool> {
     if directory_has_file_suffix(path, ".idx")? {
         return Ok(true);
     }
-    if regular_file_inside_root(path, &path.join("menuData.xml"))?
-        && directory_has_multiview_payload(path)?
-    {
+    if directory_has_multiview_menu_xml(path)? && directory_has_multiview_payload(path)? {
         return Ok(true);
     }
     let hourei_required = [
@@ -450,6 +448,27 @@ fn is_obvious_resource_only_dir(path: &Path) -> bool {
         || name == "sound"
         || name == "sounds"
         || name == "mathjax"
+}
+
+fn directory_has_multiview_menu_xml(path: &Path) -> Result<bool> {
+    if regular_file_inside_root(path, &path.join("menuData.xml"))? {
+        return Ok(true);
+    }
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        if !regular_file_inside_root(path, &entry_path)? {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if name.ends_with(".xml") && name.contains("_menu") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn directory_has_file_suffix(path: &Path, suffix: &str) -> Result<bool> {

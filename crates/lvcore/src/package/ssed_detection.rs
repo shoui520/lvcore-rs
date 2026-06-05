@@ -160,6 +160,32 @@ pub(super) fn multiview_menu_title(root: &Path) -> Result<Option<String>> {
         .find(|label| !label.is_empty()))
 }
 
+pub(super) fn multiview_menu_files(root: &Path) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    let menu_data = root.join("menuData.xml");
+    if regular_file_inside_root(root, &menu_data)? {
+        files.push("menuData.xml".to_owned());
+    }
+    if !root.is_dir() {
+        return Ok(files);
+    }
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !regular_file_inside_root(root, &path)? {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let lower = name.to_ascii_lowercase();
+        if lower != "menudata.xml" && lower.ends_with(".xml") && lower.contains("_menu") {
+            files.push(name);
+        }
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 pub(super) fn usable_multiview_title(title: &str) -> Option<String> {
     let title = title.trim();
     if title.is_empty() || title.contains('○') {

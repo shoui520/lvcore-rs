@@ -684,14 +684,17 @@ impl RendererProvider for ReaderBookPackage {
             | InternalTarget::TitleIndexItem { surface_id, .. } => {
                 self.view_for_navigation_surface_target(token.clone(), &surface_id, None, options)
             }
-            InternalTarget::MultiviewHref { href, anchor: _ } if href == "menuData.xml" => self
-                .view_for_navigation_surface_target(
-                    token.clone(),
-                    "menuData",
-                    Some("MultiView menu".to_owned()),
-                    options,
-                ),
             InternalTarget::MultiviewHref { href, anchor } => {
+                if anchor.is_none()
+                    && let Some(surface_id) = self.multiview_menu_surface_id_for_href(&href)?
+                {
+                    return self.view_for_navigation_surface_target(
+                        token.clone(),
+                        &surface_id,
+                        Some("MultiView menu".to_owned()),
+                        options,
+                    );
+                }
                 if anchor.is_none()
                     && let Some(view) =
                         self.view_for_multiview_navigation_target(token.clone(), &href)?

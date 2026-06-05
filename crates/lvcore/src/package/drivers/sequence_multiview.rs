@@ -48,12 +48,15 @@ impl ReaderBookPackage {
         let InternalTarget::MultiviewHref { href, anchor } = target.decode()? else {
             return Ok(None);
         };
-        let surface = self.open_multiview_menu_surface("menuData")?;
-        let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
-            return Ok(None);
-        };
         let mut ordered = Vec::new();
-        collect_navigation_node_targets(&nodes, &mut ordered);
+        for index in 0..self.multiview_menu_surface_files()?.len() {
+            let surface_id = super::multiview_navigation::multiview_menu_surface_id(index);
+            let surface = self.open_multiview_menu_surface(&surface_id)?;
+            let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+                continue;
+            };
+            collect_navigation_node_targets(&nodes, &mut ordered);
+        }
         let Some(center_index) = ordered.iter().position(|candidate| {
             matches!(
                 candidate.decode(),

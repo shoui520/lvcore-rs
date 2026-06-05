@@ -316,19 +316,27 @@ impl NavigationProvider for ReaderBookPackage {
                 self.push_lved_sqlite_home_surfaces(&mut surfaces)?;
             }
             FormatFamily::LvlMultiView => {
-                surfaces.push(HomeSurface {
-                    href: None,
-                    surface_id: "menuData".to_owned(),
-                    kind: NavigationSurfaceKind::MultiviewTree,
-                    status: NavigationStatus::Available,
-                    title_html: "MultiView menu".to_owned(),
-                    title_text: "MultiView menu".to_owned(),
-                    target: Some(TargetToken::new(&InternalTarget::MultiviewHref {
-                        href: "menuData.xml".to_owned(),
-                        anchor: None,
-                    })?),
-                    diagnostics: Vec::new(),
-                });
+                for (index, path) in self.multiview_menu_surface_files()?.into_iter().enumerate() {
+                    let surface_id = super::multiview_navigation::multiview_menu_surface_id(index);
+                    let title = if index == 0 {
+                        "MultiView menu".to_owned()
+                    } else {
+                        format!("MultiView menu: {path}")
+                    };
+                    surfaces.push(HomeSurface {
+                        href: None,
+                        surface_id: surface_id.clone(),
+                        kind: NavigationSurfaceKind::MultiviewTree,
+                        status: NavigationStatus::Available,
+                        title_html: escape_plain_label_html(&title),
+                        title_text: title,
+                        target: Some(TargetToken::new(&InternalTarget::MultiviewHref {
+                            href: path,
+                            anchor: None,
+                        })?),
+                        diagnostics: Vec::new(),
+                    });
+                }
             }
             FormatFamily::Hourei => {
                 if self.has_hourei_kana_panel()? {
@@ -503,7 +511,7 @@ impl NavigationProvider for ReaderBookPackage {
                 self.open_lved_info_surface(surface_id, cursor, limit)
             }
             (FormatFamily::LvedSqlite3, "lved-tree") => self.open_lved_tree_surface(surface_id),
-            (FormatFamily::LvlMultiView, "menuData") => {
+            (FormatFamily::LvlMultiView, id) if id == "menuData" || id.starts_with("menuData:") => {
                 self.open_multiview_menu_surface(surface_id)
             }
             (FormatFamily::Hourei, "kana-panel") => self.open_hourei_kana_panel_surface(surface_id),

@@ -32,6 +32,31 @@ fn parses_nested_menu_data_items() {
 }
 
 #[test]
+fn parses_legacy_menu_xml_name_ref_and_menu_nodes() {
+    let items = parse_menu_data(
+        r#"<list>
+          <group category="genre">
+            <item ref="A010" name="日本国憲法" />
+            <menu ref="A010_ZEN" name="前文" />
+            <menu ref="A010_HON-sy1" name="第一章　天皇">
+              <menu ref="A010_HON-sy1-jo1" name="第一条" />
+            </menu>
+            <item ref="none" name="見出しなし" />
+          </group>
+        </list>"#,
+    )
+    .unwrap();
+
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0].label, "日本国憲法");
+    assert_eq!(items[0].href.as_deref(), Some("A010"));
+    assert_eq!(items[1].label, "前文");
+    assert_eq!(items[1].href.as_deref(), Some("A010_ZEN"));
+    assert_eq!(items[2].children[0].label, "第一条");
+    assert_eq!(items[3].href, None);
+}
+
+#[test]
 fn rejects_unbalanced_menu_data_items() {
     let error = parse_menu_data("<list><item label=\"broken\"></list>").unwrap_err();
     assert!(

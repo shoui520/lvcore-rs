@@ -93,7 +93,8 @@ use super::ssed_body_helpers::{
 };
 use super::ssed_detection::{
     SSED_NAVIGATION_DETECTION_MAX_BYTES, file_starts_with_ssedinfo_magic, inferred_folder_title,
-    read_ssed_navigation_detection_bytes, root_fingerprint, ssed_hanrei_page_label,
+    multiview_menu_files, read_ssed_navigation_detection_bytes, root_fingerprint,
+    ssed_hanrei_page_label,
 };
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::ssed_payload::file_starts_with_android_wrapped_sseddata;
