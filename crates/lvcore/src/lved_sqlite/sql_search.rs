@@ -174,7 +174,7 @@ fn lved_search_where(
     prefer_direct_fts: bool,
 ) -> Option<(String, Vec<String>)> {
     match mode {
-        SearchMode::Exact => exact_lved_search_where(normalized, search_columns),
+        SearchMode::Exact => exact_lved_search_where(normalized, search_columns, prefer_direct_fts),
         SearchMode::Forward => one_parameter_where(fts_match(
             "forward",
             normalized,
@@ -266,9 +266,19 @@ fn lved_fts_match_query(
 fn exact_lved_search_where(
     normalized: &str,
     search_columns: &[String],
+    prefer_direct_fts: bool,
 ) -> Option<(String, Vec<String>)> {
     if has_column(search_columns, "filter") {
         let like_parameter = format!("%∥{}∥%", escape_sql_like(normalized));
+        if let Some(match_query) = exact_lved_filter_prefilter_query(normalized) {
+            let where_clause = if prefer_direct_fts {
+                "search match ? and s.filter like ? escape '\\'"
+            } else {
+                "s.rowid in (select rowid from search where search match ?) \
+                 and s.filter like ? escape '\\'"
+            };
+            return Some((where_clause.to_owned(), vec![match_query, like_parameter]));
+        }
         return Some((
             "s.filter like ? escape '\\'".to_owned(),
             vec![like_parameter],
@@ -278,6 +288,16 @@ fn exact_lved_search_where(
         return Some(("s.forward = ?".to_owned(), vec![normalized.to_owned()]));
     }
     None
+}
+
+fn exact_lved_filter_prefilter_query(normalized: &str) -> Option<String> {
+    let terms = fts_tokens(normalized, false)
+        .into_iter()
+        .filter(|token| token.chars().any(|ch| ch.is_ascii_alphanumeric()))
+        .map(|token| fts_term(&token, false))
+        .filter(|term| !term.is_empty())
+        .collect::<Vec<_>>();
+    (!terms.is_empty()).then(|| terms.join(" "))
 }
 
 pub(super) fn lved_available_search_modes(schema: &LvedSqliteSchema) -> Vec<SearchMode> {
@@ -480,4 +500,48 @@ fn escape_sql_like(value: &str) -> String {
         escaped.push(ch);
     }
     escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn search_columns(columns: &[&str]) -> Vec<String> {
+        columns.iter().map(|column| (*column).to_owned()).collect()
+    }
+
+    #[test]
+    fn exact_filter_search_prefilters_ascii_terms_with_fts() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+
+        let (where_clause, parameters) =
+            exact_lved_search_where("abacus", &columns, true).expect("exact filter search");
+
+        assert!(where_clause.contains("search match ?"));
+        assert!(where_clause.contains("s.filter like ?"));
+        assert_eq!(parameters, vec!["abacus", "%∥abacus∥%"]);
+    }
+
+    #[test]
+    fn exact_filter_search_keeps_like_scan_for_non_ascii_terms() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+
+        let (where_clause, parameters) =
+            exact_lved_search_where("あいう", &columns, true).expect("exact filter search");
+
+        assert!(!where_clause.contains("search match ?"));
+        assert_eq!(where_clause, "s.filter like ? escape '\\'");
+        assert_eq!(parameters, vec!["%∥あいう∥%"]);
+    }
+
+    #[test]
+    fn exact_filter_search_uses_subquery_prefilter_for_variant_or_queries() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+
+        let (where_clause, parameters) =
+            exact_lved_search_where("131i", &columns, false).expect("exact filter search");
+
+        assert!(where_clause.contains("select rowid from search where search match ?"));
+        assert_eq!(parameters, vec!["131i", "%∥131i∥%"]);
+    }
 }
