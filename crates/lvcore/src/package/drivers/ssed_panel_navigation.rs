@@ -1,5 +1,8 @@
 use super::*;
-use crate::package::drivers::ssed_navigation::ssed_honmon_address_target;
+use crate::package::drivers::ssed_navigation::{
+    SsedComponentNavigationTargetRequest, ssed_component_address_navigation_target,
+    ssed_honmon_address_target,
+};
 
 pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
     package: &ReaderBookPackage,
@@ -146,17 +149,18 @@ fn ssed_panel_address_target(
         return Ok(None);
     }
     if component.role != SsedComponentRole::Honmon {
-        diagnostics.push(
-            Diagnostic::info(
-                "ssed_panel_non_body_target_deferred",
-                format!(
-                    "Panel target points to {} ({:?}); non-body panel routing is deferred",
-                    component.filename, component.role
-                ),
-            )
-            .with_context("component", &component.filename),
+        return ssed_component_address_navigation_target(
+            SsedComponentNavigationTargetRequest {
+                package,
+                component,
+                block,
+                offset,
+                next,
+                diagnostic_code: "ssed_panel_non_body_target_deferred",
+                source_label: "Panel",
+            },
+            diagnostics,
         );
-        return Ok(None);
     }
     Ok(Some(ssed_honmon_address_target(
         package,

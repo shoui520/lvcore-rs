@@ -641,17 +641,18 @@ pub(in crate::package::drivers) fn ssed_menu_destination_target(
         return Ok(None);
     }
     if component.role != SsedComponentRole::Honmon {
-        diagnostics.push(
-            Diagnostic::info(
-                "ssed_navigation_non_body_target_deferred",
-                format!(
-                    "MENU/TOC target points to {} ({:?}); non-body navigation routing is deferred",
-                    component.filename, component.role
-                ),
-            )
-            .with_context("component", &component.filename),
+        return ssed_component_address_navigation_target(
+            SsedComponentNavigationTargetRequest {
+                package,
+                component,
+                block: destination.block,
+                offset: destination.offset,
+                next: next_destination.map(|next| (next.block, next.offset)),
+                diagnostic_code: "ssed_navigation_non_body_target_deferred",
+                source_label: "MENU/TOC",
+            },
+            diagnostics,
         );
-        return Ok(None);
     }
     let target = ssed_honmon_address_target(
         package,
@@ -730,4 +731,118 @@ pub(in crate::package::drivers) fn ssed_honmon_address_target(
         }
     };
     TargetToken::new(&target)
+}
+
+pub(in crate::package::drivers) fn ssed_component_address_navigation_target(
+    request: SsedComponentNavigationTargetRequest<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<TargetToken>> {
+    let resource = match request.component.role {
+        SsedComponentRole::Colscr => InternalResource::SsedComponentAddress {
+            component: request.component.filename.clone(),
+            block: request.block,
+            offset: request.offset,
+            resource_kind: ResourceKind::Colscr,
+        },
+        SsedComponentRole::MonoScr => InternalResource::SsedComponentAddress {
+            component: request.component.filename.clone(),
+            block: request.block,
+            offset: request.offset,
+            resource_kind: ResourceKind::Image,
+        },
+        SsedComponentRole::PcmData => ssed_pcmdata_navigation_resource(
+            request.package,
+            request.component,
+            request.block,
+            request.offset,
+            request.next,
+        ),
+        _ => {
+            diagnostics.push(
+                Diagnostic::info(
+                    request.diagnostic_code,
+                    format!(
+                        "{} target points to {} ({:?}); non-body navigation routing is deferred",
+                        request.source_label, request.component.filename, request.component.role
+                    ),
+                )
+                .with_context("component", &request.component.filename),
+            );
+            return Ok(None);
+        }
+    };
+    let resource = ResourceToken::new(&resource)?;
+    Ok(Some(TargetToken::new(&InternalTarget::Resource {
+        resource,
+        anchor: None,
+    })?))
+}
+
+pub(in crate::package::drivers) struct SsedComponentNavigationTargetRequest<'a> {
+    pub(in crate::package::drivers) package: &'a ReaderBookPackage,
+    pub(in crate::package::drivers) component: &'a SsedComponent,
+    pub(in crate::package::drivers) block: u32,
+    pub(in crate::package::drivers) offset: u32,
+    pub(in crate::package::drivers) next: Option<(u32, u32)>,
+    pub(in crate::package::drivers) diagnostic_code: &'static str,
+    pub(in crate::package::drivers) source_label: &'static str,
+}
+
+fn ssed_pcmdata_navigation_resource(
+    package: &ReaderBookPackage,
+    component: &SsedComponent,
+    block: u32,
+    offset: u32,
+    next: Option<(u32, u32)>,
+) -> InternalResource {
+    if let Some((end_block, end_offset)) =
+        ssed_navigation_range_end(package, component, block, offset, next)
+    {
+        InternalResource::SsedPcmDataRange {
+            component: component.filename.clone(),
+            start_block: block,
+            start_offset: offset,
+            end_block,
+            end_offset,
+        }
+    } else {
+        InternalResource::SsedComponentAddress {
+            component: component.filename.clone(),
+            block,
+            offset,
+            resource_kind: ResourceKind::PcmData,
+        }
+    }
+}
+
+fn ssed_navigation_range_end(
+    package: &ReaderBookPackage,
+    component: &SsedComponent,
+    block: u32,
+    offset: u32,
+    next: Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
+    let (next_block, next_offset) = next?;
+    if (next_block, next_offset) <= (block, offset) {
+        return None;
+    }
+    let catalog = package.ssed_catalog.as_ref()?;
+    let next_component = catalog.component_for_address(next_block)?;
+    if !next_component
+        .filename
+        .eq_ignore_ascii_case(&component.filename)
+    {
+        return None;
+    }
+    previous_ssed_address(next_block, next_offset).filter(|end| *end >= (block, offset))
+}
+
+fn previous_ssed_address(block: u32, offset: u32) -> Option<(u32, u32)> {
+    if offset > 0 {
+        Some((block, offset - 1))
+    } else if block > 0 {
+        Some((block - 1, BLOCK_SIZE - 1))
+    } else {
+        None
+    }
 }

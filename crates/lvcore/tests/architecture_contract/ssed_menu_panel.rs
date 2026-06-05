@@ -1122,6 +1122,134 @@ fn ssed_menu_and_panel_targets_support_continuous_view_windows() {
 }
 
 #[test]
+fn ssed_menu_media_component_targets_resolve_as_resource_views() {
+    let dir = tempdir().unwrap();
+    let bmp = b"BMmenu";
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_menu_and_colscr(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture_at(1, b"body"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        sseddata_literal_fixture_at(11, &menu_stream_fixture_rows(&[([0x24, 0x22], 20, 0)])),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("COLSCR.DIC"),
+        sseddata_literal_fixture_at(20, &colscr_record_fixture(bmp)),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let NavigationSurface::SimpleMenu { nodes, .. } = package.open_surface("menu").unwrap() else {
+        panic!("SSED MENU should decode to a simple menu surface");
+    };
+    let target = nodes[0].target.as_ref().unwrap();
+    assert!(matches!(
+        target.decode().unwrap(),
+        InternalTarget::Resource {
+            resource,
+            anchor: None,
+        } if matches!(
+            resource.decode().unwrap(),
+            InternalResource::SsedComponentAddress {
+                component,
+                block: 20,
+                offset: 0,
+                resource_kind: ResourceKind::Colscr,
+            } if component == "COLSCR.DIC"
+        )
+    ));
+
+    let view = package
+        .render_target(target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::MediaResource);
+    assert_eq!(view.resources.len(), 1);
+    assert_eq!(view.resources[0].kind, ResourceKind::Colscr);
+    assert_eq!(
+        package.read_resource(&view.resources[0].token).unwrap(),
+        bmp
+    );
+}
+
+#[test]
+fn ssed_panel_media_component_targets_resolve_as_resource_views() {
+    let dir = tempdir().unwrap();
+    let bmp = b"BMpanel";
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_menu_and_colscr(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture_at(1, b"body"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("COLSCR.DIC"),
+        sseddata_literal_fixture_at(20, &colscr_record_fixture(bmp)),
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("Panel")).unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<panels>
+  <panel index="01010000" paneltype="contents">
+    <title>図版</title>
+    <data type="bin" filename="Panel\Images.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("Panel/Images.bin"),
+        panel_bin_fixture(20, 0),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let NavigationSurface::Panel { cells, .. } = package.open_surface("panels:01010000").unwrap()
+    else {
+        panic!("SSED Panel should decode to panel cells");
+    };
+    let target = cells[0].target.as_ref().unwrap();
+    assert!(matches!(
+        target.decode().unwrap(),
+        InternalTarget::Resource {
+            resource,
+            anchor: None,
+        } if matches!(
+            resource.decode().unwrap(),
+            InternalResource::SsedComponentAddress {
+                component,
+                block: 20,
+                offset: 0,
+                resource_kind: ResourceKind::Colscr,
+            } if component == "COLSCR.DIC"
+        )
+    ));
+
+    let view = package
+        .render_target(target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::MediaResource);
+    assert_eq!(view.resources.len(), 1);
+    assert_eq!(view.resources[0].kind, ResourceKind::Colscr);
+    assert_eq!(
+        package.read_resource(&view.resources[0].token).unwrap(),
+        bmp
+    );
+}
+
+#[test]
 fn ssed_menu_continuous_view_pages_through_large_menu_surfaces() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -1326,4 +1454,43 @@ fn ssed_panel_cell_offset(cell: &lvcore::navigation::PanelCell) -> Option<(u32, 
         | InternalTarget::SsedBoundedAddress { block, offset, .. } => Some((block, offset)),
         _ => None,
     }
+}
+
+fn ssedinfo_fixture_with_menu_and_colscr() -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 3 * 0x30];
+    data[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Media Navigation Fixture";
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 3;
+    write_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x30..record_start + 0x60],
+        0x01,
+        11,
+        12,
+        "MENU.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x60..record_start + 0x90],
+        0xd2,
+        20,
+        20,
+        "COLSCR.DIC",
+    );
+    data
+}
+
+fn colscr_record_fixture(payload: &[u8]) -> Vec<u8> {
+    let mut record = b"data".to_vec();
+    record.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    record.extend_from_slice(payload);
+    record
 }
