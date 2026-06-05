@@ -166,8 +166,8 @@ use crate::ssed_encyclopedia::{SsedEncyclopediaRow, parse_encyclopedia_index_byt
 use crate::ssed_figure::{FigureDimensions, figure_bitmap_to_png};
 use crate::ssed_ga16::{ga16_glyph_png, ga16_resource_covers_code};
 use crate::ssed_hc::{
-    HcBasicTextGaiji, decode_hc_stream_basic_text_with_gaiji_policy,
-    decode_hc_stream_common_html_with_gaiji_policy, hc_marker_profile_for_renderer,
+    HcBasicTextGaiji, HcCommonHtmlGaiji, decode_hc_stream_basic_text_with_gaiji_policy,
+    decode_hc_stream_common_html_with_gaiji_render_policy, hc_marker_profile_for_renderer,
 };
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_title_text,

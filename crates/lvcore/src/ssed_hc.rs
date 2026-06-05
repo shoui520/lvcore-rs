@@ -69,6 +69,13 @@ pub struct HcBasicTextGaiji {
     pub resolved: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HcCommonHtmlGaiji {
+    pub text: String,
+    pub html: Option<String>,
+    pub resolved: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HcMarkerProfile {
     pub renderer_code: Option<String>,
@@ -209,6 +216,24 @@ pub fn decode_hc_stream_common_html_with_gaiji(
 pub fn decode_hc_stream_common_html_with_gaiji_policy(
     data: &[u8],
     mut gaiji_text: impl FnMut(&str) -> Option<HcBasicTextGaiji>,
+    mut suppress_gaiji: impl FnMut(&str) -> bool,
+) -> HcCommonHtmlRender {
+    decode_hc_stream_common_html_with_gaiji_render_policy(
+        data,
+        |code| {
+            gaiji_text(code).map(|gaiji| HcCommonHtmlGaiji {
+                text: gaiji.text,
+                html: None,
+                resolved: gaiji.resolved,
+            })
+        },
+        &mut suppress_gaiji,
+    )
+}
+
+pub fn decode_hc_stream_common_html_with_gaiji_render_policy(
+    data: &[u8],
+    mut gaiji_render: impl FnMut(&str) -> Option<HcCommonHtmlGaiji>,
     mut suppress_gaiji: impl FnMut(&str) -> bool,
 ) -> HcCommonHtmlRender {
     let mut html = String::with_capacity(data.len().saturating_mul(2));
@@ -447,8 +472,12 @@ pub fn decode_hc_stream_common_html_with_gaiji_policy(
             let code = format!("{byte:02X}{second:02X}");
             if suppress_gaiji(&code) {
                 stats.suppressed_gaiji_pairs += 1;
-            } else if let Some(resolved) = gaiji_text(&code) {
-                push_html_text(&mut html, &resolved.text);
+            } else if let Some(resolved) = gaiji_render(&code) {
+                if let Some(fragment) = resolved.html.as_deref() {
+                    html.push_str(fragment);
+                } else {
+                    push_html_text(&mut html, &resolved.text);
+                }
                 text.push_str(&resolved.text);
                 if resolved.resolved {
                     stats.resolved_gaiji_pairs += 1;
@@ -1046,9 +1075,10 @@ mod tests {
     use encoding_rs::SHIFT_JIS;
 
     use super::{
-        HcBasicTextGaiji, decode_hc_stream_basic_text, decode_hc_stream_basic_text_with_gaiji,
-        decode_hc_stream_basic_text_with_gaiji_policy, decode_hc_stream_common_html,
-        decode_hc_stream_common_html_with_gaiji, hc_marker_profile_for_renderer,
+        HcBasicTextGaiji, HcCommonHtmlGaiji, decode_hc_stream_basic_text,
+        decode_hc_stream_basic_text_with_gaiji, decode_hc_stream_basic_text_with_gaiji_policy,
+        decode_hc_stream_common_html, decode_hc_stream_common_html_with_gaiji,
+        decode_hc_stream_common_html_with_gaiji_render_policy, hc_marker_profile_for_renderer,
     };
 
     #[test]
@@ -1313,6 +1343,36 @@ mod tests {
         assert!(!rendered.html.contains("B123"));
         assert_eq!(rendered.stats.resolved_gaiji_pairs, 1);
         assert_eq!(rendered.stats.placeholder_gaiji_pairs, 1);
+    }
+
+    #[test]
+    fn common_html_can_render_resource_backed_gaiji_fragments() {
+        let mut data = body_jis("本文");
+        data.extend_from_slice(&[0xb1, 0x23]);
+        let fragment = "<img class=\"lvcore-gaiji lvcore-gaiji-external\" src=\"lvcore://resource/token\" alt=\"〓\" title=\"B123\">";
+
+        let rendered = decode_hc_stream_common_html_with_gaiji_render_policy(
+            &data,
+            |code| {
+                (code == "B123").then(|| HcCommonHtmlGaiji {
+                    text: "〓".to_owned(),
+                    html: Some(fragment.to_owned()),
+                    resolved: true,
+                })
+            },
+            |_code| false,
+        );
+
+        assert_eq!(rendered.text, "本文〓");
+        assert!(rendered.html.contains("lvcore://resource/token"));
+        assert_eq!(rendered.stats.resolved_gaiji_pairs, 1);
+        assert_eq!(rendered.stats.placeholder_gaiji_pairs, 0);
+        assert!(
+            rendered
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "hc_basic_text_gaiji_placeholders")
+        );
     }
 
     fn body_jis(value: &str) -> Vec<u8> {

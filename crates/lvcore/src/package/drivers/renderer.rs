@@ -239,18 +239,31 @@ impl ReaderBookPackage {
                     });
                 }
                 let data = self.read_ssed_stream_render_slice(&component, offset, length)?;
-                let rendered = decode_hc_stream_common_html_with_gaiji_policy(
+                let mut gaiji_resources = BTreeMap::<String, ResourceRef>::new();
+                let rendered = decode_hc_stream_common_html_with_gaiji_render_policy(
                     &data,
                     |code| {
                         let lookup_code = marker_profile.gaiji_lookup_code(code);
                         let resolution = self.resolve_gaiji(&lookup_code, &options.gaiji_policy);
-                        let resolved = resolution.unicode.is_some();
                         let text = resolution
                             .unicode
                             .clone()
                             .unwrap_or_else(|| "〓".to_owned());
+                        let html = gaiji_resource_html(&resolution, &text);
+                        let resolved = resolution.unicode.is_some() || html.is_some();
+                        if html.is_some()
+                            && let Some(resource) = resolution.resource.clone()
+                        {
+                            gaiji_resources
+                                .entry(resource.token.as_str().to_owned())
+                                .or_insert(resource);
+                        }
                         diagnostics.extend(resolution.diagnostics);
-                        Some(HcBasicTextGaiji { text, resolved })
+                        Some(HcCommonHtmlGaiji {
+                            text,
+                            html,
+                            resolved,
+                        })
                     },
                     |code| marker_profile.suppresses_gaiji_code(code),
                 );
@@ -261,6 +274,8 @@ impl ReaderBookPackage {
                 let html = rewrite_hc_common_html_link_hrefs(rendered.html, &links);
                 let html =
                     rewrite_hc_common_html_media_placeholders(html, &rendered.media, &resources);
+                let mut resources = resources;
+                resources.extend(gaiji_resources.into_values());
                 diagnostics.extend(rendered.diagnostics);
                 diagnostics.push(Diagnostic::warning(
                     "hc_render_common_html_fallback",
@@ -557,6 +572,33 @@ fn hc_common_resource_html(resource: &ResourceRef) -> String {
         }
         _ => format!("<a class=\"lv-hc-media lv-hc-media-link\" href=\"{href}\">{label}</a>"),
     }
+}
+
+fn gaiji_resource_html(
+    resolution: &crate::gaiji::GaijiResolution,
+    fallback_text: &str,
+) -> Option<String> {
+    if !matches!(
+        resolution.preferred_source,
+        Some(GaijiSourcePreference::ExternalResource | GaijiSourcePreference::Ga16Bitmap)
+    ) {
+        return None;
+    }
+    let resource = resolution.resource.as_ref()?;
+    let href = resource
+        .href
+        .clone()
+        .unwrap_or_else(|| format!("lvcore://resource/{}", resource.token.as_str()));
+    let class = match resolution.preferred_source {
+        Some(GaijiSourcePreference::Ga16Bitmap) => "lvcore-gaiji-ga16",
+        _ => "lvcore-gaiji-external",
+    };
+    Some(format!(
+        "<img class=\"lvcore-gaiji {class} lv-hc-gaiji\" src=\"{}\" alt=\"{}\" title=\"{}\">",
+        escape_html_attr_minimal(&href),
+        escape_html_attr_minimal(fallback_text),
+        escape_html_attr_minimal(&resolution.identity)
+    ))
 }
 
 fn escape_html_attr_minimal(value: &str) -> String {

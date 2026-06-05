@@ -374,9 +374,67 @@ fn hc00a3_profile_aliases_b261_to_available_b167_ga16_glyph() {
     assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
     assert_eq!(view.basic_text.as_deref(), Some("前〓後"));
     assert!(
+        view.display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("lvcore-gaiji-ga16") && !html.contains("B261"))
+    );
+    assert_eq!(view.resources.len(), 1);
+    assert!(
         view.diagnostics
             .iter()
             .all(|diagnostic| diagnostic.code != "gaiji_unresolved")
+    );
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "hc_basic_text_gaiji_placeholders")
+    );
+}
+
+#[test]
+fn native_hc_common_html_fallback_embeds_resource_backed_template_gaiji() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    fs::write(dir.path().join("Templates/B123.svg"), b"<svg/>").unwrap();
+    let mut honmon = body_jis("前");
+    honmon.extend_from_slice(&[0xb1, 0x23]);
+    honmon.extend_from_slice(&body_jis("後"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(&honmon),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(&token, &RenderOptions::default())
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(view.basic_text.as_deref(), Some("前〓後"));
+    assert_eq!(view.resources.len(), 1);
+    assert_eq!(view.resources[0].kind, ResourceKind::Template);
+    assert!(view.display_html.as_deref().is_some_and(|html| {
+        html.contains("lvcore-gaiji-external")
+            && html.contains("lvcore://resource/")
+            && html.contains("title=\"B123\"")
+    }));
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "gaiji_unresolved")
+    );
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "hc_basic_text_gaiji_placeholders")
     );
 }
 
