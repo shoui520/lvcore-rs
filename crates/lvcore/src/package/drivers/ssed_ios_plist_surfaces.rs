@@ -25,7 +25,7 @@ impl ReaderBookPackage {
     pub(super) fn ssed_ios_panel_plist_sources(&self) -> Result<Vec<SsedIosPlistSurfaceSource>> {
         let mut sources = Vec::new();
         for file in self.ssed_ios_plist_files()? {
-            if !is_ios_panel_plist_candidate(&file.source_id) {
+            if !is_ssed_ios_panel_plist_candidate(&file.source_id) {
                 continue;
             }
             let Ok(plist) = parse_xml_plist(&file.bytes, &file.label) else {
@@ -321,13 +321,26 @@ impl ReaderBookPackage {
         files.sort_by(|left, right| left.source_id.cmp(&right.source_id));
         Ok(files)
     }
+
+    pub(super) fn ssed_ios_plist_file_by_source_id(
+        &self,
+        source_id: &str,
+    ) -> Result<Option<SsedIosPlistFile>> {
+        let Some(file) = read_ios_plist_file_from_base(&self.root, source_id)? else {
+            let Some(parent) = self.root.parent() else {
+                return Ok(None);
+            };
+            return read_ios_plist_file_from_base(parent, source_id);
+        };
+        Ok(Some(file))
+    }
 }
 
 #[derive(Debug, Clone)]
-struct SsedIosPlistFile {
-    source_id: String,
-    label: String,
-    bytes: Vec<u8>,
+pub(super) struct SsedIosPlistFile {
+    pub(super) source_id: String,
+    pub(super) label: String,
+    pub(super) bytes: Vec<u8>,
 }
 
 fn collect_ios_plist_files_from_base(
@@ -368,7 +381,31 @@ fn collect_ios_plist_files_from_base(
     Ok(())
 }
 
-fn is_ios_panel_plist_candidate(source_id: &str) -> bool {
+fn read_ios_plist_file_from_base(base: &Path, source_id: &str) -> Result<Option<SsedIosPlistFile>> {
+    if !base.is_dir() || !source_id.to_ascii_lowercase().ends_with(".plist") {
+        return Ok(None);
+    }
+    let relative = Path::new(source_id);
+    if relative.components().any(|component| {
+        !matches!(
+            component,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    }) {
+        return Ok(None);
+    }
+    let path = base.join(relative);
+    if !regular_file_inside_root(base, &path)? {
+        return Ok(None);
+    }
+    Ok(Some(SsedIosPlistFile {
+        source_id: source_id.to_owned(),
+        label: source_id.to_owned(),
+        bytes: std::fs::read(path)?,
+    }))
+}
+
+pub(super) fn is_ssed_ios_panel_plist_candidate(source_id: &str) -> bool {
     let filename = source_id.rsplit('/').next().unwrap_or(source_id);
     let lower = filename.to_ascii_lowercase();
     if matches!(

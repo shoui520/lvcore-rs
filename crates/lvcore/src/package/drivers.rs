@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 mod body;
 mod body_hourei;
@@ -275,7 +275,7 @@ pub struct ReaderBookPackage {
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
     ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
     ssed_panel_xml: OnceLock<std::result::Result<Option<SsedPanelXml>, String>>,
-    ssed_panel_plist: OnceLock<std::result::Result<Option<PlistValue>, String>>,
+    ssed_panel_plists: Mutex<BTreeMap<String, std::result::Result<Arc<PlistValue>, String>>>,
 }
 
 #[derive(Debug, Default)]
@@ -376,7 +376,7 @@ impl ReaderBookPackage {
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),
             ssed_panel_xml: OnceLock::new(),
-            ssed_panel_plist: OnceLock::new(),
+            ssed_panel_plists: Mutex::new(BTreeMap::new()),
         }
     }
 

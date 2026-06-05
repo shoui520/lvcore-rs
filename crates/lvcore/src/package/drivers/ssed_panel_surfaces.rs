@@ -358,16 +358,13 @@ impl ReaderBookPackage {
         if let Some(source_id) =
             base_surface_id.strip_prefix(super::ssed_ios_plist_surfaces::IOS_PLIST_PANEL_PREFIX)
         {
-            if let Some(source) = self
-                .ssed_ios_panel_plist_sources()?
-                .into_iter()
-                .find(|source| source.source_id.eq_ignore_ascii_case(source_id))
+            if super::ssed_ios_plist_surfaces::is_ssed_ios_panel_plist_candidate(source_id)
+                && let Some(source) = self.ssed_ios_plist_file_by_source_id(source_id)?
             {
                 return Ok(Some(SsedPanelMetadata {
                     label: source.label,
                     bytes: source.bytes,
                     format: SsedPanelMetadataFormat::Plist,
-                    cacheable: false,
                 }));
             }
             return Ok(None);
@@ -394,7 +391,6 @@ impl ReaderBookPackage {
                     label: path.clone(),
                     bytes: self.storage.read(relative)?,
                     format: panel_metadata_format(path),
-                    cacheable: true,
                 }));
             }
         }
@@ -409,7 +405,6 @@ impl ReaderBookPackage {
                     label: path.clone(),
                     bytes: parent_storage.read(relative)?,
                     format: panel_metadata_format(path),
-                    cacheable: true,
                 }));
             }
         }
@@ -685,7 +680,6 @@ struct SsedPanelMetadata {
     label: String,
     bytes: Vec<u8>,
     format: SsedPanelMetadataFormat,
-    cacheable: bool,
 }
 
 enum SsedPanelMetadataFormat {
@@ -703,10 +697,8 @@ impl SsedPanelMetadata {
             SsedPanelMetadataFormat::Xml => package
                 .cached_ssed_panel_xml(&self.bytes, &self.label)
                 .cloned(),
-            SsedPanelMetadataFormat::Plist if self.cacheable => package
+            SsedPanelMetadataFormat::Plist => package
                 .cached_ssed_panel_plist(&self.bytes, &self.label)
-                .and_then(|value| parse_panel_plist_value_for_panel(value, requested_panel_id)),
-            SsedPanelMetadataFormat::Plist => parse_xml_plist(&self.bytes, &self.label)
                 .and_then(|value| parse_panel_plist_value_for_panel(&value, requested_panel_id)),
         }
     }
@@ -730,17 +722,23 @@ impl ReaderBookPackage {
         }
     }
 
-    fn cached_ssed_panel_plist(&self, bytes: &[u8], label: &str) -> Result<&PlistValue> {
-        let cached = self.ssed_panel_plist.get_or_init(|| {
-            parse_xml_plist(bytes, label)
-                .map(Some)
-                .map_err(|error| error.to_string())
-        });
-        match cached {
-            Ok(Some(value)) => Ok(value),
-            Ok(None) => Err(Error::Driver("cached panel plist is missing".to_owned())),
-            Err(error) => Err(Error::Driver(error.clone())),
+    fn cached_ssed_panel_plist(&self, bytes: &[u8], label: &str) -> Result<Arc<PlistValue>> {
+        let cache_key = label.to_ascii_lowercase();
+        let mut cache = self
+            .ssed_panel_plists
+            .lock()
+            .map_err(|_| Error::Driver("panel plist cache lock was poisoned".to_owned()))?;
+        if let Some(cached) = cache.get(&cache_key) {
+            return cached
+                .as_ref()
+                .map(Arc::clone)
+                .map_err(|error| Error::Driver(error.clone()));
         }
+        let parsed = parse_xml_plist(bytes, label)
+            .map(Arc::new)
+            .map_err(|error| error.to_string());
+        cache.insert(cache_key, parsed.clone());
+        parsed.map_err(Error::Driver)
     }
 }
 
