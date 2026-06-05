@@ -111,6 +111,19 @@ fn advanced_column_overrides_unit_search_mode() {
 }
 
 #[test]
+fn cli_search_mode_accepts_fulltext_aliases() {
+    for alias in ["fulltext", "full-text", "full_text"] {
+        let args =
+            Args::try_parse_from(["lvcore", "search", "/tmp/dict", "needle", "--mode", alias])
+                .unwrap();
+        let Command::Search { mode, .. } = args.command else {
+            panic!("expected search command");
+        };
+        assert_eq!(SearchMode::from(mode), SearchMode::FullText);
+    }
+}
+
+#[test]
 fn cli_render_mode_maps_to_reader_render_options() {
     assert_eq!(
         cli_render_options(CliRenderMode::GenericHtml, true),

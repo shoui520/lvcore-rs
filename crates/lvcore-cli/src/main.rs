@@ -207,6 +207,7 @@ enum CliSearchMode {
     Forward,
     Backward,
     Partial,
+    #[value(alias = "full-text", alias = "full_text")]
     Fulltext,
 }
 
