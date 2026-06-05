@@ -172,7 +172,7 @@ use crate::ssed_hc::{
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_title_text,
     is_leaf_page, is_simple_leaf_index_type, is_supported_index_type, parse_internal_page,
-    parse_simple_leaf_page, parse_supported_leaf_page,
+    parse_supported_leaf_page,
 };
 use crate::ssed_loose_media::{
     BRITANNICA_CHRONOLOGY_SOURCE_ID, discover_britannica_top_dat_files,

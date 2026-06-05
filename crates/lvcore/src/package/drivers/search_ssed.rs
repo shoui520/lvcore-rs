@@ -58,7 +58,7 @@ impl ReaderBookPackage {
             optimized_diagnostics.extend(scan_result.diagnostics);
             collector.extend_diagnostics(optimized_diagnostics.clone());
         }
-        if !collector.has_hits() && (optimized_scan_components == 0 || scan_needs_linear_fallback) {
+        if !collector.has_hits() && optimized_scan_components == 0 {
             let scan_diagnostics = if query.mode == SearchMode::Partial {
                 self.scan_ssed_partial_index_rows(&needle, |row| collector.push_row(row))?
             } else {
@@ -68,11 +68,33 @@ impl ReaderBookPackage {
         } else if matches!(
             query.mode,
             SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+        ) && !collector.has_hits()
+            && scan_needs_linear_fallback
+        {
+            let mut fallback_collector = SsedIndexSearchCollector::new(
+                self,
+                &query.mode,
+                &needle,
+                offset,
+                page_limit,
+                query.label_gaiji_policy(),
+            );
+            fallback_collector.extend_diagnostics(optimized_diagnostics.clone());
+            let scan_diagnostics = self.scan_ssed_prefiltered_existing_index_rows(
+                &query.mode,
+                &needle,
+                true,
+                |row| fallback_collector.push_row(row),
+            )?;
+            fallback_collector.extend_diagnostics(scan_diagnostics);
+            collector = fallback_collector;
+        } else if matches!(
+            query.mode,
+            SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
         ) && collector.needs_more_hits()
             && !scan_needs_linear_fallback
-            && (scan_needs_prefilter_fallback || !collector.has_hits() || !needle.is_ascii())
+            && scan_needs_prefilter_fallback
         {
-            let include_simple_indexes = scan_needs_prefilter_fallback || !needle.is_ascii();
             let mut fallback_collector = SsedIndexSearchCollector::new(
                 self,
                 &query.mode,
@@ -85,7 +107,7 @@ impl ReaderBookPackage {
             let scan_diagnostics = self.scan_ssed_prefiltered_existing_index_rows(
                 &query.mode,
                 &needle,
-                include_simple_indexes,
+                true,
                 |row| fallback_collector.push_row(row),
             )?;
             fallback_collector.extend_diagnostics(scan_diagnostics);
@@ -112,6 +134,9 @@ impl ReaderBookPackage {
         }
         self.scan_existing_ssed_simple_index_rows_with_filters(
             |component| {
+                if component.multi == 0xff {
+                    return false;
+                }
                 if !include_simple_indexes && is_simple_leaf_index_type(component.component_type) {
                     return false;
                 }

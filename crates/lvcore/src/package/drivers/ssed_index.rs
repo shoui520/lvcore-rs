@@ -1,6 +1,7 @@
 use super::*;
 
 const SSED_ADJACENT_INDEX_BODY_BOUND_MAX_BYTES: u64 = 256 * 1024;
+const SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT: usize = 256;
 
 impl ReaderBookPackage {
     pub(super) fn scan_ssed_simple_leaf_index_rows_near_key(
@@ -40,7 +41,10 @@ impl ReaderBookPackage {
         }
         'candidates: for needle_key in needle_keys {
             for component in catalog.components_by_role(SsedComponentRole::Index) {
-                if !is_simple_leaf_index_type(component.component_type) {
+                if component.multi == 0xff {
+                    continue;
+                }
+                if !is_supported_index_type(component.component_type) {
                     continue;
                 }
                 let is_backward_index = ssed_index_component_name_is_backward(&component.filename);
@@ -83,6 +87,8 @@ impl ReaderBookPackage {
                 };
                 scanned_components = scanned_components.saturating_add(1);
                 let mut last_key = None::<Vec<u8>>;
+                let mut scan_state = SsedIndexScanState::default();
+                let mut scanned_leaf_pages = 0usize;
                 'pages: for page_index in start_page..page_count {
                     let page = reader.read_range(
                         component_page_offset(component_read_base, page_index),
@@ -95,12 +101,15 @@ impl ReaderBookPackage {
                     if !is_leaf_page(word) {
                         continue;
                     }
+                    scanned_leaf_pages = scanned_leaf_pages.saturating_add(1);
                     let logical_block = component.start_block + page_index as u32;
-                    let (rows, unknown) = parse_simple_leaf_page(
+                    let (rows, unknown) = parse_supported_leaf_page(
                         &component.filename,
+                        component.component_type,
                         &page,
                         page_index as u32,
                         logical_block,
+                        &mut scan_state,
                     );
                     if rows.windows(2).any(|pair| {
                         ssed_index_row_order_key(&pair[1]) < ssed_index_row_order_key(&pair[0])
@@ -112,7 +121,7 @@ impl ReaderBookPackage {
                             Diagnostic::warning(
                                 "ssed_index_unknown_leaf_bytes",
                                 format!(
-                                    "{} had {unknown} unknown simple leaf row(s)",
+                                    "{} had {unknown} unknown index leaf row(s)",
                                     component.filename
                                 ),
                             )
@@ -160,6 +169,9 @@ impl ReaderBookPackage {
                         if !row_matches && passed_match_region {
                             break 'pages;
                         }
+                    }
+                    if scanned_leaf_pages >= SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT {
+                        break 'pages;
                     }
                 }
             }
