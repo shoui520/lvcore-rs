@@ -286,7 +286,7 @@ impl NavigationSurface {
                 .flat_map(|screen| {
                     screen.hotspots.iter().filter_map(|hotspot| {
                         hotspot.target.as_ref().map(|target| NavigationTarget {
-                            href: String::new(),
+                            href: target.href(),
                             surface_id: surface_id.clone(),
                             source_id: format!("{}:{}", screen.screen_id, hotspot.hotspot_id),
                             label_html: hotspot.hotspot_id.clone(),
@@ -303,7 +303,7 @@ impl NavigationSurface {
             } => items
                 .iter()
                 .map(|item| NavigationTarget {
-                    href: String::new(),
+                    href: item.target.href(),
                     surface_id: surface_id.clone(),
                     source_id: item.item_id.clone(),
                     label_html: item.label_html.clone(),
@@ -322,7 +322,7 @@ impl NavigationSurface {
                 .iter()
                 .filter_map(|cell| {
                     cell.target.as_ref().map(|target| NavigationTarget {
-                        href: String::new(),
+                        href: target.href(),
                         surface_id: surface_id.clone(),
                         source_id: format!("{}:{}:{}", cell.panel_id, cell.row, cell.column),
                         label_html: cell.label_html.clone(),
@@ -338,7 +338,7 @@ impl NavigationSurface {
             } => pages
                 .iter()
                 .map(|page| NavigationTarget {
-                    href: String::new(),
+                    href: page.target.href(),
                     surface_id: surface_id.clone(),
                     source_id: page.item_id.clone(),
                     label_html: page.label_html.clone(),
@@ -416,7 +416,7 @@ fn collect_node_targets(
         if let Some(target) = &node.target {
             let sequence_hint = node_sequence_hint(sequence_hint, &node.node_id);
             targets.push(NavigationTarget {
-                href: String::new(),
+                href: target.href(),
                 surface_id: surface_id.to_owned(),
                 source_id: node.node_id.clone(),
                 label_html: node.label_html.clone(),
@@ -515,6 +515,7 @@ mod tests {
         assert_eq!(surface.surface_id(), "menuData");
         assert!(surface.has_actionable_targets());
         assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].href, targets[0].target.href());
         assert_eq!(targets[0].source_id, "child");
         assert_eq!(targets[0].label_text, "Child");
         assert_eq!(
@@ -541,6 +542,10 @@ mod tests {
         assert_eq!(
             lved.actionable_targets()[0].sequence_hint,
             Some(SequenceHint::LvedListOrder)
+        );
+        assert_eq!(
+            lved.actionable_targets()[0].href,
+            lved.actionable_targets()[0].target.href()
         );
 
         let title = NavigationSurface::TitleIndexBrowse {
