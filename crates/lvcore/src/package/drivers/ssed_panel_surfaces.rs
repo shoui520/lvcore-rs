@@ -35,7 +35,7 @@ impl ReaderBookPackage {
             });
         };
         let requested_panel_id = request.requested_panel_id.as_deref();
-        let parsed = match metadata.parse(self, requested_panel_id) {
+        let mut parsed = match metadata.parse(self, requested_panel_id) {
             Ok(parsed) => parsed,
             Err(error) => {
                 return Ok(NavigationSurface::Deferred {
@@ -47,6 +47,12 @@ impl ReaderBookPackage {
                 });
             }
         };
+        if request
+            .base_surface_id
+            .starts_with(super::ssed_ios_plist_surfaces::IOS_PLIST_PANEL_PREFIX)
+        {
+            self.attach_implicit_ios_panel_bin_refs(&mut parsed, &metadata, requested_panel_id)?;
+        }
         let root_panel_id = requested_panel_id.or_else(|| {
             parsed
                 .inline_cells
@@ -184,6 +190,75 @@ impl ReaderBookPackage {
             cells,
             next_cursor,
         })
+    }
+
+    fn attach_implicit_ios_panel_bin_refs(
+        &self,
+        parsed: &mut crate::ssed_panel::SsedPanelXml,
+        metadata: &SsedPanelMetadata,
+        requested_panel_id: Option<&str>,
+    ) -> Result<()> {
+        if parsed.inline_cells.is_empty()
+            && parsed.data_refs.is_empty()
+            && let Some(panel_id) = requested_panel_id
+        {
+            let root = metadata.parse(self, None)?;
+            if let Some(data_ref) = root.inline_cells.iter().find_map(|cell| {
+                let child_panel_id = implicit_ios_panel_child_id(cell);
+                (child_panel_id == panel_id)
+                    .then(|| self.implicit_ios_panel_data_ref(panel_id, &cell.label, &cell.label))
+            }) && self.read_ssed_panel_bin_bytes(&data_ref)?.is_some()
+            {
+                parsed.data_refs.push(data_ref);
+            }
+            return Ok(());
+        }
+
+        let mut existing_refs = parsed
+            .data_refs
+            .iter()
+            .map(|data_ref| (data_ref.panel_id.clone(), data_ref.filename.clone()))
+            .collect::<BTreeSet<_>>();
+        let mut additions = Vec::new();
+        for cell in &mut parsed.inline_cells {
+            if !cell.ref_id.trim().is_empty()
+                || !cell.action_verb.trim().is_empty()
+                || cell.target_block.is_some()
+                || cell.label.trim().is_empty()
+            {
+                continue;
+            }
+            let child_panel_id = implicit_ios_panel_child_id(cell);
+            let data_ref =
+                self.implicit_ios_panel_data_ref(&child_panel_id, &cell.label, &cell.label);
+            if !existing_refs.insert((data_ref.panel_id.clone(), data_ref.filename.clone())) {
+                continue;
+            }
+            if self.read_ssed_panel_bin_bytes(&data_ref)?.is_some() {
+                cell.ref_id = child_panel_id;
+                additions.push(data_ref);
+            }
+        }
+        parsed.data_refs.extend(additions);
+        Ok(())
+    }
+
+    fn implicit_ios_panel_data_ref(
+        &self,
+        panel_id: &str,
+        title: &str,
+        label: &str,
+    ) -> SsedPanelDataRef {
+        let stem = root_level_product_idx_code(&self.root)
+            .map(|code| format!("{code}_{label}"))
+            .unwrap_or_else(|| label.to_owned());
+        SsedPanelDataRef {
+            panel_id: panel_id.to_owned(),
+            panel_type: "contents".to_owned(),
+            title: title.to_owned(),
+            filename: format!("bin/{stem}.bin"),
+            data_type: "bin".to_owned(),
+        }
     }
 
     fn append_ssed_panel_bin_cells(
@@ -518,6 +593,10 @@ fn ssed_panel_data_ref_is_aggregate(data_ref: &SsedPanelDataRef) -> bool {
     };
     let stem = stem.to_ascii_lowercase();
     stem == "all" || stem.ends_with("_all") || stem.ends_with("-all")
+}
+
+fn implicit_ios_panel_child_id(cell: &SsedPanelInlineCell) -> String {
+    format!("{}.{:04}", cell.panel_id, cell.cell_index)
 }
 
 fn ssed_panel_known_panel_ids(parsed: &crate::ssed_panel::SsedPanelXml) -> BTreeSet<String> {

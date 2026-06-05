@@ -747,6 +747,11 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     )
     .unwrap();
     fs::write(
+        root.path().join("bin/DICT_あ.bin"),
+        panel_bin_fixture(10, 6),
+    )
+    .unwrap();
+    fs::write(
         root.path().join("indexSearch.plist"),
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><array>
@@ -776,6 +781,12 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
         <key>child</key><array/>
       </dict>
     </array>
+  </dict>
+  <dict>
+    <key>title</key><string>あ</string>
+    <key>block</key><integer>0</integer>
+    <key>offset</key><integer>0</integer>
+    <key>child</key><array/>
   </dict>
 </array></plist>"#,
     )
@@ -883,12 +894,18 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     let NavigationSurface::Panel { cells, .. } = root_panel else {
         panic!("indexSearch.plist should open as a panel-style surface");
     };
-    assert_eq!(cells.len(), 2);
+    assert_eq!(cells.len(), 3);
     assert_eq!(cells[0].label_text, "Foreign Phrases");
     assert!(matches!(
         cells[0].target.as_ref().unwrap().decode().unwrap(),
         InternalTarget::MenuItem { surface_id, .. }
             if surface_id == "ios-plist:indexSearch.plist:root.0000"
+    ));
+    assert_eq!(cells[2].label_text, "あ");
+    assert!(matches!(
+        cells[2].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::MenuItem { surface_id, .. }
+            if surface_id == "ios-plist:indexSearch.plist:root.0002"
     ));
 
     let child_panel = package
@@ -934,6 +951,21 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
             component,
             block: 10,
             offset: 4,
+        } if component == "HONMON.DIC"
+    ));
+    let implicit_bin_leaf = package
+        .open_surface("ios-plist:indexSearch.plist:root.0002")
+        .unwrap();
+    let NavigationSurface::Panel { cells, .. } = implicit_bin_leaf else {
+        panic!("label-backed iOS indexSearch row should decode its inferred BIN");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 6,
         } if component == "HONMON.DIC"
     ));
 
