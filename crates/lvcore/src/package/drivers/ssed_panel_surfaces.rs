@@ -127,6 +127,9 @@ impl ReaderBookPackage {
             ) {
                 missing_data_refs.push(data_ref.clone());
             }
+            if builder.is_page_full() {
+                break;
+            }
         }
         if builder.total_seen() == 0
             && requested_panel_id.is_some()
@@ -153,6 +156,9 @@ impl ReaderBookPackage {
                     SsedPanelBinLoadStatus::Decoded
                 ) {
                     aggregate_source_count += 1;
+                }
+                if builder.is_page_full() {
+                    break;
                 }
             }
             if aggregate_source_count > 0 {
@@ -271,6 +277,36 @@ impl ReaderBookPackage {
         let Some(data) = self.read_ssed_panel_bin_bytes(data_ref)? else {
             return Ok(SsedPanelBinLoadStatus::Missing);
         };
+        if let Some(page) = parse_panel_bin_page(
+            &data,
+            builder.local_offset_for_collection(),
+            builder.remaining_capacity_with_lookahead(),
+        )? {
+            let total_count = page.actual_record_count as usize;
+            let local_start = builder.local_offset_for_collection().min(total_count);
+            if local_start >= total_count {
+                builder.skip_unbuilt(total_count);
+                return Ok(SsedPanelBinLoadStatus::Decoded);
+            }
+            builder.skip_unbuilt(local_start);
+            let decoded_count = page.records.len();
+            for page_record in &page.records {
+                builder.push_cell(|| {
+                    ssed_panel_bin_record_to_navigation_cell(
+                        self,
+                        data_ref,
+                        &page_record.record,
+                        page_record.next_record.as_ref(),
+                        diagnostics,
+                        gaiji_policy,
+                    )
+                })?;
+            }
+            if local_start.saturating_add(decoded_count) < total_count {
+                builder.mark_has_more();
+            }
+            return Ok(SsedPanelBinLoadStatus::Decoded);
+        }
         let panel = match parse_panel_bin(&data) {
             Ok(panel) => panel,
             Err(error) => {
@@ -563,6 +599,28 @@ impl PanelCellPageBuilder {
             self.has_more = true;
         }
         Ok(())
+    }
+
+    fn local_offset_for_collection(&self) -> usize {
+        self.offset.saturating_sub(self.seen)
+    }
+
+    fn remaining_capacity_with_lookahead(&self) -> usize {
+        self.limit
+            .saturating_sub(self.cells.len())
+            .saturating_add(1)
+    }
+
+    fn skip_unbuilt(&mut self, count: usize) {
+        self.seen = self.seen.saturating_add(count);
+    }
+
+    fn mark_has_more(&mut self) {
+        self.has_more = true;
+    }
+
+    fn is_page_full(&self) -> bool {
+        self.has_more
     }
 
     fn total_seen(&self) -> usize {

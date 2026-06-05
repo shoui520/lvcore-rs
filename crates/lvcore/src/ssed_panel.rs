@@ -55,6 +55,21 @@ pub struct SsedPanelBin {
     pub records: Vec<SsedPanelBinRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SsedPanelBinPageRecord {
+    pub record: SsedPanelBinRecord,
+    pub next_record: Option<SsedPanelBinRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SsedPanelBinPage {
+    pub declared_record_count: u32,
+    pub actual_record_count: u32,
+    pub text_width: u32,
+    pub format: String,
+    pub records: Vec<SsedPanelBinPageRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CurrentPanel {
     panel_id: String,
@@ -187,6 +202,77 @@ pub fn parse_panel_bin(data: &[u8]) -> Result<SsedPanelBin> {
             "Panel BIN is shorter than the 8-byte header".to_owned(),
         ));
     }
+    if let Some(layout) = standard_panel_bin_layout(data) {
+        return Ok(parse_standard_panel_records(data, &layout));
+    }
+    if let Some(panel) = parse_big_endian_utf8_panel_records(data) {
+        return Ok(panel);
+    }
+    let declared_record_count = le32(data, 0);
+    let text_width = le32(data, 4);
+    Err(Error::Driver(format!(
+        "Panel BIN size mismatch: count={declared_record_count} text_width={text_width} actual={}",
+        data.len()
+    )))
+}
+
+pub fn parse_panel_bin_page(
+    data: &[u8],
+    start: usize,
+    count: usize,
+) -> Result<Option<SsedPanelBinPage>> {
+    if data.len() < 8 {
+        return Err(Error::Driver(
+            "Panel BIN is shorter than the 8-byte header".to_owned(),
+        ));
+    }
+    let Some(layout) = standard_panel_bin_layout(data) else {
+        return Ok(None);
+    };
+    let actual_count = layout.actual_record_count as usize;
+    if count == 0 || start >= actual_count {
+        return Ok(Some(SsedPanelBinPage {
+            declared_record_count: layout.declared_record_count,
+            actual_record_count: layout.actual_record_count,
+            text_width: layout.text_width,
+            format: layout.format.to_owned(),
+            records: Vec::new(),
+        }));
+    }
+    let sorted_targets = standard_panel_sorted_targets(data, &layout);
+    let end = start.saturating_add(count).min(actual_count);
+    let mut records = Vec::with_capacity(end.saturating_sub(start));
+    for index in start..end {
+        let Some(record) = standard_panel_record_at(data, &layout, index as u32) else {
+            continue;
+        };
+        let next_record =
+            nearest_higher_standard_panel_record(data, &layout, &sorted_targets, &record);
+        records.push(SsedPanelBinPageRecord {
+            record,
+            next_record,
+        });
+    }
+    Ok(Some(SsedPanelBinPage {
+        declared_record_count: layout.declared_record_count,
+        actual_record_count: layout.actual_record_count,
+        text_width: layout.text_width,
+        format: layout.format.to_owned(),
+        records,
+    }))
+}
+
+#[derive(Debug, Clone)]
+struct StandardPanelBinLayout {
+    declared_record_count: u32,
+    actual_record_count: u32,
+    text_width: u32,
+    format: &'static str,
+    has_record_id: bool,
+    stride: usize,
+}
+
+fn standard_panel_bin_layout(data: &[u8]) -> Option<StandardPanelBinLayout> {
     let declared_record_count = le32(data, 0);
     let text_width = le32(data, 4);
     let variants = [
@@ -204,19 +290,20 @@ pub fn parse_panel_bin(data: &[u8]) -> Result<SsedPanelBin> {
         ),
     ];
     for (format, has_record_id, actual_count) in variants {
-        let Some((_, expected_len)) = panel_bin_layout_len(actual_count, text_width, has_record_id)
+        let Some((stride, expected_len)) =
+            panel_bin_layout_len(actual_count, text_width, has_record_id)
         else {
             continue;
         };
         if data.len() == expected_len {
-            return Ok(parse_panel_records(
-                data,
+            return Some(StandardPanelBinLayout {
                 declared_record_count,
-                actual_count,
+                actual_record_count: actual_count,
                 text_width,
                 format,
                 has_record_id,
-            ));
+                stride,
+            });
         }
     }
     for (format, has_record_id) in [
@@ -232,24 +319,18 @@ pub fn parse_panel_bin(data: &[u8]) -> Result<SsedPanelBin> {
             if actual_count <= declared_record_count
                 && (actual_count > 0 || declared_record_count == 0)
             {
-                return Ok(parse_panel_records(
-                    data,
+                return Some(StandardPanelBinLayout {
                     declared_record_count,
-                    actual_count,
+                    actual_record_count: actual_count,
                     text_width,
                     format,
                     has_record_id,
-                ));
+                    stride,
+                });
             }
         }
     }
-    if let Some(panel) = parse_big_endian_utf8_panel_records(data) {
-        return Ok(panel);
-    }
-    Err(Error::Driver(format!(
-        "Panel BIN size mismatch: count={declared_record_count} text_width={text_width} actual={}",
-        data.len()
-    )))
+    None
 }
 
 pub(crate) fn exinfo_general_value(data: &[u8], wanted_key: &str) -> Option<String> {
@@ -372,39 +453,94 @@ fn looks_like_big_endian_utf8_panel_records(data: &[u8], stride: usize) -> bool 
     non_empty >= usize::max(1, sample_limit / 2)
 }
 
-fn parse_panel_records(
-    data: &[u8],
-    declared_record_count: u32,
-    actual_record_count: u32,
-    text_width: u32,
-    format: &str,
-    has_record_id: bool,
-) -> SsedPanelBin {
-    let stride = (if has_record_id { 12 } else { 8 }) + text_width as usize;
+fn parse_standard_panel_records(data: &[u8], layout: &StandardPanelBinLayout) -> SsedPanelBin {
     let mut records = Vec::new();
-    for index in 0..actual_record_count {
-        let pos = 8 + index as usize * stride;
-        let (record_id, block_pos) = if has_record_id {
-            (Some(le32(data, pos)), pos + 4)
-        } else {
-            (None, pos)
-        };
-        let text_start = block_pos + 8;
-        let text_end = text_start + text_width as usize;
-        records.push(SsedPanelBinRecord {
-            index,
-            record_id,
-            block: le32(data, block_pos),
-            offset: le32(data, block_pos + 4),
-            text: decode_panel_text(&data[text_start..text_end]),
-        });
+    for index in 0..layout.actual_record_count {
+        if let Some(record) = standard_panel_record_at(data, layout, index) {
+            records.push(record);
+        }
     }
     SsedPanelBin {
-        declared_record_count,
-        actual_record_count,
-        text_width,
-        format: format.to_owned(),
+        declared_record_count: layout.declared_record_count,
+        actual_record_count: layout.actual_record_count,
+        text_width: layout.text_width,
+        format: layout.format.to_owned(),
         records,
+    }
+}
+
+fn standard_panel_record_at(
+    data: &[u8],
+    layout: &StandardPanelBinLayout,
+    index: u32,
+) -> Option<SsedPanelBinRecord> {
+    if index >= layout.actual_record_count {
+        return None;
+    }
+    let pos = 8usize.checked_add((index as usize).checked_mul(layout.stride)?)?;
+    let (record_id, block_pos) = if layout.has_record_id {
+        (Some(le32(data, pos)), pos.checked_add(4)?)
+    } else {
+        (None, pos)
+    };
+    let text_start = block_pos.checked_add(8)?;
+    let text_end = text_start.checked_add(layout.text_width as usize)?;
+    if text_end > data.len() {
+        return None;
+    }
+    Some(SsedPanelBinRecord {
+        index,
+        record_id,
+        block: le32(data, block_pos),
+        offset: le32(data, block_pos + 4),
+        text: decode_panel_text(&data[text_start..text_end]),
+    })
+}
+
+fn standard_panel_sorted_targets(
+    data: &[u8],
+    layout: &StandardPanelBinLayout,
+) -> Vec<(u32, u32, u32)> {
+    let mut targets = Vec::with_capacity(layout.actual_record_count as usize);
+    for index in 0..layout.actual_record_count {
+        let Some(block_pos) = standard_panel_record_block_pos(layout, index) else {
+            continue;
+        };
+        if block_pos + 8 > data.len() {
+            continue;
+        }
+        let block = le32(data, block_pos);
+        let offset = le32(data, block_pos + 4);
+        if block != 0 || offset != 0 {
+            targets.push((block, offset, index));
+        }
+    }
+    targets.sort_unstable();
+    targets
+}
+
+fn nearest_higher_standard_panel_record(
+    data: &[u8],
+    layout: &StandardPanelBinLayout,
+    sorted_targets: &[(u32, u32, u32)],
+    record: &SsedPanelBinRecord,
+) -> Option<SsedPanelBinRecord> {
+    let index = sorted_targets
+        .partition_point(|(block, offset, _)| (*block, *offset) <= (record.block, record.offset));
+    sorted_targets
+        .get(index)
+        .and_then(|(_, _, record_index)| standard_panel_record_at(data, layout, *record_index))
+}
+
+fn standard_panel_record_block_pos(layout: &StandardPanelBinLayout, index: u32) -> Option<usize> {
+    if index >= layout.actual_record_count {
+        return None;
+    }
+    let pos = 8usize.checked_add((index as usize).checked_mul(layout.stride)?)?;
+    if layout.has_record_id {
+        pos.checked_add(4)
+    } else {
+        Some(pos)
     }
 }
 
@@ -958,6 +1094,36 @@ mod tests {
         assert_eq!(parsed.records[0].block, 3);
         assert_eq!(parsed.records[0].offset, 0x20);
         assert_eq!(parsed.records[0].text, "あ");
+    }
+
+    #[test]
+    fn parses_panel_bin_page_with_sorted_next_record_bounds() {
+        fn row(block: u32, offset: u32, label: [u8; 4]) -> Vec<u8> {
+            block
+                .to_le_bytes()
+                .into_iter()
+                .chain(offset.to_le_bytes())
+                .chain(label)
+                .collect()
+        }
+        let data = (3u32)
+            .to_le_bytes()
+            .into_iter()
+            .chain((4u32).to_le_bytes())
+            .chain(row(3, 0x20, [0x24, 0x22, 0, 0]))
+            .chain(row(5, 0x50, [0x24, 0x24, 0, 0]))
+            .chain(row(4, 0x40, [0x24, 0x26, 0, 0]))
+            .collect::<Vec<_>>();
+
+        let page = parse_panel_bin_page(&data, 0, 1).unwrap().unwrap();
+
+        assert_eq!(page.actual_record_count, 3);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].record.block, 3);
+        assert_eq!(page.records[0].record.text, "あ");
+        let next = page.records[0].next_record.as_ref().unwrap();
+        assert_eq!(next.block, 4);
+        assert_eq!(next.text, "う");
     }
 
     #[test]
