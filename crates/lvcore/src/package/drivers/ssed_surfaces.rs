@@ -1,6 +1,68 @@
 use super::*;
 
 impl ReaderBookPackage {
+    pub(super) fn decoded_ssed_navigation_component_data(
+        &self,
+        component: &SsedComponent,
+    ) -> Result<Arc<Vec<u8>>> {
+        let cache_key = component.filename.to_ascii_lowercase();
+        {
+            let cache = self
+                .ssed_navigation_component_data
+                .lock()
+                .map_err(|_| Error::Driver("SSED navigation cache was poisoned".to_owned()))?;
+            if let Some(cached) = cache.get(&cache_key) {
+                return cached
+                    .as_ref()
+                    .map(Arc::clone)
+                    .map_err(|error| Error::Driver(error.clone()));
+            }
+        }
+
+        let decoded = (|| {
+            let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+                return Err(Error::Driver(format!(
+                    "{} is declared but not present on disk",
+                    component.filename
+                )));
+            };
+            let mut reader = SsedDataFile::open(&path)?;
+            reader.read_range(0, reader.header().expanded_size())
+        })()
+        .map(Arc::new)
+        .map_err(|error| error.to_string());
+
+        let mut cache = self
+            .ssed_navigation_component_data
+            .lock()
+            .map_err(|_| Error::Driver("SSED navigation cache was poisoned".to_owned()))?;
+        let cached = cache.entry(cache_key).or_insert_with(|| decoded);
+        cached
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(|error| Error::Driver(error.clone()))
+    }
+
+    fn cached_ssed_navigation_surface_page(&self, key: &str) -> Result<Option<NavigationSurface>> {
+        let cache = self
+            .ssed_navigation_surface_pages
+            .lock()
+            .map_err(|_| Error::Driver("SSED navigation surface cache was poisoned".to_owned()))?;
+        Ok(cache.get(key).map(|surface| surface.as_ref().clone()))
+    }
+
+    fn cache_ssed_navigation_surface_page(
+        &self,
+        key: String,
+        surface: &NavigationSurface,
+    ) -> Result<()> {
+        self.ssed_navigation_surface_pages
+            .lock()
+            .map_err(|_| Error::Driver("SSED navigation surface cache was poisoned".to_owned()))?
+            .insert(key, Arc::new(surface.clone()));
+        Ok(())
+    }
+
     pub(super) fn ssed_navigation_home_surface(
         &self,
         surface_id: &str,
@@ -172,43 +234,11 @@ impl ReaderBookPackage {
                 format!("{fallback_name} is not declared in this SSED catalog"),
             ));
         };
-        let path = match self.resolve_readable_ssed_component_path(component) {
-            Ok(Some(path)) => path,
-            Ok(None) => {
-                return Ok(deferred_component_surface_warning(
-                    surface_id,
-                    "ssed_navigation_component_file_missing",
-                    format!("{} is declared but not present on disk", component.filename),
-                    component,
-                ));
-            }
-            Err(error) => {
-                return Ok(deferred_component_surface_warning(
-                    surface_id,
-                    "ssed_navigation_component_decode_failed",
-                    format!(
-                        "{} is not readable as SSEDDATA: {error}",
-                        component.filename
-                    ),
-                    component,
-                ));
-            }
-        };
-        let mut reader = match SsedDataFile::open(&path) {
-            Ok(reader) => reader,
-            Err(error) => {
-                return Ok(deferred_component_surface_warning(
-                    surface_id,
-                    "ssed_navigation_component_decode_failed",
-                    format!(
-                        "{} is not readable as plain SSEDDATA: {error}",
-                        component.filename
-                    ),
-                    component,
-                ));
-            }
-        };
-        let data = reader.read_range(0, reader.header().expanded_size())?;
+        let cache_key =
+            ssed_navigation_surface_page_cache_key(component, surface_id, cursor, limit, options);
+        if let Some(surface) = self.cached_ssed_navigation_surface_page(&cache_key)? {
+            return Ok(surface);
+        }
         let address_offset =
             match ssed_navigation_address_cursor_offset(cursor, component, surface_id) {
                 Ok(offset) => offset,
@@ -226,6 +256,17 @@ impl ReaderBookPackage {
             }
         } else {
             decode_ssed_menu_node_cursor(cursor)
+        };
+        let data = match self.decoded_ssed_navigation_component_data(component) {
+            Ok(data) => data,
+            Err(error) => {
+                return Ok(deferred_component_surface_warning(
+                    surface_id,
+                    "ssed_navigation_component_decode_failed",
+                    format!("{} is not readable as SSEDDATA: {error}", component.filename),
+                    component,
+                ));
+            }
         };
         let parse_data = if let Some(offset) = address_offset {
             if offset >= data.len() {
@@ -295,11 +336,13 @@ impl ReaderBookPackage {
         if nodes.is_empty() {
             return Ok(deferred_surface(surface_id, diagnostics));
         }
-        Ok(NavigationSurface::SimpleMenu {
+        let surface = NavigationSurface::SimpleMenu {
             surface_id: surface_id.to_owned(),
             nodes,
             next_cursor: node_page.next_cursor,
-        })
+        };
+        self.cache_ssed_navigation_surface_page(cache_key, &surface)?;
+        Ok(surface)
     }
 
     pub(super) fn ssed_navigation_empty_diagnostic(
@@ -430,4 +473,33 @@ fn ssed_navigation_address_cursor_offset(
         )
         .with_context("component", &component.filename)
     })
+}
+
+fn ssed_navigation_surface_page_cache_key(
+    component: &SsedComponent,
+    surface_id: &str,
+    cursor: Option<&str>,
+    limit: usize,
+    options: &LabelOptions,
+) -> String {
+    let policy = options
+        .gaiji_policy
+        .priority
+        .iter()
+        .map(|source| match source {
+            GaijiSourcePreference::Unicode => "unicode",
+            GaijiSourcePreference::ExternalResource => "external",
+            GaijiSourcePreference::Ga16Bitmap => "ga16",
+            GaijiSourcePreference::Unresolved => "unresolved",
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{}\0{}\0{}\0{}\0{}",
+        component.filename.to_ascii_lowercase(),
+        surface_id,
+        cursor.unwrap_or_default(),
+        limit,
+        policy
+    )
 }

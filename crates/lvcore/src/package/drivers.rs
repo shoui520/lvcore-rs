@@ -249,6 +249,8 @@ pub struct HoureiDriver;
 type SsedIndexBodyBoundaryMap = BTreeMap<String, Vec<SsedIndexPointer>>;
 type SsedIndexComponentBoundaryCache =
     BTreeMap<String, std::result::Result<Arc<SsedIndexBodyBoundaryMap>, String>>;
+type SsedNavigationDataCache = BTreeMap<String, std::result::Result<Arc<Vec<u8>>, String>>;
+type SsedNavigationSurfaceCache = BTreeMap<String, Arc<NavigationSurface>>;
 
 pub struct ReaderBookPackage {
     root: PathBuf,
@@ -275,6 +277,8 @@ pub struct ReaderBookPackage {
         OnceLock<std::result::Result<Option<SsedIosAddressConverter>, String>>,
     ssed_ios_search_resolvers: OnceLock<std::result::Result<Vec<SsedIosSearchResolver>, String>>,
     ssed_index_component_body_boundaries: Mutex<SsedIndexComponentBoundaryCache>,
+    ssed_navigation_component_data: Mutex<SsedNavigationDataCache>,
+    ssed_navigation_surface_pages: Mutex<SsedNavigationSurfaceCache>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
     ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
     ssed_panel_xml: OnceLock<std::result::Result<Option<SsedPanelXml>, String>>,
@@ -376,6 +380,8 @@ impl ReaderBookPackage {
             ssed_ios_address_converter: OnceLock::new(),
             ssed_ios_search_resolvers: OnceLock::new(),
             ssed_index_component_body_boundaries: Mutex::new(BTreeMap::new()),
+            ssed_navigation_component_data: Mutex::new(BTreeMap::new()),
+            ssed_navigation_surface_pages: Mutex::new(BTreeMap::new()),
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),
             ssed_panel_xml: OnceLock::new(),

@@ -595,27 +595,12 @@ impl ReaderBookPackage {
                 diagnostics,
             });
         };
-        let path = match self.resolve_readable_ssed_component_path(component) {
-            Ok(Some(path)) => path,
-            Ok(None) => {
-                diagnostics.push(Diagnostic::warning(
-                    "ssed_navigation_component_file_missing",
-                    format!("{} is declared but not present on disk", component.filename),
-                ));
-                return Ok(TargetWindow {
-                    center: self.render_target(target, options)?,
-                    before: Vec::new(),
-                    after: Vec::new(),
-                    diagnostics,
-                });
-            }
+        let data = match self.decoded_ssed_navigation_component_data(component) {
+            Ok(data) => data,
             Err(error) => {
                 diagnostics.push(Diagnostic::warning(
                     "ssed_navigation_component_decode_failed",
-                    format!(
-                        "{} is not readable as SSEDDATA: {error}",
-                        component.filename
-                    ),
+                    format!("{} is not readable as SSEDDATA: {error}", component.filename),
                 ));
                 return Ok(TargetWindow {
                     center: self.render_target(target, options)?,
@@ -625,25 +610,6 @@ impl ReaderBookPackage {
                 });
             }
         };
-        let mut reader = match SsedDataFile::open(&path) {
-            Ok(reader) => reader,
-            Err(error) => {
-                diagnostics.push(Diagnostic::warning(
-                    "ssed_navigation_component_decode_failed",
-                    format!(
-                        "{} is not readable as plain SSEDDATA: {error}",
-                        component.filename
-                    ),
-                ));
-                return Ok(TargetWindow {
-                    center: self.render_target(target, options)?,
-                    before: Vec::new(),
-                    after: Vec::new(),
-                    diagnostics,
-                });
-            }
-        };
-        let data = reader.read_range(0, reader.header().expanded_size())?;
         let parsed = parse_menu_stream(&data);
         if parsed.empty_sentinel || parsed.records.is_empty() {
             let (code, message) = if parsed.empty_sentinel {
