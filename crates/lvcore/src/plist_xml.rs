@@ -12,7 +12,7 @@ pub(crate) enum PlistValue {
     String(String),
     Bool(bool),
     Integer(i64),
-    Real,
+    Real(String),
     Data,
     Date,
 }
@@ -78,8 +78,8 @@ fn parse_plist_value(
             Ok(PlistValue::Integer(value))
         }
         b"real" => {
-            let _ = parse_text_value(reader, b"real", source_label)?;
-            Ok(PlistValue::Real)
+            let raw = parse_text_value(reader, b"real", source_label)?;
+            Ok(PlistValue::Real(raw))
         }
         b"data" => {
             let _ = parse_text_value(reader, b"data", source_label)?;
@@ -110,7 +110,7 @@ fn parse_empty_plist_value(event: BytesStart<'_>, source_label: &str) -> Result<
         b"dict" => Ok(PlistValue::Dict(BTreeMap::new())),
         b"string" => Ok(PlistValue::String(String::new())),
         b"integer" => Ok(PlistValue::Integer(0)),
-        b"real" => Ok(PlistValue::Real),
+        b"real" => Ok(PlistValue::Real(String::new())),
         b"data" => Ok(PlistValue::Data),
         b"date" => Ok(PlistValue::Date),
         b"true" => Ok(PlistValue::Bool(true)),
@@ -278,7 +278,14 @@ impl PlistValue {
     pub(crate) fn as_i64(&self) -> Option<i64> {
         match self {
             Self::Integer(value) => Some(*value),
+            Self::Real(value) => parse_integral_real(value),
             _ => None,
         }
     }
+}
+
+fn parse_integral_real(value: &str) -> Option<i64> {
+    let value = value.trim();
+    let integer = value.strip_suffix(".0").unwrap_or(value);
+    integer.parse().ok()
 }

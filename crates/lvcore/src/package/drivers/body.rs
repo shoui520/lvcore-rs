@@ -12,6 +12,7 @@ impl ReaderBookPackage {
             InternalTarget::LvedInfoPage { .. } => Ok(ResolvedTargetKind::InfoPage),
             InternalTarget::LvedNamedPage { .. } => Ok(ResolvedTargetKind::InfoPage),
             InternalTarget::SsedAuxRecord { .. } => Ok(ResolvedTargetKind::InfoPage),
+            InternalTarget::SsedIosHtmlPage { .. } => Ok(ResolvedTargetKind::InfoPage),
             InternalTarget::HoureiLaw { .. } => Ok(ResolvedTargetKind::LawArticle),
             _ => Ok(ResolvedTargetKind::EntryBody),
         }
@@ -33,6 +34,11 @@ impl ReaderBookPackage {
                 Ok(lookup_britannica_chronology_record(&self.root, &key)?
                     .map(|record| record.title()))
             }
+            InternalTarget::SsedIosHtmlPage {
+                source_id, index, ..
+            } => Ok(self
+                .ssed_ios_html_list_item(&source_id, index)?
+                .map(|item| item.label_text)),
             _ => Ok(None),
         }
     }
@@ -72,6 +78,9 @@ impl BodyProvider for ReaderBookPackage {
             {
                 self.visual_body_for_britannica_chronology_record(&key)
             }
+            InternalTarget::SsedIosHtmlPage {
+                source_id, index, ..
+            } => self.visual_body_for_ssed_ios_html_page(&source_id, index),
             InternalTarget::LvedRow {
                 table,
                 row_id,

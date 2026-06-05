@@ -289,6 +289,60 @@ impl NavigationProvider for ReaderBookPackage {
                         diagnostics: Vec::new(),
                     });
                 }
+                for source in self.ssed_ios_panel_plist_sources()? {
+                    surfaces.push(HomeSurface {
+                        href: None,
+                        surface_id: source.surface_id.clone(),
+                        kind: NavigationSurfaceKind::Panel,
+                        status: NavigationStatus::Available,
+                        title_html: escape_plain_label_html(&source.title),
+                        title_text: source.title,
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: source.surface_id,
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_ios_plist_panel",
+                            "iOS plist navigation is available as a panel-style surface",
+                        )],
+                    });
+                }
+                for source in self.ssed_ios_html_list_sources()? {
+                    surfaces.push(HomeSurface {
+                        href: None,
+                        surface_id: source.surface_id.clone(),
+                        kind: NavigationSurfaceKind::Info,
+                        status: NavigationStatus::Available,
+                        title_html: escape_plain_label_html(&source.title),
+                        title_text: source.title,
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: source.surface_id,
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_ios_html_list",
+                            "iOS HTMLList.plist exposes preserved info pages",
+                        )],
+                    });
+                }
+                for source in self.ssed_ios_table_list_sources()? {
+                    surfaces.push(HomeSurface {
+                        href: None,
+                        surface_id: source.surface_id.clone(),
+                        kind: NavigationSurfaceKind::TitleIndexBrowse,
+                        status: NavigationStatus::Available,
+                        title_html: escape_plain_label_html(&source.title),
+                        title_text: source.title,
+                        target: Some(TargetToken::new(&InternalTarget::TitleIndexItem {
+                            surface_id: source.surface_id,
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_ios_table_list",
+                            "iOS tableList.plist exposes table/index entry targets",
+                        )],
+                    });
+                }
                 if self
                     .ssed_catalog
                     .as_ref()
@@ -503,6 +557,21 @@ impl NavigationProvider for ReaderBookPackage {
             }
             (FormatFamily::Ssed, id) if id.starts_with("panels:") => {
                 self.open_ssed_panel_surface(surface_id, cursor, limit, options)
+            }
+            (FormatFamily::Ssed, id)
+                if super::ssed_ios_plist_surfaces::is_ssed_ios_panel_surface_id(id) =>
+            {
+                self.open_ssed_panel_surface(surface_id, cursor, limit, options)
+            }
+            (FormatFamily::Ssed, id)
+                if super::ssed_ios_plist_surfaces::is_ssed_ios_html_list_surface_id(id) =>
+            {
+                self.open_ssed_ios_html_list_surface(surface_id, cursor, limit)
+            }
+            (FormatFamily::Ssed, id)
+                if super::ssed_ios_plist_surfaces::is_ssed_ios_table_list_surface_id(id) =>
+            {
+                self.open_ssed_ios_table_list_surface(surface_id, cursor, limit, options)
             }
             (FormatFamily::LvedSqlite3, "lved-list") => {
                 self.open_lved_list_surface(surface_id, cursor, limit)

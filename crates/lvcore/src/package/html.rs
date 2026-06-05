@@ -475,6 +475,8 @@ pub(super) enum HtmlAttrName {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct HtmlAttrRange {
     pub(super) name: HtmlAttrName,
+    pub(super) tag_start: usize,
+    pub(super) tag_end: usize,
     pub(super) value_start: usize,
     pub(super) value_end: usize,
 }
@@ -494,6 +496,18 @@ pub(super) fn next_html_href_or_src_attr(
             search = attr_start + 1;
             continue;
         };
+        let Some(tag_start) = lower[..attr_start].rfind('<') else {
+            search = attr_start + 1;
+            continue;
+        };
+        let Some(tag_end) = html_tag_end(html, tag_start) else {
+            search = attr_start + 1;
+            continue;
+        };
+        if tag_end <= attr_start || lower[tag_start..attr_start].contains('>') {
+            search = attr_start + 1;
+            continue;
+        }
 
         let mut index = attr_start + attr_name.len();
         index = skip_ascii_whitespace(lower, index)?;
@@ -515,6 +529,8 @@ pub(super) fn next_html_href_or_src_attr(
             .map(|offset| value_start + offset)?;
         return Some(HtmlAttrRange {
             name,
+            tag_start,
+            tag_end,
             value_start,
             value_end,
         });

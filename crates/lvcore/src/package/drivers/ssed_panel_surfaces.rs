@@ -15,7 +15,17 @@ impl ReaderBookPackage {
                 next_cursor: None,
             });
         }
-        let Some(metadata) = self.read_ssed_panel_metadata()? else {
+        let Some(request) = ssed_panel_surface_request(surface_id) else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_panels_surface_id_unrecognized",
+                    "panel surface id is not recognized",
+                )],
+            });
+        };
+        let Some(metadata) = self.read_ssed_panel_metadata_for_surface(&request.base_surface_id)?
+        else {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics: vec![Diagnostic::info(
@@ -24,9 +34,7 @@ impl ReaderBookPackage {
                 )],
             });
         };
-        let requested_panel_id = surface_id
-            .strip_prefix("panels:")
-            .filter(|id| !id.is_empty());
+        let requested_panel_id = request.requested_panel_id.as_deref();
         let parsed = match metadata.parse(self, requested_panel_id) {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -61,6 +69,7 @@ impl ReaderBookPackage {
                     self,
                     &cell,
                     &known_panel_ids,
+                    &request.base_surface_id,
                     &options.gaiji_policy,
                 )
             })?;
@@ -263,11 +272,30 @@ impl ReaderBookPackage {
     }
 
     pub(super) fn has_ssed_panel_metadata(&self) -> Result<bool> {
-        self.read_ssed_panel_metadata()
+        self.read_ssed_panel_metadata_for_surface("panels")
             .map(|metadata| metadata.is_some())
     }
 
-    fn read_ssed_panel_metadata(&self) -> Result<Option<SsedPanelMetadata>> {
+    fn read_ssed_panel_metadata_for_surface(
+        &self,
+        base_surface_id: &str,
+    ) -> Result<Option<SsedPanelMetadata>> {
+        if let Some(source_id) =
+            base_surface_id.strip_prefix(super::ssed_ios_plist_surfaces::IOS_PLIST_PANEL_PREFIX)
+        {
+            if let Some(source) = self
+                .ssed_ios_panel_plist_sources()?
+                .into_iter()
+                .find(|source| source.source_id.eq_ignore_ascii_case(source_id))
+            {
+                return Ok(Some(SsedPanelMetadata {
+                    label: source.label,
+                    bytes: source.bytes,
+                    format: SsedPanelMetadataFormat::Plist,
+                }));
+            }
+            return Ok(None);
+        }
         let mut candidates = Vec::new();
         if let Some(declared_panel) = self.read_exinfo_panel_metadata_name()? {
             push_unique_panel_metadata_candidate(&mut candidates, declared_panel);
@@ -376,6 +404,52 @@ impl ReaderBookPackage {
         }
         Ok(normalized)
     }
+}
+
+struct SsedPanelSurfaceRequest {
+    base_surface_id: String,
+    requested_panel_id: Option<String>,
+}
+
+fn ssed_panel_surface_request(surface_id: &str) -> Option<SsedPanelSurfaceRequest> {
+    if surface_id == "panels" {
+        return Some(SsedPanelSurfaceRequest {
+            base_surface_id: "panels".to_owned(),
+            requested_panel_id: None,
+        });
+    }
+    if let Some(panel_id) = surface_id.strip_prefix("panels:") {
+        if panel_id.is_empty() {
+            return None;
+        }
+        return Some(SsedPanelSurfaceRequest {
+            base_surface_id: "panels".to_owned(),
+            requested_panel_id: Some(panel_id.to_owned()),
+        });
+    }
+    if let Some(rest) =
+        surface_id.strip_prefix(super::ssed_ios_plist_surfaces::IOS_PLIST_PANEL_PREFIX)
+    {
+        if rest.is_empty() {
+            return None;
+        }
+        let (source_id, requested_panel_id) = rest
+            .split_once(':')
+            .map(|(source, panel)| (source, Some(panel.to_owned())))
+            .unwrap_or((rest, None));
+        if source_id.is_empty() {
+            return None;
+        }
+        return Some(SsedPanelSurfaceRequest {
+            base_surface_id: format!(
+                "{}{}",
+                super::ssed_ios_plist_surfaces::IOS_PLIST_PANEL_PREFIX,
+                source_id
+            ),
+            requested_panel_id,
+        });
+    }
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

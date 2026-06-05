@@ -14,8 +14,9 @@ use super::ssed_payload::{
 use super::ssed_zip::ssed_component_filename_aliases;
 use super::{Capability, DetectedPackage, FormatFamily};
 use crate::error::{Error, Result};
-use crate::gaiji::{parse_ccaltstr_gaiji_map, parse_uni_gaiji_map};
+use crate::gaiji::{normalize_gaiji_identity, parse_ccaltstr_gaiji_map, parse_uni_gaiji_map};
 use crate::multiview::parse_menu_data;
+use crate::plist_xml::parse_xml_plist;
 use crate::ssed::{ANDROID_LVEDINFO_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponentRole};
 use crate::ssed_aux_index::{is_numeric_aux_index_filename, parse_aux_index_specs_from_exinfo};
 use crate::ssed_menu::parse_menu_stream;
@@ -129,7 +130,58 @@ pub(super) fn load_package_uni_gaiji_maps(root: &Path) -> BTreeMap<String, Strin
         };
         merged.extend(parse_uni_gaiji_map(&data));
     }
+    for base in ios_gaiji_plist_bases(root) {
+        for name in [
+            "Gaiji.plist",
+            "GaijiS.plist",
+            "gaijiicon.plist",
+            "PanelsGaiji.plist",
+        ] {
+            let path = base.join(name);
+            if !regular_file_inside_root(&base, &path).unwrap_or(false) {
+                continue;
+            }
+            let Ok(data) = fs::read(&path) else {
+                continue;
+            };
+            merged.extend(parse_ios_gaiji_plist_map(&data, name));
+        }
+    }
     merged
+}
+
+fn ios_gaiji_plist_bases(root: &Path) -> Vec<PathBuf> {
+    let mut bases = vec![root.to_path_buf()];
+    if let Some(parent) = root.parent()
+        && parent != root
+    {
+        bases.push(parent.to_path_buf());
+    }
+    bases
+}
+
+fn parse_ios_gaiji_plist_map(data: &[u8], source_label: &str) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    let Ok(plist) = parse_xml_plist(data, source_label) else {
+        return map;
+    };
+    let Some(dict) = plist.as_dict() else {
+        return map;
+    };
+    for (key, value) in dict {
+        let Some(code) = normalize_gaiji_identity(key) else {
+            continue;
+        };
+        let Some(text) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        map.insert(code, text.to_owned());
+    }
+    map
 }
 
 pub(super) fn package_root_for_detection(path: &Path) -> &Path {

@@ -354,8 +354,10 @@ impl ReaderBookPackage {
         let html = self.normalize_ssed_sidecar_direct_resource_attrs(
             &output,
             &mut resources,
+            &mut links,
             &mut diagnostics,
             &mut seen_resource_tokens,
+            &mut seen_target_tokens,
         )?;
         Ok(NormalizedHtmlRefs {
             html,
@@ -409,20 +411,35 @@ impl ReaderBookPackage {
         &self,
         html: &str,
         resources: &mut Vec<ResourceRef>,
+        links: &mut Vec<TargetLink>,
         diagnostics: &mut Vec<Diagnostic>,
         seen_resource_tokens: &mut BTreeSet<String>,
+        seen_target_tokens: &mut BTreeSet<String>,
     ) -> Result<String> {
         let mut output = String::with_capacity(html.len());
         let mut cursor = 0usize;
         let lower = html.to_ascii_lowercase();
         while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
-            output.push_str(&html[cursor..attr.value_start]);
             let raw_value = &html[attr.value_start..attr.value_end];
-            if matches!(attr.name, HtmlAttrName::Src | HtmlAttrName::Data)
+            if attr.name == HtmlAttrName::Href
+                && !raw_value.starts_with("lvcore://")
+                && let Some(address) = parse_lved_address(raw_value)
+                && let Some(target) =
+                    self.ssed_target_for_loose_address(address.block, address.offset, diagnostics)?
+            {
+                output.push_str(&html[cursor..attr.value_start]);
+                let decoded = target.decode()?;
+                if seen_target_tokens.insert(target.as_str().to_owned()) {
+                    links.push(TargetLink::new(raw_value, &decoded)?);
+                }
+                output.push_str(&format!("lvcore://target/{}", target.as_str()));
+                cursor = attr.value_end;
+            } else if matches!(attr.name, HtmlAttrName::Src | HtmlAttrName::Data)
                 && !raw_value.starts_with("lvcore://")
             {
                 match self.ssed_sidecar_direct_resource(raw_value)? {
                     Some(resource) => {
+                        output.push_str(&html[cursor..attr.value_start]);
                         let token = ResourceToken::new(&resource)?;
                         let href = format!("lvcore://resource/{}", token.as_str());
                         if seen_resource_tokens.insert(token.as_str().to_owned()) {
@@ -431,25 +448,78 @@ impl ReaderBookPackage {
                             resources.push(resource_ref);
                         }
                         output.push_str(&href);
+                        cursor = attr.value_end;
                     }
                     None if looks_like_relative_html_resource_ref(raw_value) => {
-                        output.push_str(raw_value);
-                        diagnostics.push(Diagnostic::warning(
-                            "ssed_sidecar_direct_resource_missing",
-                            format!(
-                                "could not resolve SSED sidecar resource reference {raw_value}"
-                            ),
-                        ));
+                        if attr.name == HtmlAttrName::Src
+                            && let Some(fallback) = self.ssed_sidecar_ios_gaiji_img_fallback(
+                                raw_value,
+                                &html[attr.tag_start..attr.tag_end],
+                            )
+                        {
+                            output.push_str(&html[cursor..attr.tag_start]);
+                            output.push_str(&fallback);
+                            cursor = attr.tag_end;
+                        } else {
+                            output.push_str(&html[cursor..attr.value_start]);
+                            output.push_str(raw_value);
+                            diagnostics.push(Diagnostic::warning(
+                                "ssed_sidecar_direct_resource_missing",
+                                format!(
+                                    "could not resolve SSED sidecar resource reference {raw_value}"
+                                ),
+                            ));
+                            cursor = attr.value_end;
+                        }
                     }
-                    None => output.push_str(raw_value),
+                    None => {
+                        output.push_str(&html[cursor..attr.value_start]);
+                        output.push_str(raw_value);
+                        cursor = attr.value_end;
+                    }
                 }
             } else {
+                output.push_str(&html[cursor..attr.value_start]);
                 output.push_str(raw_value);
+                cursor = attr.value_end;
             }
-            cursor = attr.value_end;
         }
         output.push_str(&html[cursor..]);
         Ok(output)
+    }
+
+    fn ssed_sidecar_ios_gaiji_img_fallback(
+        &self,
+        raw_value: &str,
+        raw_tag: &str,
+    ) -> Option<String> {
+        let tag_name = raw_tag
+            .trim_start()
+            .strip_prefix('<')?
+            .trim_start()
+            .split_ascii_whitespace()
+            .next()?
+            .trim_end_matches('/')
+            .to_ascii_lowercase();
+        if tag_name != "img" {
+            return None;
+        }
+        let value = html_unescape_minimal(raw_value).trim().replace('\\', "/");
+        let relative = normalized_sidecar_direct_resource_ref(&value)?;
+        let filename = relative.rsplit('/').next().unwrap_or(relative.as_str());
+        let stem = filename
+            .rsplit_once('.')
+            .map(|(stem, _extension)| stem)
+            .unwrap_or(filename);
+        let code = normalize_gaiji_identity(stem)?;
+        let text = self.gaiji_unicode_map.get(&code)?;
+        let mut output = String::new();
+        output.push_str(r#"<span class="lvcore-gaiji lvcore-gaiji-ios-plist" data-gaiji=""#);
+        output.push_str(&escape_plain_label_html(&code));
+        output.push_str(r#"">"#);
+        output.push_str(&escape_plain_label_html(text));
+        output.push_str("</span>");
+        Some(output)
     }
 
     fn ssed_sidecar_direct_resource(&self, raw_value: &str) -> Result<Option<InternalResource>> {
@@ -550,6 +620,7 @@ fn ssed_sidecar_direct_resource_candidates(relative: &str) -> Vec<String> {
         [
             "OTHER/image",
             "OTHER/images",
+            "OTHER/_images",
             "Templates",
             "templates",
             "HANREI/img",

@@ -14,6 +14,7 @@ pub enum TargetKind {
     SsedAddress,
     SsedDenseAnchor,
     SsedAuxRecord,
+    SsedIosHtmlPage,
     LvedRow,
     LvedInfoPage,
     LvedNamedPage,
@@ -58,6 +59,12 @@ pub enum InternalTarget {
     SsedAuxRecord {
         source: String,
         key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
+    },
+    SsedIosHtmlPage {
+        source_id: String,
+        index: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         anchor: Option<String>,
     },
@@ -136,6 +143,7 @@ impl InternalTarget {
             | Self::SsedIndexAddress { .. } => TargetKind::SsedAddress,
             Self::SsedDenseAnchor { .. } => TargetKind::SsedDenseAnchor,
             Self::SsedAuxRecord { .. } => TargetKind::SsedAuxRecord,
+            Self::SsedIosHtmlPage { .. } => TargetKind::SsedIosHtmlPage,
             Self::LvedRow { .. } => TargetKind::LvedRow,
             Self::LvedInfoPage { .. } => TargetKind::LvedInfoPage,
             Self::LvedNamedPage { .. } => TargetKind::LvedNamedPage,

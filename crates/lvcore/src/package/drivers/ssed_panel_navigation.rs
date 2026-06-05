@@ -8,6 +8,7 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
     package: &ReaderBookPackage,
     cell: &SsedPanelInlineCell,
     known_panel_ids: &BTreeSet<String>,
+    base_surface_id: &str,
     gaiji_policy: &GaijiPolicy,
 ) -> Result<PanelCell> {
     let rich_label = package.ssed_rich_label_with_policy(&cell.label, gaiji_policy);
@@ -21,11 +22,7 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
             &mut diagnostics,
         )?
     } else if let Some(panel_id) = panel_ref_from_action_or_ref(cell, known_panel_ids) {
-        Some(TargetToken::new(&InternalTarget::PanelCell {
-            panel_id: panel_id.to_owned(),
-            row: 0,
-            column: 0,
-        })?)
+        Some(ssed_panel_child_surface_target(base_surface_id, panel_id)?)
     } else if let Some(block) = cell.target_block {
         ssed_panel_address_target(
             package,
@@ -46,6 +43,20 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
         label_text: rich_label.text,
         target,
         diagnostics,
+    })
+}
+
+fn ssed_panel_child_surface_target(base_surface_id: &str, panel_id: &str) -> Result<TargetToken> {
+    if base_surface_id == "panels" {
+        return TargetToken::new(&InternalTarget::PanelCell {
+            panel_id: panel_id.to_owned(),
+            row: 0,
+            column: 0,
+        });
+    }
+    TargetToken::new(&InternalTarget::MenuItem {
+        surface_id: format!("{base_surface_id}:{panel_id}"),
+        item_id: "root".to_owned(),
     })
 }
 

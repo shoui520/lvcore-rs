@@ -725,6 +725,215 @@ fn ssed_ios_mobile_menu_plist_opens_nested_child_panel_without_flattening_root()
 }
 
 #[test]
+fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(root.path().join("bin")).unwrap();
+    fs::create_dir_all(package_root.join("OTHER/_images")).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(package_root.join("OTHER/_images/a825.png"), b"png").unwrap();
+    fs::write(
+        root.path().join("Gaiji.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>a35b</key><string>n</string>
+</dict></plist>"#,
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("bin/DICT_getDataStrA.bin"),
+        panel_bin_fixture(10, 4),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("indexSearch.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>title</key><string>Foreign Phrases</string>
+    <key>block</key><integer>0</integer>
+    <key>offset</key><integer>0</integer>
+    <key>child</key><array>
+      <dict>
+        <key>item</key><string>A</string>
+        <key>block</key><real>10.0</real>
+        <key>offset</key><integer>2</integer>
+        <key>child</key><array/>
+      </dict>
+    </array>
+  </dict>
+  <dict>
+    <key>title</key><string>Usage</string>
+    <key>block</key><integer>0</integer>
+    <key>offset</key><integer>0</integer>
+    <key>child</key><array>
+      <dict>
+        <key>item</key><string>文語</string>
+        <key>path</key><string>DICT_getDataStrA.bin</string>
+        <key>block</key><integer>0</integer>
+        <key>offset</key><integer>0</integer>
+        <key>child</key><array/>
+      </dict>
+    </array>
+  </dict>
+</array></plist>"#,
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("HTMLList.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>name</key><array/>
+    <key>block</key><integer>10</integer>
+    <key>offset</key><integer>8</integer>
+    <key>htmlData</key><string>&lt;div class="midashi"&gt;発音記号表&lt;/div&gt;&lt;div&gt;&lt;a href="lved.addr0000000a:0002"&gt;A&lt;/a&gt;&lt;img src="a825.png"&gt;&lt;img src="a35b.png"&gt;&lt;/div&gt;</string>
+  </dict>
+</array></plist>"#,
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("tableList.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>name</key><string>United States</string>
+    <key>block</key><real>10.0</real>
+    <key>offset</key><integer>6</integer>
+  </dict>
+</array></plist>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let home = package.home_surfaces().unwrap();
+    assert!(home.iter().any(|surface| {
+        surface.surface_id == "ios-plist:indexSearch.plist"
+            && surface.kind == NavigationSurfaceKind::Panel
+            && surface.status == NavigationStatus::Available
+    }));
+    assert!(home.iter().any(|surface| {
+        surface.surface_id == "ios-html-list:HTMLList.plist"
+            && surface.kind == NavigationSurfaceKind::Info
+            && surface.status == NavigationStatus::Available
+    }));
+    assert!(home.iter().any(|surface| {
+        surface.surface_id == "ios-table-list:tableList.plist"
+            && surface.kind == NavigationSurfaceKind::TitleIndexBrowse
+            && surface.status == NavigationStatus::Available
+    }));
+
+    let root_panel = package.open_surface("ios-plist:indexSearch.plist").unwrap();
+    let NavigationSurface::Panel { cells, .. } = root_panel else {
+        panic!("indexSearch.plist should open as a panel-style surface");
+    };
+    assert_eq!(cells.len(), 2);
+    assert_eq!(cells[0].label_text, "Foreign Phrases");
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::MenuItem { surface_id, .. }
+            if surface_id == "ios-plist:indexSearch.plist:root.0000"
+    ));
+
+    let child_panel = package
+        .open_surface("ios-plist:indexSearch.plist:root.0000")
+        .unwrap();
+    let NavigationSurface::Panel { cells, .. } = child_panel else {
+        panic!("indexSearch.plist child should open as a panel-style surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "A");
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+
+    let bin_panel = package
+        .open_surface("ios-plist:indexSearch.plist:root.0001")
+        .unwrap();
+    let NavigationSurface::Panel { cells, .. } = bin_panel else {
+        panic!("indexSearch child should open as a panel-style surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "文語");
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::MenuItem { surface_id, .. }
+            if surface_id == "ios-plist:indexSearch.plist:root.0001.0000"
+    ));
+    let bin_leaf = package
+        .open_surface("ios-plist:indexSearch.plist:root.0001.0000")
+        .unwrap();
+    let NavigationSurface::Panel { cells, .. } = bin_leaf else {
+        panic!("path-backed indexSearch leaf should decode its BIN");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 4,
+        } if component == "HONMON.DIC"
+    ));
+
+    let html_surface = package
+        .open_surface("ios-html-list:HTMLList.plist")
+        .unwrap();
+    let NavigationSurface::InfoPages { pages, .. } = html_surface else {
+        panic!("HTMLList.plist should expose info pages");
+    };
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].label_text, "発音記号表");
+    assert!(matches!(
+        pages[0].target.decode().unwrap(),
+        InternalTarget::SsedIosHtmlPage {
+            source_id,
+            index: 0,
+            ..
+        } if source_id == "HTMLList.plist"
+    ));
+    let rendered = package
+        .render_target(&pages[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(rendered.kind, ResolvedTargetKind::InfoPage);
+    let html = rendered.display_html.unwrap();
+    assert!(html.contains("lvcore://target/"));
+    assert!(html.contains("lvcore://resource/"));
+    assert!(html.contains(r#"class="lvcore-gaiji lvcore-gaiji-ios-plist""#));
+    assert!(html.contains(r#"data-gaiji="A35B">n</span>"#));
+    assert_eq!(rendered.links.len(), 1);
+    assert_eq!(rendered.resources.len(), 1);
+    assert!(
+        !rendered.diagnostics.iter().any(|diagnostic| diagnostic.code
+            == "ssed_sidecar_direct_resource_missing"
+            && diagnostic.message.contains("a35b.png"))
+    );
+
+    let table_surface = package
+        .open_surface("ios-table-list:tableList.plist")
+        .unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = table_surface else {
+        panic!("tableList.plist should expose title/index rows");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "United States");
+    assert!(matches!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 6,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn empty_ssed_menu_is_not_exposed_as_targetable_home_surface() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
