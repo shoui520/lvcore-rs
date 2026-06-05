@@ -169,7 +169,11 @@ impl PackageDriver for LvedSqliteDriver {
 
     fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>> {
         let package_root = package_root_for_detection(root);
-        if detect_ssed_package(package_root)?.is_some() {
+        let explicit_lved_payload = root
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.is_file())
+            && crate::lved_sqlite::is_lved_payload_name(root);
+        if !explicit_lved_payload && detect_ssed_package(package_root)?.is_some() {
             return Ok(None);
         }
         if let Some(store) = LvedSqliteStore::discover(root)? {
@@ -184,7 +188,7 @@ impl PackageDriver for LvedSqliteDriver {
                 evidence.push(format!("key_file:{}", key_file.match_kind));
             }
             if store.android_info.is_some() {
-                evidence.push("android_dictinfo".to_owned());
+                evidence.push("derived_key_info".to_owned());
             }
             let title = match store.title() {
                 Ok(title) => title.or_else(|| inferred_folder_title(package_root)),
@@ -216,7 +220,7 @@ impl PackageDriver for LvedSqliteDriver {
             evidence.push(format!("key_file:{}", key_file.match_kind));
         }
         if store.android_info.is_some() {
-            evidence.push("android_dictinfo".to_owned());
+            evidence.push("derived_key_info".to_owned());
         }
         self.open_with_store(
             DetectedPackage {

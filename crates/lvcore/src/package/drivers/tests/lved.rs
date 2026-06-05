@@ -1,4 +1,5 @@
 use super::*;
+use crate::DriverRegistry;
 
 #[test]
 fn detects_lved_sqlite3_by_main_data_and_key() {
@@ -12,6 +13,57 @@ fn detects_lved_sqlite3_by_main_data_and_key() {
             .evidence
             .iter()
             .any(|item| item.starts_with("key_file:"))
+    );
+}
+
+#[test]
+fn explicit_ios_dbc_payload_detects_as_lved_even_with_retained_ssed_idx() {
+    let dir = tempdir().unwrap();
+    let package = dir.path().join("OXFPEU4");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(
+        dir.path().join("DictList.plist"),
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>ItemArray</key><array><dict>
+    <key>DictFolder</key><string>OXFPEU4</string>
+    <key>DictName</key><string>Oxford Test Dictionary</string>
+    <key>DictFtsDB</key><string>OXFPEU4/OXFPEU4.dbc</string>
+  </dict></array>
+</dict></plist>"#,
+    )
+    .unwrap();
+    write_retained_ssedinfo_idx(&package, "OXFPEU4.IDX");
+    let payload = package.join("OXFPEU4.dbc");
+    let key = crate::lved_sqlite::derive_android_lved_sqlcipher_key(750, "OXFPEU4");
+    {
+        let connection = Connection::open(&payload).unwrap();
+        apply_sqlcipher_key(&connection, &key).unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text, media text);
+                insert into info values (1, 1, 'about.html', '<h1>Fallback</h1>', '');
+                create table content (id integer primary key, type integer, body text, media text);
+                create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                create virtual table search using fts4(forward, back, part, fts, filter);
+                insert into content values (100, 1, '<article>body</article>', '');
+                insert into list values (1, 100, 1, '', '<b>alpha</b>', '');
+                insert into search(rowid, forward, back, part, fts, filter)
+                  values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '∥alpha∥');
+                ",
+            )
+            .unwrap();
+    }
+
+    let detected = DriverRegistry::default().detect(&payload).unwrap();
+
+    assert_eq!(detected[0].format_family, FormatFamily::LvedSqlite3);
+    assert_eq!(detected[0].title.as_deref(), Some("Oxford Test Dictionary"));
+    assert!(
+        detected
+            .iter()
+            .any(|row| row.format_family == FormatFamily::Ssed)
     );
 }
 
@@ -50,6 +102,22 @@ fn lved_key_discovery_ignores_symlinked_key_escape() {
             .unwrap()
             .is_none()
     );
+}
+
+fn write_retained_ssedinfo_idx(root: &Path, filename: &str) {
+    let mut data = vec![0u8; 0x80 + 0x30];
+    data[..SSEDINFO_MAGIC.len()].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Retained SSED";
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 1;
+    let rec = &mut data[0x80..0x80 + 0x30];
+    rec[3] = 0x00;
+    rec[4..8].copy_from_slice(&100_u32.to_be_bytes());
+    rec[8..12].copy_from_slice(&100_u32.to_be_bytes());
+    rec[0x10] = b"HONMON.DIC".len() as u8;
+    rec[0x11..0x11 + b"HONMON.DIC".len()].copy_from_slice(b"HONMON.DIC");
+    fs::write(root.join(filename), data).unwrap();
 }
 
 #[test]
