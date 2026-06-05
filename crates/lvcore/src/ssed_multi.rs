@@ -62,14 +62,14 @@ pub fn parse_multi_descriptor(data: &[u8]) -> Result<SsedMultiDescriptor> {
                     "MULTI record {index} component reference {ref_index} is truncated at offset {pos}"
                 )));
             }
+            let mut flags = [0_u8; 6];
+            flags.copy_from_slice(&data[pos + 10..pos + 16]);
             refs.push(SsedMultiComponentRef {
                 component_type: data[pos],
                 subtype: data[pos + 1],
                 start_block: be32(data, pos + 2),
                 block_count: be32(data, pos + 6),
-                flags: data[pos + 10..pos + 16]
-                    .try_into()
-                    .expect("fixed six-byte flags slice"),
+                flags,
             });
             pos += 0x10;
         }

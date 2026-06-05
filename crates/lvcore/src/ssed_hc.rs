@@ -777,7 +777,9 @@ fn close_html_style(
         return;
     };
     while style_stack.len() > position {
-        let style = style_stack.pop().expect("stack length checked");
+        let Some(style) = style_stack.pop() else {
+            return;
+        };
         if style.start_op == 0x04 {
             *halfwidth_depth = halfwidth_depth.saturating_sub(1);
         }
