@@ -25,9 +25,15 @@ impl ReaderBookPackage {
     fn ga16_gaiji_resource_ref(&self, code: &str) -> Option<ResourceRef> {
         let first = code.as_bytes().first()?.to_ascii_uppercase();
         let candidates: &[&str] = match first {
-            b'A' => &["GA16HALF", "GAI16H", "GAI16H00"],
-            b'B' => &["GA16FULL", "GAI16F", "GAI16F00"],
-            _ => &[],
+            b'A' => &[
+                "GA16HALF", "GAI16H", "GAI16H00", "GA16FULL", "GAI16F", "GAI16F00",
+            ],
+            b'B' => &[
+                "GA16FULL", "GAI16F", "GAI16F00", "GA16HALF", "GAI16H", "GAI16H00",
+            ],
+            _ => &[
+                "GA16FULL", "GAI16F", "GAI16F00", "GA16HALF", "GAI16H", "GAI16H00",
+            ],
         };
         for candidate in candidates {
             let Ok(data) = self.read_package_file_bytes(candidate) else {

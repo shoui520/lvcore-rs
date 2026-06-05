@@ -116,6 +116,30 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
 }
 
 #[test]
+fn ssed_gaiji_resolution_uses_resource_coverage_not_plane_letter() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(dir.path().join("GA16FULL"), ga16_fixture(0xA421, 2)).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let resolved = package.resolve_gaiji("A421", &GaijiPolicy::default());
+    assert_eq!(
+        resolved.preferred_source,
+        Some(GaijiSourcePreference::Ga16Bitmap)
+    );
+    assert_eq!(
+        resolved.resource.as_ref().unwrap().label.as_deref(),
+        Some("GA16FULL:A421")
+    );
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "gaiji_unresolved")
+    );
+}
+
+#[test]
 fn ssed_ccaltstr_supplies_unicode_fallback_for_gaiji_labels() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
