@@ -746,9 +746,15 @@ impl ReaderBookPackage {
                         }
                     };
                     readers.insert(component.filename.clone(), reader);
-                    readers
-                        .get_mut(&component.filename)
-                        .expect("reader was inserted")
+                    match readers.get_mut(&component.filename) {
+                        Some(reader) => reader,
+                        None => {
+                            return Err(Error::Driver(format!(
+                                "{} reader cache insert did not persist",
+                                component.filename
+                            )));
+                        }
+                    }
                 }
             };
             let body_data = reader.read_range(
