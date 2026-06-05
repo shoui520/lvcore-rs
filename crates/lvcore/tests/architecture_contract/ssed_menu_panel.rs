@@ -1455,6 +1455,79 @@ fn ssed_menu_and_panel_targets_support_continuous_view_windows() {
 }
 
 #[test]
+fn ssed_panel_menu_component_targets_open_addressed_menu_surface() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+    let menu = menu_stream_fixture_rows(&[
+        ([0x24, 0x22], 10, 0),
+        ([0x24, 0x24], 10, 2),
+        ([0x24, 0x26], 10, 4),
+    ]);
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        sseddata_literal_fixture_at(11, &menu),
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("Panel")).unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<panels>
+  <panel index="01010000" paneltype="contents">
+    <title>Menu jump</title>
+    <data type="bin" filename="Panel\Menu-Jump.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("Panel/Menu-Jump.bin"),
+        panel_bin_fixture_rows(&[(11, 18, [0x24, 0x24])]),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let NavigationSurface::Panel { cells, .. } = package.open_surface("panels:01010000").unwrap()
+    else {
+        panic!("SSED Panel should decode to panel cells");
+    };
+    let target = cells[0]
+        .target
+        .as_ref()
+        .expect("MENU.DIC panel address should resolve to a navigation target");
+    assert!(matches!(
+        target.decode().unwrap(),
+        InternalTarget::MenuItem {
+            surface_id,
+            item_id,
+        } if surface_id == "menu" && item_id == "addr:11:18"
+    ));
+
+    let view = package
+        .render_target(target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::NavigationSurface);
+    let Some(NavigationSurface::SimpleMenu { nodes, .. }) = view.surface.as_ref() else {
+        panic!("MENU.DIC address target should open a menu surface page");
+    };
+    assert_eq!(nodes[0].label_text, "い");
+    assert!(matches!(
+        nodes[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block: 10,
+            offset: 2,
+            end_block: 10,
+            end_offset: 4,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn ssed_menu_media_component_targets_resolve_as_resource_views() {
     let dir = tempdir().unwrap();
     let bmp = b"BMmenu";

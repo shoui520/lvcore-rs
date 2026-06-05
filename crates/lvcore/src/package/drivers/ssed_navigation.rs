@@ -737,6 +737,22 @@ pub(in crate::package::drivers) fn ssed_component_address_navigation_target(
     request: SsedComponentNavigationTargetRequest<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<TargetToken>> {
+    match request.component.role {
+        SsedComponentRole::Menu => {
+            return Ok(Some(TargetToken::new(&InternalTarget::MenuItem {
+                surface_id: "menu".to_owned(),
+                item_id: ssed_menu_address_item_id(request.block, request.offset),
+            })?));
+        }
+        SsedComponentRole::Toc => {
+            return Ok(Some(TargetToken::new(&InternalTarget::TocItem {
+                surface_id: "toc".to_owned(),
+                item_id: ssed_menu_address_item_id(request.block, request.offset),
+            })?));
+        }
+        _ => {}
+    }
+
     let resource = match request.component.role {
         SsedComponentRole::Colscr => InternalResource::SsedComponentAddress {
             component: request.component.filename.clone(),
@@ -776,6 +792,10 @@ pub(in crate::package::drivers) fn ssed_component_address_navigation_target(
         resource,
         anchor: None,
     })?))
+}
+
+pub(in crate::package::drivers) fn ssed_menu_address_item_id(block: u32, offset: u32) -> String {
+    format!("addr:{block}:{offset}")
 }
 
 pub(in crate::package::drivers) struct SsedComponentNavigationTargetRequest<'a> {

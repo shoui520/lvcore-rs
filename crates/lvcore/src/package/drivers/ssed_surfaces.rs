@@ -209,8 +209,45 @@ impl ReaderBookPackage {
             }
         };
         let data = reader.read_range(0, reader.header().expanded_size())?;
-        let node_cursor = decode_ssed_menu_node_cursor(cursor);
-        let parsed = parse_menu_stream_page(&data, node_cursor.record_offset, limit);
+        let address_offset =
+            match ssed_navigation_address_cursor_offset(cursor, component, surface_id) {
+                Ok(offset) => offset,
+                Err(diagnostic) => {
+                    return Ok(NavigationSurface::Deferred {
+                        surface_id: surface_id.to_owned(),
+                        diagnostics: vec![diagnostic],
+                    });
+                }
+            };
+        let node_cursor = if address_offset.is_some() {
+            SsedMenuNodeCursor {
+                record_offset: 0,
+                link_offset: 0,
+            }
+        } else {
+            decode_ssed_menu_node_cursor(cursor)
+        };
+        let parse_data = if let Some(offset) = address_offset {
+            if offset >= data.len() {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![
+                        Diagnostic::warning(
+                            "ssed_navigation_address_cursor_out_of_data",
+                            format!(
+                                "{surface_id} address cursor resolves past decoded {} data",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    ],
+                });
+            }
+            &data[offset..]
+        } else {
+            data.as_slice()
+        };
+        let parsed = parse_menu_stream_page(parse_data, node_cursor.record_offset, limit);
         if parsed.records.is_empty() {
             if !parsed.empty_sentinel && node_cursor.record_offset > 0 {
                 return Ok(NavigationSurface::SimpleMenu {
@@ -242,7 +279,11 @@ impl ReaderBookPackage {
             SsedMenuNodePageRequest {
                 package: self,
                 records: &parsed.records,
-                base_index: node_cursor.record_offset,
+                base_index: if address_offset.is_some() {
+                    0
+                } else {
+                    node_cursor.record_offset
+                },
                 initial_link_offset: node_cursor.link_offset,
                 limit,
                 parsed_next_cursor: parsed.next_cursor,
@@ -344,4 +385,49 @@ impl ReaderBookPackage {
                 })
         })
     }
+}
+
+fn ssed_navigation_address_cursor_offset(
+    cursor: Option<&str>,
+    component: &SsedComponent,
+    surface_id: &str,
+) -> std::result::Result<Option<usize>, Diagnostic> {
+    let Some(cursor) = cursor.map(str::trim).filter(|cursor| !cursor.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(rest) = cursor.strip_prefix("addr:") else {
+        return Ok(None);
+    };
+    let mut parts = rest.split(':');
+    let parsed = match (parts.next(), parts.next(), parts.next()) {
+        (Some(block), Some(offset), None) => {
+            let block = block.parse::<u32>().ok();
+            let offset = offset.parse::<u32>().ok();
+            block.zip(offset)
+        }
+        _ => None,
+    };
+    let Some((block, offset)) = parsed else {
+        return Err(Diagnostic::warning(
+            "ssed_navigation_address_cursor_invalid",
+            format!("{surface_id} address cursor is malformed: {cursor}"),
+        ));
+    };
+    let Some(relative_offset) = component.relative_offset(block, offset) else {
+        return Err(Diagnostic::warning(
+            "ssed_navigation_address_cursor_out_of_range",
+            format!(
+                "{surface_id} address cursor {block}:{offset} is outside {}",
+                component.filename
+            ),
+        )
+        .with_context("component", &component.filename));
+    };
+    usize::try_from(relative_offset).map(Some).map_err(|_| {
+        Diagnostic::warning(
+            "ssed_navigation_address_cursor_too_large",
+            format!("{surface_id} address cursor {block}:{offset} does not fit this platform"),
+        )
+        .with_context("component", &component.filename)
+    })
 }

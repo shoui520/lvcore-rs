@@ -6,11 +6,14 @@ impl ReaderBookPackage {
         target: TargetToken,
         surface_id: &str,
         title: Option<String>,
+        cursor: Option<&str>,
         options: &RenderOptions,
     ) -> Result<ResolvedTargetView> {
         let scroll_anchor = scroll_anchor_for_token(&target)?;
-        let surface = self.open_surface_with_options(
+        let surface = self.open_surface_page_with_options(
             surface_id,
+            cursor,
+            100,
             &LabelOptions {
                 gaiji_policy: options.gaiji_policy.clone(),
             },
@@ -676,14 +679,35 @@ impl RendererProvider for ReaderBookPackage {
                     token.clone(),
                     &surface_id,
                     Some(panel_id),
+                    None,
                     options,
                 )
             }
-            InternalTarget::MenuItem { surface_id, .. }
-            | InternalTarget::TocItem { surface_id, .. }
-            | InternalTarget::TitleIndexItem { surface_id, .. } => {
-                self.view_for_navigation_surface_target(token.clone(), &surface_id, None, options)
+            InternalTarget::MenuItem {
+                surface_id,
+                item_id,
             }
+            | InternalTarget::TocItem {
+                surface_id,
+                item_id,
+            } => {
+                let cursor = (item_id != "root").then_some(item_id.as_str());
+                self.view_for_navigation_surface_target(
+                    token.clone(),
+                    &surface_id,
+                    None,
+                    cursor,
+                    options,
+                )
+            }
+            InternalTarget::TitleIndexItem { surface_id, .. } => self
+                .view_for_navigation_surface_target(
+                    token.clone(),
+                    &surface_id,
+                    None,
+                    None,
+                    options,
+                ),
             InternalTarget::MultiviewHref { href, anchor } => {
                 if anchor.is_none()
                     && let Some(surface_id) = self.multiview_menu_surface_id_for_href(&href)?
@@ -692,6 +716,7 @@ impl RendererProvider for ReaderBookPackage {
                         token.clone(),
                         &surface_id,
                         Some("MultiView menu".to_owned()),
+                        None,
                         options,
                     );
                 }
