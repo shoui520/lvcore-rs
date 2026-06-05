@@ -13,6 +13,11 @@ impl ReaderBookPackage {
         if query.mode == SearchMode::FullText {
             return self.search_ssed_fulltext_body_windows(query);
         }
+        if matches!(query.mode, SearchMode::Advanced(_))
+            && !self.retained_ios_search_payloads.is_empty()
+        {
+            return self.search_ssed_ios_search_dbs(query);
+        }
         if !matches!(
             query.mode,
             SearchMode::Exact | SearchMode::Forward | SearchMode::Backward | SearchMode::Partial

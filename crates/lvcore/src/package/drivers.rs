@@ -40,6 +40,7 @@ mod ssed_components;
 mod ssed_hanrei_discovery;
 mod ssed_hanrei_surfaces;
 mod ssed_index;
+mod ssed_ios_search;
 mod ssed_multi_ids;
 mod ssed_multi_surfaces;
 mod ssed_navigation;
@@ -130,7 +131,9 @@ use crate::gaiji::{
 };
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
 use crate::image::encode_png_rgba;
-use crate::ios_dictlist::{IosDictFtsPayload, IosDictFullDbPayload, IosDictListInfo};
+use crate::ios_dictlist::{
+    IosDictFtsPayload, IosDictFullDbPayload, IosDictListInfo, IosDictSearchPayload,
+};
 use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
 use crate::multiview::{MultiviewStore, parse_menu_data};
 use crate::navigation::{
@@ -214,6 +217,7 @@ use crate::target::{InternalTarget, TargetLink, TargetToken};
 
 use self::hourei_labels::hourei_law_node_label;
 use self::ssed_index::ssed_index_bound_is_plausible;
+use self::ssed_ios_search::SsedIosSearchResolver;
 use self::ssed_multi_ids::{
     parse_ssed_multi_surface_id, ssed_multi_record_index_ref, ssed_multi_record_menu_ref,
     ssed_multi_record_surface_id, ssed_multi_root_surface_id,
@@ -250,6 +254,7 @@ pub struct ReaderBookPackage {
     hourei_store: Option<HoureiStore>,
     retained_ios_fts_payloads: Vec<IosDictFtsPayload>,
     retained_ios_full_db_payloads: Vec<IosDictFullDbPayload>,
+    retained_ios_search_payloads: Vec<IosDictSearchPayload>,
     gaiji_unicode_map: BTreeMap<String, String>,
     ssed_sidecar_body_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
@@ -257,6 +262,7 @@ pub struct ReaderBookPackage {
         OnceLock<std::result::Result<Vec<SsedSidecarMediaResolver>, String>>,
     ssed_sidecar_range_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarRangeResolver>, String>>,
+    ssed_ios_search_resolvers: OnceLock<std::result::Result<Vec<SsedIosSearchResolver>, String>>,
     ssed_index_body_boundaries:
         OnceLock<std::result::Result<BTreeMap<String, Vec<SsedIndexPointer>>, String>>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
@@ -329,6 +335,11 @@ impl ReaderBookPackage {
             .as_ref()
             .map(|info| info.full_db_payloads.clone())
             .unwrap_or_default();
+        let retained_ios_search_payloads = stores
+            .retained_ios_dictlist
+            .as_ref()
+            .map(|info| info.search_payloads.clone())
+            .unwrap_or_default();
         Self {
             root: root.to_path_buf(),
             storage: DirectoryStorage::new(root),
@@ -341,10 +352,12 @@ impl ReaderBookPackage {
             hourei_store: stores.hourei_store,
             retained_ios_fts_payloads,
             retained_ios_full_db_payloads,
+            retained_ios_search_payloads,
             gaiji_unicode_map: stores.gaiji_unicode_map,
             ssed_sidecar_body_resolvers: OnceLock::new(),
             ssed_sidecar_media_resolvers: OnceLock::new(),
             ssed_sidecar_range_resolvers: OnceLock::new(),
+            ssed_ios_search_resolvers: OnceLock::new(),
             ssed_index_body_boundaries: OnceLock::new(),
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),

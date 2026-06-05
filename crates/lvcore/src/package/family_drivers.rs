@@ -70,6 +70,18 @@ impl SsedDriver {
             lved_store = Some(store);
             retained_ios_unresolved = retained_ios_dictlist_full_db_only(info);
         }
+        if let Some(info) = &retained_ios_dictlist
+            && !info.search_payloads.is_empty()
+        {
+            extend_unique_search_modes(&mut search_modes, info.search_modes.clone());
+            extend_unique_capabilities(&mut capabilities, vec![super::Capability::NativeSearch]);
+            if search_modes.contains(&SearchMode::FullText) {
+                extend_unique_capabilities(
+                    &mut capabilities,
+                    vec![super::Capability::FullTextSearch],
+                );
+            }
+        }
         if search_modes.is_empty()
             && let Some(info) = &retained_ios_dictlist
             && !info.fts_payloads.is_empty()
@@ -96,13 +108,18 @@ impl SsedDriver {
 fn retained_ios_dictlist_full_db_only(
     info: &crate::ios_dictlist::IosDictListInfo,
 ) -> Option<crate::ios_dictlist::IosDictListInfo> {
-    if info.full_db_payloads.is_empty() {
+    if info.full_db_payloads.is_empty() && info.search_payloads.is_empty() {
         return None;
     }
     Some(crate::ios_dictlist::IosDictListInfo {
         fts_payloads: Vec::new(),
         full_db_payloads: info.full_db_payloads.clone(),
-        search_modes: Vec::new(),
+        search_payloads: info.search_payloads.clone(),
+        search_modes: if info.search_payloads.is_empty() {
+            Vec::new()
+        } else {
+            info.search_modes.clone()
+        },
     })
 }
 
@@ -148,6 +165,14 @@ fn extend_unique_capabilities(
     for capability in extra {
         if !capabilities.contains(&capability) {
             capabilities.push(capability);
+        }
+    }
+}
+
+fn extend_unique_search_modes(search_modes: &mut Vec<SearchMode>, extra: Vec<SearchMode>) {
+    for mode in extra {
+        if !search_modes.contains(&mode) {
+            search_modes.push(mode);
         }
     }
 }

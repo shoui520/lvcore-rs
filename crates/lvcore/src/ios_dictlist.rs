@@ -10,6 +10,7 @@ use crate::storage::regular_file_inside_root;
 pub(crate) struct IosDictListInfo {
     pub fts_payloads: Vec<IosDictFtsPayload>,
     pub full_db_payloads: Vec<IosDictFullDbPayload>,
+    pub search_payloads: Vec<IosDictSearchPayload>,
     pub search_modes: Vec<SearchMode>,
 }
 
@@ -24,6 +25,14 @@ pub(crate) struct IosDictFtsPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IosDictFullDbPayload {
+    pub relative_path: String,
+    pub absolute_path: PathBuf,
+    pub dict_code: String,
+    pub dictionary_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IosDictSearchPayload {
     pub relative_path: String,
     pub absolute_path: PathBuf,
     pub dict_code: String,
@@ -66,6 +75,7 @@ fn ios_dictlist_info_from_plist(
     };
     let mut fts_payloads = Vec::new();
     let mut full_db_payloads = Vec::new();
+    let mut search_payloads = Vec::new();
     if let Some(items) = dict.get("ItemArray").and_then(PlistValue::as_array) {
         for item in items.iter().filter_map(PlistValue::as_dict) {
             let dict_code = item
@@ -94,6 +104,25 @@ fn ios_dictlist_info_from_plist(
                             absolute_path,
                             dict_code,
                             dict_id,
+                            dictionary_name: dictionary_name.clone(),
+                        });
+                    }
+                }
+            }
+            if let Some(relative_path) = item.get("DictSearchDB").and_then(PlistValue::as_str) {
+                let relative_path = relative_path.trim();
+                if !relative_path.is_empty() {
+                    let absolute_path = plist_dir.join(relative_path);
+                    if regular_file_inside_root(plist_dir, &absolute_path)? {
+                        let dict_code = if dict_code.is_empty() {
+                            ios_dict_code_from_path(relative_path).unwrap_or_default()
+                        } else {
+                            dict_code.clone()
+                        };
+                        search_payloads.push(IosDictSearchPayload {
+                            relative_path: relative_path.to_owned(),
+                            absolute_path,
+                            dict_code,
                             dictionary_name: dictionary_name.clone(),
                         });
                     }
@@ -145,12 +174,17 @@ fn ios_dictlist_info_from_plist(
         }
     }
     sort_ios_search_modes(&mut modes);
-    if fts_payloads.is_empty() && full_db_payloads.is_empty() && modes.is_empty() {
+    if fts_payloads.is_empty()
+        && full_db_payloads.is_empty()
+        && search_payloads.is_empty()
+        && modes.is_empty()
+    {
         return Ok(None);
     }
     Ok(Some(IosDictListInfo {
         fts_payloads,
         full_db_payloads,
+        search_payloads,
         search_modes: modes.into_iter().collect(),
     }))
 }
@@ -267,6 +301,7 @@ mod tests {
         assert_eq!(info.fts_payloads.len(), 1);
         assert_eq!(info.fts_payloads[0].relative_path, "DICT/DICT.dbc");
         assert!(info.full_db_payloads.is_empty());
+        assert!(info.search_payloads.is_empty());
         assert_eq!(
             info.fts_payloads[0].dictionary_name.as_deref(),
             Some("Sample Dictionary")
@@ -305,6 +340,50 @@ mod tests {
         assert_eq!(
             info.full_db_payloads[0].dictionary_name.as_deref(),
             Some("Sample FullDB")
+        );
+    }
+
+    #[test]
+    fn parses_ios_dictlist_search_payload() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("DICT");
+        fs::create_dir(&package).unwrap();
+        fs::write(package.join("DICT_Search.sql"), b"SQLite format 3\0").unwrap();
+        fs::write(
+            root.path().join("DictList.plist"),
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>ItemArray</key><array><dict>
+    <key>DictName</key><string>Sample SearchDB</string>
+    <key>DictFolder</key><string>DICT</string>
+    <key>DictSearchDB</key><string>DICT/DICT_Search.sql</string>
+  </dict></array>
+  <key>StatusArray</key><array><dict>
+    <key>SearchMethod</key><array>
+      <dict><key>key</key><string>Example</string><key>use</key><true/></dict>
+    </array>
+  </dict></array>
+</dict></plist>"#,
+        )
+        .unwrap();
+
+        let info = discover_ios_dictlist_info(&package).unwrap().unwrap();
+
+        assert!(info.fts_payloads.is_empty());
+        assert!(info.full_db_payloads.is_empty());
+        assert_eq!(info.search_payloads.len(), 1);
+        assert_eq!(
+            info.search_payloads[0].relative_path,
+            "DICT/DICT_Search.sql"
+        );
+        assert_eq!(info.search_payloads[0].dict_code, "DICT");
+        assert_eq!(
+            info.search_payloads[0].dictionary_name.as_deref(),
+            Some("Sample SearchDB")
+        );
+        assert_eq!(
+            info.search_modes,
+            vec![SearchMode::Advanced("example".to_owned())]
         );
     }
 

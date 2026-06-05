@@ -470,6 +470,7 @@ fn ios_dictlist_declared_fulldb_is_preferred_for_block_offset_body() {
                     dict_code: "DICT".to_owned(),
                     dictionary_name: Some("iOS DictFULLDB".to_owned()),
                 }],
+                search_payloads: Vec::new(),
                 search_modes: Vec::new(),
             }),
             ..Default::default()
@@ -491,6 +492,190 @@ fn ios_dictlist_declared_fulldb_is_preferred_for_block_offset_body() {
             source: BodySourceKind::SidecarText,
         }
     );
+}
+
+#[test]
+fn ios_dictsearchdb_advanced_example_search_returns_ssed_address_target() {
+    let dir = tempdir().unwrap();
+    let search_db = dir.path().join("DICT_Search.sql");
+    let connection = Connection::open(&search_db).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table D_Example (
+              No integer primary key,
+              Block integer,
+              Offset integer,
+              Keyword text,
+              Midashi text,
+              Title text
+            );
+            insert into D_Example values (
+              1,
+              100,
+              32,
+              'loan example phrase',
+              'ignored midashi',
+              '1F042361236223631F05'
+            );
+            ",
+        )
+        .unwrap();
+    let catalog = SsedCatalog {
+        title: "iOS search sidecar".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 100,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("iOS search sidecar".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            retained_ios_dictlist: Some(crate::ios_dictlist::IosDictListInfo {
+                fts_payloads: Vec::new(),
+                full_db_payloads: Vec::new(),
+                search_payloads: vec![crate::ios_dictlist::IosDictSearchPayload {
+                    relative_path: "DICT/DICT_Search.sql".to_owned(),
+                    absolute_path: search_db,
+                    dict_code: "DICT".to_owned(),
+                    dictionary_name: Some("iOS SearchDB".to_owned()),
+                }],
+                search_modes: vec![SearchMode::Advanced("example".to_owned())],
+            }),
+            search_modes: vec![SearchMode::Advanced("example".to_owned())],
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Advanced("example".to_owned()),
+            query: "loan".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "abc");
+    assert!(
+        page.hits[0]
+            .snippet_html
+            .as_deref()
+            .is_some_and(|snippet| snippet.contains("loan example phrase"))
+    );
+    assert!(page.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_ios_dictsearchdb_scan"
+            && diagnostic
+                .context
+                .get("table")
+                .is_some_and(|value| value == "D_Example")
+    }));
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress { component, block: 100, offset: 32 }
+            if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
+fn ios_dictsearchdb_hits_use_index_boundary_when_available() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
+    let search_db = dir.path().join("DICT_Search.sql");
+    let connection = Connection::open(&search_db).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table D_Example (
+              No integer primary key,
+              Block integer,
+              Offset integer,
+              Keyword text,
+              Title text
+            );
+            insert into D_Example values (1, 100, 0, 'alpha example', 'alpha');
+            ",
+        )
+        .unwrap();
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("iOS search sidecar".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            retained_ios_dictlist: Some(crate::ios_dictlist::IosDictListInfo {
+                fts_payloads: Vec::new(),
+                full_db_payloads: Vec::new(),
+                search_payloads: vec![crate::ios_dictlist::IosDictSearchPayload {
+                    relative_path: "DICT/DICT_Search.sql".to_owned(),
+                    absolute_path: search_db,
+                    dict_code: "DICT".to_owned(),
+                    dictionary_name: Some("iOS SearchDB".to_owned()),
+                }],
+                search_modes: vec![SearchMode::Advanced("example".to_owned())],
+            }),
+            search_modes: vec![SearchMode::Advanced("example".to_owned())],
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Advanced("example".to_owned()),
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block: 100,
+            offset: 0,
+            end_block: 100,
+            end_offset: 32,
+        } if component == "HONMON.DIC"
+    ));
 }
 
 #[test]
