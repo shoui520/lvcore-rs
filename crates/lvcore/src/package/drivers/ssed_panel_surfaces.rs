@@ -4,8 +4,17 @@ impl ReaderBookPackage {
     pub(super) fn open_ssed_panel_surface(
         &self,
         surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
         options: &LabelOptions,
     ) -> Result<NavigationSurface> {
+        if limit == 0 {
+            return Ok(NavigationSurface::Panel {
+                surface_id: surface_id.to_owned(),
+                cells: Vec::new(),
+                next_cursor: None,
+            });
+        }
         let Some(metadata) = self.read_ssed_panel_metadata()? else {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
@@ -44,13 +53,11 @@ impl ReaderBookPackage {
             .collect::<Vec<_>>();
         let include_external_bins = requested_panel_id.is_some() || inline_cells.is_empty();
         let mut diagnostics = Vec::new();
-        let mut cells = Vec::new();
+        let mut builder = PanelCellPageBuilder::new(decode_offset_cursor(cursor), limit);
         for cell in inline_cells {
-            cells.push(ssed_panel_inline_cell_to_navigation_cell(
-                self,
-                &cell,
-                &options.gaiji_policy,
-            )?);
+            builder.push_cell(|| {
+                ssed_panel_inline_cell_to_navigation_cell(self, &cell, &options.gaiji_policy)
+            })?;
         }
         let selected_data_refs = parsed
             .data_refs
@@ -63,10 +70,35 @@ impl ReaderBookPackage {
             .collect::<Vec<_>>();
         let mut missing_data_refs = Vec::new();
         for data_ref in &selected_data_refs {
+            if !ssed_panel_data_ref_is_bin(data_ref) {
+                if ssed_panel_data_ref_is_html(data_ref) {
+                    builder.push_cell(|| {
+                        self.ssed_panel_external_html_data_cell(
+                            data_ref,
+                            &options.gaiji_policy,
+                            &mut diagnostics,
+                        )
+                    })?;
+                } else {
+                    diagnostics.push(
+                        Diagnostic::info(
+                            "ssed_panel_external_data_deferred",
+                            format!(
+                                "Panel external data {} has type {}; only BIN and HTML rows are decoded",
+                                data_ref.filename,
+                                display_panel_data_type(&data_ref.data_type)
+                            ),
+                        )
+                        .with_context("type", display_panel_data_type(&data_ref.data_type))
+                        .with_context("filename", &data_ref.filename),
+                    );
+                }
+                continue;
+            }
             if matches!(
                 self.append_ssed_panel_bin_cells(
                     data_ref,
-                    &mut cells,
+                    &mut builder,
                     &mut diagnostics,
                     &options.gaiji_policy,
                 )?,
@@ -75,7 +107,7 @@ impl ReaderBookPackage {
                 missing_data_refs.push(data_ref.clone());
             }
         }
-        if cells.is_empty()
+        if builder.total_seen() == 0
             && requested_panel_id.is_some()
             && selected_data_refs
                 .iter()
@@ -83,7 +115,8 @@ impl ReaderBookPackage {
         {
             let mut aggregate_source_count = 0usize;
             for data_ref in parsed.data_refs.iter().filter(|data_ref| {
-                !ssed_panel_data_ref_is_aggregate(data_ref)
+                ssed_panel_data_ref_is_bin(data_ref)
+                    && !ssed_panel_data_ref_is_aggregate(data_ref)
                     && !selected_data_refs.iter().any(|selected| {
                         selected.panel_id == data_ref.panel_id
                             && selected.filename == data_ref.filename
@@ -92,7 +125,7 @@ impl ReaderBookPackage {
                 if matches!(
                     self.append_ssed_panel_bin_cells(
                         data_ref,
-                        &mut cells,
+                        &mut builder,
                         &mut diagnostics,
                         &options.gaiji_policy,
                     )?,
@@ -118,7 +151,7 @@ impl ReaderBookPackage {
                 format!("Panel BIN {} was not found", data_ref.filename),
             ));
         }
-        if cells.is_empty() {
+        if builder.total_seen() == 0 {
             if diagnostics.is_empty() {
                 diagnostics.push(Diagnostic::info(
                     "ssed_panels_empty",
@@ -130,20 +163,22 @@ impl ReaderBookPackage {
                 diagnostics,
             });
         }
+        let (cells, next_cursor) = builder.finish();
         Ok(NavigationSurface::Panel {
             surface_id: surface_id.to_owned(),
             cells,
+            next_cursor,
         })
     }
 
     fn append_ssed_panel_bin_cells(
         &self,
         data_ref: &SsedPanelDataRef,
-        cells: &mut Vec<PanelCell>,
+        builder: &mut PanelCellPageBuilder,
         diagnostics: &mut Vec<Diagnostic>,
         gaiji_policy: &GaijiPolicy,
     ) -> Result<SsedPanelBinLoadStatus> {
-        let Some(data) = self.read_ssed_panel_bin_bytes(&data_ref.filename)? else {
+        let Some(data) = self.read_ssed_panel_bin_bytes(data_ref)? else {
             return Ok(SsedPanelBinLoadStatus::Missing);
         };
         let panel = match parse_panel_bin(&data) {
@@ -159,45 +194,63 @@ impl ReaderBookPackage {
                 return Ok(SsedPanelBinLoadStatus::ParseFailed);
             }
         };
+        let sorted_targets = sorted_panel_record_targets(&panel.records);
         for record in &panel.records {
-            let next_record = nearest_higher_panel_record(&panel.records, record);
-            cells.push(ssed_panel_bin_record_to_navigation_cell(
-                self,
-                data_ref,
-                record,
-                next_record,
-                diagnostics,
-                gaiji_policy,
-            )?);
+            builder.push_cell(|| {
+                let next_record =
+                    nearest_higher_panel_record(&panel.records, &sorted_targets, record);
+                ssed_panel_bin_record_to_navigation_cell(
+                    self,
+                    data_ref,
+                    record,
+                    next_record,
+                    diagnostics,
+                    gaiji_policy,
+                )
+            })?;
         }
         Ok(SsedPanelBinLoadStatus::Decoded)
     }
 
-    fn read_ssed_panel_bin_bytes(&self, filename: &str) -> Result<Option<Vec<u8>>> {
-        let relative = filename.replace('\\', "/");
-        let relative_path = Path::new(&relative);
-        if self.storage.exists(relative_path)? {
-            return self.storage.read(relative_path).map(Some);
+    fn read_ssed_panel_bin_bytes(&self, data_ref: &SsedPanelDataRef) -> Result<Option<Vec<u8>>> {
+        let names = panel_bin_candidate_names(&data_ref.filename, &data_ref.data_type);
+        for name in &names {
+            let relative_path = Path::new(name.as_str());
+            if self.storage.exists(relative_path)? {
+                return self.storage.read(relative_path).map(Some);
+            }
         }
-        if let Some(stripped) = relative.strip_prefix("Panel/")
-            && let Some(package_name) = self.root.file_name().and_then(|name| name.to_str())
-            && let Some(parent) = self.root.parent()
-        {
-            let sibling_panel_root = parent.join(format!("{package_name}_Panel"));
-            if regular_directory_inside_root(parent, &sibling_panel_root).unwrap_or(false) {
-                let sibling_storage = DirectoryStorage::new(sibling_panel_root);
-                let stripped_path = Path::new(stripped);
-                if sibling_storage.exists(stripped_path)? {
-                    return sibling_storage.read(stripped_path).map(Some);
+        for base in ["Panel", "bin"] {
+            for name in &names {
+                let relative = Path::new(base).join(name.as_str());
+                if self.storage.exists(&relative)? {
+                    return self.storage.read(&relative).map(Some);
                 }
             }
         }
-        if let Some(stripped) = relative.strip_prefix("bin/")
-            && let Some(parent) = self.root.parent()
-        {
-            let candidate = parent.join("bin").join(stripped);
-            if regular_file_inside_root(parent, &candidate).unwrap_or(false) {
-                return fs::read(candidate).map(Some).map_err(Error::from);
+        let Some(parent) = self.root.parent() else {
+            return Ok(None);
+        };
+        if let Some(package_name) = self.root.file_name().and_then(|name| name.to_str()) {
+            let sibling_panel_root = parent.join(format!("{package_name}_Panel"));
+            if regular_directory_inside_root(parent, &sibling_panel_root).unwrap_or(false) {
+                let sibling_storage = DirectoryStorage::new(sibling_panel_root);
+                for name in &names {
+                    let relative_path = Path::new(name.as_str());
+                    if sibling_storage.exists(relative_path)? {
+                        return sibling_storage.read(relative_path).map(Some);
+                    }
+                }
+            }
+        }
+        let parent_bin_root = parent.join("bin");
+        if regular_directory_inside_root(parent, &parent_bin_root).unwrap_or(false) {
+            let parent_bin_storage = DirectoryStorage::new(parent_bin_root);
+            for name in &names {
+                let relative_path = Path::new(name.as_str());
+                if parent_bin_storage.exists(relative_path)? {
+                    return parent_bin_storage.read(relative_path).map(Some);
+                }
             }
         }
         Ok(None)
@@ -209,17 +262,26 @@ impl ReaderBookPackage {
     }
 
     fn read_ssed_panel_metadata(&self) -> Result<Option<SsedPanelMetadata>> {
+        let mut candidates = Vec::new();
+        if let Some(declared_panel) = self.read_exinfo_panel_metadata_name()? {
+            push_unique_panel_metadata_candidate(&mut candidates, declared_panel);
+        }
         for path in [
             "Panels.xml",
             "Panels.plist",
             "menu.plist",
             "menu_.plist",
             "menu_iPad.plist",
+            "Panel/Panels.xml",
+            "Panel/Panels.plist",
         ] {
+            push_unique_panel_metadata_candidate(&mut candidates, path.to_owned());
+        }
+        for path in &candidates {
             let relative = Path::new(path);
             if self.storage.exists(relative)? {
                 return Ok(Some(SsedPanelMetadata {
-                    label: path.to_owned(),
+                    label: path.clone(),
                     bytes: self.storage.read(relative)?,
                     format: panel_metadata_format(path),
                 }));
@@ -228,22 +290,85 @@ impl ReaderBookPackage {
         let Some(parent) = self.root.parent() else {
             return Ok(None);
         };
-        for path in [
-            "Panels.plist",
-            "menu.plist",
-            "menu_.plist",
-            "menu_iPad.plist",
-        ] {
-            let candidate = parent.join(path);
-            if regular_file_inside_root(parent, &candidate).unwrap_or(false) {
+        let parent_storage = DirectoryStorage::new(parent.to_path_buf());
+        for path in &candidates {
+            let relative = Path::new(path);
+            if parent_storage.exists(relative)? {
                 return Ok(Some(SsedPanelMetadata {
-                    label: path.to_owned(),
-                    bytes: fs::read(candidate)?,
+                    label: path.clone(),
+                    bytes: parent_storage.read(relative)?,
                     format: panel_metadata_format(path),
                 }));
             }
         }
         Ok(None)
+    }
+
+    fn read_exinfo_panel_metadata_name(&self) -> Result<Option<String>> {
+        let relative = Path::new("EXINFO.INI");
+        if !self.storage.exists(relative)? {
+            return Ok(None);
+        }
+        let bytes = self.storage.read(relative)?;
+        Ok(crate::ssed_panel::exinfo_panel_metadata_name(&bytes)
+            .map(normalize_panel_metadata_candidate))
+    }
+
+    fn ssed_panel_external_html_data_cell(
+        &self,
+        data_ref: &SsedPanelDataRef,
+        gaiji_policy: &GaijiPolicy,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<PanelCell> {
+        let rich_label = self.ssed_rich_label_with_policy(
+            if data_ref.title.trim().is_empty() {
+                &data_ref.filename
+            } else {
+                &data_ref.title
+            },
+            gaiji_policy,
+        );
+        let path = self.ssed_panel_external_html_resource_path(data_ref)?;
+        if self.resolve_package_file_path(&path)?.is_none() {
+            diagnostics.push(
+                Diagnostic::warning(
+                    "ssed_panel_external_html_missing",
+                    format!("Panel HTML resource {} was not found", data_ref.filename),
+                )
+                .with_context("filename", &data_ref.filename),
+            );
+        }
+        let resource = ResourceToken::new(&InternalResource::PackageFile {
+            path,
+            resource_kind: ResourceKind::Html,
+        })?;
+        let target = TargetToken::new(&InternalTarget::Resource {
+            resource,
+            anchor: None,
+        })?;
+        Ok(PanelCell {
+            href: None,
+            panel_id: data_ref.panel_id.clone(),
+            row: 0,
+            column: 0,
+            label_html: rich_label.html,
+            label_text: rich_label.text,
+            target: Some(target),
+            diagnostics: rich_label.diagnostics,
+        })
+    }
+
+    fn ssed_panel_external_html_resource_path(
+        &self,
+        data_ref: &SsedPanelDataRef,
+    ) -> Result<String> {
+        let normalized = data_ref.filename.replace('\\', "/");
+        for candidate in panel_html_candidate_names(&normalized) {
+            if self.resolve_package_file_path(&candidate)?.is_some() {
+                return Ok(candidate);
+            }
+        }
+        Ok(normalized)
     }
 }
 
@@ -252,6 +377,51 @@ enum SsedPanelBinLoadStatus {
     Decoded,
     Missing,
     ParseFailed,
+}
+
+struct PanelCellPageBuilder {
+    offset: usize,
+    limit: usize,
+    seen: usize,
+    cells: Vec<PanelCell>,
+    has_more: bool,
+}
+
+impl PanelCellPageBuilder {
+    fn new(offset: usize, limit: usize) -> Self {
+        Self {
+            offset,
+            limit,
+            seen: 0,
+            cells: Vec::with_capacity(limit.min(256)),
+            has_more: false,
+        }
+    }
+
+    fn push_cell(&mut self, build: impl FnOnce() -> Result<PanelCell>) -> Result<()> {
+        let index = self.seen;
+        self.seen = self.seen.saturating_add(1);
+        if self.limit == 0 || index < self.offset {
+            return Ok(());
+        }
+        if self.cells.len() < self.limit {
+            self.cells.push(build()?);
+        } else {
+            self.has_more = true;
+        }
+        Ok(())
+    }
+
+    fn total_seen(&self) -> usize {
+        self.seen
+    }
+
+    fn finish(self) -> (Vec<PanelCell>, Option<String>) {
+        let next_cursor = self
+            .has_more
+            .then(|| self.offset.saturating_add(self.limit).to_string());
+        (self.cells, next_cursor)
+    }
 }
 
 fn ssed_panel_data_ref_is_aggregate(data_ref: &SsedPanelDataRef) -> bool {
@@ -270,15 +440,69 @@ fn ssed_panel_data_ref_is_aggregate(data_ref: &SsedPanelDataRef) -> bool {
     stem == "all" || stem.ends_with("_all") || stem.ends_with("-all")
 }
 
+fn ssed_panel_data_ref_is_bin(data_ref: &SsedPanelDataRef) -> bool {
+    if data_ref.data_type.trim().eq_ignore_ascii_case("bin") {
+        return true;
+    }
+    data_ref.data_type.trim().is_empty() && path_has_extension(&data_ref.filename, &["bin"])
+}
+
+fn ssed_panel_data_ref_is_html(data_ref: &SsedPanelDataRef) -> bool {
+    if data_ref.data_type.trim().eq_ignore_ascii_case("html") {
+        return true;
+    }
+    path_has_extension(&data_ref.filename, &["html", "htm"])
+}
+
+fn display_panel_data_type(data_type: &str) -> String {
+    let data_type = data_type.trim();
+    if data_type.is_empty() {
+        "(unspecified)".to_owned()
+    } else {
+        data_type.to_owned()
+    }
+}
+
+fn panel_html_candidate_names(filename: &str) -> Vec<String> {
+    let normalized = filename.trim_start_matches('/').to_owned();
+    let mut names = Vec::new();
+    push_unique_panel_bin_name(&mut names, normalized.clone());
+    if !normalized
+        .get(.."Templates/".len())
+        .is_some_and(|head| head.eq_ignore_ascii_case("Templates/"))
+    {
+        push_unique_panel_bin_name(&mut names, format!("Templates/{normalized}"));
+    }
+    if !normalized
+        .get(.."HTMLs/".len())
+        .is_some_and(|head| head.eq_ignore_ascii_case("HTMLs/"))
+    {
+        push_unique_panel_bin_name(&mut names, format!("HTMLs/{normalized}"));
+    }
+    names
+}
+
+fn sorted_panel_record_targets(records: &[SsedPanelBinRecord]) -> Vec<(u32, u32, usize)> {
+    let mut targets = records
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| record.block != 0 || record.offset != 0)
+        .map(|(index, record)| (record.block, record.offset, index))
+        .collect::<Vec<_>>();
+    targets.sort_unstable();
+    targets
+}
+
 fn nearest_higher_panel_record<'a>(
     records: &'a [SsedPanelBinRecord],
+    sorted_targets: &[(u32, u32, usize)],
     record: &SsedPanelBinRecord,
 ) -> Option<&'a SsedPanelBinRecord> {
-    records
-        .iter()
-        .filter(|candidate| candidate.block != 0 || candidate.offset != 0)
-        .filter(|candidate| (candidate.block, candidate.offset) > (record.block, record.offset))
-        .min_by_key(|candidate| (candidate.block, candidate.offset))
+    let index = sorted_targets
+        .partition_point(|(block, offset, _)| (*block, *offset) <= (record.block, record.offset));
+    sorted_targets
+        .get(index)
+        .and_then(|(_, _, record_index)| records.get(*record_index))
 }
 
 struct SsedPanelMetadata {
@@ -327,5 +551,53 @@ fn panel_metadata_format(path: &str) -> SsedPanelMetadataFormat {
         SsedPanelMetadataFormat::Plist
     } else {
         SsedPanelMetadataFormat::Xml
+    }
+}
+
+fn normalize_panel_metadata_candidate(path: String) -> String {
+    path.replace('\\', "/")
+}
+
+fn push_unique_panel_metadata_candidate(candidates: &mut Vec<String>, path: String) {
+    let normalized = normalize_panel_metadata_candidate(path);
+    if !normalized.is_empty()
+        && !candidates
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&normalized))
+    {
+        candidates.push(normalized);
+    }
+}
+
+fn panel_bin_candidate_names(filename: &str, data_type: &str) -> Vec<String> {
+    let normalized = filename.replace('\\', "/");
+    let mut names = Vec::new();
+    push_unique_panel_bin_candidate(&mut names, normalized.clone(), data_type);
+    if let Some(stripped) = normalized.strip_prefix("Panel/") {
+        push_unique_panel_bin_candidate(&mut names, stripped.to_owned(), data_type);
+    }
+    if let Some(stripped) = normalized.strip_prefix("bin/") {
+        push_unique_panel_bin_candidate(&mut names, stripped.to_owned(), data_type);
+    }
+    names
+}
+
+fn push_unique_panel_bin_candidate(names: &mut Vec<String>, name: String, data_type: &str) {
+    let name = name.trim_start_matches('/').to_owned();
+    if name.is_empty() {
+        return;
+    }
+    push_unique_panel_bin_name(names, name.clone());
+    if data_type.eq_ignore_ascii_case("bin") && Path::new(&name).extension().is_none() {
+        push_unique_panel_bin_name(names, format!("{name}.bin"));
+    }
+}
+
+fn push_unique_panel_bin_name(names: &mut Vec<String>, name: String) {
+    if !names
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(&name))
+    {
+        names.push(name);
     }
 }

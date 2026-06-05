@@ -432,6 +432,7 @@ mod tests {
                     diagnostics: Vec::new(),
                 },
             ],
+            next_cursor: None,
         };
         let mut screen = NavigationSurface::ScreenMenu {
             surface_id: "screen".to_owned(),

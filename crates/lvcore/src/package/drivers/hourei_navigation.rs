@@ -28,6 +28,7 @@ impl ReaderBookPackage {
         Ok(NavigationSurface::Panel {
             surface_id: surface_id.to_owned(),
             cells,
+            next_cursor: None,
         })
     }
 

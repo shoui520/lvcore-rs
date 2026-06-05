@@ -83,6 +83,8 @@ pub enum NavigationSurface {
     Panel {
         surface_id: String,
         cells: Vec<PanelCell>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_cursor: Option<String>,
     },
     HierarchicalTree {
         surface_id: String,
@@ -308,7 +310,9 @@ impl NavigationSurface {
                     diagnostics: item.diagnostics.clone(),
                 })
                 .collect(),
-            Self::Panel { surface_id, cells } => cells
+            Self::Panel {
+                surface_id, cells, ..
+            } => cells
                 .iter()
                 .filter_map(|cell| {
                     cell.target.as_ref().map(|target| NavigationTarget {
@@ -520,6 +524,7 @@ mod tests {
         let panel = NavigationSurface::Panel {
             surface_id: "panels:01010000".to_owned(),
             cells: Vec::new(),
+            next_cursor: None,
         };
         assert_eq!(
             panel.sequence_hint(),

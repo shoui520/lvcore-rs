@@ -208,6 +208,230 @@ fn ssed_missing_declared_menu_does_not_hide_panel_home_surface() {
 }
 
 #[test]
+fn ssed_panels_honor_exinfo_panelxml_metadata_name() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("EXINFO.INI"),
+        b"[GENERAL]\nPANELXML=CustomPanels_win.xml\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("CustomPanels_win.xml"),
+        r#"<panels>
+  <panel index="01000000" paneltype="menu" count_x="1">
+    <title>Custom</title>
+    <data><cell ref="01010000">あ</cell></data>
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::Panels),
+        "EXINFO PANELXML should advertise Panels even when Panels.xml is absent"
+    );
+
+    let panel = package.open_surface("panels").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = panel else {
+        panic!("EXINFO PANELXML should open as an SSED Panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "あ");
+}
+
+#[test]
+fn ssed_panels_honor_exinfo_rosqlname_when_it_names_panel_metadata() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("EXINFO.INI"),
+        b"[GENERAL]\nROSQLNAME=CustomPanels_win.xml\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("CustomPanels_win.xml"),
+        r#"<panels>
+  <panel index="01000000" paneltype="menu" count_x="1">
+    <title>Custom</title>
+    <data><cell ref="01010000">い</cell></data>
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::Panels),
+        "EXINFO ROSQLNAME should advertise Panels when it names XML/plist Panel metadata"
+    );
+
+    let panel = package.open_surface("panels").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = panel else {
+        panic!("EXINFO ROSQLNAME XML should open as an SSED Panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "い");
+}
+
+#[test]
+fn ssed_panels_ignore_exinfo_rosqlname_database_values() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("EXINFO.INI"),
+        b"[GENERAL]\nROSQLNAME=RendererBody.db\n",
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        !package
+            .metadata()
+            .capabilities
+            .contains(&Capability::Panels),
+        "EXINFO ROSQLNAME database values are sidecar hooks, not Panel metadata"
+    );
+
+    let panel = package.open_surface("panels").unwrap();
+    let lvcore::NavigationSurface::Deferred { diagnostics, .. } = panel else {
+        panic!("database ROSQLNAME without Panel metadata should not open as a panel surface");
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_panels_missing")
+    );
+}
+
+#[test]
+fn ssed_panel_inline_action_verbs_resolve_addresses_and_panel_refs() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<panels>
+  <panel index="01000000" paneltype="menu" count_x="2">
+    <title>Root</title>
+    <data>
+      <cell action_verb="lved.addr0000000A:0002">直接</cell>
+      <cell action_verb="lved.panel:01010000">子</cell>
+    </data>
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let panel = package.open_surface("panels").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = panel else {
+        panic!("inline Panel action verbs should open as a panel surface");
+    };
+    assert_eq!(cells.len(), 2);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+    assert!(matches!(
+        cells[1].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::PanelCell { panel_id, .. } if panel_id == "01010000"
+    ));
+}
+
+#[test]
+fn ssed_panel_bin_lookup_accepts_extensionless_names_in_panel_directory() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir(dir.path().join("Panel")).unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<panels>
+  <panel index="01010000" paneltype="contents">
+    <title>All</title>
+    <data type="bin" filename="All-A" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("Panel/All-A.bin"), panel_bin_fixture(10, 2)).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let panel = package.open_surface("panels:01010000").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = panel else {
+        panic!("extensionless Panel BIN reference should decode as a panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
+fn ssed_panel_external_html_data_targets_package_html_resource() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir(dir.path().join("Templates")).unwrap();
+    fs::write(
+        dir.path().join("Templates/01010000-ffff.html"),
+        b"<html><body>panel html</body></html>",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<panels>
+  <panel index="01010000" paneltype="contents">
+    <title>HTML</title>
+    <data type="html" filename="01010000-ffff.html" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let panel = package.open_surface("panels:01010000").unwrap();
+    let NavigationSurface::Panel { cells, .. } = panel else {
+        panic!("external Panel HTML should be exposed as a clickable Panel cell");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "HTML");
+    assert!(
+        !cells[0]
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_panel_bin_missing")
+    );
+    let target = cells[0].target.as_ref().unwrap().decode().unwrap();
+    let InternalTarget::Resource { resource, .. } = target else {
+        panic!("external Panel HTML should target a resource");
+    };
+    let InternalResource::PackageFile {
+        path,
+        resource_kind,
+    } = resource.decode().unwrap()
+    else {
+        panic!("external Panel HTML should use a package-file resource");
+    };
+    assert_eq!(path, "Templates/01010000-ffff.html");
+    assert_eq!(resource_kind, ResourceKind::Html);
+}
+
+#[test]
 fn ssed_mac_panels_plist_opens_like_xml_panels() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -869,4 +1093,92 @@ fn ssed_menu_continuous_view_pages_through_large_menu_surfaces() {
     assert_eq!(menu_window.after.len(), 1);
     assert_eq!(ssed_view_offset(&menu_window.before[0]), Some((10, 298)));
     assert_eq!(ssed_view_offset(&menu_window.after[0]), Some((10, 302)));
+}
+
+#[test]
+fn ssed_panel_surfaces_are_cursor_paged_and_sequence_can_find_later_cells() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("Panel")).unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<panels>
+  <panel index="01010000" paneltype="contents">
+    <title>All</title>
+    <data type="bin" filename="Panel\All-A.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    let rows = (0..130u32)
+        .map(|index| (10, index * 2, [0x24, 0x22]))
+        .collect::<Vec<_>>();
+    fs::write(
+        dir.path().join("Panel/All-A.bin"),
+        panel_bin_fixture_rows(&rows),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let first_page = package
+        .open_surface_page("panels:01010000", None, 100)
+        .unwrap();
+    let NavigationSurface::Panel {
+        cells, next_cursor, ..
+    } = first_page
+    else {
+        panic!("SSED Panel should decode as a paged panel surface");
+    };
+    assert_eq!(cells.len(), 100);
+    assert_eq!(next_cursor.as_deref(), Some("100"));
+    assert_eq!(ssed_panel_cell_offset(&cells[0]), Some((10, 0)));
+    assert_eq!(ssed_panel_cell_offset(&cells[99]), Some((10, 198)));
+
+    let second_page = package
+        .open_surface_page("panels:01010000", next_cursor.as_deref(), 100)
+        .unwrap();
+    let NavigationSurface::Panel {
+        cells, next_cursor, ..
+    } = second_page
+    else {
+        panic!("SSED Panel second page should decode as a panel surface");
+    };
+    assert_eq!(cells.len(), 30);
+    assert!(next_cursor.is_none());
+    assert_eq!(ssed_panel_cell_offset(&cells[0]), Some((10, 200)));
+
+    let target = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 10,
+        offset: 240,
+    })
+    .unwrap();
+    let panel_window = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::PanelOrder {
+                value: "01010000".to_owned(),
+            }),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert!(panel_window.diagnostics.is_empty());
+    assert_eq!(ssed_view_offset(&panel_window.before[0]), Some((10, 238)));
+    assert_eq!(ssed_view_offset(&panel_window.center), Some((10, 240)));
+    assert_eq!(ssed_view_offset(&panel_window.after[0]), Some((10, 242)));
+}
+
+fn ssed_panel_cell_offset(cell: &lvcore::navigation::PanelCell) -> Option<(u32, u32)> {
+    match cell.target.as_ref()?.decode().ok()? {
+        InternalTarget::SsedAddress { block, offset, .. }
+        | InternalTarget::SsedBoundedAddress { block, offset, .. } => Some((block, offset)),
+        _ => None,
+    }
 }

@@ -19,6 +19,7 @@ use crate::multiview::parse_menu_data;
 use crate::ssed::{ANDROID_LVEDINFO_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponentRole};
 use crate::ssed_aux_index::{is_numeric_aux_index_filename, parse_aux_index_specs_from_exinfo};
 use crate::ssed_menu::parse_menu_stream;
+use crate::ssed_panel::exinfo_panel_metadata_name;
 use crate::storage::{DirectoryStorage, StorageBackend, regular_file_inside_root};
 
 pub(super) const SSED_NAVIGATION_DETECTION_MAX_BYTES: usize = 1024 * 1024;
@@ -290,32 +291,59 @@ pub(super) fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capab
 }
 
 fn has_ssed_panel_metadata_casefolded(root: &Path, storage: &DirectoryStorage) -> bool {
-    if has_any_casefolded(
-        storage,
-        &[
-            "Panels.xml",
-            "Panels.plist",
-            "menu.plist",
-            "menu_.plist",
-            "menu_iPad.plist",
-        ],
-    ) {
+    let mut candidates = ssed_panel_metadata_candidates();
+    if let Some(declared_panel) = ssed_exinfo_panel_metadata_candidate(storage) {
+        push_unique_panel_metadata_candidate(&mut candidates, declared_panel);
+    }
+    if candidates
+        .iter()
+        .any(|candidate| storage.exists(Path::new(candidate)).unwrap_or(false))
+    {
         return true;
     }
     let Some(parent) = root.parent() else {
         return false;
     };
+    candidates
+        .iter()
+        .map(|name| parent.join(name))
+        .any(|candidate| {
+            regular_file_inside_root(parent, &candidate).unwrap_or(false) && candidate.is_file()
+        })
+}
+
+fn ssed_panel_metadata_candidates() -> Vec<String> {
     [
+        "Panels.xml",
         "Panels.plist",
         "menu.plist",
         "menu_.plist",
         "menu_iPad.plist",
+        "Panel/Panels.xml",
+        "Panel/Panels.plist",
     ]
-    .iter()
-    .map(|name| parent.join(name))
-    .any(|candidate| {
-        regular_file_inside_root(parent, &candidate).unwrap_or(false) && candidate.is_file()
-    })
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+fn ssed_exinfo_panel_metadata_candidate(storage: &DirectoryStorage) -> Option<String> {
+    let relative = Path::new("EXINFO.INI");
+    if !storage.exists(relative).unwrap_or(false) {
+        return None;
+    }
+    let bytes = storage.read(relative).ok()?;
+    exinfo_panel_metadata_name(&bytes).map(|path| path.replace('\\', "/"))
+}
+
+fn push_unique_panel_metadata_candidate(candidates: &mut Vec<String>, path: String) {
+    if !path.is_empty()
+        && !candidates
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&path))
+    {
+        candidates.insert(0, path);
+    }
 }
 
 fn ssed_navigation_component_has_non_empty_surface(

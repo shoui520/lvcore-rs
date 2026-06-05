@@ -8,9 +8,19 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
 ) -> Result<PanelCell> {
     let rich_label = package.ssed_rich_label_with_policy(&cell.label, gaiji_policy);
     let mut diagnostics = rich_label.diagnostics;
-    let target = if !cell.ref_id.is_empty() {
+    let target = if let Some(address) = parse_lved_address(&cell.action_verb) {
+        ssed_panel_address_target(
+            package,
+            address.block,
+            address.offset,
+            None,
+            &mut diagnostics,
+        )?
+    } else if let Some(panel_id) = panel_ref_from_action(&cell.action_verb)
+        .or_else(|| (!cell.ref_id.is_empty()).then_some(cell.ref_id.as_str()))
+    {
         Some(TargetToken::new(&InternalTarget::PanelCell {
-            panel_id: cell.ref_id.clone(),
+            panel_id: panel_id.to_owned(),
             row: 0,
             column: 0,
         })?)
@@ -35,6 +45,17 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
         target,
         diagnostics,
     })
+}
+
+fn panel_ref_from_action(action_verb: &str) -> Option<&str> {
+    let action = action_verb.trim();
+    let prefix = "lved.panel:";
+    action
+        .get(..prefix.len())
+        .filter(|head| head.eq_ignore_ascii_case(prefix))
+        .and_then(|_| action.get(prefix.len()..))
+        .map(str::trim)
+        .filter(|panel_id| !panel_id.is_empty())
 }
 
 pub(super) fn ssed_panel_bin_record_to_navigation_cell(

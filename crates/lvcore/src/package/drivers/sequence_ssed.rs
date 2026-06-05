@@ -306,36 +306,100 @@ impl ReaderBookPackage {
         } else {
             format!("panels:{panel_id}")
         };
-        let surface = self.open_surface_with_options(
-            &surface_id,
-            &LabelOptions {
-                gaiji_policy: options.gaiji_policy.clone(),
-            },
-        )?;
-        let NavigationSurface::Panel { cells, .. } = surface else {
-            return Ok(Some(TargetWindow {
+        let label_options = LabelOptions {
+            gaiji_policy: options.gaiji_policy.clone(),
+        };
+        let mut collector = SsedMenuSequenceWindowCollector::new(before, after);
+        let mut diagnostics = Vec::new();
+        let mut cursor = None::<String>;
+        let mut reached_page_limit = false;
+        for page_index in 0..SSED_SEQUENCE_SURFACE_MAX_PAGES {
+            let surface = self.open_surface_page_with_options(
+                &surface_id,
+                cursor.as_deref(),
+                SSED_SEQUENCE_SURFACE_PAGE_LIMIT,
+                &label_options,
+            )?;
+            let next_cursor = match surface {
+                NavigationSurface::Panel {
+                    cells, next_cursor, ..
+                } => {
+                    for cell in cells {
+                        if let Some(cell_target) = cell.target {
+                            let item = OrderedSequenceTarget {
+                                target: cell_target,
+                                title: Some(cell.label_text),
+                            };
+                            if !collector.visit(item, target) {
+                                break;
+                            }
+                        }
+                    }
+                    next_cursor
+                }
+                _ => {
+                    return Ok(Some(TargetWindow {
+                        center: self.render_target(target, options)?,
+                        before: Vec::new(),
+                        after: Vec::new(),
+                        diagnostics: vec![Diagnostic::info(
+                            "sequence_surface_not_ordered",
+                            format!("{surface_id} is not an SSED panel surface"),
+                        )],
+                    }));
+                }
+            };
+            if collector.is_satisfied() {
+                break;
+            }
+            let Some(next_cursor) = next_cursor else {
+                break;
+            };
+            if page_index + 1 >= SSED_SEQUENCE_SURFACE_MAX_PAGES {
+                reached_page_limit = true;
+                break;
+            }
+            if cursor.as_deref() == Some(next_cursor.as_str()) {
+                diagnostics.push(Diagnostic::warning(
+                    "sequence_surface_cursor_stalled",
+                    format!("{surface_id} returned a repeated pagination cursor"),
+                ));
+                break;
+            }
+            cursor = Some(next_cursor);
+        }
+        if reached_page_limit {
+            diagnostics.push(Diagnostic::warning(
+                "sequence_surface_page_limit_reached",
+                format!("{surface_id} sequence lookup stopped at the page limit"),
+            ));
+        }
+        let ordered = collector.into_ordered_context();
+        let mut window = if ordered.is_empty() {
+            TargetWindow {
                 center: self.render_target(target, options)?,
                 before: Vec::new(),
                 after: Vec::new(),
                 diagnostics: vec![Diagnostic::info(
-                    "sequence_surface_not_ordered",
-                    format!("{surface_id} is not an SSED panel surface"),
+                    "sequence_target_not_in_ssed_panel",
+                    "target is not present in the requested SSED panel order",
                 )],
-            }));
+            }
+        } else {
+            self.resolve_ordered_target_window(
+                target,
+                &ordered,
+                before,
+                after,
+                options,
+                Diagnostic::info(
+                    "sequence_target_not_in_ssed_panel",
+                    "target is not present in the requested SSED panel order",
+                ),
+            )?
         };
-        let mut ordered = Vec::new();
-        collect_panel_cell_ordered_targets(&cells, &mut ordered);
-        Ok(Some(self.resolve_ordered_target_window(
-            target,
-            &ordered,
-            before,
-            after,
-            options,
-            Diagnostic::info(
-                "sequence_target_not_in_ssed_panel",
-                "target is not present in the requested SSED panel order",
-            ),
-        )?))
+        window.diagnostics.extend(diagnostics);
+        Ok(Some(window))
     }
 }
 

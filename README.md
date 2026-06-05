@@ -49,6 +49,8 @@ LogoVista internals. The frontend receives:
 - typed SSED screen-menu surfaces for bitmap-backed navigation such as
   KOJIEN6 `SCRMENU.DIC`, with COLSCR background resources and hotspot target
   tokens;
+- pageable Panel surfaces; large LogoVista Panel BIN grids are exposed through
+  `next_cursor` instead of forcing the frontend to receive every cell at once;
 - stable opaque `TargetToken` values;
 - rendered target views with HTML/text/resources/links/diagnostics;
 - resource tokens for images, audio, PDFs, media BLOBs, gaiji assets, and other
@@ -165,6 +167,14 @@ provider slices:
 - SSED `EXINFO.INI` auxiliary text `*.IDX` declarations and unreferenced
   numeric auxiliary `00000xxx.idx` trees are exposed as hierarchical navigation
   surfaces when rows resolve to SSED component addresses;
+- SSED Panel metadata from fixed XML/plist names, EXINFO-declared panel XML/plist
+  names (`PANELXML` and XML/plist-valued `ROSQLNAME`), and mobile menu layouts is
+  exposed as Panel surfaces; large BIN-backed panels are cursor-paged and
+  continuous view can resolve targets beyond the first page; observed
+  little-endian headered Panel BIN rows and headerless big-endian UTF-8 mobile
+  rows are both decoded; external Panel HTML payloads are exposed as package-file
+  resource targets, while other non-BIN external payloads remain explicit
+  deferred diagnostics rather than misreported as missing BIN grids;
 - SSED Britannica loose media directories are exposed as reader navigation:
   `whatday/*.body`/`*.top` CP932 HTML fragments become info pages with
   `lved.addrXXXXXXXX:YYYY` links rewritten to normal target tokens, and

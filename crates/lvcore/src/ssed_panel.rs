@@ -242,10 +242,56 @@ pub fn parse_panel_bin(data: &[u8]) -> Result<SsedPanelBin> {
             }
         }
     }
+    if let Some(panel) = parse_big_endian_utf8_panel_records(data) {
+        return Ok(panel);
+    }
     Err(Error::Driver(format!(
         "Panel BIN size mismatch: count={declared_record_count} text_width={text_width} actual={}",
         data.len()
     )))
+}
+
+pub(crate) fn exinfo_general_value(data: &[u8], wanted_key: &str) -> Option<String> {
+    let (text, _encoding, _had_errors) = SHIFT_JIS.decode(data);
+    let mut in_general = false;
+    for raw_line in text.lines() {
+        let line = raw_line.trim_start_matches('\u{feff}').trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            in_general = line[1..line.len() - 1]
+                .trim()
+                .eq_ignore_ascii_case("GENERAL");
+            continue;
+        }
+        if !in_general {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim().eq_ignore_ascii_case(wanted_key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn exinfo_panel_metadata_name(data: &[u8]) -> Option<String> {
+    if let Some(value) = exinfo_general_value(data, "PANELXML") {
+        return Some(value);
+    }
+    exinfo_general_value(data, "ROSQLNAME")
+        .filter(|value| panel_metadata_name_from_exinfo_value(value))
+}
+
+fn panel_metadata_name_from_exinfo_value(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.ends_with(".xml") || value.ends_with(".plist")
 }
 
 fn panel_bin_layout_len(
@@ -257,6 +303,72 @@ fn panel_bin_layout_len(
     let stride = fixed.checked_add(text_width as usize)?;
     let payload_len = (record_count as usize).checked_mul(stride)?;
     Some((stride, 8usize.checked_add(payload_len)?))
+}
+
+fn parse_big_endian_utf8_panel_records(data: &[u8]) -> Option<SsedPanelBin> {
+    if data.len() < 12 {
+        return None;
+    }
+    let max_stride = data.len().min(512);
+    let stride = (12..=max_stride)
+        .filter(|stride| data.len().is_multiple_of(*stride))
+        .find(|stride| looks_like_big_endian_utf8_panel_records(data, *stride))?;
+    let record_count = data.len() / stride;
+    let text_width = u32::try_from(stride.saturating_sub(8)).ok()?;
+    let actual_record_count = u32::try_from(record_count).ok()?;
+    let mut records = Vec::with_capacity(record_count);
+    for index in 0..record_count {
+        let pos = index * stride;
+        let text = std::str::from_utf8(trim_trailing_nuls(&data[pos + 8..pos + stride]))
+            .ok()?
+            .to_owned();
+        records.push(SsedPanelBinRecord {
+            index: u32::try_from(index).ok()?,
+            record_id: None,
+            block: be32(data, pos),
+            offset: be32(data, pos + 4),
+            text,
+        });
+    }
+    Some(SsedPanelBin {
+        declared_record_count: actual_record_count,
+        actual_record_count,
+        text_width,
+        format: "big_endian_address_utf8_label_no_header".to_owned(),
+        records,
+    })
+}
+
+fn looks_like_big_endian_utf8_panel_records(data: &[u8], stride: usize) -> bool {
+    if stride <= 8 || !data.len().is_multiple_of(stride) {
+        return false;
+    }
+    let record_count = data.len() / stride;
+    if record_count == 0 {
+        return false;
+    }
+    let sample_limit = record_count.min(256);
+    let mut non_empty = 0usize;
+    for index in 0..sample_limit {
+        let pos = index * stride;
+        let block = be32(data, pos);
+        let offset = be32(data, pos + 4);
+        if block > 0x100000 || offset > 0x100000 {
+            return false;
+        }
+        let text_bytes = trim_trailing_nuls(&data[pos + 8..pos + stride]);
+        if text_bytes.is_empty() {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(text_bytes) else {
+            return false;
+        };
+        if text.contains('\0') {
+            return false;
+        }
+        non_empty = non_empty.saturating_add(1);
+    }
+    non_empty >= usize::max(1, sample_limit / 2)
 }
 
 fn parse_panel_records(
@@ -764,6 +876,23 @@ fn le32(data: &[u8], offset: usize) -> u32 {
     ])
 }
 
+fn be32(data: &[u8], offset: usize) -> u32 {
+    u32::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ])
+}
+
+fn trim_trailing_nuls(data: &[u8]) -> &[u8] {
+    let end = data
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .map_or(0, |index| index + 1);
+    &data[..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -803,6 +932,35 @@ mod tests {
         assert_eq!(parsed.records[0].block, 3);
         assert_eq!(parsed.records[0].offset, 0x20);
         assert_eq!(parsed.records[0].text, "あ");
+    }
+
+    #[test]
+    fn parses_headerless_big_endian_utf8_panel_records() {
+        const WIDTH: usize = 12;
+        fn row(block: u32, offset: u32, label: &str) -> Vec<u8> {
+            let mut bytes = block
+                .to_be_bytes()
+                .into_iter()
+                .chain(offset.to_be_bytes())
+                .collect::<Vec<_>>();
+            let mut label_bytes = label.as_bytes().to_vec();
+            label_bytes.resize(WIDTH, 0);
+            bytes.extend(label_bytes);
+            bytes
+        }
+        let data = row(2, 0x92, "亜")
+            .into_iter()
+            .chain(row(3, 0x180, "ア"))
+            .collect::<Vec<_>>();
+
+        let parsed = parse_panel_bin(&data).unwrap();
+
+        assert_eq!(parsed.format, "big_endian_address_utf8_label_no_header");
+        assert_eq!(parsed.text_width, WIDTH as u32);
+        assert_eq!(parsed.records[0].block, 2);
+        assert_eq!(parsed.records[0].offset, 0x92);
+        assert_eq!(parsed.records[0].text, "亜");
+        assert_eq!(parsed.records[1].text, "ア");
     }
 
     #[test]

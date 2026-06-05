@@ -489,9 +489,11 @@ impl NavigationProvider for ReaderBookPackage {
             (FormatFamily::Ssed, "lved-tree") if self.lved_store.is_some() => {
                 self.open_lved_tree_surface(surface_id)
             }
-            (FormatFamily::Ssed, "panels") => self.open_ssed_panel_surface(surface_id, options),
+            (FormatFamily::Ssed, "panels") => {
+                self.open_ssed_panel_surface(surface_id, cursor, limit, options)
+            }
             (FormatFamily::Ssed, id) if id.starts_with("panels:") => {
-                self.open_ssed_panel_surface(surface_id, options)
+                self.open_ssed_panel_surface(surface_id, cursor, limit, options)
             }
             (FormatFamily::LvedSqlite3, "lved-list") => {
                 self.open_lved_list_surface(surface_id, cursor, limit)
