@@ -42,6 +42,36 @@ fn lved_preserved_html_packages_do_not_advertise_deferred_rendering() {
 }
 
 #[test]
+fn lved_hanrei_capability_requires_info_surface() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection.execute_batch("drop table info;").unwrap();
+    }
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let metadata = package.metadata();
+
+    assert!(
+        !metadata.capabilities.contains(&Capability::Hanrei),
+        "LVED_SQLITE3 should only advertise HANREI/info when an info table exposes renderable rows"
+    );
+    let info_home = package
+        .home_surfaces()
+        .unwrap()
+        .into_iter()
+        .find(|surface| surface.surface_id == "info")
+        .expect("LVED_SQLITE3 home surfaces should report the info slot status");
+    assert_eq!(info_home.status, NavigationStatus::Missing);
+    assert!(info_home.target.is_none());
+}
+
+#[test]
 fn lved_book_id_does_not_expose_arbitrary_folder_names() {
     let dir = tempdir().unwrap();
     let first_root = dir.path().join("FirstBook");

@@ -3,19 +3,27 @@ use std::path::Path;
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::ssed_payload::has_supported_sseddata_component_payload_casefolded;
 use super::{Capability, FormatFamily};
+use crate::lved_sqlite::LvedSqliteSummary;
 use crate::search::SearchMode;
 use crate::ssed::SsedCatalog;
 use crate::storage::DirectoryStorage;
 
-pub(super) fn lved_capabilities(search_modes: &[SearchMode]) -> Vec<Capability> {
+pub(super) fn lved_capabilities(
+    search_modes: &[SearchMode],
+    summary: &LvedSqliteSummary,
+) -> Vec<Capability> {
     let mut capabilities = vec![
-        Capability::TitleIndexBrowse,
-        Capability::Hanrei,
         Capability::Resources,
         Capability::Gaiji,
         Capability::PreservedHtml,
         Capability::ContinuousView,
     ];
+    if summary.list_available || summary.tree_available {
+        capabilities.push(Capability::TitleIndexBrowse);
+    }
+    if summary.info_available {
+        capabilities.push(Capability::Hanrei);
+    }
     if !search_modes.is_empty() {
         capabilities.push(Capability::NativeSearch);
     }

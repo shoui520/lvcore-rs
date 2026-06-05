@@ -63,7 +63,7 @@ impl SsedDriver {
             && let Some(info) = &retained_ios_dictlist
             && let Some((store, summary, modes)) = open_retained_ios_lved_store(info)?
         {
-            extend_unique_capabilities(&mut capabilities, lved_capabilities(&modes));
+            extend_unique_capabilities(&mut capabilities, lved_capabilities(&modes, &summary));
             search_modes = modes;
             lved_summary = Some(summary);
             lved_store = Some(store);
@@ -229,7 +229,7 @@ impl LvedSqliteDriver {
         Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
-            lved_capabilities(&search_modes),
+            lved_capabilities(&search_modes, &summary),
             PackageStores {
                 lved_store: Some(store),
                 lved_summary: Some(summary),
