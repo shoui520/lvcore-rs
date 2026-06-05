@@ -216,9 +216,10 @@ use self::ssed_multi_ids::{
     ssed_multi_record_surface_id, ssed_multi_root_surface_id,
 };
 use self::ssed_navigation::{
-    SsedHanreiPage, read_path_inside_loose_root, read_path_inside_resolved_parent,
+    SsedHanreiPage, SsedMenuNodePageRequest, decode_ssed_menu_node_cursor,
+    read_path_inside_loose_root, read_path_inside_resolved_parent,
     ssed_aux_index_rows_to_flat_nodes, ssed_aux_index_rows_to_nodes,
-    ssed_encyclopedia_rows_to_nodes, ssed_menu_records_to_nodes_from,
+    ssed_encyclopedia_rows_to_nodes, ssed_menu_records_to_nodes_page_from,
     ssed_multi_selector_records_to_nodes,
 };
 use self::ssed_panel_navigation::{

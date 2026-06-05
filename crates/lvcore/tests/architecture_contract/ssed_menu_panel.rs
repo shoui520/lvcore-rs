@@ -754,6 +754,28 @@ fn ssed_menu_rows_with_many_links_expand_to_entry_nodes() {
             offset: 4,
         } if component == "HONMON.DIC"
     ));
+
+    let NavigationSurface::SimpleMenu {
+        nodes, next_cursor, ..
+    } = package.open_surface_page("menu", None, 1).unwrap()
+    else {
+        panic!("SSED MENU page should decode to a simple menu surface");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "alpha");
+    assert_eq!(next_cursor.as_deref(), Some("link:0:1"));
+
+    let NavigationSurface::SimpleMenu {
+        nodes, next_cursor, ..
+    } = package
+        .open_surface_page("menu", next_cursor.as_deref(), 1)
+        .unwrap()
+    else {
+        panic!("SSED MENU link cursor should decode to the next link node");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "beta");
+    assert!(next_cursor.is_none());
 }
 
 #[test]

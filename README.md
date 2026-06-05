@@ -159,6 +159,9 @@ provider slices:
   rewriting;
 - SSED MENU/TOC decoding reports explicit empty sentinel components as
   diagnostic-only surfaces rather than targetable menus;
+- SSED MENU/TOC surfaces are cursor-paged by produced navigation nodes,
+  including records that expand to many entry links, so a large menu row cannot
+  force the frontend to receive the entire navigation surface at once;
 - SSED screen-menu decoding for the KOJIEN6-style `SCRMENU.DIC` component:
   background images are exposed as COLSCR resource tokens, screen jumps remain
   navigation targets, and body hotspots resolve to normal SSED address targets;

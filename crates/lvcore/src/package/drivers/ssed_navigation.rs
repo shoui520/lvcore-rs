@@ -9,6 +9,28 @@ pub(super) struct SsedHanreiPage {
     pub(super) diagnostics: Vec<Diagnostic>,
 }
 
+#[derive(Debug)]
+pub(super) struct SsedMenuNodePage {
+    pub(super) nodes: Vec<NavigationNode>,
+    pub(super) next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SsedMenuNodeCursor {
+    pub(super) record_offset: usize,
+    pub(super) link_offset: usize,
+}
+
+pub(super) struct SsedMenuNodePageRequest<'a> {
+    pub(super) package: &'a ReaderBookPackage,
+    pub(super) records: &'a [SsedMenuRecord],
+    pub(super) base_index: usize,
+    pub(super) initial_link_offset: usize,
+    pub(super) limit: usize,
+    pub(super) parsed_next_cursor: Option<String>,
+    pub(super) gaiji_policy: &'a GaijiPolicy,
+}
+
 pub(super) fn read_path_inside_loose_root(
     package_root: &Path,
     root_name: &str,
@@ -41,28 +63,65 @@ pub(super) fn read_path_inside_resolved_parent(resolved: &Path, label: &str) -> 
     Ok(fs::read(resolved)?)
 }
 
-pub(super) fn ssed_menu_records_to_nodes_from(
-    package: &ReaderBookPackage,
-    records: &[SsedMenuRecord],
-    base_index: usize,
+pub(super) fn decode_ssed_menu_node_cursor(cursor: Option<&str>) -> SsedMenuNodeCursor {
+    let Some(cursor) = cursor.map(str::trim).filter(|cursor| !cursor.is_empty()) else {
+        return SsedMenuNodeCursor {
+            record_offset: 0,
+            link_offset: 0,
+        };
+    };
+    if let Some(rest) = cursor.strip_prefix("link:") {
+        let mut parts = rest.split(':');
+        if let (Some(record), Some(link), None) = (parts.next(), parts.next(), parts.next()) {
+            return SsedMenuNodeCursor {
+                record_offset: record.parse::<usize>().unwrap_or(0),
+                link_offset: link.parse::<usize>().unwrap_or(0),
+            };
+        }
+    }
+    SsedMenuNodeCursor {
+        record_offset: cursor.parse::<usize>().unwrap_or(0),
+        link_offset: 0,
+    }
+}
+
+pub(super) fn ssed_menu_records_to_nodes_page_from(
+    request: SsedMenuNodePageRequest<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-    gaiji_policy: &GaijiPolicy,
-) -> Result<Vec<NavigationNode>> {
+) -> Result<SsedMenuNodePage> {
     let mut roots = Vec::new();
     let mut path = Vec::<usize>::new();
+    let mut emitted = 0usize;
+    let mut next_cursor = None;
 
-    for (index, record) in records.iter().enumerate() {
-        let global_index = base_index + index;
-        let nodes = ssed_menu_record_nodes(
-            package,
-            records,
+    for (index, record) in request.records.iter().enumerate() {
+        if emitted >= request.limit {
+            next_cursor = Some((request.base_index + index).to_string());
+            break;
+        }
+        let global_index = request.base_index + index;
+        let link_offset = if index == 0 {
+            request.initial_link_offset
+        } else {
+            0
+        };
+        let page = ssed_menu_record_nodes_page(
+            SsedMenuRecordNodeRequest {
+                package: request.package,
+                records: request.records,
+                global_index,
+                link_offset,
+                limit: request.limit.saturating_sub(emitted),
+                gaiji_policy: request.gaiji_policy,
+            },
             record,
-            global_index,
             diagnostics,
-            gaiji_policy,
         )?;
+        if let Some(next_link_offset) = page.next_link_offset {
+            next_cursor = Some(format!("link:{global_index}:{next_link_offset}"));
+        }
         let depth = record.depth.max(1);
-        for node in nodes {
+        for node in page.nodes {
             attach_ssed_menu_node(
                 &mut roots,
                 &mut path,
@@ -71,20 +130,45 @@ pub(super) fn ssed_menu_records_to_nodes_from(
                 global_index,
                 diagnostics,
             );
+            emitted = emitted.saturating_add(1);
+        }
+        if next_cursor.is_some() {
+            break;
         }
     }
 
-    Ok(roots)
+    Ok(SsedMenuNodePage {
+        nodes: roots,
+        next_cursor: next_cursor.or(request.parsed_next_cursor),
+    })
 }
 
-fn ssed_menu_record_nodes(
-    package: &ReaderBookPackage,
-    records: &[SsedMenuRecord],
-    record: &SsedMenuRecord,
+#[derive(Debug)]
+struct SsedMenuRecordNodePage {
+    nodes: Vec<NavigationNode>,
+    next_link_offset: Option<usize>,
+}
+
+struct SsedMenuRecordNodeRequest<'a> {
+    package: &'a ReaderBookPackage,
+    records: &'a [SsedMenuRecord],
     global_index: usize,
+    link_offset: usize,
+    limit: usize,
+    gaiji_policy: &'a GaijiPolicy,
+}
+
+fn ssed_menu_record_nodes_page(
+    request: SsedMenuRecordNodeRequest<'_>,
+    record: &SsedMenuRecord,
     diagnostics: &mut Vec<Diagnostic>,
-    gaiji_policy: &GaijiPolicy,
-) -> Result<Vec<NavigationNode>> {
+) -> Result<SsedMenuRecordNodePage> {
+    if request.limit == 0 {
+        return Ok(SsedMenuRecordNodePage {
+            nodes: Vec::new(),
+            next_link_offset: None,
+        });
+    }
     let target_links = record
         .links
         .iter()
@@ -98,13 +182,27 @@ fn ssed_menu_record_nodes(
         .collect::<Vec<_>>();
     if target_links.len() > 1 {
         let mut nodes = Vec::new();
-        for (link_index, link) in target_links {
+        let mut consumed_links = 0usize;
+        let mut next_link_offset = None;
+        for (position, (link_index, link)) in target_links.into_iter().enumerate() {
+            if position < request.link_offset {
+                continue;
+            }
+            if nodes.len() >= request.limit {
+                next_link_offset = Some(request.link_offset.saturating_add(consumed_links));
+                break;
+            }
+            consumed_links = consumed_links.saturating_add(1);
             let Some(destination) = link.destination.as_ref() else {
                 continue;
             };
-            let next_destination = nearest_higher_menu_destination(records, destination);
-            let Some(target) =
-                ssed_menu_destination_target(package, destination, next_destination, diagnostics)?
+            let next_destination = nearest_higher_menu_destination(request.records, destination);
+            let Some(target) = ssed_menu_destination_target(
+                request.package,
+                destination,
+                next_destination,
+                diagnostics,
+            )?
             else {
                 continue;
             };
@@ -112,10 +210,12 @@ fn ssed_menu_record_nodes(
             if label.is_empty() {
                 continue;
             }
-            let rich_label = package.ssed_rich_label_with_policy(&label, gaiji_policy);
+            let rich_label = request
+                .package
+                .ssed_rich_label_with_policy(&label, request.gaiji_policy);
             nodes.push(NavigationNode {
                 href: None,
-                node_id: format!("ssed-menu:{global_index}:link:{link_index}"),
+                node_id: format!("ssed-menu:{}:link:{link_index}", request.global_index),
                 label_html: rich_label.html,
                 label_text: rich_label.text,
                 target: Some(target),
@@ -123,24 +223,35 @@ fn ssed_menu_record_nodes(
                 children: Vec::new(),
             });
         }
-        return Ok(nodes);
+        return Ok(SsedMenuRecordNodePage {
+            nodes,
+            next_link_offset,
+        });
     }
 
     let label = record.label();
     if label.is_empty() {
-        return Ok(Vec::new());
+        return Ok(SsedMenuRecordNodePage {
+            nodes: Vec::new(),
+            next_link_offset: None,
+        });
     }
-    let target = ssed_menu_record_target(package, records, record, diagnostics)?;
-    let rich_label = package.ssed_rich_label_with_policy(label, gaiji_policy);
-    Ok(vec![NavigationNode {
-        href: None,
-        node_id: format!("ssed-menu:{global_index}"),
-        label_html: rich_label.html,
-        label_text: rich_label.text,
-        target,
-        diagnostics: rich_label.diagnostics,
-        children: Vec::new(),
-    }])
+    let target = ssed_menu_record_target(request.package, request.records, record, diagnostics)?;
+    let rich_label = request
+        .package
+        .ssed_rich_label_with_policy(label, request.gaiji_policy);
+    Ok(SsedMenuRecordNodePage {
+        nodes: vec![NavigationNode {
+            href: None,
+            node_id: format!("ssed-menu:{}", request.global_index),
+            label_html: rich_label.html,
+            label_text: rich_label.text,
+            target,
+            diagnostics: rich_label.diagnostics,
+            children: Vec::new(),
+        }],
+        next_link_offset: None,
+    })
 }
 
 fn attach_ssed_menu_node(

@@ -209,10 +209,10 @@ impl ReaderBookPackage {
             }
         };
         let data = reader.read_range(0, reader.header().expanded_size())?;
-        let offset = decode_offset_cursor(cursor);
-        let parsed = parse_menu_stream_page(&data, offset, limit);
+        let node_cursor = decode_ssed_menu_node_cursor(cursor);
+        let parsed = parse_menu_stream_page(&data, node_cursor.record_offset, limit);
         if parsed.records.is_empty() {
-            if !parsed.empty_sentinel && offset > 0 {
+            if !parsed.empty_sentinel && node_cursor.record_offset > 0 {
                 return Ok(NavigationSurface::SimpleMenu {
                     surface_id: surface_id.to_owned(),
                     nodes: Vec::new(),
@@ -238,20 +238,26 @@ impl ReaderBookPackage {
             ));
         }
         let mut diagnostics = Vec::new();
-        let nodes = ssed_menu_records_to_nodes_from(
-            self,
-            &parsed.records,
-            offset,
+        let node_page = ssed_menu_records_to_nodes_page_from(
+            SsedMenuNodePageRequest {
+                package: self,
+                records: &parsed.records,
+                base_index: node_cursor.record_offset,
+                initial_link_offset: node_cursor.link_offset,
+                limit,
+                parsed_next_cursor: parsed.next_cursor,
+                gaiji_policy: &options.gaiji_policy,
+            },
             &mut diagnostics,
-            &options.gaiji_policy,
         )?;
+        let nodes = node_page.nodes;
         if nodes.is_empty() {
             return Ok(deferred_surface(surface_id, diagnostics));
         }
         Ok(NavigationSurface::SimpleMenu {
             surface_id: surface_id.to_owned(),
             nodes,
-            next_cursor: parsed.next_cursor,
+            next_cursor: node_page.next_cursor,
         })
     }
 
