@@ -1041,6 +1041,43 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
 }
 
 #[test]
+fn ssed_ios_table_list_with_unresolved_addresses_is_deferred() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        root.path().join("tableList.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>name</key><string>Stale Row</string>
+    <key>block</key><integer>231605</integer>
+    <key>offset</key><integer>1770</integer>
+  </dict>
+</array></plist>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let home = package.home_surfaces().unwrap();
+    let surface = home
+        .iter()
+        .find(|surface| surface.surface_id == "ios-table-list:tableList.plist")
+        .expect("tableList.plist should still be reported as a diagnostic surface");
+
+    assert_eq!(surface.status, NavigationStatus::Deferred);
+    assert!(surface.target.is_none());
+    assert!(surface.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_ios_table_list_unresolved"
+            && diagnostic
+                .context
+                .get("address_rows")
+                .is_some_and(|value| value == "1")
+    }));
+}
+
+#[test]
 fn empty_ssed_menu_is_not_exposed_as_targetable_home_surface() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

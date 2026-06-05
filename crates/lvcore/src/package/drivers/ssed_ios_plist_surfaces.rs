@@ -78,6 +78,65 @@ impl ReaderBookPackage {
             .collect())
     }
 
+    pub(super) fn ssed_ios_table_list_source_status(
+        &self,
+        source: &SsedIosPlistSurfaceSource,
+    ) -> Result<(NavigationStatus, Vec<Diagnostic>)> {
+        let plist = parse_xml_plist(&source.bytes, &source.label)?;
+        let rows = plist.as_array().unwrap_or_default();
+        let mut address_rows = 0usize;
+        let mut unresolved_rows = 0usize;
+        for row in rows {
+            let Some(dict) = row.as_dict() else {
+                continue;
+            };
+            let label = plist_string(dict, &["name", "item", "title", "label"]);
+            if label.trim().is_empty() {
+                continue;
+            }
+            let Some(block) = plist_u32(dict, "block").filter(|value| *value > 0) else {
+                continue;
+            };
+            address_rows = address_rows.saturating_add(1);
+            let (block, offset) =
+                self.convert_ios_ssed_address(block, plist_u32(dict, "offset").unwrap_or(0))?;
+            let mut row_diagnostics = Vec::new();
+            if self
+                .ssed_target_for_loose_address(block, offset, &mut row_diagnostics)?
+                .is_some()
+            {
+                return Ok((
+                    NavigationStatus::Available,
+                    vec![Diagnostic::info(
+                        "ssed_ios_table_list",
+                        "iOS tableList.plist exposes table/index entry targets",
+                    )],
+                ));
+            }
+            unresolved_rows = unresolved_rows.saturating_add(1);
+        }
+        if address_rows == 0 {
+            return Ok((
+                NavigationStatus::Empty,
+                vec![Diagnostic::info(
+                    "ssed_ios_table_list_empty",
+                    "iOS tableList.plist did not contain targetable address rows",
+                )],
+            ));
+        }
+        Ok((
+            NavigationStatus::Deferred,
+            vec![
+                Diagnostic::warning(
+                    "ssed_ios_table_list_unresolved",
+                    "iOS tableList.plist address rows did not resolve to package-owned entry targets",
+                )
+                .with_context("address_rows", address_rows.to_string())
+                .with_context("unresolved_rows", unresolved_rows.to_string()),
+            ],
+        ))
+    }
+
     pub(super) fn open_ssed_ios_html_list_surface(
         &self,
         surface_id: &str,

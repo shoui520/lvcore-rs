@@ -326,21 +326,24 @@ impl NavigationProvider for ReaderBookPackage {
                     });
                 }
                 for source in self.ssed_ios_table_list_sources()? {
+                    let (status, diagnostics) = self.ssed_ios_table_list_source_status(&source)?;
+                    let target = (status == NavigationStatus::Available)
+                        .then(|| {
+                            TargetToken::new(&InternalTarget::TitleIndexItem {
+                                surface_id: source.surface_id.clone(),
+                                item_id: "root".to_owned(),
+                            })
+                        })
+                        .transpose()?;
                     surfaces.push(HomeSurface {
                         href: None,
                         surface_id: source.surface_id.clone(),
                         kind: NavigationSurfaceKind::TitleIndexBrowse,
-                        status: NavigationStatus::Available,
+                        status,
                         title_html: escape_plain_label_html(&source.title),
                         title_text: source.title,
-                        target: Some(TargetToken::new(&InternalTarget::TitleIndexItem {
-                            surface_id: source.surface_id,
-                            item_id: "root".to_owned(),
-                        })?),
-                        diagnostics: vec![Diagnostic::info(
-                            "ssed_ios_table_list",
-                            "iOS tableList.plist exposes table/index entry targets",
-                        )],
+                        target,
+                        diagnostics,
                     });
                 }
                 if self
