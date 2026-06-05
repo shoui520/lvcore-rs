@@ -162,6 +162,21 @@ impl ReaderBookPackage {
                 }));
             }
         };
+        if sequence.targets.iter().any(|item| {
+            item.book_id
+                .as_ref()
+                .is_some_and(|book_id| book_id != &self.metadata.book_id)
+        }) {
+            return Ok(Some(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![Diagnostic::warning(
+                    "search_results_sequence_book_mismatch",
+                    "package-level search-result sequences cannot resolve hits owned by another book",
+                )],
+            }));
+        }
         let ordered = sequence
             .targets
             .into_iter()

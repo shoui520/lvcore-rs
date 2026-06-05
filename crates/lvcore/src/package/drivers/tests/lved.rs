@@ -257,6 +257,35 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
     assert_eq!(search_window.center.title.as_deref(), Some("beta"));
     assert_eq!(search_window.after.len(), 1);
     assert_eq!(search_window.after[0].title.as_deref(), Some("gamma"));
+
+    let foreign_sequence =
+        SearchResultSequence::new(vec![crate::sequence::SearchResultSequenceTarget {
+            book_id: Some(BookId("LVED_SQLITE3:OTHER".to_owned())),
+            target: window.after[0].target.clone(),
+            title: Some("foreign beta".to_owned()),
+        }])
+        .unwrap()
+        .encode()
+        .unwrap();
+    let foreign_window = package
+        .resolve_target_window(
+            &window.after[0].target,
+            Some(&SequenceHint::SearchResults {
+                value: foreign_sequence,
+            }),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert!(foreign_window.before.is_empty());
+    assert!(foreign_window.after.is_empty());
+    assert!(
+        foreign_window
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "search_results_sequence_book_mismatch")
+    );
 }
 
 #[test]
