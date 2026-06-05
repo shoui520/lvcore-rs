@@ -1,5 +1,8 @@
 use super::*;
-use crate::validate::{ValidateOptions, validate_detected_package_json, validate_package_json};
+use crate::validate::{
+    ValidateOptions, targetless_surface_probe, validate_detected_package_json,
+    validate_package_json,
+};
 use lvcore::lved_sqlite::apply_sqlcipher_key;
 use rusqlite::Connection;
 use std::fs;
@@ -249,6 +252,44 @@ fn validate_failure_detector_flags_open_and_deep_exercise_errors() {
             { "status": "no_target" }
         ],
     })));
+}
+
+#[test]
+fn validate_targetless_visible_diagnostic_surface_is_ok_without_fake_target() {
+    let surface = lvcore::NavigationSurface::HierarchicalTree {
+        surface_id: "aux-index:0".to_owned(),
+        nodes: vec![lvcore::navigation::NavigationNode {
+            node_id: "aux-index:1:0".to_owned(),
+            label_html: "Appendix".to_owned(),
+            label_text: "Appendix".to_owned(),
+            target: None,
+            href: None,
+            diagnostics: Vec::new(),
+            children: vec![lvcore::navigation::NavigationNode {
+                node_id: "aux-index:2:1".to_owned(),
+                label_html: "Diagnostic row".to_owned(),
+                label_text: "Diagnostic row".to_owned(),
+                target: None,
+                href: None,
+                diagnostics: vec![lvcore::Diagnostic::info(
+                    "ssed_auxiliary_index_body_target_deferred",
+                    "auxiliary row is not a renderable entry body",
+                )],
+                children: Vec::new(),
+            }],
+        }],
+        next_cursor: None,
+    };
+
+    let probe = targetless_surface_probe(&surface);
+
+    assert_eq!(probe.status, "ok");
+    assert_eq!(probe.visible_item_count, 2);
+    assert_eq!(probe.diagnostic_count, 1);
+    assert_eq!(
+        probe.diagnostics[0].code,
+        "ssed_auxiliary_index_body_target_deferred"
+    );
 }
 
 #[test]

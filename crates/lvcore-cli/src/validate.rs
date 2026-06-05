@@ -236,16 +236,13 @@ fn exercise_reader_paths(
                                         "error": error.to_string(),
                                     }),
                                 },
-                                None => json!({
-                                    "kind": "surface_first_target",
-                                    "surface_id": surface.surface_id,
-                                    "surface_kind": surface.kind,
-                                    "opened_kind": navigation_surface_kind_name(&opened),
-                                    "status": "no_target",
-                                    "resource_scan": resource_scan,
-                                    "pages_scanned": probe.pages_scanned,
-                                    "remaining_cursor": probe.remaining_cursor,
-                                }),
+                                None => targetless_surface_probe_row(
+                                    &opened,
+                                    &probe,
+                                    resource_scan,
+                                    &surface.surface_id,
+                                    &surface.kind,
+                                ),
                             }
                         }
                         Err(error) => json!({
@@ -301,6 +298,63 @@ struct SurfaceTargetProbe {
     remaining_cursor: Option<String>,
 }
 
+#[derive(Debug)]
+pub(crate) struct TargetlessSurfaceProbe {
+    pub(crate) status: &'static str,
+    pub(crate) visible_item_count: usize,
+    pub(crate) diagnostic_count: usize,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+}
+
+pub(crate) fn targetless_surface_probe(surface: &NavigationSurface) -> TargetlessSurfaceProbe {
+    let visible_item_count = surface_visible_item_count(surface);
+    let diagnostics = surface_diagnostic_sample(surface);
+    let diagnostic_count = surface_diagnostic_count(surface);
+    let status = if visible_item_count > 0 || diagnostic_count > 0 {
+        "ok"
+    } else {
+        "no_target"
+    };
+    TargetlessSurfaceProbe {
+        status,
+        visible_item_count,
+        diagnostic_count,
+        diagnostics,
+    }
+}
+
+fn targetless_surface_probe_row(
+    opened: &NavigationSurface,
+    probe: &SurfaceTargetProbe,
+    resource_scan: serde_json::Value,
+    surface_id: &str,
+    surface_kind: &NavigationSurfaceKind,
+) -> serde_json::Value {
+    let targetless = targetless_surface_probe(opened);
+    let mut row = json!({
+        "kind": "surface_first_target",
+        "surface_id": surface_id,
+        "surface_kind": surface_kind,
+        "opened_kind": navigation_surface_kind_name(opened),
+        "status": targetless.status,
+        "target_status": "none",
+        "visible_item_count": targetless.visible_item_count,
+        "targetless_diagnostic_count": targetless.diagnostic_count,
+        "resource_scan": resource_scan,
+        "pages_scanned": probe.pages_scanned,
+        "remaining_cursor": probe.remaining_cursor,
+    });
+    if targetless.status == "ok" {
+        insert_named_value(
+            &mut row,
+            "note",
+            json!("surface opened but has no actionable entry/resource target to render"),
+        );
+    }
+    insert_diagnostic_fields(&mut row, &targetless.diagnostics);
+    row
+}
+
 fn surface_probe_targets(
     library: &BookLibrary,
     book_id: &BookId,
@@ -345,6 +399,124 @@ fn navigation_surface_next_cursor(surface: &NavigationSurface) -> Option<&str> {
         | NavigationSurface::Panel { .. }
         | NavigationSurface::FallbackSearch { .. }
         | NavigationSurface::Deferred { .. } => None,
+    }
+}
+
+fn surface_visible_item_count(surface: &NavigationSurface) -> usize {
+    match surface {
+        NavigationSurface::SimpleMenu { nodes, .. }
+        | NavigationSurface::HierarchicalTree { nodes, .. } => node_visible_item_count(nodes),
+        NavigationSurface::ScreenMenu { screens, .. } => screens
+            .iter()
+            .map(|screen| 1usize + screen.hotspots.len())
+            .sum(),
+        NavigationSurface::TitleIndexBrowse { items, .. } => items.len(),
+        NavigationSurface::Panel { cells, .. } => cells.len(),
+        NavigationSurface::InfoPages { pages, .. } => pages.len(),
+        NavigationSurface::FallbackSearch { .. } | NavigationSurface::Deferred { .. } => 0,
+    }
+}
+
+fn node_visible_item_count(nodes: &[lvcore::navigation::NavigationNode]) -> usize {
+    nodes
+        .iter()
+        .map(|node| {
+            let label_count = usize::from(!node.label_text.trim().is_empty());
+            label_count + node_visible_item_count(&node.children)
+        })
+        .sum()
+}
+
+fn surface_diagnostic_count(surface: &NavigationSurface) -> usize {
+    match surface {
+        NavigationSurface::SimpleMenu { nodes, .. }
+        | NavigationSurface::HierarchicalTree { nodes, .. } => node_diagnostic_count(nodes),
+        NavigationSurface::ScreenMenu {
+            screens,
+            diagnostics,
+            ..
+        } => {
+            diagnostics.len()
+                + screens
+                    .iter()
+                    .map(|screen| {
+                        screen.diagnostics.len()
+                            + screen
+                                .hotspots
+                                .iter()
+                                .map(|hotspot| hotspot.diagnostics.len())
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
+        }
+        NavigationSurface::TitleIndexBrowse { items, .. }
+        | NavigationSurface::InfoPages { pages: items, .. } => {
+            items.iter().map(|item| item.diagnostics.len()).sum()
+        }
+        NavigationSurface::Panel { cells, .. } => {
+            cells.iter().map(|cell| cell.diagnostics.len()).sum()
+        }
+        NavigationSurface::Deferred { diagnostics, .. } => diagnostics.len(),
+        NavigationSurface::FallbackSearch { .. } => 0,
+    }
+}
+
+fn node_diagnostic_count(nodes: &[lvcore::navigation::NavigationNode]) -> usize {
+    nodes
+        .iter()
+        .map(|node| node.diagnostics.len() + node_diagnostic_count(&node.children))
+        .sum()
+}
+
+fn surface_diagnostic_sample(surface: &NavigationSurface) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    collect_surface_diagnostic_sample(surface, &mut diagnostics);
+    diagnostics.truncate(VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT);
+    diagnostics
+}
+
+fn collect_surface_diagnostic_sample(surface: &NavigationSurface, out: &mut Vec<Diagnostic>) {
+    match surface {
+        NavigationSurface::SimpleMenu { nodes, .. }
+        | NavigationSurface::HierarchicalTree { nodes, .. } => {
+            collect_node_diagnostic_sample(nodes, out);
+        }
+        NavigationSurface::ScreenMenu {
+            screens,
+            diagnostics,
+            ..
+        } => {
+            out.extend(diagnostics.iter().cloned());
+            for screen in screens {
+                out.extend(screen.diagnostics.iter().cloned());
+                for hotspot in &screen.hotspots {
+                    out.extend(hotspot.diagnostics.iter().cloned());
+                }
+            }
+        }
+        NavigationSurface::TitleIndexBrowse { items, .. }
+        | NavigationSurface::InfoPages { pages: items, .. } => {
+            for item in items {
+                out.extend(item.diagnostics.iter().cloned());
+            }
+        }
+        NavigationSurface::Panel { cells, .. } => {
+            for cell in cells {
+                out.extend(cell.diagnostics.iter().cloned());
+            }
+        }
+        NavigationSurface::Deferred { diagnostics, .. } => out.extend(diagnostics.iter().cloned()),
+        NavigationSurface::FallbackSearch { .. } => {}
+    }
+}
+
+fn collect_node_diagnostic_sample(
+    nodes: &[lvcore::navigation::NavigationNode],
+    out: &mut Vec<Diagnostic>,
+) {
+    for node in nodes {
+        out.extend(node.diagnostics.iter().cloned());
+        collect_node_diagnostic_sample(&node.children, out);
     }
 }
 
