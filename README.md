@@ -144,6 +144,17 @@ provider slices:
   LVED list/info/search/body behavior through the same provider path as normal
   LVED_SQLITE3 books; unknown encrypted retained payloads are reported as
   deferred diagnostics rather than fake search support;
+- iOS SSED `DictSearchDB`, `DictFULLDB`, and `DictConvertAddrDB` sidecars are
+  integrated into the SSED provider path. Search hits and direct SSED address
+  targets canonicalize through the observed conversion table when present, so
+  stale wrapper addresses do not leak to user-facing targets;
+- iOS SSED plist navigation sidecars are exposed as first-class reader
+  surfaces: panel-style plist indexes such as `indexSearch.plist`, preserved
+  `HTMLList.plist` info pages, and `tableList.plist` title/index rows. Preserved
+  HTML pages rewrite `lved.addrXXXXXXXX:YYYY` links to normal target tokens,
+  resolve package resources from observed iOS locations such as `OTHER/_images`,
+  and fall back through iOS `Gaiji.plist` Unicode mappings when an HTML page
+  references a gaiji PNG that is not present on disk;
 - frontend-visible search-mode metadata, with SSED modes derived from available
   title indexes/HONMON payloads and LVED advanced modes derived from actual
   `search` table columns;
