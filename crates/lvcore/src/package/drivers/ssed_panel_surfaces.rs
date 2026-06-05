@@ -543,7 +543,9 @@ impl SsedPanelMetadata {
         requested_panel_id: Option<&str>,
     ) -> Result<crate::ssed_panel::SsedPanelXml> {
         match self.format {
-            SsedPanelMetadataFormat::Xml => parse_panel_xml_bytes(&self.bytes),
+            SsedPanelMetadataFormat::Xml => package
+                .cached_ssed_panel_xml(&self.bytes, &self.label)
+                .cloned(),
             SsedPanelMetadataFormat::Plist => package
                 .cached_ssed_panel_plist(&self.bytes, &self.label)
                 .and_then(|value| parse_panel_plist_value_for_panel(value, requested_panel_id)),
@@ -552,6 +554,23 @@ impl SsedPanelMetadata {
 }
 
 impl ReaderBookPackage {
+    fn cached_ssed_panel_xml(
+        &self,
+        bytes: &[u8],
+        label: &str,
+    ) -> Result<&crate::ssed_panel::SsedPanelXml> {
+        let cached = self.ssed_panel_xml.get_or_init(|| {
+            parse_panel_xml_bytes(bytes)
+                .map(Some)
+                .map_err(|error| format!("{label}: {error}"))
+        });
+        match cached {
+            Ok(Some(value)) => Ok(value),
+            Ok(None) => Err(Error::Driver("cached panel XML is missing".to_owned())),
+            Err(error) => Err(Error::Driver(error.clone())),
+        }
+    }
+
     fn cached_ssed_panel_plist(&self, bytes: &[u8], label: &str) -> Result<&PlistValue> {
         let cached = self.ssed_panel_plist.get_or_init(|| {
             parse_xml_plist(bytes, label)

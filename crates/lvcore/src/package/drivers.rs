@@ -182,7 +182,7 @@ use crate::ssed_multi::{
     SsedMultiComponentRef, SsedMultiDescriptor, SsedMultiRecord, parse_multi_descriptor,
 };
 use crate::ssed_panel::{
-    SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, parse_panel_bin,
+    SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, SsedPanelXml, parse_panel_bin,
     parse_panel_plist_value_for_panel, parse_panel_xml_bytes,
 };
 use crate::ssed_pcmdata::{
@@ -257,6 +257,7 @@ pub struct ReaderBookPackage {
         OnceLock<std::result::Result<BTreeMap<String, Vec<SsedIndexPointer>>, String>>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
     ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
+    ssed_panel_xml: OnceLock<std::result::Result<Option<SsedPanelXml>, String>>,
     ssed_panel_plist: OnceLock<std::result::Result<Option<PlistValue>, String>>,
 }
 
@@ -336,6 +337,7 @@ impl ReaderBookPackage {
             ssed_index_body_boundaries: OnceLock::new(),
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),
+            ssed_panel_xml: OnceLock::new(),
             ssed_panel_plist: OnceLock::new(),
         }
     }
