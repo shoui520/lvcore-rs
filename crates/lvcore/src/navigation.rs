@@ -274,7 +274,9 @@ impl NavigationSurface {
             Self::HierarchicalTree { surface_id, .. } if surface_id == "lved-tree" => {
                 Some(SequenceHint::LvedTreeOrder)
             }
-            Self::HierarchicalTree { surface_id, .. } if surface_id == "menuData" => {
+            Self::HierarchicalTree { surface_id, .. }
+                if surface_id == "menuData" || surface_id.starts_with("menuData:") =>
+            {
                 Some(SequenceHint::MultiviewTreeOrder)
             }
             Self::HierarchicalTree { surface_id, .. } if surface_id == "law-tree" => {
@@ -567,6 +569,24 @@ mod tests {
         assert_eq!(targets[0].label_text, "Child");
         assert_eq!(
             targets[0].sequence_hint,
+            Some(SequenceHint::MultiviewTreeOrder)
+        );
+
+        let secondary_surface = NavigationSurface::HierarchicalTree {
+            surface_id: "menuData:1".to_owned(),
+            nodes: vec![NavigationNode {
+                href: None,
+                node_id: "secondary".to_owned(),
+                label_html: "Secondary".to_owned(),
+                label_text: "Secondary".to_owned(),
+                target: Some(token("secondary")),
+                diagnostics: Vec::new(),
+                children: Vec::new(),
+            }],
+            next_cursor: None,
+        };
+        assert_eq!(
+            secondary_surface.actionable_targets()[0].sequence_hint,
             Some(SequenceHint::MultiviewTreeOrder)
         );
     }
