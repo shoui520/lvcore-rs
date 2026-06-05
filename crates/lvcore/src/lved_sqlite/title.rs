@@ -14,8 +14,13 @@ pub(crate) fn lved_sqlite_title_from_connection(
     let mut rows = Vec::new();
     for sql in title_probe_queries() {
         rows.extend(title_probe_rows(connection, &mut seen, sql)?);
+        if let Some((score, title)) = best_title_candidate_with_score(&rows)
+            && score >= 120
+        {
+            return Some(title);
+        }
     }
-    best_title_candidate(rows)
+    best_title_candidate_with_score(&rows).map(|(_, title)| title)
 }
 
 fn title_probe_queries() -> [&'static str; 4] {
@@ -108,15 +113,15 @@ fn title_probe_rows(
     Some(rows)
 }
 
-fn best_title_candidate(rows: Vec<(i64, String, String)>) -> Option<String> {
+fn best_title_candidate_with_score(rows: &[(i64, String, String)]) -> Option<(i32, String)> {
     let mut candidates = Vec::<(i32, usize, String)>::new();
-    for (index, (_rowid, name, body)) in rows.into_iter().enumerate() {
+    for (index, (_rowid, name, body)) in rows.iter().enumerate() {
         let lower_name = name.to_lowercase();
         let Some(candidate) = (if lower_name.contains("copyright") || lower_name.contains("license")
         {
-            lved_copyright_title_candidate(&body)
+            lved_copyright_title_candidate(body)
         } else {
-            lved_html_title_candidate(&body)
+            lved_html_title_candidate(body)
         }) else {
             continue;
         };
@@ -144,7 +149,7 @@ fn best_title_candidate(rows: Vec<(i64, String, String)>) -> Option<String> {
     candidates
         .into_iter()
         .next()
-        .and_then(|(score, _, title)| (score > 0).then_some(title))
+        .and_then(|(score, _, title)| (score > 0).then_some((score, title)))
 }
 
 pub(crate) fn html_text_lines(fragment: &str) -> Vec<String> {

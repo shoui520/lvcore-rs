@@ -213,7 +213,11 @@ impl LvedSqliteStore {
             return Ok(None);
         };
         let key_file = discover_lved_key_file(&payload_path)?;
-        let android_info = android_dictinfo_for_payload(&payload_path)?;
+        let android_info = if key_file.is_none() {
+            android_dictinfo_for_payload(&payload_path)?
+        } else {
+            None
+        };
         Ok(Some(Self {
             payload_path,
             key_file,
@@ -286,7 +290,7 @@ impl LvedSqliteStore {
                 title,
                 list_available: lved_list_available(connection, &schema)?,
                 info_available: lved_info_available(connection, &schema)?,
-                tree_available: !self.tree_indexes_arc()?.is_empty(),
+                tree_available: self.tree_index_available()?,
             })
         })
     }
@@ -571,6 +575,19 @@ impl LvedSqliteStore {
             });
         }
         Ok(trees)
+    }
+
+    fn tree_index_available(&self) -> Result<bool> {
+        let root = self.payload_path.parent().ok_or_else(|| {
+            Error::Driver("LVED_SQLITE3 payload has no parent directory".to_owned())
+        })?;
+        for path in lved_tree_index_candidate_paths(root)? {
+            let data = fs::read(path)?;
+            if is_lved_text_tree_index(&data) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub fn tree_index_paths(&self) -> Result<Vec<PathBuf>> {

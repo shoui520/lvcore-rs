@@ -137,6 +137,66 @@ fn opens_sqlcipher_payload_and_extracts_title() {
 }
 
 #[test]
+fn explicit_key_discovery_skips_android_dictinfo_metadata() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("main.data"), b"encrypted").unwrap();
+    fs::write(dir.path().join("main.key"), b"explicit-key").unwrap();
+    fs::create_dir_all(dir.path().join("android viewer/res/xml")).unwrap();
+    fs::write(
+        dir.path().join("android viewer/res/xml/dictinfo.xml"),
+        r#"
+            <dictinfo>
+              <dict id="750" name="TESTDICT">
+                <code>TESTDICT</code>
+                <title>Android metadata should not be loaded</title>
+              </dict>
+            </dictinfo>
+            "#,
+    )
+    .unwrap();
+
+    let store = LvedSqliteStore::discover(dir.path()).unwrap().unwrap();
+
+    assert!(store.key_file.is_some());
+    assert!(store.android_info.is_none());
+}
+
+#[test]
+fn tree_index_available_validates_shape_without_loading_tree_rows() {
+    let dir = tempdir().unwrap();
+    let payload = dir.path().join("main.data");
+    let key = "test-key";
+    {
+        let connection = Connection::open(&payload).unwrap();
+        apply_sqlcipher_key(&connection, key).unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text, media text);
+                insert into info values (1, 1, 'about.html', '<h1>Example Dictionary 第2版</h1>', '');
+                create table content (id integer primary key, type integer, body text, media text);
+                create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                create virtual table search using fts4(forward, back, part, fts, filter);
+                ",
+            )
+            .unwrap();
+    }
+    fs::write(dir.path().join("main.key"), key).unwrap();
+    fs::write(dir.path().join("tree.idx"), b"not a lved tree index\n").unwrap();
+    let store = LvedSqliteStore::discover(dir.path()).unwrap().unwrap();
+
+    assert!(!store.summary().unwrap().tree_available);
+
+    fs::write(
+        dir.path().join("tree.idx"),
+        b"100\t0\tRoot\n101\t1\tChild\n",
+    )
+    .unwrap();
+
+    assert!(store.summary().unwrap().tree_available);
+}
+
+#[test]
 fn searches_lved_list_rows_and_preserves_content_html() {
     let dir = tempdir().unwrap();
     let payload = dir.path().join("main.data");
