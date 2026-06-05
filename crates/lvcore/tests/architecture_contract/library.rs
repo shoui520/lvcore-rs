@@ -55,6 +55,30 @@ fn library_tolerant_import_reports_opened_books_without_aborting() {
 }
 
 #[test]
+fn library_metadata_exposes_format_badges_but_not_frontend_icons() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let book_id = library.open_path(dir.path(), &registry).unwrap();
+    let metadata = library
+        .metadata_snapshot()
+        .into_iter()
+        .find(|metadata| metadata.book_id == book_id)
+        .unwrap();
+    let json = serde_json::to_value(&metadata).unwrap();
+    let object = json.as_object().unwrap();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvedSqlite3);
+    assert_eq!(metadata.format_label, "LVED_SQLITE3");
+    assert!(!object.contains_key("icon"));
+    assert!(!object.contains_key("icon_hint"));
+    assert!(!object.contains_key("cover"));
+    assert!(!object.contains_key("thumbnail"));
+}
+
+#[test]
 fn library_import_deduplicates_identical_book_ids() {
     let root = tempdir().unwrap();
     let first = root.path().join("FirstCopy");
