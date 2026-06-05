@@ -1,4 +1,8 @@
 use super::sequence::sequence_targets_match;
+use super::ssed_navigation::{
+    nearest_higher_menu_destination, ssed_menu_destination_target, ssed_menu_link_display_label,
+    ssed_menu_record_target,
+};
 use super::*;
 use std::collections::VecDeque;
 
@@ -180,10 +184,20 @@ impl ReaderBookPackage {
         let Some(SequenceHint::MenuOrder { value: surface_id }) = sequence_hint else {
             return Ok(None);
         };
+        if let Some(component_name) = ssed_direct_menu_component_name(surface_id) {
+            return Ok(Some(self.resolve_ssed_direct_menu_window(
+                surface_id,
+                component_name,
+                target,
+                before,
+                after,
+                options,
+            )?));
+        }
         let label_options = LabelOptions {
             gaiji_policy: options.gaiji_policy.clone(),
         };
-        let mut ordered = Vec::new();
+        let mut collector = SsedMenuSequenceWindowCollector::new(before, after);
         let mut diagnostics = Vec::new();
         let mut cursor = None::<String>;
         let mut reached_page_limit = false;
@@ -201,7 +215,7 @@ impl ReaderBookPackage {
                 | NavigationSurface::HierarchicalTree {
                     nodes, next_cursor, ..
                 } => {
-                    collect_navigation_node_ordered_targets(&nodes, &mut ordered);
+                    collector.collect_nodes(&nodes, target);
                     next_cursor
                 }
                 NavigationSurface::Deferred {
@@ -223,11 +237,7 @@ impl ReaderBookPackage {
                     }));
                 }
             };
-            if ordered
-                .iter()
-                .position(|candidate| sequence_targets_match(&candidate.target, target))
-                .is_some_and(|center_index| ordered.len() > center_index.saturating_add(after))
-            {
+            if collector.is_satisfied() {
                 break;
             }
             let Some(next_cursor) = next_cursor else {
@@ -252,17 +262,30 @@ impl ReaderBookPackage {
                 format!("{surface_id} sequence lookup stopped at the page limit"),
             ));
         }
-        let mut window = self.resolve_ordered_target_window(
-            target,
-            &ordered,
-            before,
-            after,
-            options,
-            Diagnostic::info(
-                "sequence_target_not_in_ssed_menu",
-                "target is not present in the requested SSED MENU/TOC order",
-            ),
-        )?;
+        let ordered = collector.into_ordered_context();
+        let mut window = if ordered.is_empty() {
+            TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![Diagnostic::info(
+                    "sequence_target_not_in_ssed_menu",
+                    "target is not present in the requested SSED MENU/TOC order",
+                )],
+            }
+        } else {
+            self.resolve_ordered_target_window(
+                target,
+                &ordered,
+                before,
+                after,
+                options,
+                Diagnostic::info(
+                    "sequence_target_not_in_ssed_menu",
+                    "target is not present in the requested SSED MENU/TOC order",
+                ),
+            )?
+        };
         window.diagnostics.extend(diagnostics);
         Ok(Some(window))
     }
@@ -315,9 +338,382 @@ impl ReaderBookPackage {
         )?))
     }
 }
+
+fn ssed_direct_menu_component_name(surface_id: &str) -> Option<&'static str> {
+    match surface_id {
+        "menu" => Some("MENU.DIC"),
+        "toc" => Some("TOC.DIC"),
+        _ => None,
+    }
+}
+
+impl ReaderBookPackage {
+    fn resolve_ssed_direct_menu_window(
+        &self,
+        surface_id: &str,
+        component_name: &str,
+        target: &TargetToken,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<TargetWindow> {
+        let mut diagnostics = Vec::new();
+        let Some(catalog) = &self.ssed_catalog else {
+            diagnostics.push(Diagnostic::info(
+                "ssed_catalog_missing",
+                "SSED MENU/TOC sequence lookup requires a parsed SSEDINFO catalog",
+            ));
+            return Ok(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics,
+            });
+        };
+        let Some(component) = catalog
+            .component_named(component_name)
+            .filter(|component| component.has_positive_range())
+        else {
+            diagnostics.push(Diagnostic::info(
+                "ssed_navigation_component_missing",
+                format!("{component_name} is not declared in this SSED catalog"),
+            ));
+            return Ok(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics,
+            });
+        };
+        let path = match self.resolve_readable_ssed_component_path(component) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                diagnostics.push(Diagnostic::warning(
+                    "ssed_navigation_component_file_missing",
+                    format!("{} is declared but not present on disk", component.filename),
+                ));
+                return Ok(TargetWindow {
+                    center: self.render_target(target, options)?,
+                    before: Vec::new(),
+                    after: Vec::new(),
+                    diagnostics,
+                });
+            }
+            Err(error) => {
+                diagnostics.push(Diagnostic::warning(
+                    "ssed_navigation_component_decode_failed",
+                    format!(
+                        "{} is not readable as SSEDDATA: {error}",
+                        component.filename
+                    ),
+                ));
+                return Ok(TargetWindow {
+                    center: self.render_target(target, options)?,
+                    before: Vec::new(),
+                    after: Vec::new(),
+                    diagnostics,
+                });
+            }
+        };
+        let mut reader = match SsedDataFile::open(&path) {
+            Ok(reader) => reader,
+            Err(error) => {
+                diagnostics.push(Diagnostic::warning(
+                    "ssed_navigation_component_decode_failed",
+                    format!(
+                        "{} is not readable as plain SSEDDATA: {error}",
+                        component.filename
+                    ),
+                ));
+                return Ok(TargetWindow {
+                    center: self.render_target(target, options)?,
+                    before: Vec::new(),
+                    after: Vec::new(),
+                    diagnostics,
+                });
+            }
+        };
+        let data = reader.read_range(0, reader.header().expanded_size())?;
+        let parsed = parse_menu_stream(&data);
+        if parsed.empty_sentinel || parsed.records.is_empty() {
+            let (code, message) = if parsed.empty_sentinel {
+                (
+                    "ssed_navigation_empty_sentinel",
+                    format!(
+                        "{} contains an explicit empty navigation sentinel",
+                        component.filename
+                    ),
+                )
+            } else {
+                (
+                    "ssed_navigation_empty",
+                    format!("{} did not decode any navigation rows", component.filename),
+                )
+            };
+            diagnostics.push(Diagnostic::info(code, message));
+            return Ok(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics,
+            });
+        }
+        if parsed.unknown_controls > 0 {
+            diagnostics.push(Diagnostic::info(
+                "ssed_navigation_unknown_controls",
+                format!(
+                    "{} contained {} unknown MENU/TOC controls while resolving sequence order",
+                    component.filename, parsed.unknown_controls
+                ),
+            ));
+        }
+
+        let mut collector = SsedMenuSequenceWindowCollector::new(before, after);
+        for record in &parsed.records {
+            self.collect_ssed_direct_menu_record_sequence_targets(
+                &parsed.records,
+                record,
+                &mut collector,
+                target,
+                &options.gaiji_policy,
+            )?;
+            if collector.is_satisfied() {
+                break;
+            }
+        }
+
+        let ordered = collector.into_ordered_context();
+        if ordered.is_empty() {
+            diagnostics.push(Diagnostic::info(
+                "sequence_target_not_in_ssed_menu",
+                format!("target is not present in the requested SSED {surface_id} order"),
+            ));
+            return Ok(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics,
+            });
+        }
+        let mut window = self.resolve_ordered_target_window(
+            target,
+            &ordered,
+            before,
+            after,
+            options,
+            Diagnostic::info(
+                "sequence_target_not_in_ssed_menu",
+                format!("target is not present in the requested SSED {surface_id} order"),
+            ),
+        )?;
+        window.diagnostics.extend(diagnostics);
+        Ok(window)
+    }
+
+    fn collect_ssed_direct_menu_record_sequence_targets(
+        &self,
+        records: &[SsedMenuRecord],
+        record: &SsedMenuRecord,
+        collector: &mut SsedMenuSequenceWindowCollector,
+        target: &TargetToken,
+        gaiji_policy: &GaijiPolicy,
+    ) -> Result<()> {
+        let target_links = record
+            .links
+            .iter()
+            .filter(|link| {
+                link.destination
+                    .as_ref()
+                    .is_some_and(|destination| !destination.is_null())
+                    && !link.label.trim().is_empty()
+            })
+            .collect::<Vec<_>>();
+        if target_links.len() > 1 {
+            for link in target_links {
+                let Some(destination) = link.destination.as_ref() else {
+                    continue;
+                };
+                let mut target_diagnostics = Vec::new();
+                let Some(menu_target) = ssed_menu_destination_target(
+                    self,
+                    destination,
+                    nearest_higher_menu_destination(records, destination),
+                    &mut target_diagnostics,
+                )?
+                else {
+                    continue;
+                };
+                let label = ssed_menu_link_display_label(&link.label);
+                if label.is_empty() {
+                    continue;
+                }
+                let rich_label = self.ssed_rich_label_with_policy(&label, gaiji_policy);
+                let item = OrderedSequenceTarget {
+                    target: menu_target,
+                    title: Some(rich_label.text),
+                };
+                if !collector.visit(item, target) {
+                    return Ok(());
+                }
+            }
+            return Ok(());
+        }
+
+        let label = record.label();
+        if label.is_empty() {
+            return Ok(());
+        }
+        let mut target_diagnostics = Vec::new();
+        let Some(menu_target) =
+            ssed_menu_record_target(self, records, record, &mut target_diagnostics)?
+        else {
+            return Ok(());
+        };
+        let rich_label = self.ssed_rich_label_with_policy(label, gaiji_policy);
+        let item = OrderedSequenceTarget {
+            target: menu_target,
+            title: Some(rich_label.text),
+        };
+        collector.visit(item, target);
+        Ok(())
+    }
+}
+
+struct SsedMenuSequenceWindowCollector {
+    before_limit: usize,
+    after_limit: usize,
+    before: VecDeque<OrderedSequenceTarget>,
+    center: Option<OrderedSequenceTarget>,
+    after: Vec<OrderedSequenceTarget>,
+}
+
+impl SsedMenuSequenceWindowCollector {
+    fn new(before_limit: usize, after_limit: usize) -> Self {
+        Self {
+            before_limit,
+            after_limit,
+            before: VecDeque::with_capacity(before_limit),
+            center: None,
+            after: Vec::with_capacity(after_limit),
+        }
+    }
+
+    fn collect_nodes(&mut self, nodes: &[NavigationNode], target: &TargetToken) -> bool {
+        for node in nodes {
+            if let Some(node_target) = &node.target {
+                let item = OrderedSequenceTarget {
+                    target: node_target.clone(),
+                    title: Some(node.label_text.clone()),
+                };
+                if !self.visit(item, target) {
+                    return false;
+                }
+            }
+            if !self.collect_nodes(&node.children, target) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn visit(&mut self, item: OrderedSequenceTarget, target: &TargetToken) -> bool {
+        if self.center.is_some() {
+            if self.after.len() < self.after_limit {
+                self.after.push(item);
+            }
+            return !self.is_satisfied();
+        }
+        if sequence_targets_match(&item.target, target) {
+            self.center = Some(item);
+            return !self.is_satisfied();
+        }
+        if self.before_limit > 0 {
+            if self.before.len() >= self.before_limit {
+                self.before.pop_front();
+            }
+            self.before.push_back(item);
+        }
+        true
+    }
+
+    fn is_satisfied(&self) -> bool {
+        self.center.is_some() && self.after.len() >= self.after_limit
+    }
+
+    fn into_ordered_context(self) -> Vec<OrderedSequenceTarget> {
+        let Some(center) = self.center else {
+            return Vec::new();
+        };
+        let mut ordered = Vec::with_capacity(
+            self.before
+                .len()
+                .saturating_add(1)
+                .saturating_add(self.after.len()),
+        );
+        ordered.extend(self.before);
+        ordered.push(center);
+        ordered.extend(self.after);
+        ordered
+    }
+}
 fn next_distinct_index_row(rows: &[SsedIndexRow], index: usize) -> Option<&SsedIndexRow> {
     let row = rows.get(index)?;
     rows.iter()
         .skip(index + 1)
         .find(|next| next.body != row.body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ssed_target(block: u32, offset: u32) -> TargetToken {
+        TargetToken::new(&InternalTarget::SsedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block,
+            offset,
+        })
+        .unwrap()
+    }
+
+    fn node(label: &str, target: TargetToken, children: Vec<NavigationNode>) -> NavigationNode {
+        NavigationNode {
+            href: None,
+            node_id: label.to_owned(),
+            label_html: label.to_owned(),
+            label_text: label.to_owned(),
+            target: Some(target),
+            diagnostics: Vec::new(),
+            children,
+        }
+    }
+
+    #[test]
+    fn ssed_menu_sequence_collector_stops_after_requested_nested_window() {
+        let center = ssed_target(10, 0);
+        let after = ssed_target(10, 2);
+        let skipped_child = ssed_target(10, 4);
+        let skipped_sibling = ssed_target(10, 6);
+        let nodes = vec![
+            node(
+                "center",
+                center.clone(),
+                vec![
+                    node("after", after, Vec::new()),
+                    node("skipped-child", skipped_child, Vec::new()),
+                ],
+            ),
+            node("skipped-sibling", skipped_sibling, Vec::new()),
+        ];
+
+        let mut collector = SsedMenuSequenceWindowCollector::new(0, 1);
+        assert!(
+            !collector.collect_nodes(&nodes, &center),
+            "collector should stop traversing once the after-window is complete"
+        );
+        let ordered = collector.into_ordered_context();
+        assert_eq!(ordered.len(), 2);
+        assert_eq!(ordered[0].title.as_deref(), Some("center"));
+        assert_eq!(ordered[1].title.as_deref(), Some("after"));
+    }
 }

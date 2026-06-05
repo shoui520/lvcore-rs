@@ -171,7 +171,7 @@ fn attach_ssed_menu_node(
     }
 }
 
-fn ssed_menu_link_display_label(label: &str) -> String {
+pub(in crate::package::drivers) fn ssed_menu_link_display_label(label: &str) -> String {
     label
         .split(['■', '§'])
         .next()
@@ -452,7 +452,7 @@ fn nearest_higher_aux_target_row<'a>(
         .min_by_key(|candidate| (candidate.block, candidate.offset))
 }
 
-fn ssed_menu_record_target(
+pub(in crate::package::drivers) fn ssed_menu_record_target(
     package: &ReaderBookPackage,
     records: &[SsedMenuRecord],
     record: &SsedMenuRecord,
@@ -470,7 +470,7 @@ fn ssed_menu_record_target(
     ssed_menu_destination_target(package, destination, next_destination, diagnostics)
 }
 
-fn ssed_menu_destination_target(
+pub(in crate::package::drivers) fn ssed_menu_destination_target(
     package: &ReaderBookPackage,
     destination: &SsedMenuDestination,
     next_destination: Option<&SsedMenuDestination>,
@@ -529,7 +529,7 @@ fn ssed_menu_destination_target(
     Ok(Some(target))
 }
 
-fn nearest_higher_menu_destination<'a>(
+pub(in crate::package::drivers) fn nearest_higher_menu_destination<'a>(
     records: &'a [SsedMenuRecord],
     destination: &SsedMenuDestination,
 ) -> Option<&'a SsedMenuDestination> {

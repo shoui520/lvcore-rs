@@ -164,21 +164,6 @@ pub(super) fn collect_navigation_node_targets(
     }
 }
 
-pub(super) fn collect_navigation_node_ordered_targets(
-    nodes: &[NavigationNode],
-    out: &mut Vec<OrderedSequenceTarget>,
-) {
-    for node in nodes {
-        if let Some(target) = &node.target {
-            out.push(OrderedSequenceTarget {
-                target: target.clone(),
-                title: Some(node.label_text.clone()),
-            });
-        }
-        collect_navigation_node_ordered_targets(&node.children, out);
-    }
-}
-
 pub(super) fn collect_panel_cell_ordered_targets(
     cells: &[PanelCell],
     out: &mut Vec<OrderedSequenceTarget>,

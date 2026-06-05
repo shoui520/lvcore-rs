@@ -71,8 +71,7 @@ use super::lved_refs::{
     lved_media_resource, lved_pdf_resource, lved_viewer_hook_target, next_lved_ref,
 };
 use super::navigation_helpers::{
-    OrderedSequenceTarget, collect_navigation_node_ordered_targets,
-    collect_navigation_node_targets, collect_panel_cell_ordered_targets,
+    OrderedSequenceTarget, collect_navigation_node_targets, collect_panel_cell_ordered_targets,
     home_surface_reader_priority, lved_list_label_html, lved_tree_items_to_nodes,
     multiview_menu_item_to_node, navigation_node_mut_at_path,
 };
