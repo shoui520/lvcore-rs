@@ -26,11 +26,16 @@ pub(super) fn search_lved_sqlite_connection(
     if normalized_variants.is_empty() {
         return Ok(Vec::new());
     }
+    // SQLite FTS rejects `OR` over multiple direct `MATCH` clauses, so
+    // hiragana/katakana variant searches keep the subquery form. Single-variant
+    // searches can use the direct FTS table expression, which avoids
+    // materializing broad match sets before the list join.
+    let prefer_direct_fts = normalized_variants.len() == 1;
     let mut where_clauses = Vec::new();
     let mut parameters = Vec::new();
     for normalized in normalized_variants {
         if let Some((where_clause, mut variant_parameters)) =
-            lved_search_where(&normalized, mode, search_columns)
+            lved_search_where(&normalized, mode, search_columns, prefer_direct_fts)
         {
             where_clauses.push(format!("({where_clause})"));
             parameters.append(&mut variant_parameters);
@@ -119,6 +124,7 @@ fn lved_search_where(
     normalized: &str,
     mode: &SearchMode,
     search_columns: &[String],
+    prefer_direct_fts: bool,
 ) -> Option<(String, Vec<String>)> {
     match mode {
         SearchMode::Exact => exact_lved_search_where(normalized, search_columns),
@@ -128,20 +134,34 @@ fn lved_search_where(
             search_columns,
             true,
             false,
+            prefer_direct_fts,
         )),
         SearchMode::Backward => {
             let reversed = normalized.chars().rev().collect::<String>();
-            one_parameter_where(fts_match("back", &reversed, search_columns, true, false))
+            one_parameter_where(fts_match(
+                "back",
+                &reversed,
+                search_columns,
+                true,
+                false,
+                prefer_direct_fts,
+            ))
         }
-        SearchMode::Partial => {
-            one_parameter_where(fts_match("part", normalized, search_columns, false, true))
-        }
+        SearchMode::Partial => one_parameter_where(fts_match(
+            "part",
+            normalized,
+            search_columns,
+            false,
+            true,
+            prefer_direct_fts,
+        )),
         SearchMode::FullText => one_parameter_where(fts_match(
             "fts",
             normalized,
             search_columns,
             false,
             should_split_chars(normalized),
+            prefer_direct_fts,
         )),
         SearchMode::Advanced(column) => one_parameter_where(fts_match(
             column,
@@ -149,6 +169,7 @@ fn lved_search_where(
             search_columns,
             false,
             should_split_chars(normalized),
+            prefer_direct_fts,
         )),
     }
 }
@@ -211,6 +232,7 @@ fn fts_match(
     search_columns: &[String],
     prefix_last: bool,
     split_chars: bool,
+    prefer_direct_fts: bool,
 ) -> Option<(String, String)> {
     if !has_column(search_columns, column) {
         return None;
@@ -225,10 +247,12 @@ fn fts_match(
         })
         .collect::<Vec<_>>();
     (!terms.is_empty()).then(|| {
-        (
-            "s.rowid in (select rowid from search where search match ?)".to_owned(),
-            terms.join(" "),
-        )
+        let where_clause = if prefer_direct_fts {
+            "search match ?"
+        } else {
+            "s.rowid in (select rowid from search where search match ?)"
+        };
+        (where_clause.to_owned(), terms.join(" "))
     })
 }
 
