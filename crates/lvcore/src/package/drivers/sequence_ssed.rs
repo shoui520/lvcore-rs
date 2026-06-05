@@ -41,6 +41,19 @@ impl ReaderBookPackage {
         after: usize,
         options: &RenderOptions,
     ) -> Result<Option<TargetWindow>> {
+        if let Some(SequenceHint::TitleIndexOrder { value, cursor }) = sequence_hint
+            && value.starts_with(super::ssed_ios_plist_surfaces::IOS_TABLE_LIST_PREFIX)
+        {
+            return self.resolve_ssed_ios_table_list_window(
+                target,
+                value,
+                cursor.as_deref(),
+                before,
+                after,
+                options,
+            );
+        }
+
         let (component, block, offset) = match target.decode()? {
             InternalTarget::SsedAddress {
                 component,

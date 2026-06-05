@@ -1,3 +1,4 @@
+use super::sequence::sequence_targets_match;
 use super::*;
 
 pub(super) const IOS_PLIST_PANEL_PREFIX: &str = "ios-plist:";
@@ -28,7 +29,7 @@ impl ReaderBookPackage {
             if !is_ssed_ios_panel_plist_candidate(&file.source_id) {
                 continue;
             }
-            let Ok(plist) = parse_xml_plist(&file.bytes, &file.label) else {
+            let Ok(plist) = self.cached_ssed_panel_plist(&file.bytes, &file.label) else {
                 continue;
             };
             let Ok(parsed) = parse_panel_plist_value_for_panel(&plist, None) else {
@@ -82,7 +83,7 @@ impl ReaderBookPackage {
         &self,
         source: &SsedIosPlistSurfaceSource,
     ) -> Result<(NavigationStatus, Vec<Diagnostic>)> {
-        let plist = parse_xml_plist(&source.bytes, &source.label)?;
+        let plist = self.cached_ssed_panel_plist(&source.bytes, &source.label)?;
         let rows = plist.as_array().unwrap_or_default();
         let mut address_rows = 0usize;
         let mut unresolved_rows = 0usize;
@@ -194,7 +195,7 @@ impl ReaderBookPackage {
         else {
             return Ok(surface_open_deferred(surface_id));
         };
-        let plist = parse_xml_plist(&source.bytes, &source.label)?;
+        let plist = self.cached_ssed_panel_plist(&source.bytes, &source.label)?;
         let rows = plist.as_array().unwrap_or_default();
         let offset = decode_offset_cursor(cursor);
         let mut items = Vec::new();
@@ -243,6 +244,168 @@ impl ReaderBookPackage {
             items,
             next_cursor,
         })
+    }
+
+    pub(super) fn resolve_ssed_ios_table_list_window(
+        &self,
+        target: &TargetToken,
+        surface_id: &str,
+        cursor_hint: Option<&str>,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        let Some(source_id) = surface_id.strip_prefix(IOS_TABLE_LIST_PREFIX) else {
+            return Ok(None);
+        };
+        let Some(source) = self
+            .ssed_ios_table_list_sources()?
+            .into_iter()
+            .find(|source| source.source_id.eq_ignore_ascii_case(source_id))
+        else {
+            return Ok(Some(TargetWindow {
+                center: self.render_target(target, options)?,
+                before: Vec::new(),
+                after: Vec::new(),
+                diagnostics: vec![Diagnostic::info(
+                    "sequence_deferred",
+                    "iOS tableList.plist order is unavailable for this target",
+                )],
+            }));
+        };
+        let plist = self.cached_ssed_panel_plist(&source.bytes, &source.label)?;
+        let rows = plist.as_array().unwrap_or_default();
+
+        if let Some(cursor_index) = cursor_hint.and_then(|value| value.parse::<usize>().ok())
+            && let Some(window) = self.resolve_ssed_ios_table_list_window_from_cursor(
+                target,
+                rows,
+                cursor_index,
+                before,
+                after,
+                options,
+            )?
+        {
+            return Ok(Some(window));
+        }
+
+        let mut diagnostics = Vec::new();
+        let mut ordered = Vec::new();
+        for row in rows.iter() {
+            if let Some(item) =
+                self.ssed_ios_table_list_ordered_target_for_row(row, options, &mut diagnostics)?
+            {
+                ordered.push(item);
+            }
+        }
+        let mut window = self.resolve_ordered_target_window(
+            target,
+            &ordered,
+            before,
+            after,
+            options,
+            Diagnostic::info(
+                "sequence_target_not_in_ios_table_list",
+                "target is not present in the iOS tableList.plist order",
+            ),
+        )?;
+        window.diagnostics.extend(diagnostics);
+        Ok(Some(window))
+    }
+
+    fn resolve_ssed_ios_table_list_window_from_cursor(
+        &self,
+        target: &TargetToken,
+        rows: &[PlistValue],
+        cursor_index: usize,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        let Some(row) = rows.get(cursor_index) else {
+            return Ok(None);
+        };
+        let mut diagnostics = Vec::new();
+        let Some(center) =
+            self.ssed_ios_table_list_ordered_target_for_row(row, options, &mut diagnostics)?
+        else {
+            return Ok(None);
+        };
+        if !sequence_targets_match(&center.target, target) {
+            return Ok(None);
+        }
+
+        let mut ordered = Vec::new();
+        let mut before_items = Vec::new();
+        for index in (0..cursor_index).rev() {
+            if before_items.len() >= before {
+                break;
+            }
+            if let Some(item) = self.ssed_ios_table_list_ordered_target_for_row(
+                &rows[index],
+                options,
+                &mut diagnostics,
+            )? {
+                before_items.push(item);
+            }
+        }
+        before_items.reverse();
+        ordered.extend(before_items);
+        ordered.push(center);
+        for row in rows.iter().skip(cursor_index.saturating_add(1)) {
+            if ordered.len() >= before.saturating_add(1).saturating_add(after) {
+                break;
+            }
+            if let Some(item) =
+                self.ssed_ios_table_list_ordered_target_for_row(row, options, &mut diagnostics)?
+            {
+                ordered.push(item);
+            }
+        }
+
+        let mut window = self.resolve_ordered_target_window(
+            target,
+            &ordered,
+            before,
+            after,
+            options,
+            Diagnostic::info(
+                "sequence_target_not_in_ios_table_list",
+                "target is not present in the iOS tableList.plist cursor window",
+            ),
+        )?;
+        window.diagnostics.extend(diagnostics);
+        Ok(Some(window))
+    }
+
+    fn ssed_ios_table_list_ordered_target_for_row(
+        &self,
+        row: &PlistValue,
+        options: &RenderOptions,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<Option<OrderedSequenceTarget>> {
+        let Some(dict) = row.as_dict() else {
+            return Ok(None);
+        };
+        let label = plist_string(dict, &["name", "item", "title", "label"]);
+        if label.trim().is_empty() {
+            return Ok(None);
+        }
+        let Some(block) = plist_u32(dict, "block").filter(|value| *value > 0) else {
+            return Ok(None);
+        };
+        let (block, offset) =
+            self.convert_ios_ssed_address(block, plist_u32(dict, "offset").unwrap_or(0))?;
+        let target = self.ssed_target_for_loose_address(block, offset, diagnostics)?;
+        let Some(target) = target else {
+            return Ok(None);
+        };
+        let rich_label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
+        diagnostics.extend(rich_label.diagnostics);
+        Ok(Some(OrderedSequenceTarget {
+            target,
+            title: Some(rich_label.text),
+        }))
     }
 
     pub(super) fn ssed_ios_html_list_item(
@@ -312,27 +475,32 @@ impl ReaderBookPackage {
     }
 
     fn ssed_ios_plist_files(&self) -> Result<Vec<SsedIosPlistFile>> {
-        let mut files = Vec::new();
-        let mut seen = BTreeSet::new();
-        collect_ios_plist_files_from_base(&self.root, "", &mut files, &mut seen)?;
-        if let Some(parent) = self.root.parent() {
-            collect_ios_plist_files_from_base(parent, "", &mut files, &mut seen)?;
+        let cached = self.ssed_ios_plist_files.get_or_init(|| {
+            let mut files = Vec::new();
+            let mut seen = BTreeSet::new();
+            collect_ios_plist_files_from_base(&self.root, "", &mut files, &mut seen)
+                .map_err(|error| error.to_string())?;
+            if let Some(parent) = self.root.parent() {
+                collect_ios_plist_files_from_base(parent, "", &mut files, &mut seen)
+                    .map_err(|error| error.to_string())?;
+            }
+            files.sort_by(|left, right| left.source_id.cmp(&right.source_id));
+            Ok(files)
+        });
+        match cached {
+            Ok(files) => Ok(files.clone()),
+            Err(error) => Err(Error::Driver(error.clone())),
         }
-        files.sort_by(|left, right| left.source_id.cmp(&right.source_id));
-        Ok(files)
     }
 
     pub(super) fn ssed_ios_plist_file_by_source_id(
         &self,
         source_id: &str,
     ) -> Result<Option<SsedIosPlistFile>> {
-        let Some(file) = read_ios_plist_file_from_base(&self.root, source_id)? else {
-            let Some(parent) = self.root.parent() else {
-                return Ok(None);
-            };
-            return read_ios_plist_file_from_base(parent, source_id);
-        };
-        Ok(Some(file))
+        Ok(self
+            .ssed_ios_plist_files()?
+            .into_iter()
+            .find(|file| file.source_id.eq_ignore_ascii_case(source_id)))
     }
 }
 
@@ -379,30 +547,6 @@ fn collect_ios_plist_files_from_base(
         });
     }
     Ok(())
-}
-
-fn read_ios_plist_file_from_base(base: &Path, source_id: &str) -> Result<Option<SsedIosPlistFile>> {
-    if !base.is_dir() || !source_id.to_ascii_lowercase().ends_with(".plist") {
-        return Ok(None);
-    }
-    let relative = Path::new(source_id);
-    if relative.components().any(|component| {
-        !matches!(
-            component,
-            std::path::Component::Normal(_) | std::path::Component::CurDir
-        )
-    }) {
-        return Ok(None);
-    }
-    let path = base.join(relative);
-    if !regular_file_inside_root(base, &path)? {
-        return Ok(None);
-    }
-    Ok(Some(SsedIosPlistFile {
-        source_id: source_id.to_owned(),
-        label: source_id.to_owned(),
-        bytes: std::fs::read(path)?,
-    }))
 }
 
 pub(super) fn is_ssed_ios_panel_plist_candidate(source_id: &str) -> bool {

@@ -780,7 +780,11 @@ impl ReaderBookPackage {
         }
     }
 
-    fn cached_ssed_panel_plist(&self, bytes: &[u8], label: &str) -> Result<Arc<PlistValue>> {
+    pub(super) fn cached_ssed_panel_plist(
+        &self,
+        bytes: &[u8],
+        label: &str,
+    ) -> Result<Arc<PlistValue>> {
         let cache_key = label.to_ascii_lowercase();
         let mut cache = self
             .ssed_panel_plists

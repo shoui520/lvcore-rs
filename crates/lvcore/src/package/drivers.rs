@@ -221,6 +221,7 @@ use crate::target::{InternalTarget, TargetLink, TargetToken};
 use self::hourei_labels::hourei_law_node_label;
 use self::ssed_index::ssed_index_bound_is_plausible;
 use self::ssed_ios_addr_convert::SsedIosAddressConverter;
+use self::ssed_ios_plist_surfaces::SsedIosPlistFile;
 use self::ssed_ios_search::SsedIosSearchResolver;
 use self::ssed_multi_ids::{
     parse_ssed_multi_surface_id, ssed_multi_record_index_ref, ssed_multi_record_menu_ref,
@@ -276,6 +277,7 @@ pub struct ReaderBookPackage {
     ssed_ios_address_converter:
         OnceLock<std::result::Result<Option<SsedIosAddressConverter>, String>>,
     ssed_ios_search_resolvers: OnceLock<std::result::Result<Vec<SsedIosSearchResolver>, String>>,
+    ssed_ios_plist_files: OnceLock<std::result::Result<Vec<SsedIosPlistFile>, String>>,
     ssed_index_component_body_boundaries: Mutex<SsedIndexComponentBoundaryCache>,
     ssed_navigation_component_data: Mutex<SsedNavigationDataCache>,
     ssed_navigation_surface_pages: Mutex<SsedNavigationSurfaceCache>,
@@ -379,6 +381,7 @@ impl ReaderBookPackage {
             ssed_sidecar_range_resolvers: OnceLock::new(),
             ssed_ios_address_converter: OnceLock::new(),
             ssed_ios_search_resolvers: OnceLock::new(),
+            ssed_ios_plist_files: OnceLock::new(),
             ssed_index_component_body_boundaries: Mutex::new(BTreeMap::new()),
             ssed_navigation_component_data: Mutex::new(BTreeMap::new()),
             ssed_navigation_surface_pages: Mutex::new(BTreeMap::new()),

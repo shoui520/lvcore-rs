@@ -580,6 +580,107 @@ fn ssed_numeric_auxiliary_index_opens_without_exinfo() {
     }));
 }
 
+#[test]
+fn ssed_ios_table_list_window_uses_plist_order() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[b"alpha body", b"beta body", b"gamma body"], 100, 102),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("tableList.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+  <dict><key>name</key><string>Alpha</string><key>block</key><integer>100</integer><key>offset</key><integer>0</integer></dict>
+  <dict><key>name</key><string>Beta</string><key>block</key><integer>101</integer><key>offset</key><integer>0</integer></dict>
+  <dict><key>name</key><string>Gamma</string><key>block</key><integer>102</integer><key>offset</key><integer>0</integer></dict>
+</array>
+</plist>
+"#,
+    )
+    .unwrap();
+    let catalog = SsedCatalog {
+        title: "iOS table list".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 102,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("iOS table list".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    let surface = package
+        .open_surface_page("ios-table-list:tableList.plist", None, 10)
+        .unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = &surface else {
+        panic!("expected iOS table-list title/index browse surface");
+    };
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].label_text, "Alpha");
+    assert_eq!(items[1].label_text, "Beta");
+    assert_eq!(items[2].label_text, "Gamma");
+
+    let targets = surface.actionable_targets();
+    let beta = targets
+        .iter()
+        .find(|target| target.label_text == "Beta")
+        .unwrap();
+    assert_eq!(
+        beta.sequence_hint,
+        Some(SequenceHint::TitleIndexOrder {
+            value: "ios-table-list:tableList.plist".to_owned(),
+            cursor: Some("1".to_owned()),
+        })
+    );
+    let window = package
+        .resolve_target_window(
+            &beta.target,
+            beta.sequence_hint.as_ref(),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.center.title.as_deref(), Some("Beta"));
+    assert_eq!(window.before.len(), 1);
+    assert_eq!(window.before[0].title.as_deref(), Some("Alpha"));
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].title.as_deref(), Some("Gamma"));
+    assert!(!window.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "sequence_target_not_in_title_index"
+            || diagnostic.code == "sequence_deferred"
+    }));
+}
+
 #[cfg(unix)]
 #[test]
 fn ssed_numeric_auxiliary_index_ignores_symlinked_escape() {
