@@ -41,7 +41,6 @@ impl ReaderBookPackage {
             gaiji_policy,
         );
         let mut optimized_scan_components = 0usize;
-        let mut scan_needs_linear_fallback = false;
         let mut scan_needs_prefilter_fallback = false;
         let mut optimized_diagnostics = Vec::new();
         if matches!(
@@ -53,7 +52,6 @@ impl ReaderBookPackage {
                     collector.push_row(row)
                 })?;
             optimized_scan_components = scan_result.scanned_components;
-            scan_needs_linear_fallback = scan_result.needs_linear_fallback;
             scan_needs_prefilter_fallback = scan_result.needs_prefilter_fallback;
             optimized_diagnostics.extend(scan_result.diagnostics);
             collector.extend_diagnostics(optimized_diagnostics.clone());
@@ -68,31 +66,7 @@ impl ReaderBookPackage {
         } else if matches!(
             query.mode,
             SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
-        ) && !collector.has_hits()
-            && scan_needs_linear_fallback
-        {
-            let mut fallback_collector = SsedIndexSearchCollector::new(
-                self,
-                &query.mode,
-                &needle,
-                offset,
-                page_limit,
-                query.label_gaiji_policy(),
-            );
-            fallback_collector.extend_diagnostics(optimized_diagnostics.clone());
-            let scan_diagnostics = self.scan_ssed_prefiltered_existing_index_rows(
-                &query.mode,
-                &needle,
-                true,
-                |row| fallback_collector.push_row(row),
-            )?;
-            fallback_collector.extend_diagnostics(scan_diagnostics);
-            collector = fallback_collector;
-        } else if matches!(
-            query.mode,
-            SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
         ) && collector.needs_more_hits()
-            && !scan_needs_linear_fallback
             && scan_needs_prefilter_fallback
         {
             let mut fallback_collector = SsedIndexSearchCollector::new(

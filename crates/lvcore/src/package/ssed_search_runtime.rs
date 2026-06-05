@@ -23,7 +23,6 @@ pub(super) struct SsedFulltextRow {
 #[derive(Debug, Default)]
 pub(super) struct SsedNearKeyScanResult {
     pub(super) scanned_components: usize,
-    pub(super) needs_linear_fallback: bool,
     pub(super) needs_prefilter_fallback: bool,
     pub(super) diagnostics: Vec<Diagnostic>,
 }

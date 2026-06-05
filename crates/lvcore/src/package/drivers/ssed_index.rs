@@ -13,7 +13,6 @@ impl ReaderBookPackage {
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(SsedNearKeyScanResult {
                 scanned_components: 0,
-                needs_linear_fallback: true,
                 needs_prefilter_fallback: false,
                 diagnostics: vec![Diagnostic::error(
                     "ssed_catalog_missing",
@@ -34,7 +33,6 @@ impl ReaderBookPackage {
         if needle_keys.is_empty() && !probe.is_empty() {
             return Ok(SsedNearKeyScanResult {
                 scanned_components: 0,
-                needs_linear_fallback: true,
                 needs_prefilter_fallback: false,
                 diagnostics,
             });
@@ -178,7 +176,6 @@ impl ReaderBookPackage {
         }
         Ok(SsedNearKeyScanResult {
             scanned_components,
-            needs_linear_fallback,
             needs_prefilter_fallback,
             diagnostics,
         })
