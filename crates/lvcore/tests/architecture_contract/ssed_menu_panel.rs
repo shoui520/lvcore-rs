@@ -725,6 +725,44 @@ fn ssed_ios_mobile_menu_plist_opens_nested_child_panel_without_flattening_root()
 }
 
 #[test]
+fn ssed_ios_plist_data_labels_decode_as_title_text() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        root.path().join("indexSearch.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>item</key><data>I0Ef7g==</data>
+    <key>block</key><integer>10</integer>
+    <key>offset</key><integer>2</integer>
+    <key>child</key><array/>
+  </dict>
+</array></plist>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let panel = package.open_surface("ios-plist:indexSearch.plist").unwrap();
+    let NavigationSurface::Panel { cells, .. } = panel else {
+        panic!("iOS plist data labels should open as a panel surface");
+    };
+
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "Ａ");
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     let root = tempdir().unwrap();
     let package_root = root.path().join("DICT");

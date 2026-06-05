@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
@@ -13,7 +15,7 @@ pub(crate) enum PlistValue {
     Bool(bool),
     Integer(i64),
     Real(String),
-    Data,
+    Data(Vec<u8>),
     Date,
 }
 
@@ -82,8 +84,8 @@ fn parse_plist_value(
             Ok(PlistValue::Real(raw))
         }
         b"data" => {
-            let _ = parse_text_value(reader, b"data", source_label)?;
-            Ok(PlistValue::Data)
+            let raw = parse_text_value(reader, b"data", source_label)?;
+            Ok(PlistValue::Data(decode_plist_data(&raw)))
         }
         b"date" => {
             let _ = parse_text_value(reader, b"date", source_label)?;
@@ -111,7 +113,7 @@ fn parse_empty_plist_value(event: BytesStart<'_>, source_label: &str) -> Result<
         b"string" => Ok(PlistValue::String(String::new())),
         b"integer" => Ok(PlistValue::Integer(0)),
         b"real" => Ok(PlistValue::Real(String::new())),
-        b"data" => Ok(PlistValue::Data),
+        b"data" => Ok(PlistValue::Data(Vec::new())),
         b"date" => Ok(PlistValue::Date),
         b"true" => Ok(PlistValue::Bool(true)),
         b"false" => Ok(PlistValue::Bool(false)),
@@ -239,6 +241,16 @@ fn consume_until_end(
     }
 }
 
+fn decode_plist_data(raw: &str) -> Vec<u8> {
+    let compact = raw
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    BASE64_STANDARD
+        .decode(compact.as_bytes())
+        .unwrap_or_default()
+}
+
 fn plist_xml_error(reader: &Reader<&[u8]>, error: quick_xml::Error, source_label: &str) -> Error {
     Error::Driver(format!(
         "{source_label} XML error at byte {}: {error}",
@@ -264,6 +276,13 @@ impl PlistValue {
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_data(&self) -> Option<&[u8]> {
+        match self {
+            Self::Data(value) => Some(value),
             _ => None,
         }
     }

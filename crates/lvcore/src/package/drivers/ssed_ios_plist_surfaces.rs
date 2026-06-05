@@ -493,13 +493,20 @@ fn plist_string(dict: &BTreeMap<String, PlistValue>, keys: &[&str]) -> String {
 }
 
 fn plist_string_opt(dict: &BTreeMap<String, PlistValue>, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        dict.get(*key)
-            .and_then(PlistValue::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-    })
+    keys.iter()
+        .filter_map(|key| dict.get(*key))
+        .filter_map(plist_value_label_text)
+        .find(|value| !value.is_empty())
+}
+
+fn plist_value_label_text(value: &PlistValue) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        let text = text.trim();
+        return (!text.is_empty()).then(|| text.to_owned());
+    }
+    let data = value.as_data()?;
+    let text = decode_title_text(data).trim().to_owned();
+    (!text.is_empty()).then_some(text)
 }
 
 fn plist_u32(dict: &BTreeMap<String, PlistValue>, key: &str) -> Option<u32> {
