@@ -371,6 +371,63 @@ fn searches_lved_list_rows_and_preserves_content_html() {
 }
 
 #[test]
+fn lved_hiragana_katakana_fts_variants_merge_before_cursor_paging() {
+    let dir = tempdir().unwrap();
+    let payload = dir.path().join("main.data");
+    let key = "test-key";
+    {
+        let connection = Connection::open(&payload).unwrap();
+        apply_sqlcipher_key(&connection, key).unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text, media text);
+                create table content (id integer primary key, type integer, body text, media text);
+                create table list (
+                  id integer primary key,
+                  refid integer,
+                  type integer,
+                  anchor text,
+                  title text,
+                  titlesub text
+                );
+                create virtual table search using fts4(forward, back, part, fts, filter);
+                insert into content values (100, 1, '<article>katakana only</article>', '');
+                insert into content values (101, 1, '<article>hiragana only</article>', '');
+                insert into content values (102, 1, '<article>both variants</article>', '');
+                insert into list values (10, 100, 1, '', 'katakana', '');
+                insert into list values (20, 101, 1, '', 'hiragana', '');
+                insert into list values (30, 102, 1, '', 'both', '');
+                insert into search(rowid, forward, back, part, fts, filter)
+                  values (10, 'ア', 'ア', 'ア', 'ア', '∥ア∥');
+                insert into search(rowid, forward, back, part, fts, filter)
+                  values (20, 'あ', 'あ', 'あ', 'あ', '∥あ∥');
+                insert into search(rowid, forward, back, part, fts, filter)
+                  values (30, 'あ ア', 'ア あ', 'あ ア', 'あ ア', '∥あ∥ア∥');
+                ",
+            )
+            .unwrap();
+    }
+    fs::write(dir.path().join("main.key"), key).unwrap();
+    let store = LvedSqliteStore::discover(dir.path()).unwrap().unwrap();
+
+    let first_page = store.search_page("あ", &SearchMode::Partial, 0, 2).unwrap();
+    assert_eq!(
+        first_page.iter().map(|hit| hit.list_id).collect::<Vec<_>>(),
+        vec![10, 20]
+    );
+
+    let second_page = store.search_page("あ", &SearchMode::Partial, 2, 2).unwrap();
+    assert_eq!(
+        second_page
+            .iter()
+            .map(|hit| hit.list_id)
+            .collect::<Vec<_>>(),
+        vec![30]
+    );
+}
+
+#[test]
 fn media_blob_resolves_observed_lved_media_aliases() {
     let dir = tempdir().unwrap();
     let payload = dir.path().join("main.data");

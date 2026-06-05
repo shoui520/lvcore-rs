@@ -1,5 +1,6 @@
 use rusqlite::types::Value;
 use rusqlite::{Connection, Row, params_from_iter};
+use std::collections::BTreeMap;
 
 use super::title::html_to_text;
 use super::{LvedSearchHit, LvedSqliteSchema, has_column, nonempty_string, sqlite_value_to_string};
@@ -25,6 +26,18 @@ pub(super) fn search_lved_sqlite_connection(
     let normalized_variants = lved_query_variants(query);
     if normalized_variants.is_empty() {
         return Ok(Vec::new());
+    }
+    if normalized_variants.len() > 1
+        && let Some(match_queries) =
+            lved_fts_match_queries(&normalized_variants, mode, search_columns)
+    {
+        return search_lved_sqlite_fts_variants(
+            connection,
+            list_columns,
+            &match_queries,
+            offset,
+            limit,
+        );
     }
     // SQLite FTS rejects `OR` over multiple direct `MATCH` clauses, so
     // hiragana/katakana variant searches keep the subquery form. Single-variant
@@ -62,6 +75,40 @@ pub(super) fn search_lved_sqlite_connection(
     let rows = statement.query_map(params_from_iter(sql_parameters), lved_search_hit_from_row)?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::from)
+}
+
+fn search_lved_sqlite_fts_variants(
+    connection: &Connection,
+    list_columns: &[String],
+    match_queries: &[String],
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<LvedSearchHit>> {
+    let fetch_limit = offset.saturating_add(limit);
+    if fetch_limit == 0 {
+        return Ok(Vec::new());
+    }
+    let projection = lved_list_projection(list_columns);
+    let sql = format!(
+        "select l.id, l.refid, {}, {}, {}, {} \
+         from search join list l on l.id = search.rowid where search match ? order by l.id limit ?",
+        projection.anchor, projection.title, projection.subtitle, projection.kind
+    );
+    let mut hits_by_list_id = BTreeMap::new();
+    for match_query in match_queries {
+        let mut statement = connection.prepare(&sql)?;
+        let rows =
+            statement.query_map((match_query, fetch_limit as i64), lved_search_hit_from_row)?;
+        for row in rows {
+            let hit = row?;
+            hits_by_list_id.entry(hit.list_id).or_insert(hit);
+        }
+    }
+    Ok(hits_by_list_id
+        .into_values()
+        .skip(offset)
+        .take(limit)
+        .collect())
 }
 
 pub(super) fn lved_list_hits_by_id_clause(
@@ -174,6 +221,48 @@ fn lved_search_where(
     }
 }
 
+fn lved_fts_match_queries(
+    normalized_variants: &[String],
+    mode: &SearchMode,
+    search_columns: &[String],
+) -> Option<Vec<String>> {
+    let queries = normalized_variants
+        .iter()
+        .filter_map(|normalized| lved_fts_match_query(normalized, mode, search_columns))
+        .collect::<Vec<_>>();
+    (!queries.is_empty()).then_some(queries)
+}
+
+fn lved_fts_match_query(
+    normalized: &str,
+    mode: &SearchMode,
+    search_columns: &[String],
+) -> Option<String> {
+    match mode {
+        SearchMode::Exact => None,
+        SearchMode::Forward => fts_query("forward", normalized, search_columns, true, false),
+        SearchMode::Backward => {
+            let reversed = normalized.chars().rev().collect::<String>();
+            fts_query("back", &reversed, search_columns, true, false)
+        }
+        SearchMode::Partial => fts_query("part", normalized, search_columns, false, true),
+        SearchMode::FullText => fts_query(
+            "fts",
+            normalized,
+            search_columns,
+            false,
+            should_split_chars(normalized),
+        ),
+        SearchMode::Advanced(column) => fts_query(
+            column,
+            normalized,
+            search_columns,
+            false,
+            should_split_chars(normalized),
+        ),
+    }
+}
+
 fn exact_lved_search_where(
     normalized: &str,
     search_columns: &[String],
@@ -234,6 +323,22 @@ fn fts_match(
     split_chars: bool,
     prefer_direct_fts: bool,
 ) -> Option<(String, String)> {
+    let query = fts_query(column, normalized, search_columns, prefix_last, split_chars)?;
+    let where_clause = if prefer_direct_fts {
+        "search match ?"
+    } else {
+        "s.rowid in (select rowid from search where search match ?)"
+    };
+    Some((where_clause.to_owned(), query))
+}
+
+fn fts_query(
+    column: &str,
+    normalized: &str,
+    search_columns: &[String],
+    prefix_last: bool,
+    split_chars: bool,
+) -> Option<String> {
     if !has_column(search_columns, column) {
         return None;
     }
@@ -246,14 +351,7 @@ fn fts_match(
             (!term.is_empty()).then(|| format!("{column}:{term}"))
         })
         .collect::<Vec<_>>();
-    (!terms.is_empty()).then(|| {
-        let where_clause = if prefer_direct_fts {
-            "search match ?"
-        } else {
-            "s.rowid in (select rowid from search where search match ?)"
-        };
-        (where_clause.to_owned(), terms.join(" "))
-    })
+    (!terms.is_empty()).then(|| terms.join(" "))
 }
 
 fn one_parameter_where(value: Option<(String, String)>) -> Option<(String, Vec<String>)> {
