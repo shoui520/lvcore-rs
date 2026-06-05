@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use lvcore::{
-    BookId, BookLibrary, BookMetadata, DetectedPackage, Diagnostic, DiagnosticSeverity,
+    BookId, BookLibrary, BookMetadata, Capability, DetectedPackage, Diagnostic, DiagnosticSeverity,
     DriverRegistry, FormatFamily, HomeSurface, NavigationStatus, NavigationSurface,
     NavigationSurfaceKind, NavigationTarget, RenderOptions, ResolvedTargetView, ResourceKind,
     SearchHit, SearchMode, SearchQuery, SearchResultSequence, SearchScope, SequenceHint,
@@ -398,9 +398,14 @@ fn should_skip_search_mode_probe(
     mode: &SearchMode,
     include_expensive_search: bool,
 ) -> bool {
-    !include_expensive_search
-        && metadata.format_family == FormatFamily::Ssed
-        && matches!(mode, SearchMode::Partial | SearchMode::FullText)
+    if include_expensive_search || metadata.format_family != FormatFamily::Ssed {
+        return false;
+    }
+    match mode {
+        SearchMode::Partial => true,
+        SearchMode::FullText => !metadata.capabilities.contains(&Capability::PreservedHtml),
+        _ => false,
+    }
 }
 
 fn skipped_search_mode_exercise(mode: SearchMode) -> serde_json::Value {
@@ -408,7 +413,7 @@ fn skipped_search_mode_exercise(mode: SearchMode) -> serde_json::Value {
         "kind": format!("search_{}", search_mode_key(&mode)),
         "status": "skipped_expensive",
         "mode": mode,
-        "reason": "ssed_linear_or_fulltext_validation_requires_explicit_include_expensive_search",
+        "reason": "ssed_linear_index_or_raw_honmon_search_requires_explicit_include_expensive_search",
     })
 }
 
@@ -1122,5 +1127,42 @@ mod tests {
             search_probe_query("０°人工歯(zero degree teeth)", &SearchMode::FullText),
             "人工"
         );
+    }
+
+    #[test]
+    fn ssed_preserved_html_fulltext_is_not_skipped_by_default() {
+        let mut metadata = BookMetadata {
+            book_id: BookId("SSED:TEST".to_owned()),
+            format_family: FormatFamily::Ssed,
+            format_label: "SSED".to_owned(),
+            package_root: PathBuf::from("test"),
+            title: Some("test".to_owned()),
+            root_fingerprint: "test".to_owned(),
+            capabilities: vec![Capability::PreservedHtml],
+            search_modes: vec![SearchMode::Exact, SearchMode::Partial, SearchMode::FullText],
+        };
+
+        assert!(should_skip_search_mode_probe(
+            &metadata,
+            &SearchMode::Partial,
+            false
+        ));
+        assert!(!should_skip_search_mode_probe(
+            &metadata,
+            &SearchMode::FullText,
+            false
+        ));
+
+        metadata.capabilities.clear();
+        assert!(should_skip_search_mode_probe(
+            &metadata,
+            &SearchMode::FullText,
+            false
+        ));
+        assert!(!should_skip_search_mode_probe(
+            &metadata,
+            &SearchMode::FullText,
+            true
+        ));
     }
 }
