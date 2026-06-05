@@ -350,6 +350,55 @@ fn ssed_panel_inline_action_verbs_resolve_addresses_and_panel_refs() {
 }
 
 #[test]
+fn ssed_panel_inline_action_panel_ref_falls_back_to_declared_ref_when_action_id_is_absent() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::create_dir(dir.path().join("Panel")).unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<panels>
+  <panel index="02000000" paneltype="menu" count_x="1">
+    <title>五十音</title>
+    <data>
+      <cell action_verb="lved.panel:01010000" ref="02010000">あ</cell>
+    </data>
+  </panel>
+  <panel index="02010000" paneltype="contents">
+    <title>あ</title>
+    <data type="bin" filename="Panel\All-A.bin" />
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("Panel/All-A.bin"), panel_bin_fixture(10, 2)).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let root_panel = package.open_surface("panels").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = root_panel else {
+        panic!("root Panel should open");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::PanelCell { panel_id, .. } if panel_id == "02010000"
+    ));
+
+    let child_panel = package.open_surface("panels:02010000").unwrap();
+    let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
+        panic!("declared ref Panel should open");
+    };
+    assert_eq!(cells.len(), 1);
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn ssed_panel_bin_lookup_accepts_extensionless_names_in_panel_directory() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

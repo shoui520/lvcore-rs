@@ -45,6 +45,7 @@ impl ReaderBookPackage {
                 .first()
                 .map(|cell| cell.panel_id.as_str())
         });
+        let known_panel_ids = ssed_panel_known_panel_ids(&parsed);
         let inline_cells = parsed
             .inline_cells
             .iter()
@@ -56,7 +57,12 @@ impl ReaderBookPackage {
         let mut builder = PanelCellPageBuilder::new(decode_offset_cursor(cursor), limit);
         for cell in inline_cells {
             builder.push_cell(|| {
-                ssed_panel_inline_cell_to_navigation_cell(self, &cell, &options.gaiji_policy)
+                ssed_panel_inline_cell_to_navigation_cell(
+                    self,
+                    &cell,
+                    &known_panel_ids,
+                    &options.gaiji_policy,
+                )
             })?;
         }
         let selected_data_refs = parsed
@@ -438,6 +444,20 @@ fn ssed_panel_data_ref_is_aggregate(data_ref: &SsedPanelDataRef) -> bool {
     };
     let stem = stem.to_ascii_lowercase();
     stem == "all" || stem.ends_with("_all") || stem.ends_with("-all")
+}
+
+fn ssed_panel_known_panel_ids(parsed: &crate::ssed_panel::SsedPanelXml) -> BTreeSet<String> {
+    parsed
+        .inline_cells
+        .iter()
+        .map(|cell| cell.panel_id.clone())
+        .chain(
+            parsed
+                .data_refs
+                .iter()
+                .map(|data_ref| data_ref.panel_id.clone()),
+        )
+        .collect()
 }
 
 fn ssed_panel_data_ref_is_bin(data_ref: &SsedPanelDataRef) -> bool {

@@ -4,6 +4,7 @@ use crate::package::drivers::ssed_navigation::ssed_honmon_address_target;
 pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
     package: &ReaderBookPackage,
     cell: &SsedPanelInlineCell,
+    known_panel_ids: &BTreeSet<String>,
     gaiji_policy: &GaijiPolicy,
 ) -> Result<PanelCell> {
     let rich_label = package.ssed_rich_label_with_policy(&cell.label, gaiji_policy);
@@ -16,9 +17,7 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
             None,
             &mut diagnostics,
         )?
-    } else if let Some(panel_id) = panel_ref_from_action(&cell.action_verb)
-        .or_else(|| (!cell.ref_id.is_empty()).then_some(cell.ref_id.as_str()))
-    {
+    } else if let Some(panel_id) = panel_ref_from_action_or_ref(cell, known_panel_ids) {
         Some(TargetToken::new(&InternalTarget::PanelCell {
             panel_id: panel_id.to_owned(),
             row: 0,
@@ -45,6 +44,21 @@ pub(super) fn ssed_panel_inline_cell_to_navigation_cell(
         target,
         diagnostics,
     })
+}
+
+fn panel_ref_from_action_or_ref<'a>(
+    cell: &'a SsedPanelInlineCell,
+    known_panel_ids: &BTreeSet<String>,
+) -> Option<&'a str> {
+    let action_ref = panel_ref_from_action(&cell.action_verb);
+    let cell_ref = (!cell.ref_id.trim().is_empty()).then_some(cell.ref_id.as_str());
+    match (action_ref, cell_ref) {
+        (Some(action), Some(_reference)) if known_panel_ids.contains(action) => Some(action),
+        (Some(_action), Some(reference)) if known_panel_ids.contains(reference) => Some(reference),
+        (Some(action), _) => Some(action),
+        (None, Some(reference)) => Some(reference),
+        (None, None) => None,
+    }
 }
 
 fn panel_ref_from_action(action_verb: &str) -> Option<&str> {
