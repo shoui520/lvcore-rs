@@ -428,6 +428,59 @@ fn ssed_reversed_backward_index_supports_suffix_search() {
 }
 
 #[test]
+fn ssed_partial_search_prefers_forward_rows_when_bidirectional_indexes_exist() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_forward_and_backward_indexes(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BHTITLE.DIC"),
+        sseddata_literal_fixture(b"shadow\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[("alpha", 1, 2, 13, 0)])),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[("ahpla", 1, 4, 15, 0)])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "alp".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(
+        page.hits
+            .iter()
+            .map(|hit| hit.title_text.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha"]
+    );
+    assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, 2);
+}
+
+#[test]
 fn ssed_tagged_index_search_supports_grouped_rows_across_pages() {
     let dir = tempdir().unwrap();
     fs::write(

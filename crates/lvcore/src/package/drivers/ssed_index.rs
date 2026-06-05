@@ -224,15 +224,6 @@ impl ReaderBookPackage {
         self.scan_ssed_simple_index_rows_with_filters(row_limit, |_| true, |_, _| true, on_row)
     }
 
-    pub(super) fn scan_ssed_simple_index_rows_with_page_filter(
-        &self,
-        row_limit: Option<usize>,
-        page_may_match: impl FnMut(&SsedComponent, &[u8]) -> bool,
-        on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
-    ) -> Result<Vec<Diagnostic>> {
-        self.scan_ssed_simple_index_rows_with_filters(row_limit, |_| true, page_may_match, on_row)
-    }
-
     pub(super) fn scan_ssed_simple_index_rows_with_filters(
         &self,
         row_limit: Option<usize>,

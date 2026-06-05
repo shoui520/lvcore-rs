@@ -70,8 +70,12 @@ impl ReaderBookPackage {
         }
         let reversed_needle = reverse_search_match_text(needle);
         let reverse_candidates = ssed_index_page_prefilter_candidates(&reversed_needle);
-        self.scan_ssed_simple_index_rows_with_page_filter(
+        let skip_backward_rows = self.ssed_has_forward_browse_index();
+        self.scan_ssed_simple_index_rows_with_filters(
             None,
+            |component| {
+                !(skip_backward_rows && ssed_index_component_name_is_backward(&component.filename))
+            },
             |component, page| {
                 if ssed_index_component_name_is_backward(&component.filename) {
                     ssed_body_window_may_contain_query(page, &reverse_candidates)
