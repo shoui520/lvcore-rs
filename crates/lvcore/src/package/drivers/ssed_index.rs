@@ -542,6 +542,116 @@ impl ReaderBookPackage {
         Ok(diagnostics)
     }
 
+    fn scan_ssed_index_component_body_pointers(
+        &self,
+        component: &SsedComponent,
+        mut on_pointer: impl FnMut(SsedIndexPointer) -> Result<bool>,
+    ) -> Result<Vec<Diagnostic>> {
+        let mut diagnostics = Vec::new();
+        if !is_supported_index_type(component.component_type) {
+            diagnostics.push(
+                Diagnostic::info(
+                    "ssed_index_variant_deferred",
+                    format!("{} is not a supported index component", component.filename),
+                )
+                .with_context("component", &component.filename),
+            );
+            return Ok(diagnostics);
+        }
+        let path = match self.resolve_readable_ssed_component_path(component) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                diagnostics.push(
+                    Diagnostic::info(
+                        "ssed_index_component_missing",
+                        format!("{} is declared but not present on disk", component.filename),
+                    )
+                    .with_context("component", &component.filename),
+                );
+                return Ok(diagnostics);
+            }
+            Err(error) => {
+                diagnostics.push(
+                    Diagnostic::warning(
+                        "ssed_index_component_decode_failed",
+                        format!(
+                            "{} is not readable as SSEDDATA: {error}",
+                            component.filename
+                        ),
+                    )
+                    .with_context("component", &component.filename),
+                );
+                return Ok(diagnostics);
+            }
+        };
+        let mut reader = SsedDataFile::open(&path)?;
+        let component_read_base = ssed_component_read_base(component, &reader);
+        let page_count = component.block_count() as usize;
+        let mut scan_state = SsedIndexScanState::default();
+        'pages: for page_index in 0..page_count {
+            let page = reader.read_range(
+                component_page_offset(component_read_base, page_index),
+                INDEX_PAGE_SIZE,
+            )?;
+            if page.len() < 4 {
+                break;
+            }
+            let word = u16::from_be_bytes([page[0], page[1]]);
+            if !is_leaf_page(word) {
+                continue;
+            }
+            if let Some((pointers, unknown)) =
+                parse_supported_leaf_page_body_pointers(component.component_type, &page)
+            {
+                if unknown > 0 {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_unknown_leaf_bytes",
+                            format!(
+                                "{} had {unknown} unknown simple leaf row(s)",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                }
+                for pointer in pointers {
+                    if !on_pointer(pointer)? {
+                        break 'pages;
+                    }
+                }
+                continue;
+            }
+            let logical_block = component.start_block + page_index as u32;
+            let (page_rows, unknown) = parse_supported_leaf_page(
+                &component.filename,
+                component.component_type,
+                &page,
+                page_index as u32,
+                logical_block,
+                &mut scan_state,
+            );
+            if unknown > 0 {
+                diagnostics.push(
+                    Diagnostic::warning(
+                        "ssed_index_unknown_leaf_bytes",
+                        format!(
+                            "{} had {unknown} unknown simple leaf row(s)",
+                            component.filename
+                        ),
+                    )
+                    .with_context("component", &component.filename),
+                );
+            }
+            for row in page_rows {
+                if !on_pointer(row.body)? {
+                    break 'pages;
+                }
+            }
+        }
+        Ok(diagnostics)
+    }
+
     pub(super) fn ssed_title_text(&self, pointer: SsedIndexPointer) -> Option<String> {
         let catalog = self.ssed_catalog.as_ref()?;
         let component = catalog.component_for_address(pointer.block)?;
@@ -653,14 +763,15 @@ impl ReaderBookPackage {
         row.body.block < min_start || row.body.block > max_end
     }
 
-    pub(in crate::package) fn ssed_next_index_body_pointer_after(
+    pub(in crate::package) fn ssed_next_index_body_pointer_after_in_index_component(
         &self,
         pointer: SsedIndexPointer,
+        index_component: &str,
     ) -> Result<Option<SsedIndexPointer>> {
         let Some(component_name) = self.ssed_component_for_index_pointer(pointer) else {
             return Ok(None);
         };
-        let boundaries = self.ssed_index_body_boundaries()?;
+        let boundaries = self.ssed_index_body_boundaries_for_index_component(index_component)?;
         let Some(pointers) = boundaries.get(component_name) else {
             return Ok(None);
         };
@@ -670,33 +781,70 @@ impl ReaderBookPackage {
             .copied())
     }
 
-    fn ssed_index_body_boundaries(&self) -> Result<&BTreeMap<String, Vec<SsedIndexPointer>>> {
-        let boundaries = self.ssed_index_body_boundaries.get_or_init(|| {
-            self.build_ssed_index_body_boundaries()
-                .map_err(|error| error.to_string())
-        });
-        match boundaries {
-            Ok(boundaries) => Ok(boundaries),
-            Err(error) => Err(Error::Driver(error.clone())),
+    fn ssed_index_body_boundaries_for_index_component(
+        &self,
+        index_component_name: &str,
+    ) -> Result<Arc<SsedIndexBodyBoundaryMap>> {
+        let key = index_component_name.to_ascii_lowercase();
+        {
+            let cache = self
+                .ssed_index_component_body_boundaries
+                .lock()
+                .map_err(|_| Error::Driver("SSED index boundary cache was poisoned".to_owned()))?;
+            if let Some(cached) = cache.get(&key) {
+                return cached
+                    .as_ref()
+                    .map(Arc::clone)
+                    .map_err(|error| Error::Driver(error.clone()));
+            }
         }
+
+        let built = self
+            .build_ssed_index_body_boundaries_for_index_component(index_component_name)
+            .map(Arc::new)
+            .map_err(|error| error.to_string());
+        let mut cache = self
+            .ssed_index_component_body_boundaries
+            .lock()
+            .map_err(|_| Error::Driver("SSED index boundary cache was poisoned".to_owned()))?;
+        let cached = cache.entry(key).or_insert_with(|| built);
+        cached
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(|error| Error::Driver(error.clone()))
     }
 
-    fn build_ssed_index_body_boundaries(&self) -> Result<BTreeMap<String, Vec<SsedIndexPointer>>> {
+    fn build_ssed_index_body_boundaries_for_index_component(
+        &self,
+        index_component_name: &str,
+    ) -> Result<BTreeMap<String, Vec<SsedIndexPointer>>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Err(Error::Driver(
+                "SSED index boundaries require a parsed SSEDINFO catalog".to_owned(),
+            ));
+        };
+        let Some(component) =
+            catalog
+                .components_by_role(SsedComponentRole::Index)
+                .find(|component| {
+                    component
+                        .filename
+                        .eq_ignore_ascii_case(index_component_name)
+                })
+        else {
+            return Ok(BTreeMap::new());
+        };
         let mut by_component = BTreeMap::<String, Vec<SsedIndexPointer>>::new();
-        let mut diagnostics = self.scan_ssed_simple_index_rows_with_filters(
-            None,
-            |component| !ssed_index_component_name_is_backward(&component.filename),
-            |_, _| true,
-            |row| {
-                if let Some(component) = self.ssed_component_for_index_pointer(row.body) {
+        let mut diagnostics =
+            self.scan_ssed_index_component_body_pointers(component, |pointer| {
+                if let Some(component) = self.ssed_component_for_index_pointer(pointer) {
                     by_component
                         .entry(component.to_owned())
                         .or_default()
-                        .push(row.body);
+                        .push(pointer);
                 }
                 Ok(true)
-            },
-        )?;
+            })?;
         diagnostics.retain(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
         if let Some(diagnostic) = diagnostics.into_iter().next() {
             return Err(Error::Driver(diagnostic.message));

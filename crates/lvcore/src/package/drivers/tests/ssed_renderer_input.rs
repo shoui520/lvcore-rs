@@ -541,6 +541,71 @@ fn ssed_hc_renderer_input_uses_local_boundary_for_marker_variants() {
 }
 
 #[test]
+fn ssed_hc_renderer_input_uses_local_boundary_for_0101_marker_variants() {
+    let dir = tempdir().unwrap();
+    let mut honmon = Vec::new();
+    honmon.extend_from_slice(&[0x1f, 0x09, 0x01, 0x01]);
+    honmon.extend_from_slice(b"head");
+    honmon.extend_from_slice(&[0x1f, 0x09, 0x01, 0x03]);
+    honmon.extend_from_slice(b"section");
+    let second_entry_offset = honmon.len();
+    honmon.extend_from_slice(&SSED_ENTRY_MARKER);
+    honmon.extend_from_slice(b"next");
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+    )
+    .unwrap();
+    let catalog = SsedCatalog {
+        title: "Local 0101 boundaries".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 100,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Local 0101 boundaries".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 0,
+    })
+    .unwrap();
+
+    let input = package.renderer_input_for_target(&token).unwrap();
+    let RendererInput::HcSsedStream { length, .. } = input else {
+        panic!("SSED address should produce HC renderer input");
+    };
+    assert_eq!(length, Some(second_entry_offset as u64));
+}
+
+#[test]
 fn ssed_hc_renderer_input_uses_metadata_record_close_boundary() {
     let dir = tempdir().unwrap();
     let mut honmon = Vec::new();
@@ -729,6 +794,112 @@ fn ssed_hc_renderer_input_does_not_scan_index_for_markerless_stream_length() {
             .iter()
             .any(|diagnostic| { diagnostic.code == "ssed_renderer_resource_scan_deferred" })
     );
+}
+
+#[test]
+fn ssed_index_address_uses_own_index_component_for_body_bound() {
+    let dir = tempdir().unwrap();
+    let honmon = b"first-second-third".to_vec();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(
+            &[&simple_index_page_for_test(&[
+                (&[0x24, 0x22], 100, 0),
+                (&[0x24, 0x24], 100, 5),
+            ])],
+            200,
+            200,
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FKINDEX.DIC"),
+        fixture_sseddata_literal_chunks(
+            &[&simple_index_page_for_test(&[
+                (&[0x25, 0x22], 100, 0),
+                (&[0x25, 0x24], 100, 12),
+            ])],
+            300,
+            300,
+        ),
+    )
+    .unwrap();
+    let catalog = SsedCatalog {
+        title: "Index-specific body bounds".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x71,
+                start_block: 200,
+                end_block: 200,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x71,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FKINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Index-specific body bounds".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let token = TargetToken::new(&InternalTarget::SsedIndexAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 0,
+        index_component: "FKINDEX.DIC".to_owned(),
+    })
+    .unwrap();
+
+    let input = package.renderer_input_for_target(&token).unwrap();
+    let RendererInput::HcSsedStream { length, .. } = input else {
+        panic!("SSED index address should produce HC renderer input");
+    };
+
+    assert_eq!(length, Some(12));
 }
 
 #[test]

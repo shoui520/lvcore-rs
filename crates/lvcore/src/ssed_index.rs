@@ -256,6 +256,157 @@ pub fn parse_supported_leaf_page(
     (Vec::new(), 0)
 }
 
+pub fn parse_supported_leaf_page_body_pointers(
+    component_type: u8,
+    page: &[u8],
+) -> Option<(Vec<SsedIndexPointer>, usize)> {
+    if is_simple_leaf_index_type(component_type) {
+        return Some(parse_simple_leaf_page_body_pointers(page));
+    }
+    if is_body_only_simple_leaf_index_type(component_type) {
+        return Some(parse_body_only_simple_leaf_page_body_pointers(page));
+    }
+    if is_body_only_tagged_leaf_index_type(component_type) {
+        return Some(parse_tagged_leaf_page_body_pointers(
+            page,
+            TaggedLeafLayout::BodyOnly,
+        ));
+    }
+    if is_tagged_leaf_index_type(component_type) {
+        return Some(parse_tagged_leaf_page_body_pointers(
+            page,
+            TaggedLeafLayout::BodyAndTitle,
+        ));
+    }
+    None
+}
+
+fn parse_simple_leaf_page_body_pointers(page: &[u8]) -> (Vec<SsedIndexPointer>, usize) {
+    if page.len() < 4 {
+        return (Vec::new(), 1);
+    }
+    let count = be16(page, 2);
+    let mut pos = 4usize;
+    let mut pointers = Vec::new();
+    let mut unknown = 0usize;
+
+    for _ in 1..=u32::from(count) {
+        if pos >= page.len() {
+            break;
+        }
+        let key_len = page[pos] as usize;
+        if key_len == 0 {
+            if page[pos..page.len().min(pos + 13)]
+                .iter()
+                .any(|value| *value != 0)
+            {
+                while pos + 13 <= page.len() && page[pos..pos + 13].iter().any(|value| *value != 0)
+                {
+                    pointers.push(SsedIndexPointer {
+                        block: be32(page, pos),
+                        offset: u32::from(be16(page, pos + 4)),
+                    });
+                    pos += 13;
+                }
+            }
+            break;
+        }
+        pos += 1;
+        if pos + key_len + 12 > page.len() {
+            unknown += 1;
+            break;
+        }
+        pos += key_len;
+        pointers.push(SsedIndexPointer {
+            block: be32(page, pos),
+            offset: u32::from(be16(page, pos + 4)),
+        });
+        pos += 12;
+    }
+
+    (pointers, unknown)
+}
+
+fn parse_body_only_simple_leaf_page_body_pointers(page: &[u8]) -> (Vec<SsedIndexPointer>, usize) {
+    if page.len() < 4 {
+        return (Vec::new(), 1);
+    }
+    let count = be16(page, 2);
+    let mut pos = 4usize;
+    let mut pointers = Vec::new();
+    let mut unknown = 0usize;
+    for _ in 1..=u32::from(count) {
+        if pos >= page.len() || page[pos] == 0 {
+            break;
+        }
+        let key_len = page[pos] as usize;
+        pos += 1;
+        if pos + key_len + 6 > page.len() {
+            unknown += 1;
+            break;
+        }
+        pos += key_len;
+        pointers.push(SsedIndexPointer {
+            block: be32(page, pos),
+            offset: u32::from(be16(page, pos + 4)),
+        });
+        pos += 6;
+    }
+    (pointers, unknown)
+}
+
+fn parse_tagged_leaf_page_body_pointers(
+    page: &[u8],
+    layout: TaggedLeafLayout,
+) -> (Vec<SsedIndexPointer>, usize) {
+    if page.len() < 4 {
+        return (Vec::new(), 1);
+    }
+    let count = be16(page, 2);
+    let mut pos = 4usize;
+    let mut pointers = Vec::new();
+    let mut unknown = 0usize;
+    let mut subrecord = 0u16;
+
+    while subrecord < count && pos + 2 <= page.len() {
+        let tag = page[pos];
+        let key_len = page[pos + 1] as usize;
+        if tag == 0 && key_len == 0 {
+            break;
+        }
+        pos += 2;
+
+        match tag {
+            0x00 | 0xc0 => {
+                let pointer_len = match layout {
+                    TaggedLeafLayout::BodyOnly => 6,
+                    TaggedLeafLayout::BodyAndTitle => 12,
+                };
+                if pos + key_len + pointer_len > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                pos += key_len;
+                pointers.push(read_body_pointer(page, pos));
+                pos += pointer_len;
+            }
+            0x80 => {
+                if pos + 2 + key_len > page.len() {
+                    unknown += 1;
+                    break;
+                }
+                pos += 2 + key_len;
+            }
+            _ => {
+                unknown += 1;
+                break;
+            }
+        }
+        subrecord += 1;
+    }
+    (pointers, unknown)
+}
+
 fn parse_body_only_simple_leaf_page(
     component: &str,
     page: &[u8],

@@ -172,7 +172,7 @@ use crate::ssed_hc::{
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_title_text,
     is_leaf_page, is_simple_leaf_index_type, is_supported_index_type, parse_internal_page,
-    parse_supported_leaf_page,
+    parse_supported_leaf_page, parse_supported_leaf_page_body_pointers,
 };
 use crate::ssed_loose_media::{
     BRITANNICA_CHRONOLOGY_SOURCE_ID, discover_britannica_top_dat_files,
@@ -246,6 +246,10 @@ pub struct LvedSqliteDriver;
 pub struct LvlMultiViewDriver;
 pub struct HoureiDriver;
 
+type SsedIndexBodyBoundaryMap = BTreeMap<String, Vec<SsedIndexPointer>>;
+type SsedIndexComponentBoundaryCache =
+    BTreeMap<String, std::result::Result<Arc<SsedIndexBodyBoundaryMap>, String>>;
+
 pub struct ReaderBookPackage {
     root: PathBuf,
     storage: DirectoryStorage,
@@ -270,8 +274,7 @@ pub struct ReaderBookPackage {
     ssed_ios_address_converter:
         OnceLock<std::result::Result<Option<SsedIosAddressConverter>, String>>,
     ssed_ios_search_resolvers: OnceLock<std::result::Result<Vec<SsedIosSearchResolver>, String>>,
-    ssed_index_body_boundaries:
-        OnceLock<std::result::Result<BTreeMap<String, Vec<SsedIndexPointer>>, String>>,
+    ssed_index_component_body_boundaries: Mutex<SsedIndexComponentBoundaryCache>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
     ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
     ssed_panel_xml: OnceLock<std::result::Result<Option<SsedPanelXml>, String>>,
@@ -372,7 +375,7 @@ impl ReaderBookPackage {
             ssed_sidecar_range_resolvers: OnceLock::new(),
             ssed_ios_address_converter: OnceLock::new(),
             ssed_ios_search_resolvers: OnceLock::new(),
-            ssed_index_body_boundaries: OnceLock::new(),
+            ssed_index_component_body_boundaries: Mutex::new(BTreeMap::new()),
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),
             ssed_panel_xml: OnceLock::new(),

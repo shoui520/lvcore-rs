@@ -14,7 +14,7 @@ impl ReaderBookPackage {
             block,
             offset,
             None,
-            false,
+            None,
         )
     }
 
@@ -23,14 +23,14 @@ impl ReaderBookPackage {
         requested_component: &str,
         block: u32,
         offset: u32,
-        _index_component: &str,
+        index_component: &str,
     ) -> Result<VisualBody> {
         self.visual_body_for_ssed_address_with_options(
             requested_component,
             block,
             offset,
             None,
-            true,
+            Some(index_component),
         )
     }
 
@@ -47,7 +47,7 @@ impl ReaderBookPackage {
             block,
             offset,
             Some((end_block, end_offset)),
-            false,
+            None,
         )
     }
 
@@ -57,7 +57,7 @@ impl ReaderBookPackage {
         block: u32,
         offset: u32,
         end: Option<(u32, u32)>,
-        allow_index_boundary: bool,
+        index_component_hint: Option<&str>,
     ) -> Result<VisualBody> {
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(VisualBody::Unsupported {
@@ -144,24 +144,21 @@ impl ReaderBookPackage {
         let explicit_bounded_length = end.and_then(|(end_block, end_offset)| {
             bounded_ssed_stream_length(catalog, component, stream_offset, end_block, end_offset)
         });
-        let index_bounded_length =
-            if allow_index_boundary && end.is_none() && inferred_length.is_none() {
-                self.ssed_next_index_body_pointer_after(SsedIndexPointer { block, offset })?
-                    .filter(|end| {
-                        ssed_index_bound_is_plausible(SsedIndexPointer { block, offset }, *end)
-                    })
-                    .and_then(|end| {
-                        bounded_ssed_stream_length(
-                            catalog,
-                            component,
-                            stream_offset,
-                            end.block,
-                            end.offset,
-                        )
-                    })
-            } else {
-                None
-            };
+        let index_bounded_length = if let Some(index_component) = index_component_hint
+            && end.is_none()
+            && inferred_length.is_none()
+        {
+            self.ssed_next_index_body_pointer_after_in_index_component(
+                SsedIndexPointer { block, offset },
+                index_component,
+            )?
+            .filter(|end| ssed_index_bound_is_plausible(SsedIndexPointer { block, offset }, *end))
+            .and_then(|end| {
+                bounded_ssed_stream_length(catalog, component, stream_offset, end.block, end.offset)
+            })
+        } else {
+            None
+        };
         let sidecar_range_bounded_length = if component.role == SsedComponentRole::Honmon {
             self.ssed_sidecar_range_bound(block, offset)?
                 .and_then(|bound| {
@@ -383,14 +380,14 @@ impl ReaderBookPackage {
             .map(|next| next.saturating_sub(start) as u64)
             .or_else(|| Some((reader.header().expanded_size() - start) as u64));
         }
-        if let Some(marker_len) = ssed_reader_index_boundary_marker_variant_len(&mut reader, start)
+        if let Some(markers) = ssed_reader_index_boundary_marker_variants(&mut reader, start)
             .ok()
             .flatten()
         {
             return ssed_find_next_marker_variant_offset(
                 &mut reader,
-                start.saturating_add(marker_len),
-                &[0x1f, 0x09, 0x00, 0x02],
+                start.saturating_add(SSED_ENTRY_MARKER.len()),
+                &markers,
             )
             .ok()
             .flatten()
@@ -585,33 +582,67 @@ fn sidecar_plain_text_to_html(text: &str) -> String {
     html
 }
 
-fn ssed_reader_index_boundary_marker_variant_len(
+fn ssed_reader_index_boundary_marker_variants(
     reader: &mut SsedDataFile,
     offset: usize,
-) -> Result<Option<usize>> {
+) -> Result<Option<Vec<[u8; 4]>>> {
     let data = reader.read_range(offset, SSED_ENTRY_MARKER.len())?;
-    if data == [0x1f, 0x09, 0x00, 0x02] {
-        Ok(Some(SSED_ENTRY_MARKER.len()))
-    } else {
-        Ok(None)
+    let Ok(marker) = <[u8; 4]>::try_from(data.as_slice()) else {
+        return Ok(None);
+    };
+    match marker {
+        [0x1f, 0x09, 0x00, 0x02] => Ok(Some(vec![marker])),
+        [0x1f, 0x09, 0x01, 0x01] => Ok(Some(vec![marker, SSED_ENTRY_MARKER])),
+        _ => Ok(None),
     }
 }
 
 fn ssed_find_next_marker_variant_offset(
     reader: &mut SsedDataFile,
     offset: usize,
-    marker: &[u8],
+    markers: &[[u8; 4]],
 ) -> Result<Option<usize>> {
-    if marker.is_empty() {
+    if markers.is_empty() {
         return Ok(None);
     }
-    let available = reader.header().expanded_size().saturating_sub(offset);
-    let size = available.min(SSED_MARKER_VARIANT_BOUNDARY_SCAN_LIMIT);
-    let data = reader.read_range(offset, size)?;
-    Ok(data
-        .windows(marker.len())
-        .position(|window| window == marker)
-        .map(|relative| offset.saturating_add(relative)))
+    const MARKER_VARIANT_SCAN_CHUNK_BYTES: usize = 8 * 1024;
+    let expanded_size = reader.header().expanded_size();
+    let scan_end = offset
+        .saturating_add(SSED_MARKER_VARIANT_BOUNDARY_SCAN_LIMIT)
+        .min(expanded_size);
+    let mut read_offset = offset;
+    let mut carry = Vec::new();
+    let mut carry_base = offset;
+    let tail_size = SSED_ENTRY_MARKER.len().saturating_sub(1);
+
+    while read_offset < scan_end {
+        let read_size = scan_end
+            .saturating_sub(read_offset)
+            .min(MARKER_VARIANT_SCAN_CHUNK_BYTES);
+        let chunk = reader.read_range(read_offset, read_size)?;
+        if chunk.is_empty() {
+            break;
+        }
+        let base = if carry.is_empty() {
+            read_offset
+        } else {
+            carry_base
+        };
+        let mut buffer = Vec::with_capacity(carry.len() + chunk.len());
+        buffer.extend_from_slice(&carry);
+        buffer.extend_from_slice(&chunk);
+        if let Some(relative) = buffer
+            .windows(SSED_ENTRY_MARKER.len())
+            .position(|window| markers.iter().any(|marker| window == marker))
+        {
+            return Ok(Some(base.saturating_add(relative)));
+        }
+        let retained = tail_size.min(buffer.len());
+        carry = buffer[buffer.len() - retained..].to_vec();
+        carry_base = base + buffer.len() - retained;
+        read_offset = read_offset.saturating_add(read_size);
+    }
+    Ok(None)
 }
 
 fn ssed_reader_metadata_record_marker_len(
