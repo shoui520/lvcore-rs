@@ -77,7 +77,17 @@ fn validate_opened_package_json(
     book_id: BookId,
     options: ValidateOptions,
 ) -> serde_json::Value {
-    let metadata = metadata_for(&library, &book_id);
+    let metadata = match metadata_for(&library, &book_id) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return json!({
+                "path": path,
+                "status": "metadata_error",
+                "book_id": book_id,
+                "error": error.to_string(),
+            });
+        }
+    };
     match library.home_surfaces(&book_id) {
         Ok(surfaces) => {
             let exercises = if options.deep {
@@ -261,7 +271,17 @@ fn exercise_reader_paths(
         rows.push(row);
     }
 
-    let metadata = metadata_for(library, book_id);
+    let metadata = match metadata_for(library, book_id) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            rows.push(json!({
+                "kind": "search_modes",
+                "status": "metadata_error",
+                "error": error.to_string(),
+            }));
+            return rows;
+        }
+    };
     rows.extend(search_mode_exercises(
         library,
         book_id,

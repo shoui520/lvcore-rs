@@ -462,7 +462,7 @@ fn main() -> Result<()> {
         } => {
             let registry = DriverRegistry::default();
             let (library, book_id) = open_single_book_library(&registry, &path)?;
-            let metadata = metadata_for(&library, &book_id);
+            let metadata = metadata_for(&library, &book_id)?;
             let surface =
                 library.open_surface_page(&book_id, &surface_id, cursor.as_deref(), limit)?;
             write_json_pretty(&json!({
@@ -486,7 +486,7 @@ fn main() -> Result<()> {
         Command::RendererInput { path, token } => {
             let registry = DriverRegistry::default();
             let (library, book_id) = open_single_book_library(&registry, &path)?;
-            let metadata = metadata_for(&library, &book_id);
+            let metadata = metadata_for(&library, &book_id)?;
             let target = TargetToken::from_opaque(token);
             let input = library.renderer_input_for_target(&book_id, &target)?;
             write_json_pretty(&json!({
@@ -566,12 +566,16 @@ fn open_library_from_paths(
     (library, report)
 }
 
-fn metadata_for(library: &BookLibrary, book_id: &BookId) -> BookMetadata {
+fn metadata_for(library: &BookLibrary, book_id: &BookId) -> Result<BookMetadata> {
     library
         .book(book_id)
-        .expect("book id returned by open_path must exist")
-        .metadata()
-        .clone()
+        .map(|book| book.metadata().clone())
+        .ok_or_else(|| {
+            Error::Driver(format!(
+                "opened book id {} is not in the library",
+                book_id.0
+            ))
+        })
 }
 
 fn library_import_command_json(
@@ -585,7 +589,7 @@ fn library_import_command_json(
 
 fn home_command_json(registry: &DriverRegistry, path: &Path) -> Result<serde_json::Value> {
     let (library, book_id) = open_single_book_library(registry, path)?;
-    let metadata = metadata_for(&library, &book_id);
+    let metadata = metadata_for(&library, &book_id)?;
     let surfaces = library.home_surfaces(&book_id)?;
     Ok(json!({
         "metadata": metadata,
@@ -676,7 +680,7 @@ fn search_command_json(
     window_after: usize,
 ) -> Result<serde_json::Value> {
     let (library, book_id) = open_single_book_library(registry, path)?;
-    let metadata = metadata_for(&library, &book_id);
+    let metadata = metadata_for(&library, &book_id)?;
     let page = library.search(&SearchQuery {
         scope: SearchScope::CurrentBook {
             book_id: book_id.clone(),
@@ -733,7 +737,7 @@ fn render_command_json(
     render_options: RenderOptions,
 ) -> Result<serde_json::Value> {
     let (library, book_id) = open_single_book_library(registry, path)?;
-    let metadata = metadata_for(&library, &book_id);
+    let metadata = metadata_for(&library, &book_id)?;
     let (routed_book_id, view, routing_diagnostics) = if token.starts_with("lvcore://target/") {
         let routed = library.render_target_href_routed(&book_id, &token, &render_options)?;
         (routed.book_id, routed.view, routed.diagnostics)
@@ -761,7 +765,7 @@ fn window_command_json(
     render_options: RenderOptions,
 ) -> Result<serde_json::Value> {
     let (library, book_id) = open_single_book_library(registry, path)?;
-    let metadata = metadata_for(&library, &book_id);
+    let metadata = metadata_for(&library, &book_id)?;
     let (routed_book_id, window, routing_diagnostics) = if token.starts_with("lvcore://target/") {
         let routed = library.resolve_target_window_href_routed(
             &book_id,
@@ -802,7 +806,7 @@ fn resource_command_json(
     token: String,
 ) -> Result<serde_json::Value> {
     let (library, book_id) = open_single_book_library(registry, path)?;
-    let metadata = metadata_for(&library, &book_id);
+    let metadata = metadata_for(&library, &book_id)?;
     let (resource_ref, bytes) = if token.starts_with("lvcore://resource/") {
         (
             library.resolve_scoped_resource_href(&token)?,

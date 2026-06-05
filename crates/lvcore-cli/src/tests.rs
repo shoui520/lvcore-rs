@@ -59,6 +59,20 @@ fn registry_can_stream_discovered_packages_without_precollecting() {
 }
 
 #[test]
+fn metadata_for_missing_book_id_returns_error_instead_of_panicking() {
+    let library = BookLibrary::new();
+    let book_id = BookId("missing-book".to_owned());
+
+    let error = metadata_for(&library, &book_id).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("opened book id missing-book is not in the library")
+    );
+}
+
+#[test]
 fn validate_can_open_a_previously_detected_package() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
