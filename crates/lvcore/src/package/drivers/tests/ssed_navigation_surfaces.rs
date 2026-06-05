@@ -434,6 +434,89 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
     assert_eq!(next_cursor.as_deref(), Some("4"));
 }
 
+#[test]
+fn ssed_auxiliary_index_defers_honmon_targets_inside_entry_marker_controls() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("EXINFO.INI"),
+        cp932("[GENERAL]\nIDXINFO=000002BC.idx\nIDXTITLE=付録\n"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("000002BC.idx"),
+        cp932(
+            "00000000\t00000000\tRoot\n\
+                 00000002\t00000002\t\tMarker child\n\
+                 00000002\t00000004\t\tPayload child\n",
+        ),
+    )
+    .unwrap();
+    let body = [
+        0x1f, 0x02, 0x1f, 0x09, 0x00, 0x01, 0x1f, 0x41, 0x00, 0x01, 0x1f, 0x61, 0x1f, 0x0a,
+    ];
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&body], 2, 2),
+    )
+    .unwrap();
+    let catalog = SsedCatalog {
+        title: "Aux marker".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 2,
+            end_block: 2,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Aux marker".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    let surface = package.open_surface("aux-index:0").unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+        panic!("expected auxiliary navigation tree");
+    };
+    let marker_child = &nodes[0].children[0];
+    let payload_child = &nodes[0].children[1];
+    assert!(marker_child.target.is_none());
+    assert!(payload_child.target.is_none());
+    assert!(
+        marker_child
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "ssed_auxiliary_index_body_target_deferred" })
+    );
+    assert!(
+        payload_child
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "ssed_auxiliary_index_body_target_deferred" })
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn ssed_adjacent_panel_symlink_escape_is_not_advertised() {

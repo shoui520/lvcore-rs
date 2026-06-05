@@ -575,6 +575,15 @@ fn ssed_aux_index_row_target(
             diagnostics,
         );
     }
+    if let Some(catalog) = &package.ssed_catalog
+        && let Some(component) = catalog.component_for_address(row.block)
+        && component.role == SsedComponentRole::Honmon
+        && let Some(diagnostic) =
+            ssed_aux_honmon_target_deferred_diagnostic(package, component, row, next_target_row)?
+    {
+        diagnostics.push(diagnostic);
+        return Ok(None);
+    }
     match package.ssed_target_for_index_pointer_with_bound(pointer, end)? {
         Ok(target) => Ok(Some(target)),
         Err(diagnostic) => {
@@ -582,6 +591,135 @@ fn ssed_aux_index_row_target(
             Ok(None)
         }
     }
+}
+
+fn ssed_aux_honmon_target_deferred_diagnostic(
+    package: &ReaderBookPackage,
+    component: &SsedComponent,
+    row: &SsedAuxIndexRow,
+    next_target_row: Option<&SsedAuxIndexRow>,
+) -> Result<Option<Diagnostic>> {
+    const MIN_AUX_HONMON_RANGE_BYTES: u64 = 8;
+
+    let Some(component_offset) = component.relative_offset(row.block, row.offset) else {
+        return Ok(None);
+    };
+    let Some(path) = package.resolve_readable_ssed_component_path(component)? else {
+        return Ok(None);
+    };
+    let mut reader = SsedDataFile::open(path)?;
+    let Ok(component_offset_usize) = usize::try_from(component_offset) else {
+        return Ok(Some(
+            Diagnostic::info(
+                "ssed_auxiliary_index_body_target_deferred",
+                format!(
+                    "auxiliary index row {} points to a HONMON offset too large to validate",
+                    row.line_number
+                ),
+            )
+            .with_context("component", &component.filename),
+        ));
+    };
+
+    if let Some(next) = next_target_row
+        && let Some(next_component) = package
+            .ssed_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.component_for_address(next.block))
+        && next_component
+            .filename
+            .eq_ignore_ascii_case(&component.filename)
+        && let Some(next_offset) = next_component.relative_offset(next.block, next.offset)
+    {
+        let stream_start =
+            ssed_aux_honmon_stream_start_offset(&mut reader, component_offset_usize)?;
+        if next_offset > u64::try_from(stream_start).unwrap_or(u64::MAX) {
+            let range_len = next_offset - u64::try_from(stream_start).unwrap_or(0);
+            if range_len < MIN_AUX_HONMON_RANGE_BYTES {
+                return Ok(Some(
+                    Diagnostic::info(
+                        "ssed_auxiliary_index_body_target_deferred",
+                        format!(
+                            "auxiliary index row {} points into a {range_len} byte HONMON range, which is not a renderable entry body",
+                            row.line_number
+                        ),
+                    )
+                    .with_context("component", &component.filename)
+                    .with_context("block", row.block.to_string())
+                    .with_context("offset", row.offset.to_string()),
+                ));
+            }
+        }
+    }
+
+    if ssed_aux_honmon_offset_is_inside_entry_marker(&mut reader, component_offset_usize)? {
+        return Ok(Some(
+            Diagnostic::info(
+                "ssed_auxiliary_index_body_target_deferred",
+                format!(
+                    "auxiliary index row {} points inside an SSED entry marker/control header",
+                    row.line_number
+                ),
+            )
+            .with_context("component", &component.filename)
+            .with_context("block", row.block.to_string())
+            .with_context("offset", row.offset.to_string()),
+        ));
+    }
+
+    Ok(None)
+}
+
+fn ssed_aux_honmon_stream_start_offset(
+    reader: &mut SsedDataFile,
+    component_offset: usize,
+) -> Result<usize> {
+    if component_offset >= 2 {
+        let prefix_offset = component_offset - 2;
+        let data = reader.read_range(prefix_offset, SSED_ENTRY_MARKER.len() + 2)?;
+        if data.starts_with(&[0x1f, 0x02])
+            && data
+                .get(2..2 + SSED_ENTRY_MARKER.len())
+                .is_some_and(|marker| marker == SSED_ENTRY_MARKER)
+        {
+            return Ok(prefix_offset);
+        }
+    }
+    Ok(component_offset)
+}
+
+fn ssed_aux_honmon_offset_is_inside_entry_marker(
+    reader: &mut SsedDataFile,
+    component_offset: usize,
+) -> Result<bool> {
+    let scan_start = component_offset.saturating_sub(SSED_ENTRY_MARKER.len() + 2);
+    let data = reader.read_range(scan_start, SSED_ENTRY_MARKER.len() * 3)?;
+    for relative_start in 0..data.len().min(SSED_ENTRY_MARKER.len() + 2) {
+        let absolute_start = scan_start + relative_start;
+        let Some(marker_len) = ssed_entry_marker_len_in_slice(&data[relative_start..]) else {
+            continue;
+        };
+        if component_offset > absolute_start
+            && component_offset < absolute_start.saturating_add(marker_len)
+            && !(marker_len == SSED_ENTRY_MARKER.len() + 2
+                && component_offset == absolute_start + 2)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn ssed_entry_marker_len_in_slice(data: &[u8]) -> Option<usize> {
+    if data.starts_with(&[0x1f, 0x02])
+        && data
+            .get(2..2 + SSED_ENTRY_MARKER.len())
+            .is_some_and(|marker| marker == SSED_ENTRY_MARKER)
+    {
+        return Some(SSED_ENTRY_MARKER.len() + 2);
+    }
+    data.starts_with(&SSED_ENTRY_MARKER)
+        .then_some(SSED_ENTRY_MARKER.len())
 }
 
 fn nearest_higher_aux_target_row<'a>(
