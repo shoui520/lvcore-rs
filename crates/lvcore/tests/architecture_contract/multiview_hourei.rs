@@ -444,7 +444,16 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     let kana_browse = package
         .open_surface_page("hourei-kana:み", None, 10)
         .unwrap();
-    let lvcore::NavigationSurface::TitleIndexBrowse { items, .. } = kana_browse else {
+    let kana_actionable = kana_browse.actionable_targets();
+    assert_eq!(kana_actionable.len(), 1);
+    assert_eq!(
+        kana_actionable[0].sequence_hint,
+        Some(lvcore::SequenceHint::TitleIndexOrder {
+            value: "hourei-kana:み".to_owned(),
+            cursor: Some("law:401000000000000001".to_owned()),
+        })
+    );
+    let lvcore::NavigationSurface::TitleIndexBrowse { items, .. } = &kana_browse else {
         panic!("Hourei kana initial should open as a title/index browse surface");
     };
     assert_eq!(items.len(), 1);
@@ -652,6 +661,29 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
     assert_eq!(body_order.after.len(), 1);
     assert!(
         body_order
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "sequence_deferred")
+    );
+
+    let kana_entry_window = package
+        .resolve_target_window(
+            &kana_actionable[0].target,
+            kana_actionable[0].sequence_hint.as_ref(),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        kana_entry_window.center.kind,
+        ResolvedTargetKind::LawArticle
+    );
+    assert_eq!(kana_entry_window.center.title.as_deref(), Some("民法"));
+    assert_eq!(kana_entry_window.after.len(), 1);
+    assert_eq!(kana_entry_window.after[0].title.as_deref(), Some("商法"));
+    assert!(
+        kana_entry_window
             .diagnostics
             .iter()
             .all(|diagnostic| diagnostic.code != "sequence_deferred")

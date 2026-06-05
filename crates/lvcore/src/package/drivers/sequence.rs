@@ -1,4 +1,4 @@
-use super::hourei_navigation::hourei_kana_panel_surface_id;
+use super::hourei_navigation::{hourei_kana_initial_from_surface_id, hourei_kana_panel_surface_id};
 use super::*;
 
 impl SequenceProvider for ReaderBookPackage {
@@ -77,6 +77,12 @@ impl SequenceProvider for ReaderBookPackage {
             return Ok(window);
         }
         if self.metadata.format_family == FormatFamily::Hourei
+            && sequence_hint.is_some_and(is_hourei_kana_list_sequence_hint)
+            && let Some(window) = self.resolve_hourei_law_window(target, before, after, options)?
+        {
+            return Ok(window);
+        }
+        if self.metadata.format_family == FormatFamily::Hourei
             && sequence_hint.is_none_or(|hint| {
                 matches!(
                     hint,
@@ -123,6 +129,14 @@ fn is_lved_list_sequence_hint(hint: &SequenceHint) -> bool {
             hint,
             SequenceHint::TitleIndexOrder { value, .. } if value == "lved-list"
         )
+}
+
+fn is_hourei_kana_list_sequence_hint(hint: &SequenceHint) -> bool {
+    matches!(
+        hint,
+        SequenceHint::TitleIndexOrder { value, .. }
+            if hourei_kana_initial_from_surface_id(value).is_some()
+    )
 }
 
 impl ReaderBookPackage {
