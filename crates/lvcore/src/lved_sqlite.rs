@@ -9,6 +9,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::ios_dictlist::discover_ios_dictlist_info;
 use crate::search::SearchMode;
 use crate::storage::regular_file_inside_root;
 
@@ -214,7 +215,8 @@ impl LvedSqliteStore {
         };
         let key_file = discover_lved_key_file(&payload_path)?;
         let android_info = if key_file.is_none() {
-            android_dictinfo_for_payload(&payload_path)?
+            ios_lved_sqlcipher_info_for_payload(&payload_path)?
+                .or(android_dictinfo_for_payload(&payload_path)?)
         } else {
             None
         };
@@ -1053,6 +1055,38 @@ fn push_unique_string(values: &mut Vec<String>, value: &str) {
     if !value.is_empty() && !values.iter().any(|existing| existing == value) {
         values.push(value.to_owned());
     }
+}
+
+fn ios_lved_sqlcipher_info_for_payload(payload_path: &Path) -> Result<Option<AndroidDictInfo>> {
+    let root = payload_path.parent().unwrap_or(payload_path);
+    let Some(info) = discover_ios_dictlist_info(root)? else {
+        return Ok(None);
+    };
+    let payload_canonical = fs::canonicalize(payload_path).ok();
+    for payload in info.fts_payloads {
+        let same_path = payload.absolute_path == payload_path
+            || payload_canonical.as_ref().is_some_and(|canonical| {
+                fs::canonicalize(&payload.absolute_path).ok().as_ref() == Some(canonical)
+            });
+        if !same_path {
+            continue;
+        }
+        let Some(dict_id) = payload.dict_id else {
+            continue;
+        };
+        if payload.dict_code.is_empty() {
+            continue;
+        }
+        let title = payload.dictionary_name.unwrap_or_default();
+        return Ok(Some(AndroidDictInfo {
+            dict_id,
+            dict_code: payload.dict_code,
+            title: title.clone(),
+            name: title,
+            fonts: Vec::new(),
+        }));
+    }
+    Ok(None)
 }
 
 fn push_unique_i64(values: &mut Vec<i64>, value: i64) {

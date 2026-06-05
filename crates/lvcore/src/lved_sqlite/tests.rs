@@ -89,6 +89,62 @@ fn discovers_android_lved_payload_and_uses_dictinfo_key() {
 }
 
 #[test]
+fn discovers_ios_lved_dbc_payload_and_uses_dictlist_key() {
+    let dir = tempdir().unwrap();
+    let package = dir.path().join("OXFPEU4");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(
+        dir.path().join("DictList.plist"),
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>ItemArray</key><array><dict>
+    <key>DictFolder</key><string>OXFPEU4</string>
+    <key>DictName</key><string>Oxford Test Dictionary</string>
+    <key>DictFtsDB</key><string>OXFPEU4/OXFPEU4.dbc</string>
+  </dict></array>
+</dict></plist>"#,
+    )
+    .unwrap();
+    let payload = package.join("OXFPEU4.dbc");
+    let key = derive_android_lved_sqlcipher_key(750, "OXFPEU4");
+    {
+        let connection = Connection::open(&payload).unwrap();
+        apply_sqlcipher_key(&connection, &key).unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text, media text);
+                insert into info values (1, 1, 'about.html', '<h1>Wrong fallback title</h1>', '');
+                create table content (id integer primary key, type integer, body text, media text);
+                create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                create virtual table search using fts4(forward, back, part, fts, filter);
+                insert into content values (100, 1, '<article>body</article>', '');
+                insert into list values (1, 100, 1, '', '<b>alpha</b>', '');
+                insert into search(rowid, forward, back, part, fts, filter)
+                  values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', '∥alpha∥');
+                ",
+            )
+            .unwrap();
+    }
+
+    let store = LvedSqliteStore::discover(&package).unwrap().unwrap();
+
+    assert!(store.key_file.is_none());
+    assert_eq!(
+        store.android_info.as_ref().map(|info| info.dict_id),
+        Some(750)
+    );
+    assert_eq!(
+        store.title().unwrap().as_deref(),
+        Some("Oxford Test Dictionary")
+    );
+    assert_eq!(
+        store.search("alp", &SearchMode::Forward, 10).unwrap()[0].title_text,
+        "alpha"
+    );
+}
+
+#[test]
 fn android_lved_key_derivation_uses_wrapping_id_arithmetic() {
     let key = derive_android_lved_sqlcipher_key(i64::MAX, "TESTDICT");
     let expected_id = i64::MAX.wrapping_mul(19286).to_string();

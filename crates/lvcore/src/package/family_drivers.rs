@@ -145,6 +145,9 @@ impl PackageDriver for LvedSqliteDriver {
 
     fn detect(&self, root: &Path) -> Result<Option<DetectedPackage>> {
         let package_root = package_root_for_detection(root);
+        if detect_ssed_package(package_root)?.is_some() {
+            return Ok(None);
+        }
         if let Some(store) = LvedSqliteStore::discover(root)? {
             let mut evidence = vec![
                 store
