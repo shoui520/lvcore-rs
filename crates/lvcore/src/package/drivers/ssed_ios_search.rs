@@ -70,9 +70,19 @@ impl ReaderBookPackage {
             .collect::<Vec<_>>();
         if mode_resolvers.is_empty() {
             return Ok(SearchPage::deferred(
-                "iOS DictSearchDB search has no implemented table for this SSED search mode",
+                "iOS advanced search has no implemented table for this SSED search mode",
             ));
         }
+        let has_search_db_resolver = mode_resolvers
+            .iter()
+            .any(|resolver| resolver.source == SsedIosSearchResolverSource::DictSearchDb);
+        let mode_resolvers = mode_resolvers
+            .into_iter()
+            .filter(|resolver| {
+                !has_search_db_resolver
+                    || resolver.source == SsedIosSearchResolverSource::DictSearchDb
+            })
+            .collect::<Vec<_>>();
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(SearchPage {
                 hits: Vec::new(),
@@ -121,16 +131,10 @@ impl ReaderBookPackage {
                 }
                 let label = self.ssed_rich_label_with_policy(&row.label, &label_policy);
                 let (block, offset) = self.convert_ios_ssed_address(row.block, row.offset)?;
-                let pointer = SsedIndexPointer { block, offset };
-                let end = self
-                    .ssed_next_index_body_pointer_after(pointer)?
-                    .filter(|end| ssed_index_bound_is_plausible(pointer, *end));
-                let target = match self.ssed_target_for_index_pointer_with_bound(pointer, end)? {
-                    Ok(target) => target,
-                    Err(diagnostic) => {
-                        diagnostics.push(diagnostic);
-                        continue;
-                    }
+                let Some(target) =
+                    self.ssed_target_for_loose_address(block, offset, &mut diagnostics)?
+                else {
+                    continue;
                 };
                 let href = target.href();
                 let snippet_html = (!row.snippet.trim().is_empty())
