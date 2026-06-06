@@ -1426,12 +1426,6 @@ fn select_search_probe_query(
     mode: &SearchMode,
     labels: &[String],
 ) -> String {
-    if metadata.format_family == FormatFamily::Ssed
-        && matches!(mode, SearchMode::Exact | SearchMode::Backward)
-        && labels.iter().any(|label| label == "あ")
-    {
-        return "あ".to_owned();
-    }
     let mut prioritized_labels = labels
         .iter()
         .filter(|label| !is_default_search_probe_label(label))
@@ -1457,12 +1451,7 @@ fn select_search_probe_query(
     "a".to_owned()
 }
 
-fn search_probe_prefers_real_labels(format_family: FormatFamily, mode: &SearchMode) -> bool {
-    if format_family == FormatFamily::Ssed
-        && matches!(mode, SearchMode::Exact | SearchMode::Backward)
-    {
-        return false;
-    }
+fn search_probe_prefers_real_labels(_format_family: FormatFamily, mode: &SearchMode) -> bool {
     matches!(
         mode,
         SearchMode::Exact
@@ -1970,7 +1959,7 @@ mod tests {
 
     #[test]
     fn validation_probe_prefers_real_labels_before_defaults() {
-        assert!(!search_probe_prefers_real_labels(
+        assert!(search_probe_prefers_real_labels(
             FormatFamily::Ssed,
             &SearchMode::Exact
         ));
@@ -1978,7 +1967,7 @@ mod tests {
             FormatFamily::Ssed,
             &SearchMode::Forward
         ));
-        assert!(!search_probe_prefers_real_labels(
+        assert!(search_probe_prefers_real_labels(
             FormatFamily::Ssed,
             &SearchMode::Backward
         ));
