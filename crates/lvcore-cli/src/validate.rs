@@ -18,7 +18,8 @@ use super::metadata_for;
 use super::open_single_book_library;
 
 const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 8;
-const VALIDATE_SEARCH_HIT_RENDER_LIMIT: usize = 3;
+const VALIDATE_GENERIC_HTML_NATIVE_HTML_LIMIT: usize = 128 * 1024;
+const VALIDATE_GENERIC_HTML_RESOURCE_LIMIT: usize = 64;
 const VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT: usize = 8;
 const VALIDATE_SURFACE_TARGET_PAGE_LIMIT: usize = 16;
 const VALIDATE_SURFACE_PROBE_PAGE_LIMIT: usize = 16;
@@ -615,8 +616,7 @@ fn search_mode_exercise(
             });
             insert_diagnostic_fields(&mut row, &page.diagnostics);
             if render_hits {
-                let rendered_hits = rendered_search_hit_probes(library, book_id, &page.hits);
-                let rendered_first = rendered_hits.first().cloned();
+                let rendered_first = rendered_first_search_hit_probe(library, book_id, &page.hits);
                 let resource_scan = rendered_search_resource_scan(
                     library,
                     book_id,
@@ -625,8 +625,9 @@ fn search_mode_exercise(
                 );
                 let window_probe = search_result_window_probe(library, book_id, &page.hits);
                 if let Some(object) = row.as_object_mut() {
+                    let rendered_hit_count = usize::from(rendered_first.is_some());
                     object.insert("rendered_first".to_owned(), json!(rendered_first));
-                    object.insert("rendered_hit_count".to_owned(), json!(rendered_hits.len()));
+                    object.insert("rendered_hit_count".to_owned(), json!(rendered_hit_count));
                     object.insert("resource_scan".to_owned(), resource_scan);
                     object.insert("window".to_owned(), window_probe);
                 }
@@ -795,9 +796,49 @@ fn render_mode_contract_probe(
     book_id: &BookId,
     native_view: &ResolvedTargetView,
 ) -> serde_json::Value {
+    let generic_html = if let Some(reason) = generic_html_probe_skip_reason(
+        native_view
+            .display_html
+            .as_ref()
+            .map(|value| value.len())
+            .unwrap_or(0),
+        native_view.resources.len(),
+    ) {
+        skipped_render_mode_probe(native_view, RenderMode::GenericHtml, reason)
+    } else {
+        render_mode_probe(library, book_id, native_view, RenderMode::GenericHtml)
+    };
     json!({
-        "generic_html": render_mode_probe(library, book_id, native_view, RenderMode::GenericHtml),
+        "generic_html": generic_html,
         "basic_text": render_mode_probe(library, book_id, native_view, RenderMode::BasicText),
+    })
+}
+
+fn generic_html_probe_skip_reason(
+    native_display_html_len: usize,
+    native_resource_count: usize,
+) -> Option<&'static str> {
+    if native_display_html_len > VALIDATE_GENERIC_HTML_NATIVE_HTML_LIMIT {
+        return Some("native_display_html_too_large");
+    }
+    if native_resource_count > VALIDATE_GENERIC_HTML_RESOURCE_LIMIT {
+        return Some("resource_count_too_large");
+    }
+    None
+}
+
+fn skipped_render_mode_probe(
+    native_view: &ResolvedTargetView,
+    mode: RenderMode,
+    reason: &'static str,
+) -> serde_json::Value {
+    json!({
+        "status": "skipped_large_view",
+        "view_kind": native_view.kind,
+        "mode": mode,
+        "reason": reason,
+        "native_display_html_len": native_view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+        "native_resource_count": native_view.resources.len(),
     })
 }
 
@@ -980,25 +1021,23 @@ fn surface_rendered_view_probe(
     row
 }
 
-fn rendered_search_hit_probes(
+fn rendered_first_search_hit_probe(
     library: &BookLibrary,
     book_id: &BookId,
     hits: &[SearchHit],
-) -> Vec<serde_json::Value> {
-    hits.iter()
-        .take(VALIDATE_SEARCH_HIT_RENDER_LIMIT)
-        .map(|hit| {
-            library
-                .render_target(book_id, &hit.target, &RenderOptions::default())
-                .map(|view| rendered_view_probe(library, book_id, &view))
-                .unwrap_or_else(|error| {
-                    json!({
-                        "status": "render_error",
-                        "error": error.to_string(),
-                    })
+) -> Option<serde_json::Value> {
+    let hit = hits.first()?;
+    Some(
+        library
+            .render_target(book_id, &hit.target, &RenderOptions::default())
+            .map(|view| rendered_view_probe(library, book_id, &view))
+            .unwrap_or_else(|error| {
+                json!({
+                    "status": "render_error",
+                    "error": error.to_string(),
                 })
-        })
-        .collect()
+            }),
+    )
 }
 
 fn rendered_search_resource_scan(
@@ -1648,6 +1687,19 @@ mod tests {
             VALIDATE_RESOURCE_TARGET_SCAN_LIMIT
         );
         assert_eq!(VALIDATE_RESOURCE_TARGET_SCAN_LIMIT, 8);
+    }
+
+    #[test]
+    fn validate_generic_html_probe_skips_large_native_views_only() {
+        assert_eq!(generic_html_probe_skip_reason(4096, 4), None);
+        assert_eq!(
+            generic_html_probe_skip_reason(VALIDATE_GENERIC_HTML_NATIVE_HTML_LIMIT + 1, 4),
+            Some("native_display_html_too_large")
+        );
+        assert_eq!(
+            generic_html_probe_skip_reason(4096, VALIDATE_GENERIC_HTML_RESOURCE_LIMIT + 1),
+            Some("resource_count_too_large")
+        );
     }
 
     #[test]
