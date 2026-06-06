@@ -182,23 +182,22 @@ impl ReaderBookPackage {
             saw_raw_rows = true;
             let row_count = rows.len();
             for (index, row) in rows.iter().enumerate() {
-                let label_text = self.ssed_display_text_for_index_row(row);
-                if label_text.trim().is_empty() {
-                    continue;
-                }
-                let label = self.ssed_rich_label_with_policy(&label_text, &options.gaiji_policy);
-                let target = match self.ssed_browse_target_for_index_row(
-                    row,
-                    rows.iter()
-                        .skip(index + 1)
-                        .find(|next| next.body != row.body),
-                )? {
+                let next_distinct_row = rows
+                    .iter()
+                    .skip(index + 1)
+                    .find(|next| next.body != row.body);
+                let target = match self.ssed_browse_target_for_index_row(row, next_distinct_row)? {
                     Ok(target) => target,
                     Err(diagnostic) => {
                         diagnostics.push(diagnostic);
                         continue;
                     }
                 };
+                let label_text = self.ssed_browse_display_text_for_index_row(row, &target)?;
+                if label_text.trim().is_empty() {
+                    continue;
+                }
+                let label = self.ssed_rich_label_with_policy(&label_text, &options.gaiji_policy);
                 items.push(NavigationItem {
                     href: String::new(),
                     item_id: format!("{}:{}", row.component, scan_offset + index),

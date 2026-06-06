@@ -16,6 +16,8 @@ mod text;
 
 use text::{normalize_sidecar_search_text, strip_html_tags};
 
+const SSED_SIDECAR_TITLE_DECODED_FALLBACK_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsedSidecarStorage {
     Plain,
@@ -441,8 +443,11 @@ pub fn search_ssed_dense_sidecar_titles_with_resolvers(
             continue;
         };
         let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
-        let (sql, uses_prefilter) =
-            sidecar_title_prefilter_sql_for_resolver(resolver, title_column, query);
+        let Some((sql, uses_prefilter)) =
+            sidecar_title_prefilter_sql_for_resolver(&connection, resolver, title_column, query)?
+        else {
+            continue;
+        };
         let mut statement = connection.prepare(&sql)?;
         let mut rows = if uses_prefilter {
             statement.query([sqlite_like_contains_pattern(query)])?
@@ -732,25 +737,67 @@ fn search_prefilter_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> Opti
 }
 
 fn sidecar_title_prefilter_sql_for_resolver(
+    connection: &Connection,
     resolver: &SsedSidecarBodyResolver,
     title_column: &str,
     query: &str,
-) -> (String, bool) {
-    let (where_sql, uses_prefilter) = if !query.is_ascii() {
-        (None, false)
-    } else {
-        (
-            Some(format!(
-                " where {} like ? escape '\\'",
-                quote_sql_identifier(title_column)
-            )),
-            true,
-        )
-    };
-    (
+) -> Result<Option<(String, bool)>> {
+    let (where_sql, uses_prefilter) =
+        if sidecar_title_sql_prefilter_is_available(connection, resolver, title_column, query)? {
+            (
+                Some(format!(
+                    " where {} like ? escape '\\'",
+                    quote_sql_identifier(title_column)
+                )),
+                true,
+            )
+        } else if sidecar_title_decoded_fallback_is_bounded(resolver) {
+            (None, false)
+        } else {
+            return Ok(None);
+        };
+    Ok(Some((
         search_select_sql_for_resolver(resolver, where_sql.as_deref()),
         uses_prefilter,
-    )
+    )))
+}
+
+fn sidecar_title_sql_prefilter_is_available(
+    connection: &Connection,
+    resolver: &SsedSidecarBodyResolver,
+    title_column: &str,
+    query: &str,
+) -> Result<bool> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(false);
+    }
+    if query.is_ascii() {
+        return Ok(true);
+    }
+
+    let title_sql = quote_sql_identifier(title_column);
+    let sql = format!(
+        "select typeof({title_sql}) from {} where {title_sql} is not null limit 16",
+        quote_sql_identifier(&resolver.table),
+    );
+    let mut saw_text = false;
+    let mut statement = connection.prepare(&sql)?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        match sqlite_value_to_string(row.get_ref(0)?)?.casefold().as_str() {
+            "blob" => return Ok(false),
+            "text" => saw_text = true,
+            _ => {}
+        }
+    }
+    Ok(saw_text)
+}
+
+fn sidecar_title_decoded_fallback_is_bounded(resolver: &SsedSidecarBodyResolver) -> bool {
+    fs::metadata(&resolver.path)
+        .map(|metadata| metadata.len() <= SSED_SIDECAR_TITLE_DECODED_FALLBACK_MAX_BYTES)
+        .unwrap_or(false)
 }
 
 fn search_select_sql_for_resolver(

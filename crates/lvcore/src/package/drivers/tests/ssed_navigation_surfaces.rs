@@ -160,6 +160,135 @@ fn ssed_title_index_browse_uses_internal_tree_order_not_physical_leaf_order() {
 }
 
 #[test]
+fn ssed_title_index_browse_falls_back_to_resolved_body_title_for_placeholder_labels() {
+    let dir = tempdir().unwrap();
+
+    let body = {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0x1f, 0x09, 0x00, 0x02]);
+        body.extend_from_slice(&body_jis("raw body anchor"));
+        body
+    };
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&body], 100, 100),
+    )
+    .unwrap();
+
+    let titles = b"?\x1f\x0a";
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[titles], 300, 300),
+    )
+    .unwrap();
+
+    let connection = Connection::open(dir.path().join("GENIUSEB.sql")).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table GENIUSEB_1 (
+              No integer primary key,
+              Block integer,
+              Offset integer,
+              Title text,
+              Body text,
+              TitleJIS text
+            );
+            insert into GENIUSEB_1 values (
+              1,
+              100,
+              4,
+              'resolved sidecar title',
+              'sidecar body',
+              'resolved sidecar title'
+            );
+            ",
+        )
+        .unwrap();
+
+    let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    index_page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    let mut pos = 4usize;
+    write_simple_index_row(&mut index_page, &mut pos, b"?", 100, 0, 300, 0);
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+    )
+    .unwrap();
+
+    let catalog = SsedCatalog {
+        title: "Placeholder".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x91,
+                start_block: 200,
+                end_block: 200,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Placeholder".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = &surface else {
+        panic!("expected title/index browse surface");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "resolved sidecar title");
+
+    let view = package
+        .render_target(&items[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.title.as_deref(), Some("resolved sidecar title"));
+}
+
+#[test]
 fn ssed_visible_title_label_fallback_does_not_return_empty_first_page_for_deep_matches() {
     let dir = tempdir().unwrap();
 

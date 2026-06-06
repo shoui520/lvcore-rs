@@ -1391,6 +1391,25 @@ impl ReaderBookPackage {
         self.ssed_display_text_for_index_title_or_key(row.title, &ssed_visible_index_key(row))
     }
 
+    pub(in crate::package) fn ssed_browse_display_text_for_index_row(
+        &self,
+        row: &SsedIndexRow,
+        target: &TargetToken,
+    ) -> Result<String> {
+        let label = self.ssed_display_text_for_index_row(row);
+        if !ssed_index_display_label_needs_body_fallback(&label) {
+            return Ok(label);
+        }
+        let Some(title) = self.title_for_body_target(target)? else {
+            return Ok(label);
+        };
+        let title = clean_ssed_index_display_label(&title);
+        if ssed_index_display_label_needs_body_fallback(&title) {
+            return Ok(label);
+        }
+        Ok(title)
+    }
+
     pub(in crate::package) fn ssed_display_text_for_index_title_or_key(
         &self,
         title_pointer: SsedIndexPointer,
@@ -1522,6 +1541,18 @@ pub(in crate::package::drivers) fn clean_ssed_index_display_label(value: &str) -
         }
     }
     value.trim().to_owned()
+}
+
+fn ssed_index_display_label_needs_body_fallback(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || looks_like_raw_anchor_label(value) {
+        return true;
+    }
+    value.chars().all(is_unusable_index_display_char)
+}
+
+fn is_unusable_index_display_char(value: char) -> bool {
+    matches!(value, '?' | '？' | '�' | '□' | '〓' | 'Δ')
 }
 
 fn strip_ssed_index_disambiguation_marker(value: &str) -> &str {

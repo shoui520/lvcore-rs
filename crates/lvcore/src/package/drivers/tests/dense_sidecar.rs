@@ -1597,6 +1597,59 @@ fn dense_honmon_exact_search_uses_sidecar_titles() {
 }
 
 #[test]
+fn dense_honmon_search_uses_cjk_sidecar_titles() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::CjkTitleRows);
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    for mode in [SearchMode::Exact, SearchMode::Forward, SearchMode::Partial] {
+        let page = package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
+                mode,
+                query: "丂".to_owned(),
+                cursor: None,
+                limit: 10,
+                gaiji_policy: None,
+            })
+            .unwrap();
+
+        assert_eq!(page.hits.len(), 1);
+        assert_eq!(page.hits[0].title_text, "丂");
+        assert!(matches!(
+            page.hits[0].target.decode().unwrap(),
+            InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "1"
+        ));
+        assert!(
+            page.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "ssed_sidecar_title_search")
+        );
+        assert!(page.diagnostics.iter().any(
+            |diagnostic| diagnostic.code == "ssed_native_index_search_deferred_sidecar_backed"
+        ));
+    }
+}
+
+#[test]
 fn dense_honmon_exact_search_dedupes_native_and_sidecar_title_labels() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);

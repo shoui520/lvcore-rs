@@ -36,6 +36,7 @@ enum DenseSidecarFixture {
     BlobBodyRows,
     PlainOnlyBodyRows,
     EntityTitleRows,
+    CjkTitleRows,
     MissingBetaRow,
     OrderedHonbunRows,
 }
@@ -140,6 +141,9 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
         }
         DenseSidecarFixture::EntityTitleRows => {
             write_dense_body_db_with_entity_title(root.join("body.db"));
+        }
+        DenseSidecarFixture::CjkTitleRows => {
+            write_dense_body_db_with_cjk_titles(root.join("body.db"));
         }
         DenseSidecarFixture::MissingBetaRow => {
             write_dense_body_db(root.join("body.db"), true, false, false);
@@ -366,6 +370,17 @@ fn write_dense_body_db_with_entity_title(path: PathBuf) {
                 "<div>prefixed sidecar html</div>".as_bytes(),
                 "prefixed sidecar body".as_bytes(),
             ),
+        )
+        .unwrap();
+}
+
+fn write_dense_body_db_with_cjk_titles(path: PathBuf) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "create table t_contents (f_DataId integer primary key, f_Title text, f_Html text, f_Plane text);
+             insert into t_contents values (1, '丂', '<div>丂 html</div>', '丂 body');
+             insert into t_contents values (2, '新', '<div>新 html</div>', '新 body');",
         )
         .unwrap();
 }

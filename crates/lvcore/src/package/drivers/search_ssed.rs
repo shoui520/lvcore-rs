@@ -50,6 +50,15 @@ impl ReaderBookPackage {
                 title_label_row_offset,
             );
         }
+        if query.cursor.is_none() && ssed_sidecar_title_auto_append_is_bounded(&query.query) {
+            let mut diagnostics = Vec::new();
+            if self.ssed_simple_search_should_prefer_dense_sidecar_titles(&mut diagnostics)? {
+                let page = self.search_ssed_sidecar_title_page(query, 0, diagnostics)?;
+                if !page.hits.is_empty() || page.next_cursor.is_some() {
+                    return Ok(page);
+                }
+            }
+        }
 
         if query.mode == SearchMode::Partial {
             if let Some(prefix_cursor) = decode_ssed_partial_prefix_cursor(query.cursor.as_deref())
@@ -1290,6 +1299,40 @@ impl ReaderBookPackage {
         catalog: &SsedCatalog,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<bool> {
+        self.ssed_honmon_body_window_scan_is_needed_with_diagnostics(
+            catalog,
+            diagnostics,
+            "ssed_fulltext_honmon_scan_skipped_sidecar_backed",
+            "SSED full-text search skipped raw HONMON scanning because ordered HONBUN renderer rows are the visual body source",
+            "SSED full-text search skipped raw HONMON scanning because sampled native index targets dereference to dense sidecar bodies",
+        )
+    }
+
+    fn ssed_simple_search_should_prefer_dense_sidecar_titles(
+        &self,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<bool> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(false);
+        };
+        let native_scan_needed = self.ssed_honmon_body_window_scan_is_needed_with_diagnostics(
+            catalog,
+            diagnostics,
+            "ssed_native_index_search_deferred_sidecar_backed",
+            "SSED native title/index search was deferred because ordered HONBUN renderer rows are the visual body source",
+            "SSED native title/index search was deferred because sampled native index targets dereference to dense sidecar bodies",
+        )?;
+        Ok(!native_scan_needed)
+    }
+
+    fn ssed_honmon_body_window_scan_is_needed_with_diagnostics(
+        &self,
+        catalog: &SsedCatalog,
+        diagnostics: &mut Vec<Diagnostic>,
+        skipped_code: &'static str,
+        ordered_message: &'static str,
+        sampled_message: &'static str,
+    ) -> Result<bool> {
         let resolvers = self.ssed_sidecar_body_resolvers()?;
         if resolvers.is_empty() {
             return Ok(true);
@@ -1298,10 +1341,7 @@ impl ReaderBookPackage {
             .iter()
             .any(SsedSidecarBodyResolver::is_ordered_honbun_renderer_body)
         {
-            diagnostics.push(Diagnostic::info(
-                "ssed_fulltext_honmon_scan_skipped_sidecar_backed",
-                "SSED full-text search skipped raw HONMON scanning because ordered HONBUN renderer rows are the visual body source",
-            ));
+            diagnostics.push(Diagnostic::info(skipped_code, ordered_message));
             return Ok(false);
         }
 
@@ -1346,11 +1386,8 @@ impl ReaderBookPackage {
         diagnostics.append(&mut sample_diagnostics);
         if checked_targets > 0 && checked_targets == sidecar_backed_targets {
             diagnostics.push(
-                Diagnostic::info(
-                    "ssed_fulltext_honmon_scan_skipped_sidecar_backed",
-                    "SSED full-text search skipped raw HONMON scanning because sampled native index targets dereference to dense sidecar bodies",
-                )
-                .with_context("checked_targets", checked_targets.to_string()),
+                Diagnostic::info(skipped_code, sampled_message)
+                    .with_context("checked_targets", checked_targets.to_string()),
             );
             return Ok(false);
         }
@@ -2116,7 +2153,7 @@ fn ssed_sidecar_title_search_mode(mode: &SearchMode) -> Option<SsedSidecarTitleS
 
 fn ssed_sidecar_title_auto_append_is_bounded(query: &str) -> bool {
     let query = query.trim();
-    !query.is_empty() && query.is_ascii()
+    !query.is_empty() && !query.chars().any(char::is_whitespace)
 }
 
 fn ssed_fulltext_sidecar_title_prepass_is_bounded(query: &str) -> bool {
@@ -2134,13 +2171,15 @@ mod tests {
     };
 
     #[test]
-    fn sidecar_title_auto_append_is_limited_to_bounded_ascii_queries() {
+    fn sidecar_title_auto_append_accepts_bounded_single_token_queries() {
         assert!(ssed_sidecar_title_auto_append_is_bounded("et"));
         assert!(ssed_sidecar_title_auto_append_is_bounded(" abaisser "));
+        assert!(ssed_sidecar_title_auto_append_is_bounded("白水"));
+        assert!(ssed_sidecar_title_auto_append_is_bounded("丂"));
+        assert!(ssed_sidecar_title_auto_append_is_bounded("◯に"));
+        assert!(ssed_sidecar_title_auto_append_is_bounded("ａｂｃ"));
         assert!(!ssed_sidecar_title_auto_append_is_bounded(""));
-        assert!(!ssed_sidecar_title_auto_append_is_bounded("◯に"));
-        assert!(!ssed_sidecar_title_auto_append_is_bounded("白水"));
-        assert!(!ssed_sidecar_title_auto_append_is_bounded("ａｂｃ"));
+        assert!(!ssed_sidecar_title_auto_append_is_bounded("two words"));
     }
 
     #[test]
