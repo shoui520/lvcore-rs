@@ -150,8 +150,10 @@ impl ReaderBookPackage {
         else {
             return Ok(None);
         };
-        match lookup_ssed_ordered_honbun_body_by_row(self.ssed_sidecar_body_resolvers()?, row_index)?
-        {
+        match lookup_ssed_ordered_honbun_body_by_row(
+            self.ssed_sidecar_body_resolvers()?,
+            row_index,
+        )? {
             SsedSidecarLookup::Resolved(body) if !body.title.trim().is_empty() => {
                 Ok(Some(body.title))
             }
@@ -159,11 +161,7 @@ impl ReaderBookPackage {
         }
     }
 
-    fn ssed_sidecar_title_for_address(
-        &self,
-        block: u32,
-        offset: u32,
-    ) -> Result<Option<String>> {
+    fn ssed_sidecar_title_for_address(&self, block: u32, offset: u32) -> Result<Option<String>> {
         match lookup_ssed_sidecar_body_by_address_with_resolvers(
             self.ssed_sidecar_body_resolvers()?,
             block,
