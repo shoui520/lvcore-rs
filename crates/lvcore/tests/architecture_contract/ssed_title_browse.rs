@@ -47,6 +47,30 @@ fn ssed_simple_title_index_surface_resolves_entry_targets() {
 }
 
 #[test]
+fn title_index_browse_strips_observed_display_only_markers() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    let mut title = body_jis("¶100円硬貨 ＜えん１【円】＞■search-alt§other-alt");
+    title.extend_from_slice(&[0x1f, 0x0a]);
+    fs::write(dir.path().join("FHTITLE.DIC"), sseddata_literal_fixture(&title)).unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("100", 1, 2, 13, 0)),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("title-index should open as a title/index browse surface");
+    };
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "１００円硬貨　＜えん１【円】＞");
+    assert_eq!(items[0].label_html, "１００円硬貨　＜えん１【円】＞");
+}
+
+#[test]
 fn title_index_surfaces_are_cursor_paged_by_backend() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

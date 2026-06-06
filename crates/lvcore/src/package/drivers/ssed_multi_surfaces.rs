@@ -333,6 +333,7 @@ impl ReaderBookPackage {
                 .or_else(|| self.ssed_multi_title_text(descriptor_component, record, row.title))
                 .or_else(|| self.ssed_title_text(row.title))
                 .unwrap_or_else(|| row.target_key.clone());
+            let label = super::ssed_index::clean_ssed_index_display_label(&label);
             let label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
             let target = match self.ssed_target_for_search_index_row(&row)? {
                 Ok(target) => target,

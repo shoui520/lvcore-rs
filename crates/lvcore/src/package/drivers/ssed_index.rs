@@ -1365,10 +1365,11 @@ impl ReaderBookPackage {
         fallback_key: &str,
     ) -> String {
         let title = self.ssed_title_text(title_pointer);
-        match title {
+        let display = match title {
             Some(title) if !looks_like_raw_anchor_label(&title) => title,
             _ => fallback_key.to_owned(),
-        }
+        };
+        clean_ssed_index_display_label(&display)
     }
 
     pub(super) fn ssed_component_for_index_pointer(
@@ -1465,6 +1466,26 @@ fn ssed_visible_index_key(row: &SsedIndexRow) -> String {
     } else {
         stripped.to_owned()
     }
+}
+
+pub(in crate::package::drivers) fn clean_ssed_index_display_label(value: &str) -> String {
+    let mut value = value.trim();
+    while let Some(rest) = value.strip_prefix('¶') {
+        let rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        value = rest;
+    }
+    for marker in ['■', '§'] {
+        if let Some((visible, _metadata)) = value.split_once(marker) {
+            let visible = visible.trim();
+            if !visible.is_empty() {
+                value = visible;
+            }
+        }
+    }
+    value.trim().to_owned()
 }
 
 fn strip_ssed_index_disambiguation_marker(value: &str) -> &str {

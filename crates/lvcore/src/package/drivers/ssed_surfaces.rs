@@ -175,9 +175,7 @@ impl ReaderBookPackage {
         }
         let mut items = Vec::new();
         for (index, row) in visible_rows.iter().enumerate() {
-            let label = self
-                .ssed_title_text(row.title)
-                .unwrap_or_else(|| row.key.clone());
+            let label = self.ssed_display_text_for_index_row(row);
             let label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
             let target = match self.ssed_browse_target_for_index_row(
                 row,

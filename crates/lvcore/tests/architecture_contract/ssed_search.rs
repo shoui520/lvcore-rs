@@ -113,6 +113,38 @@ fn ssed_search_falls_back_to_visible_title_label_when_index_key_differs() {
 }
 
 #[test]
+fn ssed_search_hit_titles_strip_observed_display_only_markers() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    let mut title = body_jis("¶100円硬貨 ＜えん１【円】＞■search-alt§other-alt");
+    title.extend_from_slice(&[0x1f, 0x0a]);
+    fs::write(dir.path().join("FHTITLE.DIC"), sseddata_literal_fixture(&title)).unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("100", 1, 2, 13, 0)),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "100".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "１００円硬貨　＜えん１【円】＞");
+    assert_eq!(page.hits[0].title_html, "１００円硬貨　＜えん１【円】＞");
+}
+
+#[test]
 fn ssed_exact_search_ignores_observed_index_disambiguation_suffixes() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
