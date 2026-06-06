@@ -171,18 +171,25 @@ impl ReaderBookPackage {
                 SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
             )
         {
-            let mut fallback_page =
-                self.search_ssed_title_label_fallback_page(query, &needle, 0)?;
-            if fallback_page.hits.is_empty() && fallback_page.next_cursor.is_none() {
-                collector.extend_diagnostics(fallback_page.diagnostics);
-            } else {
-                if fallback_page.next_cursor.is_none()
-                    && fallback_page.hits.len() < query.limit
-                    && ssed_sidecar_title_auto_append_is_bounded(&query.query)
-                {
-                    self.append_ssed_sidecar_title_hits(query, &mut fallback_page, 0)?;
+            if ssed_title_label_fallback_is_reasonable(&query.mode, &needle) {
+                let mut fallback_page =
+                    self.search_ssed_title_label_fallback_page(query, &needle, 0)?;
+                if fallback_page.hits.is_empty() && fallback_page.next_cursor.is_none() {
+                    collector.extend_diagnostics(fallback_page.diagnostics);
+                } else {
+                    if fallback_page.next_cursor.is_none()
+                        && fallback_page.hits.len() < query.limit
+                        && ssed_sidecar_title_auto_append_is_bounded(&query.query)
+                    {
+                        self.append_ssed_sidecar_title_hits(query, &mut fallback_page, 0)?;
+                    }
+                    return Ok(fallback_page);
                 }
-                return Ok(fallback_page);
+            } else {
+                collector.extend_diagnostics(vec![Diagnostic::info(
+                    "ssed_title_label_search_fallback_skipped_short_query",
+                    "SSED title-label fallback search was skipped for a short exact/backward query after native index search found no hits",
+                )]);
             }
         }
         let mut page = collector.into_search_page(query.limit);
@@ -1779,6 +1786,14 @@ fn decode_ssed_title_label_cursor(cursor: Option<&str>) -> Option<usize> {
 
 fn encode_ssed_title_label_cursor(offset: usize) -> String {
     format!("{SSED_TITLE_LABEL_CURSOR_PREFIX}{offset}")
+}
+
+fn ssed_title_label_fallback_is_reasonable(mode: &SearchMode, needle: &str) -> bool {
+    match mode {
+        SearchMode::Exact | SearchMode::Backward => needle.chars().count() >= 2,
+        SearchMode::Forward => true,
+        SearchMode::Partial | SearchMode::FullText | SearchMode::Advanced(_) => false,
+    }
 }
 
 fn ssed_title_label_fallback_row_matches(

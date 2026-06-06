@@ -592,7 +592,7 @@ fn search_mode_exercises(
             rows.push(skipped_search_mode_exercise(mode));
             continue;
         }
-        let query = select_search_probe_query(&mode, &probe_labels);
+        let query = select_search_probe_query(metadata, &mode, &probe_labels);
         let render_hits = mode == SearchMode::Forward;
         rows.push(search_mode_exercise(
             library,
@@ -1396,7 +1396,7 @@ fn push_probe_label(out: &mut Vec<String>, label: &str) {
 
 fn default_search_probe_labels(metadata: &BookMetadata) -> &'static [&'static str] {
     match metadata.format_family {
-        FormatFamily::Ssed if metadata_title_contains_cjk(metadata) => &["新", "あ", "a"],
+        FormatFamily::Ssed if metadata_title_contains_cjk(metadata) => &["a", "あ", "新"],
         FormatFamily::LvlMultiView
             if metadata.capabilities.contains(&Capability::LawNavigation) =>
         {
@@ -1421,7 +1421,17 @@ fn metadata_title_contains_cjk(metadata: &BookMetadata) -> bool {
     })
 }
 
-fn select_search_probe_query(mode: &SearchMode, labels: &[String]) -> String {
+fn select_search_probe_query(
+    metadata: &BookMetadata,
+    mode: &SearchMode,
+    labels: &[String],
+) -> String {
+    if metadata.format_family == FormatFamily::Ssed
+        && matches!(mode, SearchMode::Exact | SearchMode::Backward)
+        && labels.iter().any(|label| label == "あ")
+    {
+        return "あ".to_owned();
+    }
     let mut prioritized_labels = labels
         .iter()
         .filter(|label| !is_default_search_probe_label(label))
@@ -1431,11 +1441,12 @@ fn select_search_probe_query(mode: &SearchMode, labels: &[String]) -> String {
                 .filter(|label| is_default_search_probe_label(label)),
         );
     let mut normal_labels = labels.iter();
-    let label_iter: &mut dyn Iterator<Item = &String> = if search_probe_prefers_real_labels(mode) {
-        &mut prioritized_labels
-    } else {
-        &mut normal_labels
-    };
+    let label_iter: &mut dyn Iterator<Item = &String> =
+        if search_probe_prefers_real_labels(metadata.format_family, mode) {
+            &mut prioritized_labels
+        } else {
+            &mut normal_labels
+        };
     for label in label_iter {
         let query = search_probe_query(label, mode);
         if !search_probe_query_is_useful(&query) {
@@ -1446,7 +1457,12 @@ fn select_search_probe_query(mode: &SearchMode, labels: &[String]) -> String {
     "a".to_owned()
 }
 
-fn search_probe_prefers_real_labels(mode: &SearchMode) -> bool {
+fn search_probe_prefers_real_labels(format_family: FormatFamily, mode: &SearchMode) -> bool {
+    if format_family == FormatFamily::Ssed
+        && matches!(mode, SearchMode::Exact | SearchMode::Backward)
+    {
+        return false;
+    }
     matches!(
         mode,
         SearchMode::Exact
@@ -1954,14 +1970,38 @@ mod tests {
 
     #[test]
     fn validation_probe_prefers_real_labels_before_defaults() {
-        assert!(search_probe_prefers_real_labels(&SearchMode::Exact));
-        assert!(search_probe_prefers_real_labels(&SearchMode::Forward));
-        assert!(search_probe_prefers_real_labels(&SearchMode::Backward));
-        assert!(search_probe_prefers_real_labels(&SearchMode::Partial));
-        assert!(search_probe_prefers_real_labels(&SearchMode::FullText));
-        assert!(search_probe_prefers_real_labels(&SearchMode::Advanced(
-            "advanced1".to_owned()
-        )));
+        assert!(!search_probe_prefers_real_labels(
+            FormatFamily::Ssed,
+            &SearchMode::Exact
+        ));
+        assert!(search_probe_prefers_real_labels(
+            FormatFamily::Ssed,
+            &SearchMode::Forward
+        ));
+        assert!(!search_probe_prefers_real_labels(
+            FormatFamily::Ssed,
+            &SearchMode::Backward
+        ));
+        assert!(search_probe_prefers_real_labels(
+            FormatFamily::Ssed,
+            &SearchMode::Partial
+        ));
+        assert!(search_probe_prefers_real_labels(
+            FormatFamily::Ssed,
+            &SearchMode::FullText
+        ));
+        assert!(search_probe_prefers_real_labels(
+            FormatFamily::LvedSqlite3,
+            &SearchMode::Exact
+        ));
+        assert!(search_probe_prefers_real_labels(
+            FormatFamily::LvedSqlite3,
+            &SearchMode::Backward
+        ));
+        assert!(search_probe_prefers_real_labels(
+            FormatFamily::Ssed,
+            &SearchMode::Advanced("advanced1".to_owned())
+        ));
         assert!(is_default_search_probe_label("新"));
     }
 
@@ -2006,7 +2046,7 @@ mod tests {
             diagnostics: Vec::new(),
         };
 
-        assert_eq!(default_search_probe_labels(&metadata), &["新", "あ", "a"]);
+        assert_eq!(default_search_probe_labels(&metadata), &["a", "あ", "新"]);
 
         metadata.title = Some("Readers Special".to_owned());
         assert_eq!(default_search_probe_labels(&metadata), &["a", "あ"]);

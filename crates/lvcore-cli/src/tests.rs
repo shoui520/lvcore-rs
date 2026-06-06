@@ -736,12 +736,17 @@ fn validate_deep_exercises_ssed_advertised_search_modes() {
         .iter()
         .find(|exercise| exercise["kind"] == "search_exact")
         .expect("missing exact validation row");
-    assert_eq!(exact["query"], "ａｌｐｈａ");
+    assert_eq!(exact["query"], "あ");
     let forward = exercises
         .iter()
         .find(|exercise| exercise["kind"] == "search_forward")
         .expect("missing forward validation row");
     assert_eq!(forward["query"], "ａｌ");
+    let backward = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_backward")
+        .expect("missing backward validation row");
+    assert_eq!(backward["query"], "あ");
     let partial = exercises
         .iter()
         .find(|exercise| exercise["kind"] == "search_partial")
