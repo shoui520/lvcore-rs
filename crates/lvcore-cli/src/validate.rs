@@ -1150,6 +1150,11 @@ fn search_probe_labels(
     surfaces: &[HomeSurface],
 ) -> Vec<String> {
     let mut labels = Vec::new();
+    if metadata.format_family == FormatFamily::Ssed {
+        for label in default_search_probe_labels(metadata) {
+            push_probe_label(&mut labels, label);
+        }
+    }
     let preferred = [
         NavigationSurfaceKind::TitleIndexBrowse,
         NavigationSurfaceKind::Menu,
@@ -1177,8 +1182,10 @@ fn search_probe_labels(
     if let Some(title) = &metadata.title {
         push_probe_label(&mut labels, title);
     }
-    for label in default_search_probe_labels(metadata) {
-        push_probe_label(&mut labels, label);
+    if metadata.format_family != FormatFamily::Ssed {
+        for label in default_search_probe_labels(metadata) {
+            push_probe_label(&mut labels, label);
+        }
     }
     if labels.is_empty() {
         labels.push("a".to_owned());
