@@ -151,16 +151,7 @@ pub(super) fn multiview_menu_item_to_node(
     item: &MultiviewMenuItem,
     node_id: &str,
 ) -> Result<NavigationNode> {
-    let target = item
-        .href
-        .as_ref()
-        .map(|href| {
-            TargetToken::new(&InternalTarget::MultiviewHref {
-                href: href.clone(),
-                anchor: item.anchor.clone(),
-            })
-        })
-        .transpose()?;
+    let target = multiview_menu_item_target(item)?;
     let children = item
         .children
         .iter()
@@ -234,16 +225,7 @@ fn multiview_menu_item_to_lazy_node(
     item: &MultiviewMenuItem,
     node_id: &str,
 ) -> Result<NavigationNode> {
-    let target = item
-        .href
-        .as_ref()
-        .map(|href| {
-            TargetToken::new(&InternalTarget::MultiviewHref {
-                href: href.clone(),
-                anchor: item.anchor.clone(),
-            })
-        })
-        .transpose()?;
+    let target = multiview_menu_item_target(item)?;
     Ok(NavigationNode {
         href: None,
         child_cursor: (!item.children.is_empty()).then(|| format!("children:{node_id}:0")),
@@ -254,6 +236,24 @@ fn multiview_menu_item_to_lazy_node(
         diagnostics: Vec::new(),
         children: Vec::new(),
     })
+}
+
+fn multiview_menu_item_target(item: &MultiviewMenuItem) -> Result<Option<TargetToken>> {
+    let Some(href) = item.href.as_ref() else {
+        return Ok(None);
+    };
+    if is_multiview_menu_navigation_command_href(href) {
+        return Ok(None);
+    }
+    TargetToken::new(&InternalTarget::MultiviewHref {
+        href: href.clone(),
+        anchor: item.anchor.clone(),
+    })
+    .map(Some)
+}
+
+fn is_multiview_menu_navigation_command_href(href: &str) -> bool {
+    href.eq_ignore_ascii_case("index")
 }
 
 enum MultiviewMenuPageCursor {

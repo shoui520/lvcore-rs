@@ -414,6 +414,39 @@ fn multiview_menu_surface_pages_large_nested_trees_lazily() {
 }
 
 #[test]
+fn multiview_index_command_nodes_keep_children_without_body_target() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        r#"<list>
+          <item label="五十音法令索引　検索" href="index">
+            <item label="日本国憲法" href="M010" />
+          </item>
+        </list>"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("blvdat"), b"payload").unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surface = package.open_surface_page("menuData", None, 100).unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+        panic!("menuData should open as a MultiView tree");
+    };
+
+    assert_eq!(nodes[0].label_text, "五十音法令索引　検索");
+    assert!(nodes[0].target.is_none());
+    assert_eq!(nodes[0].children[0].label_text, "日本国憲法");
+    assert!(nodes[0].children[0].target.is_some());
+
+    let lazy = package.open_surface_page("menuData", None, 1).unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = lazy else {
+        panic!("menuData should open as a MultiView tree");
+    };
+    assert!(nodes[0].target.is_none());
+    assert_eq!(nodes[0].child_cursor.as_deref(), Some("children:0:0"));
+}
+
+#[test]
 fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     let dir = tempdir().unwrap();
     fs::write(
