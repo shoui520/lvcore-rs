@@ -985,11 +985,21 @@ impl ReaderBookPackage {
             return None;
         }
         let component_offset = component.relative_offset(pointer.block, pointer.offset)?;
-        let path = self
-            .resolve_readable_ssed_component_path(component)
-            .ok()
-            .flatten()?;
-        let mut reader = SsedDataFile::open(path).ok()?;
+        let mut readers = self.ssed_title_reader_cache.lock().ok()?;
+        if !readers.contains_key(&component.filename) {
+            let reader = self
+                .resolve_readable_ssed_component_path(component)
+                .map_err(|error| error.to_string())
+                .and_then(|path| {
+                    path.ok_or_else(|| format!("{} is not present on disk", component.filename))
+                })
+                .and_then(|path| SsedDataFile::open(path).map_err(|error| error.to_string()));
+            readers.insert(component.filename.clone(), reader);
+        }
+        let reader = match readers.get_mut(&component.filename)? {
+            Ok(reader) => reader,
+            Err(_) => return None,
+        };
         let data = reader
             .read_range(usize::try_from(component_offset).ok()?, 512)
             .ok()?;

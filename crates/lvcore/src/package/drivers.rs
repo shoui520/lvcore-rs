@@ -259,6 +259,7 @@ type SsedIndexComponentBoundaryCache =
 type SsedNavigationDataCache = BTreeMap<String, std::result::Result<Arc<Vec<u8>>, String>>;
 type SsedNavigationSurfaceCache = BTreeMap<String, Arc<NavigationSurface>>;
 type SsedTitleTextCache = BTreeMap<(u32, u32), Option<Arc<str>>>;
+type SsedTitleReaderCache = BTreeMap<String, std::result::Result<SsedDataFile, String>>;
 
 pub struct ReaderBookPackage {
     root: PathBuf,
@@ -287,6 +288,7 @@ pub struct ReaderBookPackage {
     ssed_ios_plist_files: OnceLock<std::result::Result<Vec<SsedIosPlistFile>, String>>,
     ssed_index_component_body_boundaries: Mutex<SsedIndexComponentBoundaryCache>,
     ssed_title_text_cache: Mutex<SsedTitleTextCache>,
+    ssed_title_reader_cache: Mutex<SsedTitleReaderCache>,
     ssed_navigation_component_data: Mutex<SsedNavigationDataCache>,
     ssed_navigation_surface_pages: Mutex<SsedNavigationSurfaceCache>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
@@ -392,6 +394,7 @@ impl ReaderBookPackage {
             ssed_ios_plist_files: OnceLock::new(),
             ssed_index_component_body_boundaries: Mutex::new(BTreeMap::new()),
             ssed_title_text_cache: Mutex::new(BTreeMap::new()),
+            ssed_title_reader_cache: Mutex::new(BTreeMap::new()),
             ssed_navigation_component_data: Mutex::new(BTreeMap::new()),
             ssed_navigation_surface_pages: Mutex::new(BTreeMap::new()),
             ssed_pdfspread_database: OnceLock::new(),
