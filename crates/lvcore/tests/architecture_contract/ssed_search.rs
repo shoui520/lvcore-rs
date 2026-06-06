@@ -113,6 +113,87 @@ fn ssed_search_falls_back_to_visible_title_label_when_index_key_differs() {
 }
 
 #[test]
+fn ssed_visible_title_label_fallback_returns_scan_cursor_when_bounded() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_index_type_and_blocks(0x91, 4),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0atarget\x1f\x0a"),
+    )
+    .unwrap();
+
+    let internal = internal_page_fixture(&[("a", 16), ("b", 17), ("c", 18)]);
+    let mut index = Vec::new();
+    index.extend_from_slice(&internal);
+    let mut body_offset = 1u16;
+    for page_index in 0..3 {
+        let mut rows = Vec::new();
+        for row_index in 0..100 {
+            let title_offset = if page_index == 2 && row_index == 70 {
+                7
+            } else {
+                0
+            };
+            rows.push(("x", 1, body_offset, 13, title_offset));
+            body_offset = body_offset.saturating_add(1);
+        }
+        index.extend_from_slice(&simple_index_fixture_rows(&rows));
+    }
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&index),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let first = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "target".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert!(first.hits.is_empty());
+    let cursor = first
+        .next_cursor
+        .as_deref()
+        .expect("bounded visible-title fallback should expose a resume cursor");
+    assert!(cursor.starts_with("ssed-title-label:"));
+    assert!(
+        first
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_title_label_search_fallback_limited"),
+        "bounded fallback should explain why the first page has no hit yet"
+    );
+
+    let second = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "target".to_owned(),
+            cursor: Some(cursor.to_owned()),
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(second.hits.len(), 1);
+    assert_eq!(second.hits[0].title_text, "target");
+    assert!(second.next_cursor.is_none());
+}
+
+#[test]
 fn ssed_simple_index_search_matches_katakana_query_against_hiragana_key() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

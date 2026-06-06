@@ -1,9 +1,10 @@
-use std::cell::Cell;
+use std::{cell::Cell, collections::HashSet};
 
 use super::*;
 
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
+const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 
 impl ReaderBookPackage {
     pub(super) fn search_ssed_simple_indexes(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -32,8 +33,18 @@ impl ReaderBookPackage {
                 "SSED search mode is not implemented for simple title/index scanning yet",
             ));
         }
+        let needle = normalize_search_match_text(&query.query);
         if let Some(sidecar_offset) = decode_ssed_sidecar_title_cursor(query.cursor.as_deref()) {
             return self.search_ssed_sidecar_title_page(query, sidecar_offset, Vec::new());
+        }
+        if let Some(title_label_row_offset) =
+            decode_ssed_title_label_cursor(query.cursor.as_deref())
+        {
+            return self.search_ssed_title_label_fallback_page(
+                query,
+                &needle,
+                title_label_row_offset,
+            );
         }
 
         let partial_scan_cursor = if query.mode == SearchMode::Partial {
@@ -55,7 +66,6 @@ impl ReaderBookPackage {
             decode_offset_cursor(query.cursor.as_deref())
         };
         let page_limit = query.limit.saturating_add(1);
-        let needle = normalize_search_match_text(&query.query);
         let gaiji_policy = query.label_gaiji_policy();
         let mut collector = SsedIndexSearchCollector::new(
             self,
@@ -160,56 +170,18 @@ impl ReaderBookPackage {
                 SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
             )
         {
-            let mut fallback_collector = SsedIndexSearchCollector::new(
-                self,
-                &query.mode,
-                &needle,
-                offset,
-                page_limit,
-                query.label_gaiji_policy(),
-            )
-            .with_display_label_matching();
-            let mut checked_rows = 0usize;
-            let skip_backward_rows = self.ssed_has_forward_browse_index();
-            let fallback_diagnostics = self.scan_ssed_ordered_index_rows_with_filters(
-                None,
-                |component| {
-                    if skip_backward_rows
-                        && ssed_index_component_name_is_backward(&component.filename)
-                    {
-                        return false;
-                    }
-                    self.resolve_readable_ssed_component_path(component)
-                        .ok()
-                        .flatten()
-                        .is_some()
-                },
-                |row| {
-                    checked_rows = checked_rows.saturating_add(1);
-                    if checked_rows > SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS {
-                        return Ok(false);
-                    }
-                    let keep_scanning = fallback_collector.push_row(row)?;
-                    Ok(keep_scanning && !fallback_collector.has_hits())
-                },
-            )?;
-            fallback_collector.extend_diagnostics(fallback_diagnostics);
-            if checked_rows > SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS {
-                fallback_collector.extend_diagnostics(vec![
-                    Diagnostic::info(
-                        "ssed_title_label_search_fallback_limited",
-                        "SSED title-label fallback search reached its bounded row budget before exhausting all title/index rows",
-                    )
-                    .with_context(
-                        "checked_rows",
-                        SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS.to_string(),
-                    ),
-                ]);
-            }
-            if fallback_collector.has_hits() {
-                collector = fallback_collector;
+            let mut fallback_page =
+                self.search_ssed_title_label_fallback_page(query, &needle, 0)?;
+            if fallback_page.hits.is_empty() && fallback_page.next_cursor.is_none() {
+                collector.extend_diagnostics(fallback_page.diagnostics);
             } else {
-                collector.extend_diagnostics(fallback_collector.into_search_page(0).diagnostics);
+                if fallback_page.next_cursor.is_none()
+                    && fallback_page.hits.len() < query.limit
+                    && ssed_sidecar_title_auto_append_is_bounded(&query.query)
+                {
+                    self.append_ssed_sidecar_title_hits(query, &mut fallback_page, 0)?;
+                }
+                return Ok(fallback_page);
             }
         }
         let mut page = collector.into_search_page(query.limit);
@@ -224,6 +196,105 @@ impl ReaderBookPackage {
             self.append_ssed_sidecar_title_hits(query, &mut page, 0)?;
         }
         Ok(page)
+    }
+
+    fn search_ssed_title_label_fallback_page(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        row_offset: usize,
+    ) -> Result<SearchPage> {
+        let label_policy = query.label_gaiji_policy();
+        let skip_backward_rows = self.ssed_has_forward_browse_index();
+        let mut checked_rows = 0usize;
+        let mut scanned_rows = 0usize;
+        let mut hits = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut seen_targets = HashSet::new();
+        let mut stopped = SsedTitleLabelFallbackStop::Exhausted;
+        let fallback_diagnostics = self.scan_ssed_ordered_index_rows_with_filters(
+            None,
+            |component| {
+                if skip_backward_rows && ssed_index_component_name_is_backward(&component.filename)
+                {
+                    return false;
+                }
+                self.resolve_readable_ssed_component_path(component)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            },
+            |row| {
+                if checked_rows < row_offset {
+                    checked_rows = checked_rows.saturating_add(1);
+                    return Ok(true);
+                }
+                if scanned_rows >= SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS {
+                    stopped = SsedTitleLabelFallbackStop::Budget;
+                    return Ok(false);
+                }
+                checked_rows = checked_rows.saturating_add(1);
+                scanned_rows = scanned_rows.saturating_add(1);
+                if !ssed_title_label_fallback_row_matches(self, &query.mode, needle, &row) {
+                    return Ok(true);
+                }
+                if self.ssed_index_row_body_pointer_is_outside_catalog_range(&row) {
+                    return Ok(true);
+                }
+                let body_key = format!("{:08x}:{:04x}", row.body.block, row.body.offset);
+                if !seen_targets.insert(body_key) {
+                    return Ok(true);
+                }
+                let target = match self.ssed_target_for_search_index_row(&row)? {
+                    Ok(target) => target,
+                    Err(diagnostic) => {
+                        diagnostics.push(diagnostic);
+                        return Ok(true);
+                    }
+                };
+                let title = self.ssed_display_text_for_index_row(&row);
+                let label = self.ssed_rich_label_with_policy(&title, &label_policy);
+                let href = target.href();
+                hits.push(SearchHit {
+                    href,
+                    book_id: self.book_id_for_hit(),
+                    target,
+                    title_html: label.html,
+                    title_text: label.text,
+                    snippet_html: None,
+                    sequence_hint: None,
+                    diagnostics: label.diagnostics,
+                });
+                if hits.len() >= query.limit {
+                    stopped = SsedTitleLabelFallbackStop::PageFull;
+                    return Ok(false);
+                }
+                Ok(true)
+            },
+        )?;
+        diagnostics.extend(fallback_diagnostics);
+        let next_cursor = match stopped {
+            SsedTitleLabelFallbackStop::Exhausted => None,
+            SsedTitleLabelFallbackStop::Budget | SsedTitleLabelFallbackStop::PageFull => {
+                Some(encode_ssed_title_label_cursor(checked_rows))
+            }
+        };
+        if matches!(stopped, SsedTitleLabelFallbackStop::Budget) {
+            diagnostics.push(
+                Diagnostic::info(
+                    "ssed_title_label_search_fallback_limited",
+                    "SSED title-label fallback search reached its bounded row budget before exhausting all title/index rows",
+                )
+                .with_context("checked_rows", scanned_rows.to_string())
+                .with_context("next_cursor", encode_ssed_title_label_cursor(checked_rows)),
+            );
+        }
+        Ok(SearchPage {
+            hits,
+            next_cursor,
+            result_sequence: None,
+            diagnostics,
+        })
     }
 
     fn search_ssed_sidecar_title_page(
@@ -1427,6 +1498,55 @@ fn decode_ssed_sidecar_title_cursor(cursor: Option<&str>) -> Option<usize> {
 
 fn encode_ssed_sidecar_title_cursor(offset: usize) -> String {
     format!("{SSED_SIDECAR_TITLE_CURSOR_PREFIX}{offset}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SsedTitleLabelFallbackStop {
+    Exhausted,
+    Budget,
+    PageFull,
+}
+
+fn decode_ssed_title_label_cursor(cursor: Option<&str>) -> Option<usize> {
+    cursor?
+        .strip_prefix(SSED_TITLE_LABEL_CURSOR_PREFIX)?
+        .parse()
+        .ok()
+}
+
+fn encode_ssed_title_label_cursor(offset: usize) -> String {
+    format!("{SSED_TITLE_LABEL_CURSOR_PREFIX}{offset}")
+}
+
+fn ssed_title_label_fallback_row_matches(
+    package: &ReaderBookPackage,
+    mode: &SearchMode,
+    needle: &str,
+    row: &SsedIndexRow,
+) -> bool {
+    let key = ssed_index_row_match_text(row);
+    if ssed_search_mode_matches(mode, &key, needle) {
+        return true;
+    }
+    let display = package.ssed_display_text_for_index_row(row);
+    if display == row.key {
+        return false;
+    }
+    let mut display_key = normalize_search_match_text(&display);
+    if ssed_index_component_name_is_backward(&row.component) {
+        display_key = reverse_search_match_text(&display_key);
+    }
+    ssed_search_mode_matches(mode, &display_key, needle)
+}
+
+fn ssed_search_mode_matches(mode: &SearchMode, key: &str, needle: &str) -> bool {
+    match mode {
+        SearchMode::Exact => key == needle,
+        SearchMode::Forward => key.starts_with(needle),
+        SearchMode::Backward => key.ends_with(needle),
+        SearchMode::Partial => key.contains(needle),
+        SearchMode::FullText | SearchMode::Advanced(_) => false,
+    }
 }
 
 fn ssed_sidecar_title_search_mode(mode: &SearchMode) -> Option<SsedSidecarTitleSearchMode> {
