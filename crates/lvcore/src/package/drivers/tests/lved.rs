@@ -245,6 +245,7 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
         .unwrap();
 
     assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(view.title.as_deref(), Some("alpha"));
     let html = view.display_html.as_deref().unwrap();
     assert!(html.contains("<article><h1>Alpha</h1><p>body</p>"));
     assert!(html.contains("lvcore://resource/"));

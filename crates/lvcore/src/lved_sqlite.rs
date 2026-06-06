@@ -398,6 +398,27 @@ impl LvedSqliteStore {
         })
     }
 
+    pub fn content_title_text(&self, content_id: i64) -> Result<Option<String>> {
+        self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
+            let list_columns = schema.columns("list");
+            if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
+                return Ok(None);
+            }
+            let title = lved_list_hits_by_id_clause(
+                connection,
+                list_columns,
+                "l.refid = ?",
+                "l.id",
+                content_id,
+                1,
+            )?
+            .into_iter()
+            .find_map(|hit| (!hit.title_text.trim().is_empty()).then_some(hit.title_text));
+            Ok(title)
+        })
+    }
+
     pub fn info_html(&self, row_id: i64) -> Result<Option<String>> {
         self.with_connection(|connection| {
             let schema = self.schema(connection)?;

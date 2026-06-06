@@ -39,6 +39,14 @@ impl ReaderBookPackage {
             } => Ok(self
                 .ssed_ios_html_list_item(&source_id, index)?
                 .map(|item| item.label_text)),
+            InternalTarget::LvedRow { table, row_id, .. }
+                if table.eq_ignore_ascii_case("content") =>
+            {
+                let Some(store) = &self.lved_store else {
+                    return Ok(None);
+                };
+                store.content_title_text(row_id)
+            }
             _ => Ok(None),
         }
     }
