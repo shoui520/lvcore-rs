@@ -110,6 +110,24 @@ impl NavigationProvider for ReaderBookPackage {
             )? {
                 surfaces.push(surface);
             }
+            if let Some(catalog) = &self.ssed_catalog {
+                for component in ssed_direct_navigation_components(catalog) {
+                    let surface_id = ssed_direct_navigation_surface_id_for_component(component);
+                    if surface_id == "menu" || surface_id == "toc" {
+                        continue;
+                    }
+                    let kind = ssed_direct_navigation_kind_for_component(component);
+                    let title = component.filename.clone();
+                    if let Some(surface) = self.ssed_navigation_home_surface_for_component(
+                        &surface_id,
+                        kind,
+                        &title,
+                        component,
+                    )? {
+                        surfaces.push(surface);
+                    }
+                }
+            }
             surfaces.extend(self.ssed_multi_home_surfaces()?);
             if self
                 .ssed_catalog
@@ -521,6 +539,43 @@ impl NavigationProvider for ReaderBookPackage {
                 limit,
                 options,
             ),
+            id if has_ssed_components && id.starts_with("ssed-nav:") => {
+                let component_name =
+                    ssed_direct_navigation_component_name_from_surface_id(surface_id);
+                let Some(component_name) = component_name else {
+                    return Ok(NavigationSurface::Deferred {
+                        surface_id: surface_id.to_owned(),
+                        diagnostics: vec![Diagnostic::warning(
+                            "ssed_navigation_surface_id_invalid",
+                            format!("{surface_id} is not a valid SSED navigation surface id"),
+                        )],
+                    });
+                };
+                let Some(catalog) = &self.ssed_catalog else {
+                    return Ok(NavigationSurface::Deferred {
+                        surface_id: surface_id.to_owned(),
+                        diagnostics: vec![Diagnostic::error(
+                            "ssed_catalog_missing",
+                            "SSED navigation surfaces require a parsed SSEDINFO catalog",
+                        )],
+                    });
+                };
+                let Some(component) = catalog
+                    .component_named(&component_name)
+                    .filter(|component| component.has_positive_range())
+                else {
+                    return Ok(NavigationSurface::Deferred {
+                        surface_id: surface_id.to_owned(),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_navigation_component_missing",
+                            format!("{component_name} is not declared in this SSED catalog"),
+                        )],
+                    });
+                };
+                self.open_ssed_navigation_component_surface(
+                    surface_id, component, cursor, limit, options,
+                )
+            }
             id if has_ssed_components && id.starts_with("multi:") => {
                 self.open_ssed_multi_selector_surface(surface_id, cursor, limit, options)
             }

@@ -904,16 +904,19 @@ pub(in crate::package::drivers) fn ssed_component_address_navigation_target(
 ) -> Result<Option<TargetToken>> {
     match request.component.role {
         SsedComponentRole::Menu => {
+            let surface_id = ssed_direct_navigation_surface_id_for_component(request.component);
             return Ok(Some(TargetToken::new(&InternalTarget::MenuItem {
-                surface_id: "menu".to_owned(),
+                surface_id,
                 item_id: ssed_menu_address_item_id(request.block, request.offset),
             })?));
         }
         SsedComponentRole::Toc => {
-            return Ok(Some(TargetToken::new(&InternalTarget::TocItem {
-                surface_id: "toc".to_owned(),
-                item_id: ssed_menu_address_item_id(request.block, request.offset),
-            })?));
+            let surface_id = ssed_direct_navigation_surface_id_for_component(request.component);
+            return Ok(Some(ssed_direct_navigation_target_for_component(
+                request.component,
+                surface_id,
+                ssed_menu_address_item_id(request.block, request.offset),
+            )?));
         }
         _ => {}
     }
@@ -961,6 +964,85 @@ pub(in crate::package::drivers) fn ssed_component_address_navigation_target(
 
 pub(in crate::package::drivers) fn ssed_menu_address_item_id(block: u32, offset: u32) -> String {
     format!("addr:{block}:{offset}")
+}
+
+pub(in crate::package::drivers) fn ssed_direct_navigation_components(
+    catalog: &SsedCatalog,
+) -> Vec<&SsedComponent> {
+    catalog
+        .components
+        .iter()
+        .filter(|component| {
+            component.has_positive_range()
+                && matches!(
+                    component.role,
+                    SsedComponentRole::Menu | SsedComponentRole::Toc
+                )
+                && !ssed_component_name_is_multi_selector_child(&component.filename)
+        })
+        .collect()
+}
+
+pub(in crate::package::drivers) fn ssed_direct_navigation_surface_id_for_component(
+    component: &SsedComponent,
+) -> String {
+    let upper = component.filename.to_ascii_uppercase();
+    match upper.as_str() {
+        "MENU.DIC" => "menu".to_owned(),
+        "TOC.DIC" => "toc".to_owned(),
+        _ => format!("ssed-nav:{}", hex::encode(component.filename.as_bytes())),
+    }
+}
+
+pub(in crate::package::drivers) fn ssed_direct_navigation_component_name_from_surface_id(
+    surface_id: &str,
+) -> Option<String> {
+    match surface_id {
+        "menu" => Some("MENU.DIC".to_owned()),
+        "toc" => Some("TOC.DIC".to_owned()),
+        _ => surface_id
+            .strip_prefix("ssed-nav:")
+            .and_then(|encoded| hex::decode(encoded).ok())
+            .and_then(|bytes| String::from_utf8(bytes).ok()),
+    }
+}
+
+pub(in crate::package::drivers) fn ssed_direct_navigation_kind_for_component(
+    component: &SsedComponent,
+) -> NavigationSurfaceKind {
+    let upper = component.filename.to_ascii_uppercase();
+    if upper.starts_with("MENU") {
+        return NavigationSurfaceKind::Menu;
+    }
+    if upper.starts_with("TOC") {
+        return NavigationSurfaceKind::Toc;
+    }
+    match component.role {
+        SsedComponentRole::Toc => NavigationSurfaceKind::Toc,
+        _ => NavigationSurfaceKind::Menu,
+    }
+}
+
+pub(in crate::package::drivers) fn ssed_direct_navigation_target_for_component(
+    component: &SsedComponent,
+    surface_id: String,
+    item_id: String,
+) -> Result<TargetToken> {
+    match ssed_direct_navigation_kind_for_component(component) {
+        NavigationSurfaceKind::Toc => TargetToken::new(&InternalTarget::TocItem {
+            surface_id,
+            item_id,
+        }),
+        _ => TargetToken::new(&InternalTarget::MenuItem {
+            surface_id,
+            item_id,
+        }),
+    }
+}
+
+fn ssed_component_name_is_multi_selector_child(filename: &str) -> bool {
+    let upper = filename.to_ascii_uppercase();
+    upper.starts_with("MUL") && upper.contains('_')
 }
 
 pub(in crate::package::drivers) struct SsedComponentNavigationTargetRequest<'a> {

@@ -239,8 +239,10 @@ use self::ssed_navigation::{
     SsedHanreiPage, SsedMenuNodeCursor, SsedMenuNodePageRequest, decode_ssed_menu_node_cursor,
     read_path_inside_loose_root, read_path_inside_resolved_parent,
     ssed_aux_index_rows_to_flat_nodes, ssed_aux_index_rows_to_nodes,
-    ssed_encyclopedia_rows_to_nodes, ssed_menu_records_to_nodes_page_from,
-    ssed_multi_selector_records_to_nodes,
+    ssed_direct_navigation_component_name_from_surface_id, ssed_direct_navigation_components,
+    ssed_direct_navigation_kind_for_component, ssed_direct_navigation_surface_id_for_component,
+    ssed_direct_navigation_target_for_component, ssed_encyclopedia_rows_to_nodes,
+    ssed_menu_records_to_nodes_page_from, ssed_multi_selector_records_to_nodes,
 };
 use self::ssed_panel_navigation::{
     ssed_panel_bin_record_to_navigation_cell, ssed_panel_inline_cell_to_navigation_cell,

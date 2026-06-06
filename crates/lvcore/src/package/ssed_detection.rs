@@ -18,8 +18,8 @@ use crate::gaiji::{normalize_gaiji_identity, parse_ccaltstr_gaiji_map, parse_uni
 use crate::multiview::parse_menu_data;
 use crate::plist_xml::parse_xml_plist;
 use crate::ssed::{
-    ANDROID_LVEDINFO_MAGIC, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponentRole,
-    SsedDataHeader,
+    ANDROID_LVEDINFO_MAGIC, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponent,
+    SsedComponentRole, SsedDataHeader,
 };
 use crate::ssed_aux_index::{is_numeric_aux_index_filename, parse_aux_index_specs_from_exinfo};
 use crate::ssed_menu::parse_menu_stream;
@@ -394,10 +394,16 @@ pub(super) fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capab
     if has_decodable_index_rows {
         capabilities.push(Capability::TitleIndexBrowse);
     }
-    if ssed_navigation_component_has_non_empty_surface(catalog, &storage, "MENU.DIC") {
+    if catalog.components.iter().any(|component| {
+        ssed_component_is_direct_menu_surface(component)
+            && ssed_navigation_component_has_non_empty_surface(&storage, component)
+    }) {
         capabilities.push(Capability::Menu);
     }
-    if ssed_navigation_component_has_non_empty_surface(catalog, &storage, "TOC.DIC") {
+    if catalog.components.iter().any(|component| {
+        ssed_component_is_direct_toc_surface(component)
+            && ssed_navigation_component_has_non_empty_surface(&storage, component)
+    }) {
         capabilities.push(Capability::Toc);
     }
     if catalog
@@ -503,16 +509,12 @@ fn push_unique_panel_metadata_candidate(candidates: &mut Vec<String>, path: Stri
 }
 
 fn ssed_navigation_component_has_non_empty_surface(
-    catalog: &SsedCatalog,
     storage: &DirectoryStorage,
-    fallback_name: &str,
+    component: &SsedComponent,
 ) -> bool {
-    let Some(component) = catalog
-        .component_named(fallback_name)
-        .filter(|component| component.has_positive_range())
-    else {
+    if !component.has_positive_range() {
         return false;
-    };
+    }
 
     let mut candidates = Vec::new();
     if let Ok(Some(path)) = storage.resolve_casefolded(Path::new(&component.filename)) {
@@ -535,6 +537,38 @@ fn ssed_navigation_component_has_non_empty_surface(
     }
 
     false
+}
+
+fn ssed_component_is_direct_menu_surface(component: &SsedComponent) -> bool {
+    if !ssed_component_is_direct_menu_or_toc_surface(component) {
+        return false;
+    }
+    let upper = component.filename.to_ascii_uppercase();
+    upper.starts_with("MENU")
+        || (component.role == SsedComponentRole::Menu && !upper.starts_with("TOC"))
+}
+
+fn ssed_component_is_direct_toc_surface(component: &SsedComponent) -> bool {
+    if !ssed_component_is_direct_menu_or_toc_surface(component) {
+        return false;
+    }
+    let upper = component.filename.to_ascii_uppercase();
+    upper.starts_with("TOC")
+        || (component.role == SsedComponentRole::Toc && !upper.starts_with("MENU"))
+}
+
+fn ssed_component_is_direct_menu_or_toc_surface(component: &SsedComponent) -> bool {
+    component.has_positive_range()
+        && matches!(
+            component.role,
+            SsedComponentRole::Menu | SsedComponentRole::Toc
+        )
+        && !ssed_component_name_is_multi_selector_child(&component.filename)
+}
+
+fn ssed_component_name_is_multi_selector_child(filename: &str) -> bool {
+    let upper = filename.to_ascii_uppercase();
+    upper.starts_with("MUL") && upper.contains('_')
 }
 
 pub(super) fn read_ssed_navigation_detection_bytes(path: &Path) -> Result<Option<Vec<u8>>> {

@@ -309,7 +309,7 @@ impl ReaderBookPackage {
             }
             return Ok(Some(self.resolve_ssed_direct_menu_window(
                 surface_id,
-                component_name,
+                &component_name,
                 target,
                 before,
                 after,
@@ -618,12 +618,8 @@ impl ReaderBookPackage {
     }
 }
 
-fn ssed_direct_menu_component_name(surface_id: &str) -> Option<&'static str> {
-    match surface_id {
-        "menu" => Some("MENU.DIC"),
-        "toc" => Some("TOC.DIC"),
-        _ => None,
-    }
+fn ssed_direct_menu_component_name(surface_id: &str) -> Option<String> {
+    ssed_direct_navigation_component_name_from_surface_id(surface_id)
 }
 
 fn ssed_menu_sequence_start_cursor(cursor: Option<&str>, before: usize) -> Option<String> {

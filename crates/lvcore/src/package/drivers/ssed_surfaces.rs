@@ -73,7 +73,7 @@ impl ReaderBookPackage {
         surface_id: &str,
         kind: NavigationSurfaceKind,
         title: &str,
-        role: SsedComponentRole,
+        _role: SsedComponentRole,
         fallback_name: &str,
     ) -> Result<Option<HomeSurface>> {
         let Some(catalog) = &self.ssed_catalog else {
@@ -85,7 +85,16 @@ impl ReaderBookPackage {
         else {
             return Ok(None);
         };
+        self.ssed_navigation_home_surface_for_component(surface_id, kind, title, component)
+    }
 
+    pub(super) fn ssed_navigation_home_surface_for_component(
+        &self,
+        surface_id: &str,
+        kind: NavigationSurfaceKind,
+        title: &str,
+        component: &SsedComponent,
+    ) -> Result<Option<HomeSurface>> {
         match self.resolve_readable_ssed_component_path(component) {
             Ok(Some(_)) => {}
             Ok(None) => return Ok(None),
@@ -112,21 +121,16 @@ impl ReaderBookPackage {
             }
         }
 
-        let empty_diagnostic = self.ssed_navigation_empty_diagnostic(role, fallback_name)?;
+        let empty_diagnostic = self.ssed_navigation_component_empty_diagnostic(component)?;
         let is_empty = empty_diagnostic.is_some();
         let target = if is_empty {
             None
         } else {
-            Some(match role {
-                SsedComponentRole::Toc => TargetToken::new(&InternalTarget::TocItem {
-                    surface_id: surface_id.to_owned(),
-                    item_id: "root".to_owned(),
-                })?,
-                _ => TargetToken::new(&InternalTarget::MenuItem {
-                    surface_id: surface_id.to_owned(),
-                    item_id: "root".to_owned(),
-                })?,
-            })
+            Some(ssed_direct_navigation_target_for_component(
+                component,
+                surface_id.to_owned(),
+                "root".to_owned(),
+            )?)
         };
 
         Ok(Some(HomeSurface {
@@ -261,6 +265,24 @@ impl ReaderBookPackage {
                 format!("{fallback_name} is not declared in this SSED catalog"),
             ));
         };
+        self.open_ssed_navigation_component_surface(surface_id, component, cursor, limit, options)
+    }
+
+    pub(super) fn open_ssed_navigation_component_surface(
+        &self,
+        surface_id: &str,
+        component: &SsedComponent,
+        cursor: Option<&str>,
+        limit: usize,
+        options: &LabelOptions,
+    ) -> Result<NavigationSurface> {
+        if limit == 0 {
+            return Ok(NavigationSurface::SimpleMenu {
+                surface_id: surface_id.to_owned(),
+                nodes: Vec::new(),
+                next_cursor: None,
+            });
+        }
         let cache_key =
             ssed_navigation_surface_page_cache_key(component, surface_id, cursor, limit, options);
         if let Some(surface) = self.cached_ssed_navigation_surface_page(&cache_key)? {
@@ -375,20 +397,10 @@ impl ReaderBookPackage {
         Ok(surface)
     }
 
-    pub(super) fn ssed_navigation_empty_diagnostic(
+    pub(super) fn ssed_navigation_component_empty_diagnostic(
         &self,
-        _role: SsedComponentRole,
-        fallback_name: &str,
+        component: &SsedComponent,
     ) -> Result<Option<Diagnostic>> {
-        let Some(catalog) = &self.ssed_catalog else {
-            return Ok(None);
-        };
-        let Some(component) = catalog
-            .component_named(fallback_name)
-            .filter(|component| component.has_positive_range())
-        else {
-            return Ok(None);
-        };
         if u64::from(component.block_count()) * u64::from(BLOCK_SIZE)
             > SSED_HOME_NAVIGATION_EMPTY_CHECK_MAX_BYTES
         {

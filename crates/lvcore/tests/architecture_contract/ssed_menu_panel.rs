@@ -1407,6 +1407,89 @@ fn ssed_menu_rows_with_many_links_expand_to_entry_nodes() {
 }
 
 #[test]
+fn ssed_nonstandard_direct_menu_component_is_exposed_and_openable() {
+    let dir = tempdir().unwrap();
+    let record_start = 0x80;
+    let mut catalog = vec![0u8; record_start + 2 * 0x30];
+    catalog[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Nonstandard Menu Fixture";
+    catalog[0x0c] = title.len() as u8;
+    catalog[0x0d..0x0d + title.len()].copy_from_slice(title);
+    catalog[0x4d] = 2;
+    write_record(
+        &mut catalog[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x30..record_start + 0x60],
+        0x20,
+        11,
+        11,
+        "MENU2.DIC",
+    );
+    fs::write(dir.path().join("DICT.IDX"), catalog).unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("MENU2.DIC"),
+        sseddata_literal_fixture(&menu_stream_fixture(10, 2)),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(package.metadata().capabilities.contains(&Capability::Menu));
+    assert!(!package.metadata().capabilities.contains(&Capability::Toc));
+    let surfaces = package.home_surfaces().unwrap();
+    let menu2 = surfaces
+        .iter()
+        .find(|surface| surface.title_text == "MENU2.DIC")
+        .expect("declared nonstandard direct navigation component should be surfaced");
+    assert!(menu2.surface_id.starts_with("ssed-nav:"));
+    assert_eq!(menu2.kind, NavigationSurfaceKind::Menu);
+    assert_eq!(menu2.status, NavigationStatus::Available);
+    assert!(matches!(
+        menu2.target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::MenuItem {
+            surface_id,
+            item_id,
+        } if surface_id == menu2.surface_id && item_id == "root"
+    ));
+
+    let NavigationSurface::SimpleMenu { nodes, .. } =
+        package.open_surface(&menu2.surface_id).unwrap()
+    else {
+        panic!("nonstandard SSED navigation component should decode as a simple menu surface");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "あ");
+    assert!(matches!(
+        nodes[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+
+    let targets = NavigationSurface::SimpleMenu {
+        surface_id: menu2.surface_id.clone(),
+        nodes,
+        next_cursor: None,
+    }
+    .actionable_targets();
+    assert!(matches!(
+        targets[0].sequence_hint.as_ref(),
+        Some(lvcore::SequenceHint::MenuOrder { value, .. }) if value == &menu2.surface_id
+    ));
+}
+
+#[test]
 fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
     let dir = tempdir().unwrap();
     fs::write(
