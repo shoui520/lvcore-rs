@@ -562,7 +562,7 @@ fn search_mode_exercises(
             rows.push(skipped_search_mode_exercise(mode));
             continue;
         }
-        let query = select_search_probe_query(library, book_id, &mode, &probe_labels);
+        let query = select_search_probe_query(&mode, &probe_labels);
         let render_hits = mode == SearchMode::Forward;
         rows.push(search_mode_exercise(
             library,
@@ -1297,9 +1297,6 @@ fn search_probe_labels(
             collect_actionable_probe_labels(&opened, &mut labels);
         }
     }
-    if let Some(title) = &metadata.title {
-        push_probe_label(&mut labels, title);
-    }
     if metadata.format_family != FormatFamily::Ssed {
         for label in default_search_probe_labels(metadata) {
             push_probe_label(&mut labels, label);
@@ -1369,6 +1366,7 @@ fn push_probe_label(out: &mut Vec<String>, label: &str) {
 
 fn default_search_probe_labels(metadata: &BookMetadata) -> &'static [&'static str] {
     match metadata.format_family {
+        FormatFamily::Ssed if metadata_title_contains_cjk(metadata) => &["新", "あ", "a"],
         FormatFamily::LvlMultiView
             if metadata.capabilities.contains(&Capability::LawNavigation) =>
         {
@@ -1379,13 +1377,21 @@ fn default_search_probe_labels(metadata: &BookMetadata) -> &'static [&'static st
     }
 }
 
-fn select_search_probe_query(
-    library: &BookLibrary,
-    book_id: &BookId,
-    mode: &SearchMode,
-    labels: &[String],
-) -> String {
-    let mut fallback = None;
+fn metadata_title_contains_cjk(metadata: &BookMetadata) -> bool {
+    metadata.title.as_deref().is_some_and(|title| {
+        title.chars().any(|ch| {
+            matches!(
+                ch as u32,
+                0x3040..=0x30ff
+                    | 0x3400..=0x4dbf
+                    | 0x4e00..=0x9fff
+                    | 0xf900..=0xfaff
+            )
+        })
+    })
+}
+
+fn select_search_probe_query(mode: &SearchMode, labels: &[String]) -> String {
     let mut prioritized_labels = labels
         .iter()
         .filter(|label| !is_default_search_probe_label(label))
@@ -1405,29 +1411,9 @@ fn select_search_probe_query(
         if !search_probe_query_is_useful(&query) {
             continue;
         }
-        if fallback.is_none() {
-            fallback = Some(query.clone());
-        }
-        if query == "a" && search_probe_lookup_text(label).is_none() {
-            continue;
-        }
-        let Ok(page) = library.search(&SearchQuery {
-            scope: SearchScope::CurrentBook {
-                book_id: book_id.clone(),
-            },
-            mode: mode.clone(),
-            query: query.clone(),
-            cursor: None,
-            limit: 1,
-            gaiji_policy: None,
-        }) else {
-            continue;
-        };
-        if !page.hits.is_empty() {
-            return query;
-        }
+        return query;
     }
-    fallback.unwrap_or_else(|| "a".to_owned())
+    "a".to_owned()
 }
 
 fn search_probe_prefers_real_labels(mode: &SearchMode) -> bool {
@@ -1801,6 +1787,26 @@ mod tests {
         }
         assert_eq!(labels.len(), VALIDATE_SEARCH_PROBE_LABEL_LIMIT);
         assert_eq!(labels.last().map(String::as_str), Some("probe11"));
+    }
+
+    #[test]
+    fn ssed_default_search_probes_are_script_aware() {
+        let mut metadata = BookMetadata {
+            book_id: BookId("SSED:TEST".to_owned()),
+            format_family: FormatFamily::Ssed,
+            format_label: "SSED".to_owned(),
+            package_root: PathBuf::from("test"),
+            title: Some("角川新字源".to_owned()),
+            root_fingerprint: "test".to_owned(),
+            capabilities: Vec::new(),
+            search_modes: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+
+        assert_eq!(default_search_probe_labels(&metadata), &["新", "あ", "a"]);
+
+        metadata.title = Some("Readers Special".to_owned());
+        assert_eq!(default_search_probe_labels(&metadata), &["a", "あ"]);
     }
 
     #[test]
