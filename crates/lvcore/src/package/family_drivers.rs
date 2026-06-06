@@ -232,10 +232,9 @@ impl PackageDriver for LvedSqliteDriver {
             if store.android_info.is_some() {
                 evidence.push("derived_key_info".to_owned());
             }
-            let title = match store.title() {
-                Ok(title) => title.or_else(|| inferred_folder_title(package_root)),
-                Err(_) => return Ok(None),
-            };
+            let title = store
+                .cheap_title_hint()
+                .or_else(|| inferred_folder_title(package_root));
             return Ok(Some(DetectedPackage {
                 root: package_root.to_path_buf(),
                 format_family: FormatFamily::LvedSqlite3,

@@ -17,6 +17,28 @@ fn detects_lved_sqlite3_by_main_data_and_key() {
 }
 
 #[test]
+fn lved_key_file_detection_does_not_decrypt_payload_for_title() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("main.data"), b"not sqlitecipher yet").unwrap();
+    fs::write(dir.path().join("main.key"), "test-key").unwrap();
+
+    let detected = LvedSqliteDriver.detect(dir.path()).unwrap().unwrap();
+
+    assert_eq!(detected.format_family, FormatFamily::LvedSqlite3);
+    assert_eq!(
+        detected.title.as_deref(),
+        dir.path().file_name().and_then(|v| v.to_str())
+    );
+    assert!(
+        detected
+            .evidence
+            .iter()
+            .any(|item| item.starts_with("key_file:"))
+    );
+    assert!(LvedSqliteDriver.open(dir.path()).is_err());
+}
+
+#[test]
 fn explicit_ios_dbc_payload_detects_as_lved_even_with_retained_ssed_idx() {
     let dir = tempdir().unwrap();
     let package = dir.path().join("OXFPEU4");

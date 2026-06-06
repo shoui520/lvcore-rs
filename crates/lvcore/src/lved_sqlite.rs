@@ -284,6 +284,12 @@ impl LvedSqliteStore {
         self.with_connection(|connection| self.cached_title(connection))
     }
 
+    pub fn cheap_title_hint(&self) -> Option<String> {
+        self.android_info
+            .as_ref()
+            .and_then(|info| nonempty_string(info.title.clone()))
+    }
+
     pub fn summary(&self) -> Result<LvedSqliteSummary> {
         self.with_connection(|connection| {
             let schema = self.schema(connection)?;
