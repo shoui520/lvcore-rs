@@ -90,6 +90,11 @@ For progressive UI updates, the developer CLI mirrors this split:
   before showing usable books, and it does not need to special-case duplicate
   book rows.
 
+The developer CLI opens packages per command invocation. It is useful for
+validation and reports, but it is not the frontend performance model for
+repeated search pages. A reader app should keep a `BookLibrary` open and request
+additional pages/windows against that in-memory library state.
+
 The frontend cache may store candidate fingerprints, book metadata, app-supplied
 icon state, recently rendered snippets, and bookmark/history tokens. It should
 still pass stored `TargetToken`/`ResourceToken` values back to lvcore for
