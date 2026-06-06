@@ -295,6 +295,139 @@ fn ssed_visible_title_label_fallback_does_not_return_empty_first_page_for_deep_m
 }
 
 #[test]
+fn ssed_partial_physical_scan_does_not_return_empty_first_page_before_later_matches() {
+    let dir = tempdir().unwrap();
+
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[b"body"], 100, 100),
+    )
+    .unwrap();
+
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[b"target\x1f\x0a"], 300, 300),
+    )
+    .unwrap();
+
+    let leaf_count = 9usize;
+    let mut internal = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    internal[0..2].copy_from_slice(&0x0002u16.to_be_bytes());
+    internal[2..4].copy_from_slice(&u16::try_from(leaf_count).unwrap().to_be_bytes());
+    let mut internal_pos = 4usize;
+    for leaf_index in 0..leaf_count {
+        write_internal_index_row(
+            &mut internal,
+            &mut internal_pos,
+            b"x",
+            201 + u32::try_from(leaf_index).unwrap(),
+        );
+    }
+
+    let mut index_stream = Vec::new();
+    index_stream.extend_from_slice(&internal);
+    for leaf_index in 0..leaf_count {
+        let mut leaf = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+        leaf[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        if leaf_index + 1 == leaf_count {
+            leaf[2..4].copy_from_slice(&1u16.to_be_bytes());
+            let mut pos = 4usize;
+            write_simple_index_row(&mut leaf, &mut pos, b"target", 100, 0, 300, 0);
+        } else {
+            leaf[2..4].copy_from_slice(&0u16.to_be_bytes());
+        }
+        index_stream.extend_from_slice(&leaf);
+    }
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_stream], 200, 200 + leaf_count as u32),
+    )
+    .unwrap();
+
+    let catalog = SsedCatalog {
+        title: "Partial".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x91,
+                start_block: 200,
+                end_block: 200 + leaf_count as u32,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    };
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Partial".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "target".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "target");
+    assert_eq!(page.next_cursor, None);
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "ssed_index_empty_physical_pages_skipped" })
+    );
+}
+
+#[test]
 fn ssed_screen_menu_surface_exposes_backgrounds_and_hotspot_targets() {
     let dir = tempdir().unwrap();
     let mut screen_menu = Vec::new();

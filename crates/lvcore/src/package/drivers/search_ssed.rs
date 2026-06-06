@@ -4,6 +4,7 @@ use super::*;
 
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 4096;
+const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 256;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 
@@ -81,15 +82,13 @@ impl ReaderBookPackage {
         let mut optimized_diagnostics = Vec::new();
         let mut physical_next_cursor = None;
         if prefiltered_scan_cursor.is_some() {
-            let scan_result = self.scan_ssed_prefiltered_index_rows_paged(
+            physical_next_cursor = self.scan_ssed_prefiltered_index_rows_paged_until_visible(
                 &query.mode,
                 &needle,
                 true,
                 prefiltered_scan_cursor,
-                |row| collector.push_row(row),
+                &mut collector,
             )?;
-            physical_next_cursor = scan_result.next_cursor;
-            collector.extend_diagnostics(scan_result.diagnostics);
         } else if matches!(
             query.mode,
             SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
@@ -114,26 +113,25 @@ impl ReaderBookPackage {
         }
         if !collector.has_hits() && optimized_scan_components == 0 {
             let scan_diagnostics = if query.mode == SearchMode::Partial {
-                let scan_result =
-                    self.scan_ssed_partial_index_rows_paged(&needle, partial_scan_cursor, |row| {
-                        collector.push_row(row)
-                    })?;
-                physical_next_cursor = scan_result.next_cursor;
-                scan_result.diagnostics
+                physical_next_cursor = self.scan_ssed_partial_index_rows_paged_until_visible(
+                    &needle,
+                    partial_scan_cursor,
+                    &mut collector,
+                )?;
+                Vec::new()
             } else if matches!(
                 query.mode,
                 SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
             ) && scan_needs_prefilter_fallback
             {
-                let scan_result = self.scan_ssed_prefiltered_index_rows_paged(
+                physical_next_cursor = self.scan_ssed_prefiltered_index_rows_paged_until_visible(
                     &query.mode,
                     &needle,
                     true,
                     None,
-                    |row| collector.push_row(row),
+                    &mut collector,
                 )?;
-                physical_next_cursor = scan_result.next_cursor;
-                scan_result.diagnostics
+                Vec::new()
             } else {
                 self.scan_ssed_simple_index_rows(None, |row| collector.push_row(row))?
             };
@@ -153,15 +151,13 @@ impl ReaderBookPackage {
                 query.label_gaiji_policy(),
             );
             fallback_collector.extend_diagnostics(optimized_diagnostics);
-            let scan_result = self.scan_ssed_prefiltered_index_rows_paged(
+            physical_next_cursor = self.scan_ssed_prefiltered_index_rows_paged_until_visible(
                 &query.mode,
                 &needle,
                 true,
                 None,
-                |row| fallback_collector.push_row(row),
+                &mut fallback_collector,
             )?;
-            physical_next_cursor = scan_result.next_cursor;
-            fallback_collector.extend_diagnostics(scan_result.diagnostics);
             collector = fallback_collector;
         }
         if !collector.has_hits()
@@ -197,6 +193,137 @@ impl ReaderBookPackage {
             self.append_ssed_sidecar_title_hits(query, &mut page, 0)?;
         }
         Ok(page)
+    }
+
+    fn scan_ssed_partial_index_rows_paged_until_visible(
+        &self,
+        needle: &str,
+        cursor: Option<SsedPartialIndexScanCursor>,
+        collector: &mut SsedIndexSearchCollector<'_>,
+    ) -> Result<Option<String>> {
+        let mut current_cursor = cursor;
+        let mut advanced_empty_pages = 0usize;
+        loop {
+            let scan_result =
+                self.scan_ssed_partial_index_rows_paged(needle, current_cursor, |row| {
+                    collector.push_row(row)
+                })?;
+            let next_cursor = scan_result.next_cursor;
+            collector.extend_diagnostics(scan_result.diagnostics);
+            if collector.has_hits() || next_cursor.is_none() {
+                self.record_ssed_empty_physical_scan_advances(
+                    collector,
+                    advanced_empty_pages,
+                    next_cursor.as_deref(),
+                    false,
+                );
+                return Ok(next_cursor);
+            }
+            if advanced_empty_pages >= SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT {
+                self.record_ssed_empty_physical_scan_advances(
+                    collector,
+                    advanced_empty_pages,
+                    next_cursor.as_deref(),
+                    true,
+                );
+                return Ok(next_cursor);
+            }
+            advanced_empty_pages = advanced_empty_pages.saturating_add(1);
+            let decoded = decode_ssed_partial_index_scan_cursor(next_cursor.as_deref());
+            if decoded.is_none() {
+                collector.extend_diagnostics(vec![
+                    Diagnostic::warning(
+                        "ssed_index_physical_cursor_decode_failed",
+                        "SSED partial index scan produced an unreadable continuation cursor",
+                    )
+                    .with_context("next_cursor", next_cursor.clone().unwrap_or_default()),
+                ]);
+                return Ok(next_cursor);
+            }
+            current_cursor = decoded;
+        }
+    }
+
+    fn scan_ssed_prefiltered_index_rows_paged_until_visible(
+        &self,
+        mode: &SearchMode,
+        needle: &str,
+        include_simple_indexes: bool,
+        cursor: Option<SsedPrefilteredIndexScanCursor>,
+        collector: &mut SsedIndexSearchCollector<'_>,
+    ) -> Result<Option<String>> {
+        let mut current_cursor = cursor;
+        let mut advanced_empty_pages = 0usize;
+        loop {
+            let scan_result = self.scan_ssed_prefiltered_index_rows_paged(
+                mode,
+                needle,
+                include_simple_indexes,
+                current_cursor,
+                |row| collector.push_row(row),
+            )?;
+            let next_cursor = scan_result.next_cursor;
+            collector.extend_diagnostics(scan_result.diagnostics);
+            if collector.has_hits() || next_cursor.is_none() {
+                self.record_ssed_empty_physical_scan_advances(
+                    collector,
+                    advanced_empty_pages,
+                    next_cursor.as_deref(),
+                    false,
+                );
+                return Ok(next_cursor);
+            }
+            if advanced_empty_pages >= SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT {
+                self.record_ssed_empty_physical_scan_advances(
+                    collector,
+                    advanced_empty_pages,
+                    next_cursor.as_deref(),
+                    true,
+                );
+                return Ok(next_cursor);
+            }
+            advanced_empty_pages = advanced_empty_pages.saturating_add(1);
+            let decoded = decode_ssed_prefiltered_index_scan_cursor(next_cursor.as_deref());
+            if decoded.is_none() {
+                collector.extend_diagnostics(vec![
+                    Diagnostic::warning(
+                        "ssed_index_physical_cursor_decode_failed",
+                        "SSED prefiltered index scan produced an unreadable continuation cursor",
+                    )
+                    .with_context("next_cursor", next_cursor.clone().unwrap_or_default()),
+                ]);
+                return Ok(next_cursor);
+            }
+            current_cursor = decoded;
+        }
+    }
+
+    fn record_ssed_empty_physical_scan_advances(
+        &self,
+        collector: &mut SsedIndexSearchCollector<'_>,
+        advanced_empty_pages: usize,
+        next_cursor: Option<&str>,
+        limited: bool,
+    ) {
+        if advanced_empty_pages == 0 {
+            return;
+        }
+        let mut diagnostic = if limited {
+            Diagnostic::info(
+                "ssed_index_empty_physical_scan_limited",
+                "SSED native index search advanced empty physical scan pages and stopped at the bounded cursor budget",
+            )
+        } else {
+            Diagnostic::info(
+                "ssed_index_empty_physical_pages_skipped",
+                "SSED native index search advanced empty physical scan pages before returning a user-visible page",
+            )
+        }
+        .with_context("advanced_empty_pages", advanced_empty_pages.to_string());
+        if let Some(next_cursor) = next_cursor {
+            diagnostic = diagnostic.with_context("next_cursor", next_cursor.to_owned());
+        }
+        collector.extend_diagnostics(vec![diagnostic]);
     }
 
     fn search_ssed_title_label_fallback_page(
