@@ -271,11 +271,23 @@ impl DriverRegistry {
     }
 
     pub fn open_best(&self, root: &Path) -> Result<Box<dyn BookPackage>> {
-        let detected = self
-            .detect(root)?
-            .into_iter()
-            .next()
-            .ok_or(Error::UnrecognizedPackage)?;
+        let detected = match self.detect(root)?.into_iter().next() {
+            Some(detected) => detected,
+            None => {
+                let mut discovered =
+                    self.discover_best_packages(root, PackageDiscoveryOptions::with_max(2))?;
+                match discovered.len() {
+                    0 => return Err(Error::UnrecognizedPackage),
+                    1 => discovered.remove(0),
+                    _ => {
+                        return Err(Error::Driver(
+                            "path contains multiple package candidates; use library APIs instead"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
+        };
         for driver in &self.drivers {
             if driver.family() == detected.format_family {
                 return driver.open_detected(detected);

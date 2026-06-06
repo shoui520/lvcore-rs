@@ -41,6 +41,65 @@ fn detect_command_recurses_when_root_is_not_a_package() {
 }
 
 #[test]
+fn single_book_commands_open_single_nested_package_wrapper() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("NestedDictionary");
+    fs::create_dir_all(&package).unwrap();
+    write_lved_cli_fixture(&package);
+
+    let output = search_command_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        "alp".to_owned(),
+        SearchMode::Forward,
+        10,
+        None,
+        RenderOptions::default(),
+        false,
+        0,
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(
+        output["metadata"]["package_root"].as_str().unwrap(),
+        package.to_string_lossy()
+    );
+    assert_eq!(output["hits"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn single_book_commands_reject_ambiguous_multi_package_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("FirstDictionary");
+    let second = dir.path().join("SecondDictionary");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    write_lved_cli_fixture(&first);
+    write_lved_cli_fixture(&second);
+
+    let error = search_command_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        "alp".to_owned(),
+        SearchMode::Forward,
+        10,
+        None,
+        RenderOptions::default(),
+        false,
+        0,
+        0,
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("path contains multiple package candidates")
+    );
+}
+
+#[test]
 fn registry_can_stream_discovered_packages_without_precollecting() {
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("FirstDictionary");
