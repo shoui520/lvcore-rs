@@ -61,6 +61,9 @@ LogoVista internals. The frontend receives:
   pass it back as `SequenceHint::SearchResults { value }` when opening a hit
   with continuous view in the visible result order, including 串刺し検索 pages
   where neighboring hits may belong to different books.
+- selected-book 串刺し検索 preserves the frontend-provided book order for both
+  hit pages and search-result continuous view windows. All-book search uses the
+  library's deterministic loaded-book order.
 
 The frontend should not parse HONMON, `lved.*` links, Panel rows, law references,
 or gaiji codes directly.
@@ -103,6 +106,10 @@ resolution rather than decoding or trusting them itself.
 - `BasicText` is the low-risk flattened mode. It is useful for snippets,
   previews, and simple external integrations, but it is not the visual parity
   path for LogoVista dictionaries.
+- `BookMetadata` uses a stable cache-friendly JSON shape for always-present
+  list fields such as `search_modes` and `diagnostics`, even when they are
+  empty. Nested view/surface diagnostics may still be omitted when empty to keep
+  per-entry payloads compact.
 
 ## Non-Goals
 
@@ -134,7 +141,8 @@ provider slices:
 - library search pages expose an opaque search-result sequence for continuous
   view. The frontend does not need to reconstruct search-result order from
   target internals; it can pass the returned value back to lvcore when opening a
-  result with surrounding entries;
+  result with surrounding entries; selected-book search preserves the
+  frontend-provided book order in that sequence;
 - casefolded storage lookup with casing preservation;
 - readable SSED component materialization for plain payloads, LogoFontCipher
   payloads, Mac OS X AES payloads, and observed Mac OS X ZipCrypto `HONMON`
