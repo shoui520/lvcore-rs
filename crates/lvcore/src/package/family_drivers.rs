@@ -14,6 +14,7 @@ use super::ssed_detection::{
     load_package_uni_gaiji_maps, multiview_menu_files, multiview_menu_title,
     package_root_for_detection, ssed_capabilities, ssed_catalog_for_root, usable_multiview_title,
 };
+use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::{BookPackage, DetectedPackage, FormatFamily, PackageDriver};
 use crate::error::{Error, Result};
 use crate::hourei::HoureiStore;
@@ -21,7 +22,7 @@ use crate::ios_dictlist::discover_ios_dictlist_info;
 use crate::lved_sqlite::{AndroidDictInfo, LvedSqliteStore};
 use crate::multiview::MultiviewStore;
 use crate::search::SearchMode;
-use crate::ssed::SsedCatalog;
+use crate::ssed::{SsedCatalog, SsedComponentRole};
 use crate::storage::{DirectoryStorage, StorageBackend, regular_file_inside_root};
 
 impl PackageDriver for SsedDriver {
@@ -288,7 +289,15 @@ impl LvedSqliteDriver {
         let package_root = detection.root.clone();
         let summary = store.summary()?;
         let search_modes = store.search_modes()?;
+        let retained_ssed_catalog = retained_ssed_catalog_for_lved_reader(&package_root)?;
         let retained_ssed_components = discover_retained_sseddata_components(&package_root)?;
+        let mut capabilities = lved_capabilities(&search_modes, &summary);
+        if let Some(catalog) = &retained_ssed_catalog {
+            extend_unique_capabilities(
+                &mut capabilities,
+                ssed_capabilities(catalog, &package_root),
+            );
+        }
         detection.title = summary
             .title
             .clone()
@@ -296,8 +305,9 @@ impl LvedSqliteDriver {
         Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
-            lved_capabilities(&search_modes, &summary),
+            capabilities,
             PackageStores {
+                ssed_catalog: retained_ssed_catalog,
                 lved_store: Some(store),
                 lved_summary: Some(summary),
                 retained_ssed_components,
@@ -306,6 +316,19 @@ impl LvedSqliteDriver {
             },
         )))
     }
+}
+
+fn retained_ssed_catalog_for_lved_reader(root: &Path) -> Result<Option<SsedCatalog>> {
+    let Ok(catalog) = ssed_catalog_for_root(root) else {
+        return Ok(None);
+    };
+    let storage = DirectoryStorage::new(root.to_path_buf());
+    let has_reader_surface = has_decodable_ssed_index_rows(&catalog, &storage)
+        || catalog.has_role(SsedComponentRole::Menu)
+        || catalog.has_role(SsedComponentRole::Toc)
+        || catalog.has_role(SsedComponentRole::MultiDescriptor)
+        || catalog.has_role(SsedComponentRole::ScreenMenu);
+    Ok(has_reader_surface.then_some(catalog))
 }
 
 impl PackageDriver for LvlMultiViewDriver {

@@ -455,8 +455,30 @@ fn package_metadata_diagnostics(stores: &PackageStores) -> Vec<Diagnostic> {
     stores
         .retained_ssed_components
         .iter()
+        .filter(|component| {
+            !stores.ssed_catalog.as_ref().is_some_and(|catalog| {
+                retained_ssed_component_is_catalog_backed(component, catalog)
+            })
+        })
         .map(retained_ssed_component_diagnostic)
         .collect()
+}
+
+fn retained_ssed_component_is_catalog_backed(
+    component: &RetainedSsedComponent,
+    catalog: &SsedCatalog,
+) -> bool {
+    catalog.components.iter().any(|catalog_component| {
+        catalog_component
+            .filename
+            .eq_ignore_ascii_case(&component.filename)
+            && catalog_component.role == component.role
+            && component
+                .component_type
+                .is_none_or(|component_type| catalog_component.component_type == component_type)
+            && catalog_component.start_block == component.start_block
+            && catalog_component.end_block == component.end_block
+    })
 }
 
 fn retained_ssed_component_diagnostic(component: &RetainedSsedComponent) -> Diagnostic {

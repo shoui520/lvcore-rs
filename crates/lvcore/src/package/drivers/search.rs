@@ -6,10 +6,12 @@ impl SearchProvider for ReaderBookPackage {
             .ssed_catalog
             .as_ref()
             .is_some_and(|catalog| has_decodable_ssed_index_rows(catalog, &self.storage));
-        let mut page = if has_decodable_ssed_indexes {
-            self.search_ssed_simple_indexes(query)?
-        } else if self.lved_store.is_some() && self.metadata.search_modes.contains(&query.mode) {
+        let mut page = if self.lved_store.is_some()
+            && self.metadata.search_modes.contains(&query.mode)
+        {
             self.search_lved_sqlite(query)?
+        } else if has_decodable_ssed_indexes {
+            self.search_ssed_simple_indexes(query)?
         } else if !self.retained_ios_fts_payloads.is_empty()
             && self.metadata.search_modes.contains(&query.mode)
         {

@@ -230,6 +230,63 @@ fn lved_retained_loose_sseddata_indexes_are_deferred_diagnostics() {
     assert_eq!(page.hits[0].title_text, "alpha");
 }
 
+#[test]
+fn lved_adopts_reader_reachable_retained_ssed_catalog_as_secondary_surface() {
+    let dir = tempdir().unwrap();
+    write_lved_search_fixture(dir.path());
+    write_retained_ssed_catalog_with_title_index(dir.path(), "MIXED.IDX");
+
+    let package = LvedSqliteDriver.open(dir.path()).unwrap();
+
+    assert_eq!(package.metadata().format_family, FormatFamily::LvedSqlite3);
+    assert!(
+        package
+            .metadata()
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "retained_ssed_component_deferred")
+    );
+    assert!(
+        package
+            .metadata()
+            .capabilities
+            .contains(&Capability::HcRenderInput)
+    );
+
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "lved-list" && surface.status == NavigationStatus::Available
+    }));
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "title-index" && surface.status == NavigationStatus::Available
+    }));
+
+    let surface = package.open_surface_page("title-index", None, 10).unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("retained SSED title/index should open as a secondary browse surface");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "retained alpha");
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::LvedRow { table, .. } if table == "content"
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn lved_detection_ignores_symlinked_payload_escape() {
@@ -281,6 +338,70 @@ fn write_retained_ssedinfo_idx(root: &Path, filename: &str) {
     rec[0x10] = b"HONMON.DIC".len() as u8;
     rec[0x11..0x11 + b"HONMON.DIC".len()].copy_from_slice(b"HONMON.DIC");
     fs::write(root.join(filename), data).unwrap();
+}
+
+fn write_retained_ssed_catalog_with_title_index(root: &Path, filename: &str) {
+    let mut data = vec![0u8; 0x80 + 0x90];
+    data[..SSEDINFO_MAGIC.len()].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Retained SSED";
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 3;
+    write_retained_ssedinfo_record(&mut data[0x80..0x80 + 0x30], 0x00, 100, 100, "HONMON.DIC");
+    write_retained_ssedinfo_record(
+        &mut data[0x80 + 0x30..0x80 + 0x60],
+        0x03,
+        300,
+        300,
+        "FHTITLE.DIC",
+    );
+    write_retained_ssedinfo_record(
+        &mut data[0x80 + 0x60..0x80 + 0x90],
+        0x91,
+        200,
+        200,
+        "FHINDEX.DIC",
+    );
+    fs::write(root.join(filename), data).unwrap();
+
+    let mut body = Vec::new();
+    body.extend_from_slice(&SSED_ENTRY_MARKER);
+    body.extend_from_slice(&body_jis("retained body"));
+    fs::write(
+        root.join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&body], 100, 100),
+    )
+    .unwrap();
+    fs::write(
+        root.join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[b"retained alpha\x1f\x0a"], 300, 300),
+    )
+    .unwrap();
+
+    let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    index_page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    let mut pos = 4usize;
+    write_simple_index_row(&mut index_page, &mut pos, &body_jis("あ"), 100, 0, 300, 0);
+    fs::write(
+        root.join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+    )
+    .unwrap();
+}
+
+fn write_retained_ssedinfo_record(
+    rec: &mut [u8],
+    component_type: u8,
+    start: u32,
+    end: u32,
+    filename: &str,
+) {
+    rec[3] = component_type;
+    rec[4..8].copy_from_slice(&start.to_be_bytes());
+    rec[8..12].copy_from_slice(&end.to_be_bytes());
+    rec[0x10] = filename.len() as u8;
+    rec[0x11..0x11 + filename.len()].copy_from_slice(filename.as_bytes());
 }
 
 #[test]
