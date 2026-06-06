@@ -338,6 +338,17 @@ fn write_dense_body_db_with_entity_title(path: PathBuf) {
             ),
         )
         .unwrap();
+    connection
+        .execute(
+            "insert into t_contents values (?, ?, ?, ?)",
+            (
+                3,
+                "&#x002A;abaisser".as_bytes(),
+                "<div>prefixed sidecar html</div>".as_bytes(),
+                "prefixed sidecar body".as_bytes(),
+            ),
+        )
+        .unwrap();
 }
 
 fn write_sharded_t_contents_body_db(path: PathBuf) {

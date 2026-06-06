@@ -3,6 +3,7 @@ use std::cell::Cell;
 use super::*;
 
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
+const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 
 impl ReaderBookPackage {
     pub(super) fn search_ssed_simple_indexes(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -30,6 +31,9 @@ impl ReaderBookPackage {
             return Ok(SearchPage::deferred(
                 "SSED search mode is not implemented for simple title/index scanning yet",
             ));
+        }
+        if let Some(sidecar_offset) = decode_ssed_sidecar_title_cursor(query.cursor.as_deref()) {
+            return self.search_ssed_sidecar_title_page(query, sidecar_offset, Vec::new());
         }
 
         let partial_scan_cursor = if query.mode == SearchMode::Partial {
@@ -212,7 +216,100 @@ impl ReaderBookPackage {
         if page.next_cursor.is_none() {
             page.next_cursor = physical_next_cursor;
         }
+        if page.next_cursor.is_none() && query.cursor.is_none() && page.hits.len() < query.limit {
+            self.append_ssed_sidecar_title_hits(query, &mut page, 0)?;
+        }
         Ok(page)
+    }
+
+    fn search_ssed_sidecar_title_page(
+        &self,
+        query: &SearchQuery,
+        sidecar_offset: usize,
+        diagnostics: Vec<Diagnostic>,
+    ) -> Result<SearchPage> {
+        let mut page = SearchPage {
+            hits: Vec::new(),
+            next_cursor: None,
+            result_sequence: None,
+            diagnostics,
+        };
+        self.append_ssed_sidecar_title_hits(query, &mut page, sidecar_offset)?;
+        Ok(page)
+    }
+
+    fn append_ssed_sidecar_title_hits(
+        &self,
+        query: &SearchQuery,
+        page: &mut SearchPage,
+        sidecar_offset: usize,
+    ) -> Result<()> {
+        let Some(mode) = ssed_sidecar_title_search_mode(&query.mode) else {
+            return Ok(());
+        };
+        let remaining = query.limit.saturating_sub(page.hits.len());
+        if remaining == 0 {
+            return Ok(());
+        }
+        let sidecar_page = search_ssed_dense_sidecar_titles_with_resolvers(
+            self.ssed_sidecar_body_resolvers()?,
+            mode,
+            &query.query,
+            sidecar_offset,
+            remaining.saturating_add(1),
+        )?;
+        if !sidecar_page.hits.is_empty() || sidecar_page.matched_count > sidecar_offset {
+            page.diagnostics.push(Diagnostic::info(
+                "ssed_sidecar_title_search",
+                "SSED search included renderable dense HONMON sidecar titles",
+            ));
+        }
+        let mut existing_titles = page
+            .hits
+            .iter()
+            .map(|hit| normalize_search_match_text(&hit.title_text))
+            .collect::<HashSet<_>>();
+        for hit in sidecar_page.hits {
+            let title = if hit.body.title.trim().is_empty() {
+                hit.body.text.chars().take(80).collect::<String>()
+            } else {
+                hit.body.title.clone()
+            };
+            let label = self.ssed_rich_label_with_policy(&title, &query.label_gaiji_policy());
+            if !existing_titles.insert(normalize_search_match_text(&label.text)) {
+                continue;
+            }
+            let resolver_hint = hit
+                .body
+                .resolver
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string());
+            let mut hit_diagnostics = label.diagnostics;
+            hit_diagnostics.extend(hit.body.diagnostics);
+            let target = TargetToken::new(&InternalTarget::SsedDenseAnchor {
+                anchor: hit.anchor_id,
+                resolver_hint,
+            })?;
+            let href = target.href();
+            page.hits.push(SearchHit {
+                href,
+                book_id: self.metadata.book_id.clone(),
+                target,
+                title_html: label.html,
+                title_text: label.text,
+                snippet_html: None,
+                sequence_hint: None,
+                diagnostics: hit_diagnostics,
+            });
+            if page.hits.len() >= query.limit {
+                break;
+            }
+        }
+        if !sidecar_page.exhausted {
+            page.next_cursor = Some(encode_ssed_sidecar_title_cursor(sidecar_page.matched_count));
+        }
+        Ok(())
     }
 
     fn scan_ssed_partial_index_rows(
@@ -1228,4 +1325,25 @@ fn decode_ssed_fulltext_row_cursor(cursor: Option<&str>) -> Option<usize> {
     cursor?
         .strip_prefix("row:")
         .and_then(|value| value.parse::<usize>().ok())
+}
+
+fn decode_ssed_sidecar_title_cursor(cursor: Option<&str>) -> Option<usize> {
+    cursor?
+        .strip_prefix(SSED_SIDECAR_TITLE_CURSOR_PREFIX)?
+        .parse()
+        .ok()
+}
+
+fn encode_ssed_sidecar_title_cursor(offset: usize) -> String {
+    format!("{SSED_SIDECAR_TITLE_CURSOR_PREFIX}{offset}")
+}
+
+fn ssed_sidecar_title_search_mode(mode: &SearchMode) -> Option<SsedSidecarTitleSearchMode> {
+    match mode {
+        SearchMode::Exact => Some(SsedSidecarTitleSearchMode::Exact),
+        SearchMode::Forward => Some(SsedSidecarTitleSearchMode::Forward),
+        SearchMode::Backward => Some(SsedSidecarTitleSearchMode::Backward),
+        SearchMode::Partial => Some(SsedSidecarTitleSearchMode::Partial),
+        SearchMode::FullText | SearchMode::Advanced(_) => None,
+    }
 }

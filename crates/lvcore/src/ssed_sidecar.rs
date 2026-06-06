@@ -113,6 +113,14 @@ pub struct SsedSidecarSearchPage {
     pub exhausted: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SsedSidecarTitleSearchMode {
+    Exact,
+    Forward,
+    Backward,
+    Partial,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SsedSidecarLookup {
     Resolved(SsedSidecarBody),
@@ -410,6 +418,66 @@ pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
     })
 }
 
+pub fn search_ssed_dense_sidecar_titles_with_resolvers(
+    resolvers: &[SsedSidecarBodyResolver],
+    mode: SsedSidecarTitleSearchMode,
+    query: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<SsedSidecarSearchPage> {
+    let needle = normalize_sidecar_search_text(query);
+    if needle.is_empty() || limit == 0 {
+        return Ok(SsedSidecarSearchPage {
+            hits: Vec::new(),
+            matched_count: 0,
+            exhausted: true,
+        });
+    }
+
+    let mut hits = Vec::new();
+    let mut matched = 0usize;
+    for resolver in resolvers {
+        let Some(title_column) = &resolver.title_column else {
+            continue;
+        };
+        let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
+        let (sql, uses_prefilter) =
+            sidecar_title_prefilter_sql_for_resolver(resolver, title_column, query);
+        let mut statement = connection.prepare(&sql)?;
+        let mut rows = if uses_prefilter {
+            statement.query([sqlite_like_contains_pattern(query)])?
+        } else {
+            statement.query([])?
+        };
+        while let Some(row) = rows.next()? {
+            let anchor_id = anchor_id_from_search_row(resolver, row)?;
+            let body = sidecar_body_from_row(resolver, row)?;
+            let hit = SsedSidecarSearchHit { anchor_id, body };
+            if !sidecar_title_matches(&hit.body.title, mode, &needle) {
+                continue;
+            }
+            if matched < offset {
+                matched = matched.saturating_add(1);
+                continue;
+            }
+            hits.push(hit);
+            matched = matched.saturating_add(1);
+            if hits.len() >= limit {
+                return Ok(SsedSidecarSearchPage {
+                    hits,
+                    matched_count: matched,
+                    exhausted: false,
+                });
+            }
+        }
+    }
+    Ok(SsedSidecarSearchPage {
+        hits,
+        matched_count: matched,
+        exhausted: true,
+    })
+}
+
 fn search_ssed_dense_sidecar_bodies_prefiltered(
     resolvers: &[SsedSidecarBodyResolver],
     query: &str,
@@ -663,6 +731,28 @@ fn search_prefilter_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> Opti
     ))
 }
 
+fn sidecar_title_prefilter_sql_for_resolver(
+    resolver: &SsedSidecarBodyResolver,
+    title_column: &str,
+    query: &str,
+) -> (String, bool) {
+    let (where_sql, uses_prefilter) = if !query.is_ascii() {
+        (None, false)
+    } else {
+        (
+            Some(format!(
+                " where {} like ? escape '\\'",
+                quote_sql_identifier(title_column)
+            )),
+            true,
+        )
+    };
+    (
+        search_select_sql_for_resolver(resolver, where_sql.as_deref()),
+        uses_prefilter,
+    )
+}
+
 fn search_select_sql_for_resolver(
     resolver: &SsedSidecarBodyResolver,
     where_sql: Option<&str>,
@@ -779,6 +869,41 @@ fn sidecar_search_hit_matches(hit: &SsedSidecarSearchHit, needle: &str) -> bool 
         haystack.push_str(&strip_html_tags(html));
     }
     normalize_sidecar_search_text(&haystack).contains(needle)
+}
+
+fn sidecar_title_matches(title: &str, mode: SsedSidecarTitleSearchMode, needle: &str) -> bool {
+    sidecar_title_match_variants(title)
+        .into_iter()
+        .any(|candidate| match mode {
+            SsedSidecarTitleSearchMode::Exact => candidate == needle,
+            SsedSidecarTitleSearchMode::Forward => candidate.starts_with(needle),
+            SsedSidecarTitleSearchMode::Backward => candidate.ends_with(needle),
+            SsedSidecarTitleSearchMode::Partial => candidate.contains(needle),
+        })
+}
+
+fn sidecar_title_match_variants(title: &str) -> Vec<String> {
+    let normalized = normalize_sidecar_search_text(title);
+    let mut variants = Vec::new();
+    push_unique_sidecar_title_variant(&mut variants, normalized.clone());
+    let trimmed = normalized
+        .trim_start_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '*' | '＊' | '+' | '＋' | '-' | '‐' | '‑' | '‒' | '–' | '—' | '―' | '━'
+                )
+        })
+        .trim()
+        .to_owned();
+    push_unique_sidecar_title_variant(&mut variants, trimmed);
+    variants
+}
+
+fn push_unique_sidecar_title_variant(variants: &mut Vec<String>, value: String) {
+    if !value.is_empty() && !variants.iter().any(|existing| existing == &value) {
+        variants.push(value);
+    }
 }
 
 fn lookup_resolver_body(

@@ -209,12 +209,13 @@ use crate::ssed_screen_menu::{
 use crate::ssed_sidecar::{
     SsedSidecarBody, SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
     SsedSidecarMediaResolver, SsedSidecarRangeResolver, SsedSidecarSearchPage,
-    discover_ssed_sidecar_body_resolvers_with_candidates, discover_ssed_sidecar_media_resolvers,
-    discover_ssed_sidecar_range_resolvers_with_candidates,
+    SsedSidecarTitleSearchMode, discover_ssed_sidecar_body_resolvers_with_candidates,
+    discover_ssed_sidecar_media_resolvers, discover_ssed_sidecar_range_resolvers_with_candidates,
     lookup_ssed_dense_sidecar_body_with_resolvers, lookup_ssed_ordered_honbun_body_by_row,
     lookup_ssed_sidecar_body_by_address_with_resolvers, lookup_ssed_sidecar_media,
     lookup_ssed_sidecar_range_bound_with_resolvers,
     search_ssed_dense_sidecar_bodies_with_resolvers,
+    search_ssed_dense_sidecar_titles_with_resolvers,
 };
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index, parse_sounddata_marker_at};
 use crate::storage::{
