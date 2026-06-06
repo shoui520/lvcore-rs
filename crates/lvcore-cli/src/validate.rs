@@ -411,12 +411,13 @@ fn surface_probe_targets(
     let mut pages_scanned = 1usize;
     let mut resource_targets = first_surface.actionable_targets();
     let mut remaining_cursor = navigation_surface_next_cursor(first_surface).map(str::to_owned);
+    let mut child_cursor = navigation_surface_first_child_cursor(first_surface).map(str::to_owned);
 
     while resource_targets.is_empty()
-        && remaining_cursor.is_some()
+        && (remaining_cursor.is_some() || child_cursor.is_some())
         && pages_scanned < VALIDATE_SURFACE_TARGET_PAGE_LIMIT
     {
-        let cursor = remaining_cursor.clone();
+        let cursor = child_cursor.take().or_else(|| remaining_cursor.clone());
         let page = library.open_surface_page(
             book_id,
             surface_id,
@@ -426,6 +427,7 @@ fn surface_probe_targets(
         pages_scanned += 1;
         resource_targets = page.actionable_targets();
         remaining_cursor = navigation_surface_next_cursor(&page).map(str::to_owned);
+        child_cursor = navigation_surface_first_child_cursor(&page).map(str::to_owned);
     }
 
     Ok(SurfaceTargetProbe {
@@ -447,6 +449,31 @@ fn navigation_surface_next_cursor(surface: &NavigationSurface) -> Option<&str> {
         | NavigationSurface::FallbackSearch { .. }
         | NavigationSurface::Deferred { .. } => None,
     }
+}
+
+fn navigation_surface_first_child_cursor(surface: &NavigationSurface) -> Option<&str> {
+    match surface {
+        NavigationSurface::SimpleMenu { nodes, .. }
+        | NavigationSurface::HierarchicalTree { nodes, .. } => first_node_child_cursor(nodes),
+        NavigationSurface::ScreenMenu { .. }
+        | NavigationSurface::TitleIndexBrowse { .. }
+        | NavigationSurface::Panel { .. }
+        | NavigationSurface::InfoPages { .. }
+        | NavigationSurface::FallbackSearch { .. }
+        | NavigationSurface::Deferred { .. } => None,
+    }
+}
+
+fn first_node_child_cursor(nodes: &[lvcore::navigation::NavigationNode]) -> Option<&str> {
+    for node in nodes {
+        if let Some(cursor) = node.child_cursor.as_deref() {
+            return Some(cursor);
+        }
+        if let Some(cursor) = first_node_child_cursor(&node.children) {
+            return Some(cursor);
+        }
+    }
+    None
 }
 
 fn surface_visible_item_count(surface: &NavigationSurface) -> usize {

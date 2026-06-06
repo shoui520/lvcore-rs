@@ -162,8 +162,7 @@ impl ReaderBookPackage {
                 )],
             });
         }
-        let offset = decode_offset_cursor(cursor);
-        let (nodes, next_cursor) = lved_tree_items_to_nodes_page(rows.as_ref(), offset, limit)?;
+        let (nodes, next_cursor) = lved_tree_items_to_nodes_page(rows.as_ref(), cursor, limit)?;
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
             nodes,

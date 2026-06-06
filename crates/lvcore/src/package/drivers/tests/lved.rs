@@ -336,6 +336,46 @@ fn lved_adopts_reader_reachable_retained_ssed_catalog_as_secondary_surface() {
     ));
 }
 
+#[test]
+fn lved_tree_surface_lazily_pages_large_child_branches() {
+    let dir = tempdir().unwrap();
+    write_lved_search_fixture(dir.path());
+    let mut tree = String::from("0\t0\tRoot\n");
+    for index in 0..24 {
+        let data_id = match index {
+            0 => 100,
+            1 => 101,
+            _ => 102,
+        };
+        tree.push_str(&format!("{data_id}\t1\tChild {index}\n"));
+    }
+    fs::write(dir.path().join("tree.idx"), tree).unwrap();
+
+    let package = LvedSqliteDriver.open(dir.path()).unwrap();
+    let root_surface = package.open_surface_page("lved-tree", None, 4).unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = root_surface else {
+        panic!("expected LVED tree surface");
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "Root");
+    assert_eq!(nodes[0].child_cursor.as_deref(), Some("children:0:0"));
+    assert!(nodes[0].children.is_empty());
+
+    let child_surface = package
+        .open_surface_page("lved-tree", nodes[0].child_cursor.as_deref(), 4)
+        .unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = child_surface
+    else {
+        panic!("expected LVED tree child page");
+    };
+    assert_eq!(nodes.len(), 4);
+    assert_eq!(nodes[0].label_text, "Child 0");
+    assert!(nodes[0].target.is_some());
+    assert_eq!(next_cursor.as_deref(), Some("children:0:4"));
+}
+
 #[cfg(unix)]
 #[test]
 fn lved_detection_ignores_symlinked_payload_escape() {
