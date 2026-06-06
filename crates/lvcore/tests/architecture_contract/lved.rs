@@ -586,42 +586,53 @@ fn lved_tree_surface_is_not_advertised_when_no_tree_index_exists() {
 }
 
 #[test]
-fn lved_retained_ssed_components_are_metadata_diagnostics_not_navigation() {
+fn lved_retained_ssed_components_are_supplemental_search_not_navigation() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute_batch(
+                "
+                insert into content values (110, 1, '<article><h1>Gamma</h1></article>', '');
+                insert into list values (3, 110, 1, '', '<b>gamma</b>', '');
+                ",
+            )
+            .unwrap();
+    }
+    let retained_index =
+        simple_index_raw_ascii_fixture_rows(&[("ammag", 3, 0, 0, 0), ("tsohg", 999, 0, 0, 0)]);
     fs::write(
         dir.path().join("BHINDEX.DIC"),
-        sseddata_literal_fixture(b"retained-backward-index"),
+        sseddata_literal_fixture(&retained_index),
     )
     .unwrap();
     fs::write(
         dir.path().join("BKINDEX.DIC"),
-        sseddata_literal_fixture(b"retained-backward-keyword-index"),
+        sseddata_literal_fixture(&retained_index),
     )
     .unwrap();
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
     let metadata = package.metadata();
     assert_eq!(metadata.format_family, FormatFamily::LvedSqlite3);
-    assert_eq!(metadata.diagnostics.len(), 2);
-    assert!(metadata.diagnostics.iter().all(|diagnostic| {
-        diagnostic.code == "retained_ssed_component_deferred"
-            && diagnostic.context.contains_key("filename")
-            && diagnostic.context.contains_key("component_type")
-            && diagnostic.context.contains_key("role")
-    }));
-    assert!(metadata.diagnostics.iter().any(|diagnostic| {
-        diagnostic.context.get("filename").map(String::as_str) == Some("BHINDEX.DIC")
-            && diagnostic.context.get("component_type").map(String::as_str) == Some("0x71")
-    }));
-    assert!(metadata.diagnostics.iter().any(|diagnostic| {
-        diagnostic.context.get("filename").map(String::as_str) == Some("BKINDEX.DIC")
-            && diagnostic.context.get("component_type").map(String::as_str) == Some("0x70")
-    }));
+    assert!(
+        metadata
+            .diagnostics
+            .iter()
+            .all(|diagnostic| { diagnostic.code != "retained_ssed_component_deferred" })
+    );
     let metadata_json = serde_json::to_value(metadata).unwrap();
-    assert_eq!(
-        metadata_json["diagnostics"][0]["code"],
-        "retained_ssed_component_deferred"
+    assert!(
+        !metadata_json["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "retained_ssed_component_deferred")
     );
 
     let surfaces = package.home_surfaces().unwrap();
@@ -632,7 +643,38 @@ fn lved_retained_ssed_components_are_metadata_diagnostics_not_navigation() {
         surfaces.iter().all(|surface| {
             surface.surface_id != "retained-ssed-components" && surface.surface_id != "title-index"
         }),
-        "retained SSED evidence in LVED_SQLITE3 belongs in metadata diagnostics until the routing semantics are understood"
+        "retained SSED search components in LVED_SQLITE3 must not expose fake SSED browsing"
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "mma".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "gamma");
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::LvedRow {
+            table,
+            row_id: 110,
+            anchor: None,
+            query: None,
+        } if table == "content"
+    ));
+    let view = package
+        .render_target(&page.hits[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(
+        view.display_html.as_deref(),
+        Some("<article><h1>Gamma</h1></article>")
     );
 }
 

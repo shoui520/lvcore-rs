@@ -15,13 +15,24 @@ impl ReaderBookPackage {
                 diagnostics: Vec::new(),
             });
         }
+        if let Some(retained_offset) =
+            self.decode_lved_retained_index_cursor(query.cursor.as_deref())
+        {
+            let page_limit = query.limit.saturating_add(1);
+            let mut page =
+                self.search_lved_retained_ssed_indexes(query, &[], page_limit, retained_offset)?;
+            if page.hits.len() > query.limit {
+                page.hits.truncate(query.limit);
+            }
+            return Ok(page);
+        }
         let offset = decode_offset_cursor(query.cursor.as_deref());
         let page_limit = query.limit.saturating_add(1);
         let mut raw_hits = store.search_page(&query.query, &query.mode, offset, page_limit)?;
-        let next_cursor =
+        let mut next_cursor =
             (raw_hits.len() > query.limit).then(|| (offset + query.limit).to_string());
         raw_hits.truncate(query.limit);
-        let hits = raw_hits
+        let mut hits = raw_hits
             .into_iter()
             .map(|hit| {
                 let target = TargetToken::new(&InternalTarget::LvedRow {
@@ -49,11 +60,23 @@ impl ReaderBookPackage {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let mut diagnostics = Vec::new();
+        if next_cursor.is_none() && hits.len() < query.limit {
+            let retained_limit = query.limit.saturating_sub(hits.len()).saturating_add(1);
+            let mut retained_page =
+                self.search_lved_retained_ssed_indexes(query, &hits, retained_limit, 0)?;
+            next_cursor = retained_page.next_cursor.take();
+            diagnostics.extend(retained_page.diagnostics);
+            hits.extend(retained_page.hits);
+            if hits.len() > query.limit {
+                hits.truncate(query.limit);
+            }
+        }
         Ok(SearchPage {
             hits,
             next_cursor,
             result_sequence: None,
-            diagnostics: Vec::new(),
+            diagnostics,
         })
     }
 }

@@ -556,6 +556,26 @@ impl LvedSqliteStore {
         })
     }
 
+    pub fn list_hit_by_list_id(&self, list_id: i64) -> Result<Option<LvedSearchHit>> {
+        self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
+            let list_columns = schema.columns("list");
+            if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
+                return Ok(None);
+            }
+            Ok(lved_list_hits_by_id_clause(
+                connection,
+                list_columns,
+                "l.id = ?",
+                "l.id",
+                list_id,
+                1,
+            )?
+            .into_iter()
+            .next())
+        })
+    }
+
     pub fn tree_index_items(&self) -> Result<Vec<LvedTreeIndexItem>> {
         Ok(self.tree_index_items_arc()?.as_ref().clone())
     }

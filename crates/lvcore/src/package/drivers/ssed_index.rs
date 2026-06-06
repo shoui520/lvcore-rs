@@ -1598,7 +1598,7 @@ fn ssed_index_pointer_distance(start: SsedIndexPointer, end: SsedIndexPointer) -
     end_abs.checked_sub(start_abs)
 }
 
-fn ssed_component_read_base(component: &SsedComponent, reader: &SsedDataFile) -> usize {
+pub(super) fn ssed_component_read_base(component: &SsedComponent, reader: &SsedDataFile) -> usize {
     if component.start_block >= reader.header().start_block
         && component.end_block <= reader.header().end_block
     {
@@ -1613,7 +1613,7 @@ fn component_page_offset(component_read_base: usize, page_index: usize) -> usize
         .saturating_mul(INDEX_PAGE_SIZE)
 }
 
-fn read_index_page(
+pub(super) fn read_index_page(
     reader: &mut SsedDataFile,
     component_read_base: usize,
     page_index: usize,

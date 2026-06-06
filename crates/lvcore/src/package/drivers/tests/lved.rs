@@ -166,10 +166,11 @@ fn retained_ssed_components_are_capabilities_not_family_gated() {
 }
 
 #[test]
-fn lved_retained_loose_sseddata_indexes_are_deferred_diagnostics() {
+fn lved_retained_loose_sseddata_indexes_are_supplemental_search() {
     let dir = tempdir().unwrap();
     write_lved_search_fixture(dir.path());
-    let index_page = simple_index_page_for_test(&[(&body_jis("alpha"), 100, 0)]);
+    let index_page =
+        simple_index_page_for_test(&[(&body_jis("ateb"), 2, 0), (&body_jis("tsohg"), 999, 0)]);
     fs::write(
         dir.path().join("BHINDEX.DIC"),
         fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
@@ -183,16 +184,11 @@ fn lved_retained_loose_sseddata_indexes_are_deferred_diagnostics() {
 
     let package = LvedSqliteDriver.open(dir.path()).unwrap();
     let diagnostics = &package.metadata().diagnostics;
-    assert_eq!(diagnostics.len(), 2);
-    assert!(diagnostics.iter().all(|diagnostic| {
-        diagnostic.code == "retained_ssed_component_deferred"
-            && diagnostic.context.contains_key("filename")
-            && diagnostic.context.contains_key("component_type")
-    }));
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.context.get("filename").map(String::as_str) == Some("BHINDEX.DIC")
-            && diagnostic.context.get("component_type").map(String::as_str) == Some("0x71")
-    }));
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| { diagnostic.code != "retained_ssed_component_deferred" })
+    );
 
     let surfaces = package.home_surfaces().unwrap();
 
@@ -228,6 +224,38 @@ fn lved_retained_loose_sseddata_indexes_are_deferred_diagnostics() {
         .unwrap();
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "alpha");
+
+    let retained_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "eta".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(retained_page.hits.len(), 1);
+    assert_eq!(retained_page.hits[0].title_text, "beta");
+    assert!(matches!(
+        retained_page.hits[0].target.decode().unwrap(),
+        InternalTarget::LvedRow {
+            table,
+            row_id: 101,
+            anchor: None,
+            query: None
+        } if table == "content"
+    ));
+    let view = package
+        .render_target(&retained_page.hits[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(
+        view.display_html.as_deref(),
+        Some("<article><h1>Beta</h1></article>")
+    );
 }
 
 #[test]

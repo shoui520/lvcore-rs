@@ -16,6 +16,7 @@ mod html_resource_render;
 mod law_render_refs;
 mod lved_navigation;
 mod lved_render_refs;
+mod lved_retained_index;
 mod multiview_navigation;
 mod navigation;
 mod package_files;
@@ -143,7 +144,7 @@ use crate::ios_dictlist::{
     IosDictConvertAddrPayload, IosDictFtsPayload, IosDictFullDbPayload, IosDictListInfo,
     IosDictSearchPayload,
 };
-use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
+use crate::lved_sqlite::{LvedSearchHit, LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
 use crate::multiview::{MultiviewStore, parse_menu_data};
 use crate::navigation::{
     HomeSurface, LabelOptions, NavigationItem, NavigationNode, NavigationProvider,
@@ -276,6 +277,7 @@ pub struct ReaderBookPackage {
     lved_summary: Option<LvedSqliteSummary>,
     multiview_store: Option<MultiviewStore>,
     hourei_store: Option<HoureiStore>,
+    retained_ssed_components: Vec<RetainedSsedComponent>,
     retained_ios_fts_payloads: Vec<IosDictFtsPayload>,
     retained_ios_full_db_payloads: Vec<IosDictFullDbPayload>,
     retained_ios_search_payloads: Vec<IosDictSearchPayload>,
@@ -400,6 +402,7 @@ impl ReaderBookPackage {
             lved_summary: stores.lved_summary,
             multiview_store: stores.multiview_store,
             hourei_store: stores.hourei_store,
+            retained_ssed_components: stores.retained_ssed_components,
             retained_ios_fts_payloads,
             retained_ios_full_db_payloads,
             retained_ios_search_payloads,
@@ -466,12 +469,22 @@ fn package_metadata_diagnostics(stores: &PackageStores) -> Vec<Diagnostic> {
         .retained_ssed_components
         .iter()
         .filter(|component| {
-            !retained_component_catalog.is_some_and(|catalog| {
+            !(retained_component_catalog.is_some_and(|catalog| {
                 retained_ssed_component_is_catalog_backed(component, catalog)
-            })
+            }) || stores.lved_store.is_some()
+                && retained_ssed_component_is_supported_lved_index(component))
         })
         .map(retained_ssed_component_diagnostic)
         .collect()
+}
+
+fn retained_ssed_component_is_supported_lved_index(component: &RetainedSsedComponent) -> bool {
+    component.role == SsedComponentRole::Index
+        && component
+            .component_type
+            .is_some_and(is_supported_index_type)
+        && component.start_block <= component.end_block
+        && component.chunk_count > 0
 }
 
 fn retained_ssed_component_is_catalog_backed(
