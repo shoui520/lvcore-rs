@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -622,6 +623,7 @@ fn library_discover_command_json(
 ) -> Result<serde_json::Value> {
     let mut candidates = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut seen = BTreeSet::new();
     for path in paths {
         let remaining = max.map(|limit| limit.saturating_sub(candidates.len()));
         if remaining == Some(0) {
@@ -629,7 +631,14 @@ fn library_discover_command_json(
         }
         match registry.discover_package_candidates(path, PackageDiscoveryOptions { max: remaining })
         {
-            Ok(mut rows) => candidates.append(&mut rows),
+            Ok(rows) => {
+                for row in rows {
+                    let identity = (row.format_label.clone(), row.root_fingerprint.clone());
+                    if seen.insert(identity) {
+                        candidates.push(row);
+                    }
+                }
+            }
             Err(error) => diagnostics.push(
                 lvcore::Diagnostic::warning(
                     "library_discovery_failed",
