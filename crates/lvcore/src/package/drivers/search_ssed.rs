@@ -2,7 +2,7 @@ use std::cell::Cell;
 
 use super::*;
 
-const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 8192;
+const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
 
 impl ReaderBookPackage {
     pub(super) fn search_ssed_simple_indexes(&self, query: &SearchQuery) -> Result<SearchPage> {
