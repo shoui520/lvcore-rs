@@ -1330,7 +1330,15 @@ fn select_search_probe_query(
 }
 
 fn search_probe_prefers_real_labels(mode: &SearchMode) -> bool {
-    matches!(mode, SearchMode::Exact | SearchMode::FullText)
+    matches!(
+        mode,
+        SearchMode::Exact
+            | SearchMode::Forward
+            | SearchMode::Backward
+            | SearchMode::Partial
+            | SearchMode::FullText
+            | SearchMode::Advanced(_)
+    )
 }
 
 fn is_default_search_probe_label(label: &str) -> bool {
@@ -1651,11 +1659,15 @@ mod tests {
     }
 
     #[test]
-    fn fulltext_validation_probe_prefers_real_labels_before_defaults() {
+    fn validation_probe_prefers_real_labels_before_defaults() {
         assert!(search_probe_prefers_real_labels(&SearchMode::Exact));
+        assert!(search_probe_prefers_real_labels(&SearchMode::Forward));
+        assert!(search_probe_prefers_real_labels(&SearchMode::Backward));
+        assert!(search_probe_prefers_real_labels(&SearchMode::Partial));
         assert!(search_probe_prefers_real_labels(&SearchMode::FullText));
-        assert!(!search_probe_prefers_real_labels(&SearchMode::Forward));
-        assert!(!search_probe_prefers_real_labels(&SearchMode::Partial));
+        assert!(search_probe_prefers_real_labels(&SearchMode::Advanced(
+            "advanced1".to_owned()
+        )));
     }
 
     #[test]
