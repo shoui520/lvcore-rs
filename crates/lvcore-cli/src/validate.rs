@@ -1488,7 +1488,9 @@ fn search_probe_suffix(title: &str) -> Option<String> {
 
 fn search_probe_partial_text(title: &str) -> Option<String> {
     search_probe_first_useful_run(title)
-        .map(|run| run.chars().take(2).collect())
+        .map(|run| {
+            search_probe_ascii_alnum_slice(&run).unwrap_or_else(|| run.chars().take(2).collect())
+        })
         .or_else(|| search_probe_prefix(title))
 }
 
@@ -1524,6 +1526,21 @@ fn search_probe_partial_source_text(title: &str) -> Option<String> {
 
 fn search_probe_run_is_useful(value: &str) -> bool {
     value.chars().count() >= 2 && value.chars().any(char::is_alphabetic)
+}
+
+fn search_probe_ascii_alnum_slice(value: &str) -> Option<String> {
+    let mut current = String::new();
+    for ch in value.chars().chain(std::iter::once(' ')) {
+        if ch.is_ascii_alphanumeric() {
+            current.push(ch);
+            continue;
+        }
+        if current.chars().count() >= 2 {
+            return Some(current.chars().take(2).collect());
+        }
+        current.clear();
+    }
+    None
 }
 
 fn search_probe_lookup_text(title: &str) -> Option<String> {
@@ -1805,6 +1822,10 @@ mod tests {
             "人工"
         );
         assert_eq!(search_probe_query("ºO1, ºo", &SearchMode::FullText), "O1");
+        assert_eq!(
+            search_probe_query("0＜síze zéro＞", &SearchMode::FullText),
+            "ze"
+        );
     }
 
     #[test]
