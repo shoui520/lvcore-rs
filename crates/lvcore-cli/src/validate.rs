@@ -1429,7 +1429,7 @@ fn search_probe_prefers_real_labels(mode: &SearchMode) -> bool {
 }
 
 fn is_default_search_probe_label(label: &str) -> bool {
-    matches!(label, "a" | "あ")
+    matches!(label, "a" | "あ" | "新")
 }
 
 fn search_probe_query_is_useful(query: &str) -> bool {
@@ -1612,6 +1612,8 @@ fn is_search_probe_label_boundary(ch: char) -> bool {
             | '；'
             | '/'
             | '／'
+            | '|'
+            | '｜'
     )
 }
 
@@ -1705,6 +1707,13 @@ mod tests {
         assert_eq!(search_probe_query("А, а1", &SearchMode::Exact), "А");
         assert_eq!(search_probe_query("***a", &SearchMode::Exact), "a");
         assert_eq!(search_probe_query("★重要", &SearchMode::Exact), "重要");
+        assert_eq!(
+            search_probe_query(
+                "0歳平均余命｜ゼロサイヘイキンヨメイ｜0歳平均余命",
+                &SearchMode::Exact
+            ),
+            "0歳平均余命"
+        );
         assert_eq!(search_probe_lookup_text("【】"), None);
         assert_eq!(search_probe_query("【角】", &SearchMode::Exact), "角");
         assert_eq!(search_probe_query("《凡例》", &SearchMode::Exact), "凡例");
@@ -1760,6 +1769,7 @@ mod tests {
         assert!(search_probe_prefers_real_labels(&SearchMode::Advanced(
             "advanced1".to_owned()
         )));
+        assert!(is_default_search_probe_label("新"));
     }
 
     #[test]
