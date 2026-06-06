@@ -53,7 +53,7 @@ where
                 }
                 Ok(None) => output.push_str(raw_value),
                 Err(error) => {
-                    output.push_str(raw_value);
+                    output.push_str("data:,");
                     view.diagnostics.push(Diagnostic::warning(
                         "generic_html_resource_inline_failed",
                         error.to_string(),
@@ -302,6 +302,39 @@ mod tests {
 
         assert_eq!(view.href, target.href());
         assert_eq!(view.links[0].href, link_target.href());
+    }
+
+    #[test]
+    fn generic_html_finalizer_replaces_unreadable_resources_with_empty_data_url() {
+        let view = ResolvedTargetView {
+            href: String::new(),
+            kind: ResolvedTargetKind::InfoPage,
+            target: token("entry"),
+            title: None,
+            display_html: Some(r#"<script src="lvcore://resource/missing"></script>"#.to_owned()),
+            basic_text: None,
+            scroll_anchor: None,
+            surface: None,
+            resources: Vec::new(),
+            links: Vec::new(),
+            capabilities: Default::default(),
+            diagnostics: Vec::new(),
+            debug_trace: None,
+        };
+
+        let view = finalize_generic_html_view(view, |_| {
+            Err(crate::error::Error::Driver("missing".to_owned()))
+        })
+        .unwrap();
+        let html = view.display_html.as_deref().unwrap();
+
+        assert!(html.contains(r#"src="data:,""#));
+        assert!(!html.contains("lvcore://resource/"));
+        assert!(
+            view.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "generic_html_resource_inline_failed")
+        );
     }
 
     #[test]
