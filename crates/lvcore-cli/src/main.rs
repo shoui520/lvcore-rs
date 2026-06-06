@@ -142,6 +142,9 @@ enum Command {
         /// Stop after this many discovered packages.
         #[arg(long)]
         max: Option<usize>,
+        /// Stream one JSON object per package plus a final summary.
+        #[arg(long)]
+        jsonl: bool,
     },
     /// Open a reader navigation surface for one package.
     Surface {
@@ -499,10 +502,14 @@ fn main() -> Result<()> {
             )?;
             write_json_pretty(&output)?;
         }
-        Command::LibraryImport { paths, max } => {
+        Command::LibraryImport { paths, max, jsonl } => {
             let registry = DriverRegistry::default();
-            let output = library_import_command_json(&registry, &paths, max);
-            write_json_pretty(&output)?;
+            if jsonl {
+                library_import_command_jsonl(&registry, &paths, max)?;
+            } else {
+                let output = library_import_command_json(&registry, &paths, max);
+                write_json_pretty(&output)?;
+            }
         }
         Command::Surface {
             path,
@@ -577,6 +584,10 @@ fn main() -> Result<()> {
 
 fn write_json_pretty(value: &impl serde::Serialize) -> Result<()> {
     write_stdout_line(&serde_json::to_string_pretty(value)?)
+}
+
+fn write_json_line(value: &impl serde::Serialize) -> Result<()> {
+    write_stdout_line(&serde_json::to_string(value)?)
 }
 
 fn write_stdout_line(line: &str) -> Result<()> {
@@ -678,6 +689,118 @@ fn library_import_command_json(
 ) -> LibraryImportResult {
     let (library, import_report) = open_library_from_paths(registry, paths, max);
     library.import_result(import_report)
+}
+
+fn library_import_command_jsonl(
+    registry: &DriverRegistry,
+    paths: &[PathBuf],
+    max: Option<usize>,
+) -> Result<()> {
+    library_import_command_jsonl_with_emit(registry, paths, max, write_json_line)
+}
+
+fn library_import_command_jsonl_with_emit<F>(
+    registry: &DriverRegistry,
+    paths: &[PathBuf],
+    max: Option<usize>,
+    mut emit: F,
+) -> Result<()>
+where
+    F: FnMut(&serde_json::Value) -> Result<()>,
+{
+    let mut library = BookLibrary::new();
+    let mut opened = Vec::new();
+    let mut diagnostics = Vec::new();
+    for path in paths {
+        let remaining = max.map(|limit| limit.saturating_sub(opened.len()));
+        if remaining == Some(0) {
+            break;
+        }
+        let discovery_result = registry.for_each_best_package(
+            path,
+            PackageDiscoveryOptions { max: remaining },
+            |detected| {
+                if max.is_some_and(|limit| opened.len() >= limit) {
+                    return Ok(());
+                }
+                let root = detected.root.clone();
+                let started = Instant::now();
+                match registry.open_detected_package(detected) {
+                    Ok(package) => {
+                        let metadata = package.metadata().clone();
+                        let book_id = metadata.book_id.clone();
+                        let inserted = library.insert(package);
+                        let elapsed_ms = started.elapsed().as_millis();
+                        if inserted {
+                            opened.push(book_id.clone());
+                            emit(&json!({
+                                "event": "book",
+                                "status": "opened",
+                                "path": root,
+                                "book_id": book_id,
+                                "metadata": metadata,
+                                "elapsed_ms": elapsed_ms,
+                            }))?;
+                        } else {
+                            let diagnostic = lvcore::Diagnostic::info(
+                                "library_duplicate_book_skipped",
+                                format!("duplicate book {} was already opened", book_id.0),
+                            )
+                            .with_context("path", root.display().to_string())
+                            .with_context("book_id", book_id.0.clone());
+                            diagnostics.push(diagnostic.clone());
+                            emit(&json!({
+                                "event": "book",
+                                "status": "skipped_duplicate",
+                                "path": root,
+                                "book_id": book_id,
+                                "metadata": metadata,
+                                "diagnostics": [diagnostic],
+                                "elapsed_ms": elapsed_ms,
+                            }))?;
+                        }
+                    }
+                    Err(error) => {
+                        let diagnostic = lvcore::Diagnostic::warning(
+                            "book_open_failed",
+                            format!("package open failed for {}: {error}", root.display()),
+                        )
+                        .with_context("path", root.display().to_string());
+                        diagnostics.push(diagnostic.clone());
+                        emit(&json!({
+                            "event": "book",
+                            "status": "error",
+                            "path": root,
+                            "diagnostics": [diagnostic],
+                            "elapsed_ms": started.elapsed().as_millis(),
+                        }))?;
+                    }
+                }
+                Ok(())
+            },
+        );
+        if let Err(error) = discovery_result {
+            let diagnostic = lvcore::Diagnostic::warning(
+                "library_discovery_failed",
+                format!("package discovery failed for {}: {error}", path.display()),
+            )
+            .with_context("path", path.display().to_string());
+            diagnostics.push(diagnostic.clone());
+            emit(&json!({
+                "event": "discovery",
+                "status": "error",
+                "path": path,
+                "diagnostics": [diagnostic],
+            }))?;
+        }
+    }
+    emit(&json!({
+        "event": "summary",
+        "status": "ok",
+        "book_count": library.len(),
+        "opened_book_ids": opened,
+        "diagnostics": diagnostics,
+    }))
 }
 
 fn home_command_json(registry: &DriverRegistry, path: &Path) -> Result<serde_json::Value> {

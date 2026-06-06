@@ -171,6 +171,58 @@ fn library_discover_command_deduplicates_overlapping_inputs() {
 }
 
 #[test]
+fn library_import_jsonl_streams_package_rows_and_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("NestedDictionary");
+    fs::create_dir_all(&package).unwrap();
+    write_lved_cli_fixture(&package);
+
+    let mut rows = Vec::new();
+    library_import_command_jsonl_with_emit(
+        &DriverRegistry::default(),
+        &[dir.path().to_path_buf()],
+        None,
+        |row| {
+            rows.push(row.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["event"], "book");
+    assert_eq!(rows[0]["status"], "opened");
+    assert_eq!(rows[0]["metadata"]["format_family"], "lved_sqlite3");
+    assert_eq!(rows[1]["event"], "summary");
+    assert_eq!(rows[1]["book_count"], 1);
+    assert_eq!(rows[1]["opened_book_ids"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn library_import_jsonl_reports_duplicate_rows_without_reopening_summary_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("NestedDictionary");
+    fs::create_dir_all(&package).unwrap();
+    write_lved_cli_fixture(&package);
+
+    let mut rows = Vec::new();
+    library_import_command_jsonl_with_emit(
+        &DriverRegistry::default(),
+        &[dir.path().to_path_buf(), package],
+        None,
+        |row| {
+            rows.push(row.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert!(rows.iter().any(|row| row["status"] == "skipped_duplicate"));
+    assert_eq!(rows.last().unwrap()["event"], "summary");
+    assert_eq!(rows.last().unwrap()["book_count"], 1);
+}
+
+#[test]
 fn metadata_for_missing_book_id_returns_error_instead_of_panicking() {
     let library = BookLibrary::new();
     let book_id = BookId("missing-book".to_owned());
