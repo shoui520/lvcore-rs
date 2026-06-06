@@ -116,6 +116,14 @@ pub struct NavigationNode {
     pub target: Option<TargetToken>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub href: Option<String>,
+    /// Cursor for lazily opening this node's children on large tree surfaces.
+    ///
+    /// If `children` is populated, those children are already loaded. If this
+    /// field is present, the frontend can pass it back to `open_surface_page`
+    /// with the same `surface_id` to fetch the child page without loading the
+    /// full tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -542,6 +550,7 @@ mod tests {
             surface_id: "menuData".to_owned(),
             nodes: vec![NavigationNode {
                 href: None,
+                child_cursor: None,
                 node_id: "root".to_owned(),
                 label_html: "Root".to_owned(),
                 label_text: "Root".to_owned(),
@@ -549,6 +558,7 @@ mod tests {
                 diagnostics: Vec::new(),
                 children: vec![NavigationNode {
                     href: None,
+                    child_cursor: None,
                     node_id: "child".to_owned(),
                     label_html: "Child".to_owned(),
                     label_text: "Child".to_owned(),
@@ -576,6 +586,7 @@ mod tests {
             surface_id: "menuData:1".to_owned(),
             nodes: vec![NavigationNode {
                 href: None,
+                child_cursor: None,
                 node_id: "secondary".to_owned(),
                 label_html: "Secondary".to_owned(),
                 label_text: "Secondary".to_owned(),

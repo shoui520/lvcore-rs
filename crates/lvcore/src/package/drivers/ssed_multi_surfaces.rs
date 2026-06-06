@@ -330,6 +330,7 @@ impl ReaderBookPackage {
             };
             nodes.push(NavigationNode {
                 href: None,
+                child_cursor: None,
                 node_id: format!("multi:{}:record:{}", descriptor_name, record.index),
                 label_html: rich_label.html,
                 label_text: rich_label.text,

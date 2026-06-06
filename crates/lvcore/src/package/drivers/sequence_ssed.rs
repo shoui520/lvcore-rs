@@ -904,6 +904,7 @@ mod tests {
     fn node(label: &str, target: TargetToken, children: Vec<NavigationNode>) -> NavigationNode {
         NavigationNode {
             href: None,
+            child_cursor: None,
             node_id: label.to_owned(),
             label_html: label.to_owned(),
             label_text: label.to_owned(),

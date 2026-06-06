@@ -353,6 +353,67 @@ fn multiview_menu_surface_pages_top_level_nodes() {
 }
 
 #[test]
+fn multiview_menu_surface_pages_large_nested_trees_lazily() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        r#"<list>
+          <item label="Root">
+            <item label="Alpha" href="A001" />
+            <item label="Beta" href="B001" />
+            <item label="Gamma" href="G001" />
+          </item>
+        </list>"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("blvdat"), b"payload").unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let root = package.open_surface_page("menuData", None, 2).unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = root
+    else {
+        panic!("menuData should open as a MultiView tree");
+    };
+    assert!(next_cursor.is_none());
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].label_text, "Root");
+    assert!(nodes[0].children.is_empty());
+    assert_eq!(nodes[0].child_cursor.as_deref(), Some("children:0:0"));
+
+    let children = package
+        .open_surface_page("menuData", nodes[0].child_cursor.as_deref(), 2)
+        .unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = children
+    else {
+        panic!("menuData child cursor should open as a MultiView tree page");
+    };
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["Alpha", "Beta"]
+    );
+    assert_eq!(next_cursor.as_deref(), Some("children:0:2"));
+
+    let last = package
+        .open_surface_page("menuData", next_cursor.as_deref(), 2)
+        .unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = last
+    else {
+        panic!("menuData child cursor should open as a MultiView tree page");
+    };
+    assert_eq!(nodes[0].label_text, "Gamma");
+    assert!(next_cursor.is_none());
+}
+
+#[test]
 fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     let dir = tempdir().unwrap();
     fs::write(

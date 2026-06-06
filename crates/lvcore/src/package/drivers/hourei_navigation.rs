@@ -101,6 +101,7 @@ impl ReaderBookPackage {
                         let label = hourei_law_node_label(&law);
                         Ok(NavigationNode {
                             href: None,
+                            child_cursor: None,
                             node_id: format!("law:{}", law.hore_id),
                             label_html: escape_hourei_label_html(&label),
                             label_text: label,
@@ -115,6 +116,7 @@ impl ReaderBookPackage {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(NavigationNode {
                     href: None,
+                    child_cursor: None,
                     node_id: format!("category:{}", category.id),
                     label_html: escape_hourei_label_html(&category.name),
                     label_text: category.name,

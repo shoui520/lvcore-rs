@@ -380,6 +380,7 @@ mod tests {
             surface_id: "menu".to_owned(),
             nodes: vec![NavigationNode {
                 href: None,
+                child_cursor: None,
                 node_id: "node".to_owned(),
                 label_html: "Node".to_owned(),
                 label_text: "Node".to_owned(),
@@ -387,6 +388,7 @@ mod tests {
                 diagnostics: Vec::new(),
                 children: vec![NavigationNode {
                     href: Some(href_only_node.clone()),
+                    child_cursor: None,
                     node_id: "href-only-node".to_owned(),
                     label_html: "Href Node".to_owned(),
                     label_text: "Href Node".to_owned(),

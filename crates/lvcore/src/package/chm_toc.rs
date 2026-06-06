@@ -159,6 +159,7 @@ fn chm_hhc_item_to_node(
         .transpose()?;
     Ok(NavigationNode {
         href: None,
+        child_cursor: None,
         node_id: format!("hanrei-chm-toc-{index}"),
         label_html: escape_plain_label_html(&item.name),
         label_text: item.name.clone(),

@@ -456,6 +456,7 @@ fn validate_targetless_visible_diagnostic_surface_is_ok_without_fake_target() {
             label_text: "Appendix".to_owned(),
             target: None,
             href: None,
+            child_cursor: None,
             diagnostics: Vec::new(),
             children: vec![lvcore::navigation::NavigationNode {
                 node_id: "aux-index:2:1".to_owned(),
@@ -463,6 +464,7 @@ fn validate_targetless_visible_diagnostic_surface_is_ok_without_fake_target() {
                 label_text: "Diagnostic row".to_owned(),
                 target: None,
                 href: None,
+                child_cursor: None,
                 diagnostics: vec![lvcore::Diagnostic::info(
                     "ssed_auxiliary_index_body_target_deferred",
                     "auxiliary row is not a renderable entry body",

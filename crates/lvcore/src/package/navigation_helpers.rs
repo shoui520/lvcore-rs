@@ -135,6 +135,7 @@ fn lved_tree_level_to_nodes(
         };
         nodes.push(NavigationNode {
             href: None,
+            child_cursor: None,
             node_id: format!("tree:{}:{}", item.data_id, item_index),
             label_html: escape_plain_label_html(&item.label),
             label_text: item.label.clone(),
@@ -168,6 +169,7 @@ pub(super) fn multiview_menu_item_to_node(
         .collect::<Result<Vec<_>>>()?;
     Ok(NavigationNode {
         href: None,
+        child_cursor: None,
         node_id: node_id.to_owned(),
         label_html: escape_plain_label_html(&item.label),
         label_text: item.label.clone(),
@@ -179,22 +181,189 @@ pub(super) fn multiview_menu_item_to_node(
 
 pub(super) fn multiview_menu_items_to_nodes_page(
     items: &[MultiviewMenuItem],
-    offset: usize,
+    cursor: Option<&str>,
     limit: usize,
 ) -> Result<(Vec<NavigationNode>, Option<String>)> {
     if limit == 0 {
         return Ok((Vec::new(), None));
     }
-    let nodes = items
+    let page = parse_multiview_menu_page_cursor(cursor)?;
+    let (page_items, node_prefix, offset) = match page {
+        MultiviewMenuPageCursor::Root { offset } => (items, None, offset),
+        MultiviewMenuPageCursor::Children { path, offset } => {
+            let Some(children) = multiview_menu_children_at_path(items, &path) else {
+                return Ok((Vec::new(), None));
+            };
+            (children, Some(multiview_menu_path_node_id(&path)), offset)
+        }
+    };
+    let page_items = page_items
         .iter()
         .enumerate()
         .skip(offset)
         .take(limit)
-        .map(|(index, item)| multiview_menu_item_to_node(item, &index.to_string()))
+        .collect::<Vec<_>>();
+    let full_page_fits = multiview_menu_items_node_count_capped(
+        page_items.iter().map(|(_, item)| *item),
+        limit.saturating_add(1),
+    ) <= limit;
+    let nodes = page_items
+        .iter()
+        .map(|(index, item)| {
+            let node_id = match &node_prefix {
+                Some(prefix) => format!("{prefix}.{index}"),
+                None => index.to_string(),
+            };
+            if full_page_fits {
+                multiview_menu_item_to_node(item, &node_id)
+            } else {
+                multiview_menu_item_to_lazy_node(item, &node_id)
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
-    let next_cursor = (offset.saturating_add(nodes.len()) < items.len())
-        .then(|| offset.saturating_add(nodes.len()).to_string());
+    let next_offset = offset.saturating_add(nodes.len());
+    let next_cursor =
+        (next_offset < page_items_len_for_cursor(items, cursor)?).then(|| match &node_prefix {
+            Some(prefix) => format!("children:{prefix}:{next_offset}"),
+            None => next_offset.to_string(),
+        });
     Ok((nodes, next_cursor))
+}
+
+fn multiview_menu_item_to_lazy_node(
+    item: &MultiviewMenuItem,
+    node_id: &str,
+) -> Result<NavigationNode> {
+    let target = item
+        .href
+        .as_ref()
+        .map(|href| {
+            TargetToken::new(&InternalTarget::MultiviewHref {
+                href: href.clone(),
+                anchor: item.anchor.clone(),
+            })
+        })
+        .transpose()?;
+    Ok(NavigationNode {
+        href: None,
+        child_cursor: (!item.children.is_empty()).then(|| format!("children:{node_id}:0")),
+        node_id: node_id.to_owned(),
+        label_html: escape_plain_label_html(&item.label),
+        label_text: item.label.clone(),
+        target,
+        diagnostics: Vec::new(),
+        children: Vec::new(),
+    })
+}
+
+enum MultiviewMenuPageCursor {
+    Root { offset: usize },
+    Children { path: Vec<usize>, offset: usize },
+}
+
+fn parse_multiview_menu_page_cursor(cursor: Option<&str>) -> Result<MultiviewMenuPageCursor> {
+    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(MultiviewMenuPageCursor::Root { offset: 0 });
+    };
+    if let Some(rest) = cursor.strip_prefix("children:") {
+        let Some((path, offset)) = rest.rsplit_once(':') else {
+            return Err(crate::error::Error::Driver(format!(
+                "invalid MultiView child cursor: {cursor}"
+            )));
+        };
+        let path = parse_multiview_menu_node_path(path)?;
+        let offset = offset.parse::<usize>().map_err(|error| {
+            crate::error::Error::Driver(format!(
+                "invalid MultiView child cursor offset {offset}: {error}"
+            ))
+        })?;
+        return Ok(MultiviewMenuPageCursor::Children { path, offset });
+    }
+    let offset = cursor.parse::<usize>().map_err(|error| {
+        crate::error::Error::Driver(format!("invalid MultiView root cursor {cursor}: {error}"))
+    })?;
+    Ok(MultiviewMenuPageCursor::Root { offset })
+}
+
+fn parse_multiview_menu_node_path(value: &str) -> Result<Vec<usize>> {
+    if value.trim().is_empty() {
+        return Err(crate::error::Error::Driver(
+            "empty MultiView child cursor path".to_owned(),
+        ));
+    }
+    value
+        .split('.')
+        .map(|part| {
+            part.parse::<usize>().map_err(|error| {
+                crate::error::Error::Driver(format!(
+                    "invalid MultiView child cursor path segment {part}: {error}"
+                ))
+            })
+        })
+        .collect()
+}
+
+fn multiview_menu_path_node_id(path: &[usize]) -> String {
+    path.iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn multiview_menu_children_at_path<'a>(
+    items: &'a [MultiviewMenuItem],
+    path: &[usize],
+) -> Option<&'a [MultiviewMenuItem]> {
+    let mut current = items;
+    for index in path {
+        current = current.get(*index)?.children.as_slice();
+    }
+    Some(current)
+}
+
+fn page_items_len_for_cursor(items: &[MultiviewMenuItem], cursor: Option<&str>) -> Result<usize> {
+    match parse_multiview_menu_page_cursor(cursor)? {
+        MultiviewMenuPageCursor::Root { .. } => Ok(items.len()),
+        MultiviewMenuPageCursor::Children { path, .. } => {
+            Ok(multiview_menu_children_at_path(items, &path)
+                .map(<[MultiviewMenuItem]>::len)
+                .unwrap_or(0))
+        }
+    }
+}
+
+fn multiview_menu_items_node_count_capped<'a>(
+    items: impl IntoIterator<Item = &'a MultiviewMenuItem>,
+    cap: usize,
+) -> usize {
+    let mut count = 0usize;
+    for item in items {
+        count = count.saturating_add(multiview_menu_item_node_count_capped(
+            item,
+            cap.saturating_sub(count),
+        ));
+        if count > cap {
+            return count;
+        }
+    }
+    count
+}
+
+fn multiview_menu_item_node_count_capped(item: &MultiviewMenuItem, cap: usize) -> usize {
+    let mut count = 1usize;
+    if count > cap {
+        return count;
+    }
+    for child in &item.children {
+        count = count.saturating_add(multiview_menu_item_node_count_capped(
+            child,
+            cap.saturating_sub(count),
+        ));
+        if count > cap {
+            return count;
+        }
+    }
+    count
 }
 
 pub(super) fn navigation_node_mut_at_path<'a>(

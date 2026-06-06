@@ -216,6 +216,7 @@ fn ssed_menu_record_nodes_page(
                 .ssed_rich_label_with_policy(&label, request.gaiji_policy);
             nodes.push(NavigationNode {
                 href: None,
+                child_cursor: None,
                 node_id: format!("ssed-menu:{}:link:{link_index}", request.global_index),
                 label_html: rich_label.html,
                 label_text: rich_label.text,
@@ -249,6 +250,7 @@ fn ssed_menu_record_nodes_page(
     Ok(SsedMenuRecordNodePage {
         nodes: vec![NavigationNode {
             href: None,
+            child_cursor: None,
             node_id: format!("ssed-menu:{}", request.global_index),
             label_html: rich_label.html,
             label_text: rich_label.text,
@@ -322,6 +324,7 @@ pub(super) fn ssed_multi_selector_records_to_nodes(
         let rich_label = package.ssed_rich_label_with_policy(label, gaiji_policy);
         let node = NavigationNode {
             href: None,
+            child_cursor: None,
             node_id: format!("multi:{descriptor_name}:record:{record_index}:selector:{index}"),
             label_html: rich_label.html,
             label_text: rich_label.text.clone(),
@@ -369,6 +372,7 @@ pub(super) fn ssed_encyclopedia_rows_to_nodes(
         let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
         let node = NavigationNode {
             href: None,
+            child_cursor: None,
             node_id: format!("encyclopedia:{}:{index}", row.index),
             label_html: rich_label.html,
             label_text: rich_label.text,
@@ -452,6 +456,7 @@ pub(super) fn ssed_aux_index_rows_to_nodes(
             ssed_aux_index_row_target(package, row, next_target_row, &mut node_diagnostics)?;
         let node = NavigationNode {
             href: None,
+            child_cursor: None,
             node_id: format!("aux-index:{}:{index}", row.line_number),
             label_html: rich_label.html,
             label_text: rich_label.text,
@@ -499,6 +504,7 @@ pub(super) fn ssed_aux_index_rows_to_flat_nodes(
                 ssed_aux_index_row_target(package, row, next_target_row, &mut node_diagnostics)?;
             Ok(NavigationNode {
                 href: None,
+                child_cursor: None,
                 node_id: format!("aux-index:{}:{index}", row.line_number),
                 label_html: rich_label.html,
                 label_text: rich_label.text,

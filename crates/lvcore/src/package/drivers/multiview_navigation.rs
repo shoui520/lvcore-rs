@@ -35,8 +35,7 @@ impl ReaderBookPackage {
         let xml = String::from_utf8(bytes)
             .map_err(|error| Error::Driver(format!("{menu_file} is not valid UTF-8: {error}")))?;
         let items = parse_menu_data(&xml)?;
-        let offset = decode_offset_cursor(cursor);
-        let (nodes, next_cursor) = multiview_menu_items_to_nodes_page(&items, offset, limit)?;
+        let (nodes, next_cursor) = multiview_menu_items_to_nodes_page(&items, cursor, limit)?;
         Ok(NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
             nodes,
