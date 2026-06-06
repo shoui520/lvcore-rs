@@ -30,6 +30,32 @@ fn discovers_dict_code_key_file_for_main_data() {
 }
 
 #[test]
+fn keyless_encrypted_main_data_is_not_discoverable_as_openable_lved() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("main.data"), vec![0x5a; 4096]).unwrap();
+
+    let store = LvedSqliteStore::discover(dir.path()).unwrap();
+
+    assert!(store.is_none());
+}
+
+#[test]
+fn keyless_plain_sqlite_main_data_is_discoverable() {
+    let dir = tempdir().unwrap();
+    let payload = dir.path().join("main.data");
+    {
+        let connection = Connection::open(&payload).unwrap();
+        connection.execute_batch("create table info (id integer);").unwrap();
+    }
+
+    let store = LvedSqliteStore::discover(dir.path()).unwrap().unwrap();
+
+    assert!(store.key_file.is_none());
+    assert!(store.android_info.is_none());
+    assert!(store.open_readonly().is_ok());
+}
+
+#[test]
 fn generic_main_dbc_uses_package_folder_as_dict_code() {
     let dir = tempdir().unwrap();
     let package = dir.path().join("_DCT_OXFPEU4");

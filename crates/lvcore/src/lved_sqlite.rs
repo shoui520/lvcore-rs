@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -220,6 +221,12 @@ impl LvedSqliteStore {
         } else {
             None
         };
+        if key_file.is_none()
+            && android_info.is_none()
+            && !lved_payload_has_sqlite_header(&payload_path)?
+        {
+            return Ok(None);
+        }
         Ok(Some(Self {
             payload_path,
             key_file,
@@ -1298,6 +1305,15 @@ fn validate_sqlite_connection(connection: &Connection) -> Result<()> {
     let _: i64 =
         connection.query_row("select count(*) from sqlite_master", [], |row| row.get(0))?;
     Ok(())
+}
+
+fn lved_payload_has_sqlite_header(path: &Path) -> Result<bool> {
+    let mut file = fs::File::open(path)?;
+    let mut header = [0_u8; 16];
+    if file.read_exact(&mut header).is_err() {
+        return Ok(false);
+    }
+    Ok(&header == b"SQLite format 3\0")
 }
 
 pub(super) fn quote_identifier(value: &str) -> String {
