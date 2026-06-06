@@ -25,10 +25,7 @@ fn lved_key_file_detection_does_not_decrypt_payload_for_title() {
     let detected = LvedSqliteDriver.detect(dir.path()).unwrap().unwrap();
 
     assert_eq!(detected.format_family, FormatFamily::LvedSqlite3);
-    assert_eq!(
-        detected.title.as_deref(),
-        dir.path().file_name().and_then(|v| v.to_str())
-    );
+    assert!(detected.title.is_none());
     assert!(
         detected
             .evidence
