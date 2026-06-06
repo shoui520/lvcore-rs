@@ -291,7 +291,8 @@ impl ReaderBookPackage {
                     "ssed_title_label_search_fallback_limited",
                     "SSED title-label fallback search reached its bounded row budget before exhausting all title/index rows",
                 )
-                .with_context("checked_rows", scanned_rows.to_string())
+                .with_context("checked_rows", checked_rows.to_string())
+                .with_context("scanned_rows", scanned_rows.to_string())
                 .with_context("next_cursor", encode_ssed_title_label_cursor(checked_rows)),
             );
         }
