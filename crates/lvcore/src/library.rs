@@ -258,10 +258,7 @@ impl BookLibrary {
     }
 
     pub fn metadata_snapshot(&self) -> Vec<BookMetadata> {
-        self.metadata()
-            .into_iter()
-            .cloned()
-            .collect()
+        self.metadata().into_iter().cloned().collect()
     }
 
     pub fn snapshot(&self) -> LibrarySnapshot {

@@ -52,7 +52,11 @@ fn title_index_browse_strips_observed_display_only_markers() {
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
     let mut title = body_jis("¶100円硬貨 ＜えん１【円】＞■search-alt§other-alt");
     title.extend_from_slice(&[0x1f, 0x0a]);
-    fs::write(dir.path().join("FHTITLE.DIC"), sseddata_literal_fixture(&title)).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(&title),
+    )
+    .unwrap();
     fs::write(
         dir.path().join("FHINDEX.DIC"),
         sseddata_literal_fixture(&simple_index_fixture("100", 1, 2, 13, 0)),
@@ -137,6 +141,44 @@ fn title_index_surfaces_are_cursor_paged_by_backend() {
     };
     assert_eq!(items[0].label_text, "gamma");
     assert!(next_cursor.is_none());
+}
+
+#[test]
+fn title_index_browse_skips_internal_blank_label_rows() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"\x1f\x0aalpha\x1f\x0abeta\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("  ", 1, 2, 13, 0),
+            ("alpha", 1, 4, 13, 2),
+            ("  ", 1, 6, 13, 0),
+            ("beta", 1, 8, 13, 9),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("expected SSED title/index browse");
+    };
+
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "beta"]
+    );
+    assert!(items.iter().all(|item| !item.label_text.trim().is_empty()));
+    assert_eq!(items[0].item_id, "FHINDEX.DIC:1");
+    assert_eq!(items[1].item_id, "FHINDEX.DIC:3");
 }
 
 #[test]

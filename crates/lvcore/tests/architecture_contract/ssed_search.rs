@@ -118,7 +118,11 @@ fn ssed_search_hit_titles_strip_observed_display_only_markers() {
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
     let mut title = body_jis("¶100円硬貨 ＜えん１【円】＞■search-alt§other-alt");
     title.extend_from_slice(&[0x1f, 0x0a]);
-    fs::write(dir.path().join("FHTITLE.DIC"), sseddata_literal_fixture(&title)).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(&title),
+    )
+    .unwrap();
     fs::write(
         dir.path().join("FHINDEX.DIC"),
         sseddata_literal_fixture(&simple_index_fixture("100", 1, 2, 13, 0)),

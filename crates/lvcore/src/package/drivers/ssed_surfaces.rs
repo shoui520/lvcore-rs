@@ -161,41 +161,64 @@ impl ReaderBookPackage {
                 next_cursor: None,
             });
         }
-        let offset = decode_offset_cursor(cursor);
-        let (rows, mut diagnostics) =
-            self.ssed_simple_index_rows_page(offset, limit.saturating_add(1))?;
-        let next_cursor = (rows.len() > limit).then(|| (offset + limit).to_string());
-        let visible_len = rows.len().min(limit);
-        let visible_rows = &rows[..visible_len];
-        if visible_rows.is_empty() && !diagnostics.is_empty() {
+        let mut scan_offset = decode_offset_cursor(cursor);
+        let mut diagnostics = Vec::new();
+        let mut items = Vec::new();
+        let mut next_cursor = None;
+        let mut saw_raw_rows = false;
+        while items.len() < limit {
+            let remaining = limit.saturating_sub(items.len());
+            let batch_limit = remaining.saturating_add(1).max(128);
+            let (rows, mut row_diagnostics) =
+                self.ssed_simple_index_rows_page(scan_offset, batch_limit)?;
+            diagnostics.append(&mut row_diagnostics);
+            if rows.is_empty() {
+                break;
+            }
+            saw_raw_rows = true;
+            let row_count = rows.len();
+            for (index, row) in rows.iter().enumerate() {
+                let label_text = self.ssed_display_text_for_index_row(row);
+                if label_text.trim().is_empty() {
+                    continue;
+                }
+                let label = self.ssed_rich_label_with_policy(&label_text, &options.gaiji_policy);
+                let target = match self.ssed_browse_target_for_index_row(
+                    row,
+                    rows.iter()
+                        .skip(index + 1)
+                        .find(|next| next.body != row.body),
+                )? {
+                    Ok(target) => target,
+                    Err(diagnostic) => {
+                        diagnostics.push(diagnostic);
+                        continue;
+                    }
+                };
+                items.push(NavigationItem {
+                    href: String::new(),
+                    item_id: format!("{}:{}", row.component, scan_offset + index),
+                    label_html: label.html,
+                    label_text: label.text,
+                    target,
+                    diagnostics: label.diagnostics,
+                });
+                if items.len() == limit {
+                    if row_count == batch_limit || index + 1 < row_count {
+                        next_cursor = Some((scan_offset + index + 1).to_string());
+                    }
+                    break;
+                }
+            }
+            if items.len() == limit || row_count < batch_limit {
+                break;
+            }
+            scan_offset = scan_offset.saturating_add(row_count);
+        }
+        if !saw_raw_rows && !diagnostics.is_empty() {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics,
-            });
-        }
-        let mut items = Vec::new();
-        for (index, row) in visible_rows.iter().enumerate() {
-            let label = self.ssed_display_text_for_index_row(row);
-            let label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
-            let target = match self.ssed_browse_target_for_index_row(
-                row,
-                rows.iter()
-                    .skip(index + 1)
-                    .find(|next| next.body != row.body),
-            )? {
-                Ok(target) => target,
-                Err(diagnostic) => {
-                    diagnostics.push(diagnostic);
-                    continue;
-                }
-            };
-            items.push(NavigationItem {
-                href: String::new(),
-                item_id: format!("{}:{}", row.component, offset + index),
-                label_html: label.html,
-                label_text: label.text,
-                target,
-                diagnostics: label.diagnostics,
             });
         }
         Ok(NavigationSurface::TitleIndexBrowse {
