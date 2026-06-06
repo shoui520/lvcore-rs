@@ -301,9 +301,9 @@ impl ReaderBookPackage {
         &self,
         stats: &SsedIosTableListResolutionStats,
     ) -> Diagnostic {
-        let mut diagnostic = Diagnostic::warning(
+        let mut diagnostic = Diagnostic::info(
             "ssed_ios_table_list_unresolved",
-            "iOS tableList.plist address rows did not resolve to package-owned entry targets",
+            "iOS tableList.plist rows use an address namespace that did not resolve to retained SSED or sidecar entry targets",
         )
         .with_context("address_rows", stats.address_rows.to_string())
         .with_context("unresolved_rows", stats.unresolved_rows.to_string())
