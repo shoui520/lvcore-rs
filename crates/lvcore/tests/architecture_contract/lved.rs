@@ -385,6 +385,57 @@ fn lved_tree_surface_is_not_advertised_when_no_tree_index_exists() {
 }
 
 #[test]
+fn lved_retained_ssed_components_are_metadata_diagnostics_not_navigation() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    fs::write(
+        dir.path().join("BHINDEX.DIC"),
+        sseddata_literal_fixture(b"retained-backward-index"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BKINDEX.DIC"),
+        sseddata_literal_fixture(b"retained-backward-keyword-index"),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let metadata = package.metadata();
+    assert_eq!(metadata.format_family, FormatFamily::LvedSqlite3);
+    assert_eq!(metadata.diagnostics.len(), 2);
+    assert!(metadata.diagnostics.iter().all(|diagnostic| {
+        diagnostic.code == "retained_ssed_component_deferred"
+            && diagnostic.context.contains_key("filename")
+            && diagnostic.context.contains_key("component_type")
+            && diagnostic.context.contains_key("role")
+    }));
+    assert!(metadata.diagnostics.iter().any(|diagnostic| {
+        diagnostic.context.get("filename").map(String::as_str) == Some("BHINDEX.DIC")
+            && diagnostic.context.get("component_type").map(String::as_str) == Some("0x71")
+    }));
+    assert!(metadata.diagnostics.iter().any(|diagnostic| {
+        diagnostic.context.get("filename").map(String::as_str) == Some("BKINDEX.DIC")
+            && diagnostic.context.get("component_type").map(String::as_str) == Some("0x70")
+    }));
+    let metadata_json = serde_json::to_value(metadata).unwrap();
+    assert_eq!(
+        metadata_json["diagnostics"][0]["code"],
+        "retained_ssed_component_deferred"
+    );
+
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "lved-list" && surface.status == NavigationStatus::Available
+    }));
+    assert!(
+        surfaces.iter().all(|surface| {
+            surface.surface_id != "retained-ssed-components" && surface.surface_id != "title-index"
+        }),
+        "retained SSED evidence in LVED_SQLITE3 belongs in metadata diagnostics until the routing semantics are understood"
+    );
+}
+
+#[test]
 fn lved_retained_product_idx_opens_as_navigation_tree() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());
