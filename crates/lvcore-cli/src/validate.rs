@@ -188,68 +188,79 @@ fn exercise_reader_paths(
                     row
                 } else {
                     match surface_probe_targets(library, book_id, &surface.surface_id, &opened) {
-                        Ok(probe) => {
-                            let resource_scan = rendered_resource_scan(
-                                library,
+                        Ok(probe) => match probe.first_target.as_ref() {
+                            Some(target) => match library.render_target(
                                 book_id,
-                                &probe.resource_targets,
-                                resource_scan_limit,
-                            );
-                            match probe.first_target.as_ref() {
-                                Some(target) => match library.render_target(
-                                    book_id,
-                                    &target.target,
-                                    &RenderOptions::default(),
-                                ) {
-                                    Ok(view) => {
-                                        let window_probe =
-                                            target.sequence_hint.clone().map(|hint| {
-                                                continuous_window_probe(
-                                                    library,
-                                                    book_id,
-                                                    &target.target,
-                                                    hint,
-                                                )
-                                            });
-                                        let mut row = surface_rendered_view_probe(
+                                &target.target,
+                                &RenderOptions::default(),
+                            ) {
+                                Ok(view) => {
+                                    let resource_scan = rendered_resource_scan_with_first_view(
+                                        library,
+                                        book_id,
+                                        &probe.resource_targets,
+                                        resource_scan_limit,
+                                        &view,
+                                    );
+                                    let window_probe = target.sequence_hint.clone().map(|hint| {
+                                        continuous_window_probe(
                                             library,
                                             book_id,
-                                            &view,
-                                            SurfaceRenderedProbeContext {
-                                                surface_id: &surface.surface_id,
-                                                surface_kind: &surface.kind,
-                                                opened_kind: navigation_surface_kind_name(&opened),
-                                                label: target.label_text.clone(),
-                                                resource_scan,
-                                            },
-                                        );
-                                        insert_surface_page_probe_fields(&mut row, &probe);
-                                        if let Some(window_probe) = window_probe {
-                                            insert_named_value(&mut row, "window", window_probe);
-                                        }
-                                        row
+                                            &target.target,
+                                            hint,
+                                        )
+                                    });
+                                    let mut row = surface_rendered_view_probe(
+                                        library,
+                                        book_id,
+                                        &view,
+                                        SurfaceRenderedProbeContext {
+                                            surface_id: &surface.surface_id,
+                                            surface_kind: &surface.kind,
+                                            opened_kind: navigation_surface_kind_name(&opened),
+                                            label: target.label_text.clone(),
+                                            resource_scan,
+                                        },
+                                    );
+                                    insert_surface_page_probe_fields(&mut row, &probe);
+                                    if let Some(window_probe) = window_probe {
+                                        insert_named_value(&mut row, "window", window_probe);
                                     }
-                                    Err(error) => json!({
-                                        "kind": "surface_first_target",
-                                        "surface_id": surface.surface_id,
-                                        "surface_kind": surface.kind,
-                                        "status": "render_error",
-                                        "label": target.label_text,
-                                        "resource_scan": resource_scan,
-                                        "pages_scanned": probe.pages_scanned,
-                                        "remaining_cursor": probe.remaining_cursor,
-                                        "error": error.to_string(),
-                                    }),
-                                },
-                                None => targetless_surface_probe_row(
+                                    row
+                                }
+                                Err(error) => json!({
+                                    "kind": "surface_first_target",
+                                    "surface_id": surface.surface_id,
+                                    "surface_kind": surface.kind,
+                                    "status": "render_error",
+                                    "label": target.label_text,
+                                    "resource_scan": rendered_resource_scan_first_render_error(
+                                        &probe.resource_targets,
+                                        &target.source_id,
+                                        &target.label_text,
+                                        error.to_string(),
+                                    ),
+                                    "pages_scanned": probe.pages_scanned,
+                                    "remaining_cursor": probe.remaining_cursor,
+                                    "error": error.to_string(),
+                                }),
+                            },
+                            None => {
+                                let resource_scan = rendered_resource_scan(
+                                    library,
+                                    book_id,
+                                    &probe.resource_targets,
+                                    resource_scan_limit,
+                                );
+                                targetless_surface_probe_row(
                                     &opened,
                                     &probe,
                                     resource_scan,
                                     &surface.surface_id,
                                     &surface.kind,
-                                ),
+                                )
                             }
-                        }
+                        },
                         Err(error) => json!({
                             "kind": "surface_first_target",
                             "surface_id": surface.surface_id,
@@ -616,12 +627,20 @@ fn search_mode_exercise(
             });
             insert_diagnostic_fields(&mut row, &page.diagnostics);
             if render_hits {
-                let rendered_first = rendered_first_search_hit_probe(library, book_id, &page.hits);
+                let first_rendered_view = first_search_hit_render(library, book_id, &page.hits);
+                let rendered_first = rendered_first_search_hit_probe(
+                    library,
+                    book_id,
+                    first_rendered_view.as_ref().map(|row| row.as_ref()),
+                );
                 let resource_scan = rendered_search_resource_scan(
                     library,
                     book_id,
                     &page.hits,
                     resource_scan_limit,
+                    first_rendered_view
+                        .as_ref()
+                        .and_then(|row| row.as_ref().ok()),
                 );
                 let window_probe = search_result_window_probe(library, book_id, &page.hits);
                 if let Some(object) = row.as_object_mut() {
@@ -1021,23 +1040,31 @@ fn surface_rendered_view_probe(
     row
 }
 
-fn rendered_first_search_hit_probe(
+fn first_search_hit_render(
     library: &BookLibrary,
     book_id: &BookId,
     hits: &[SearchHit],
-) -> Option<serde_json::Value> {
+) -> Option<std::result::Result<ResolvedTargetView, String>> {
     let hit = hits.first()?;
     Some(
         library
             .render_target(book_id, &hit.target, &RenderOptions::default())
-            .map(|view| rendered_view_probe(library, book_id, &view))
-            .unwrap_or_else(|error| {
-                json!({
-                    "status": "render_error",
-                    "error": error.to_string(),
-                })
-            }),
+            .map_err(|error| error.to_string()),
     )
+}
+
+fn rendered_first_search_hit_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    first_rendered_view: Option<std::result::Result<&ResolvedTargetView, &String>>,
+) -> Option<serde_json::Value> {
+    first_rendered_view.map(|row| match row {
+        Ok(view) => rendered_view_probe(library, book_id, view),
+        Err(error) => json!({
+            "status": "render_error",
+            "error": error,
+        }),
+    })
 }
 
 fn rendered_search_resource_scan(
@@ -1045,6 +1072,7 @@ fn rendered_search_resource_scan(
     book_id: &BookId,
     hits: &[SearchHit],
     limit: usize,
+    first_rendered_view: Option<&ResolvedTargetView>,
 ) -> serde_json::Value {
     let targets = hits
         .iter()
@@ -1059,7 +1087,17 @@ fn rendered_search_resource_scan(
             diagnostics: hit.diagnostics.clone(),
         })
         .collect::<Vec<_>>();
-    rendered_resource_scan(library, book_id, &targets, limit)
+    if let Some(first_rendered_view) = first_rendered_view {
+        rendered_resource_scan_with_first_view(
+            library,
+            book_id,
+            &targets,
+            limit,
+            first_rendered_view,
+        )
+    } else {
+        rendered_resource_scan(library, book_id, &targets, limit)
+    }
 }
 
 fn rendered_resource_scan(
@@ -1068,6 +1106,26 @@ fn rendered_resource_scan(
     targets: &[NavigationTarget],
     limit: usize,
 ) -> serde_json::Value {
+    rendered_resource_scan_inner(library, book_id, targets, limit, None)
+}
+
+fn rendered_resource_scan_with_first_view(
+    library: &BookLibrary,
+    book_id: &BookId,
+    targets: &[NavigationTarget],
+    limit: usize,
+    first_view: &ResolvedTargetView,
+) -> serde_json::Value {
+    rendered_resource_scan_inner(library, book_id, targets, limit, Some(first_view))
+}
+
+fn rendered_resource_scan_inner(
+    library: &BookLibrary,
+    book_id: &BookId,
+    targets: &[NavigationTarget],
+    limit: usize,
+    first_view: Option<&ResolvedTargetView>,
+) -> serde_json::Value {
     let started = Instant::now();
     let mut checked_target_count = 0usize;
     let mut slowest_target_ms = 0u128;
@@ -1075,26 +1133,38 @@ fn rendered_resource_scan(
     for (index, target) in targets.iter().take(limit).enumerate() {
         checked_target_count += 1;
         let target_started = Instant::now();
-        let view = match library.render_target(book_id, &target.target, &RenderOptions::default()) {
-            Ok(view) => view,
-            Err(error) => {
-                return json!({
-                    "status": "render_error",
-                    "target_count": targets.len(),
-                    "checked_target_count": checked_target_count,
-                    "target_index": index,
-                    "source_id": target.source_id,
-                    "label": target.label_text,
-                    "error": error.to_string(),
-                });
-            }
+        let cached_view = (index == 0).then_some(first_view).flatten();
+        let owned_view;
+        let view = if let Some(view) = cached_view {
+            view
+        } else {
+            owned_view =
+                match library.render_target(book_id, &target.target, &RenderOptions::default()) {
+                    Ok(view) => view,
+                    Err(error) => {
+                        return json!({
+                            "status": "render_error",
+                            "target_count": targets.len(),
+                            "checked_target_count": checked_target_count,
+                            "target_index": index,
+                            "source_id": target.source_id,
+                            "label": target.label_text,
+                            "error": error.to_string(),
+                        });
+                    }
+                };
+            &owned_view
         };
-        let target_elapsed_ms = target_started.elapsed().as_millis();
+        let target_elapsed_ms = if cached_view.is_some() {
+            0
+        } else {
+            target_started.elapsed().as_millis()
+        };
         if target_elapsed_ms > slowest_target_ms {
             slowest_target_ms = target_elapsed_ms;
             slowest_target_index = Some(index);
         }
-        let Some(first_resource) = first_readable_resource_probe(library, book_id, &view) else {
+        let Some(first_resource) = first_readable_resource_probe(library, book_id, view) else {
             continue;
         };
         let status = if first_resource
@@ -1131,6 +1201,23 @@ fn rendered_resource_scan(
         "elapsed_ms": started.elapsed().as_millis(),
         "slowest_target_ms": slowest_target_ms,
         "slowest_target_index": slowest_target_index,
+    })
+}
+
+fn rendered_resource_scan_first_render_error(
+    targets: &[NavigationTarget],
+    source_id: &str,
+    label: &str,
+    error: String,
+) -> serde_json::Value {
+    json!({
+        "status": "render_error",
+        "target_count": targets.len(),
+        "checked_target_count": usize::from(!targets.is_empty()),
+        "target_index": 0,
+        "source_id": source_id,
+        "label": label,
+        "error": error,
     })
 }
 

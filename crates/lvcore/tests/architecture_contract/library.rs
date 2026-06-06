@@ -85,6 +85,37 @@ fn library_metadata_exposes_format_badges_but_not_frontend_icons() {
 }
 
 #[test]
+fn library_book_ids_are_format_dependent_for_released_same_code_books() {
+    let root = tempdir().unwrap();
+    let ssed = root.path().join("ssed/_DCT_DAIJIRN4");
+    let lved = root.path().join("lved/_DCT_DAIJIRN4");
+    fs::create_dir_all(&ssed).unwrap();
+    fs::create_dir_all(&lved).unwrap();
+    fs::write(ssed.join("DAIJIRN4.IDX"), ssedinfo_fixture()).unwrap();
+    write_minimal_lved_sqlite_fixture(&lved);
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let opened = library
+        .open_discovered_paths(
+            [&ssed, &lved],
+            &registry,
+            PackageDiscoveryOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(opened.len(), 2);
+    assert_eq!(library.len(), 2);
+    let ids = opened.iter().map(|id| id.0.as_str()).collect::<Vec<_>>();
+    assert!(ids.iter().any(|id| id.starts_with("SSED:DAIJIRN4:")));
+    assert!(
+        ids.iter()
+            .any(|id| id.starts_with("LVED_SQLITE3:DAIJIRN4:"))
+    );
+    assert_ne!(opened[0], opened[1]);
+}
+
+#[test]
 fn library_metadata_serializes_empty_search_modes_for_frontend_cache_shape() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
