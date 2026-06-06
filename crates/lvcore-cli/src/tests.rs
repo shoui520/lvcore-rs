@@ -171,6 +171,37 @@ fn library_discover_command_deduplicates_overlapping_inputs() {
 }
 
 #[test]
+fn library_discover_jsonl_streams_candidates_and_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("FirstDictionary");
+    let second = dir.path().join("SecondDictionary");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    write_lved_cli_fixture(&first);
+    write_lved_cli_fixture(&second);
+    fs::write(second.join("extra.bin"), b"distinct root metadata").unwrap();
+
+    let mut rows = Vec::new();
+    library_discover_command_jsonl_with_emit(
+        &DriverRegistry::default(),
+        &[dir.path().to_path_buf()],
+        None,
+        |row| {
+            rows.push(row.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["event"], "candidate");
+    assert_eq!(rows[0]["status"], "detected");
+    assert_eq!(rows[1]["event"], "candidate");
+    assert_eq!(rows[2]["event"], "summary");
+    assert_eq!(rows[2]["candidate_count"], 2);
+}
+
+#[test]
 fn library_import_jsonl_streams_package_rows_and_summary() {
     let dir = tempfile::tempdir().unwrap();
     let package = dir.path().join("NestedDictionary");

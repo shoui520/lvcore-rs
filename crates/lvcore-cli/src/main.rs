@@ -7,8 +7,8 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 use lvcore::{
     BookId, BookLibrary, BookMetadata, DriverRegistry, Error, LibraryImportReport,
-    LibraryImportResult, PackageDiscoveryOptions, RenderMode, RenderOptions, ResourceToken, Result,
-    SearchMode, SearchQuery, SearchScope, SequenceHint, TargetToken,
+    LibraryImportResult, PackageCandidate, PackageDiscoveryOptions, RenderMode, RenderOptions,
+    ResourceToken, Result, SearchMode, SearchQuery, SearchScope, SequenceHint, TargetToken,
 };
 use serde_json::json;
 
@@ -38,6 +38,9 @@ enum Command {
         /// Stop after this many discovered package candidates.
         #[arg(long)]
         max: Option<usize>,
+        /// Stream one JSON object per candidate as soon as it is discovered.
+        #[arg(long)]
+        jsonl: bool,
     },
     /// Recursively open packages and exercise reader-facing metadata/surfaces.
     Validate {
@@ -366,10 +369,14 @@ fn main() -> Result<()> {
             let detected = registry.detect_all(&path, PackageDiscoveryOptions::default())?;
             write_json_pretty(&detected)?;
         }
-        Command::LibraryDiscover { paths, max } => {
+        Command::LibraryDiscover { paths, max, jsonl } => {
             let registry = DriverRegistry::default();
-            let output = library_discover_command_json(&registry, &paths, max)?;
-            write_json_pretty(&output)?;
+            if jsonl {
+                library_discover_command_jsonl(&registry, &paths, max)?;
+            } else {
+                let output = library_discover_command_json(&registry, &paths, max)?;
+                write_json_pretty(&output)?;
+            }
         }
         Command::Validate {
             paths,
@@ -632,11 +639,60 @@ fn library_discover_command_json(
     paths: &[PathBuf],
     max: Option<usize>,
 ) -> Result<serde_json::Value> {
-    let mut candidates = Vec::new();
-    let mut diagnostics = Vec::new();
+    let mut candidates: Vec<PackageCandidate> = Vec::new();
+    let mut diagnostics: Vec<lvcore::Diagnostic> = Vec::new();
+    library_discover_command_jsonl_with_emit(registry, paths, max, |row| {
+        match row.get("event").and_then(serde_json::Value::as_str) {
+            Some("candidate") => {
+                if let Some(candidate) = row.get("candidate") {
+                    candidates.push(serde_json::from_value(candidate.clone())?);
+                }
+            }
+            Some("discovery") => {
+                if let Some(values) = row.get("diagnostics").and_then(serde_json::Value::as_array) {
+                    for value in values {
+                        diagnostics
+                            .push(serde_json::from_value::<lvcore::Diagnostic>(value.clone())?);
+                    }
+                }
+            }
+            Some("summary") | None | Some(_) => {}
+        }
+        Ok(())
+    })?;
+    let candidate_count = candidates.len();
+    Ok(json!({
+        "candidates": candidates,
+        "candidate_count": candidate_count,
+        "diagnostics": diagnostics,
+    }))
+}
+
+fn library_discover_command_jsonl(
+    registry: &DriverRegistry,
+    paths: &[PathBuf],
+    max: Option<usize>,
+) -> Result<()> {
+    library_discover_command_jsonl_with_emit(registry, paths, max, |row| {
+        write_json_line(row)?;
+        flush_stdout()
+    })
+}
+
+fn library_discover_command_jsonl_with_emit<F>(
+    registry: &DriverRegistry,
+    paths: &[PathBuf],
+    max: Option<usize>,
+    mut emit: F,
+) -> Result<()>
+where
+    F: FnMut(&serde_json::Value) -> Result<()>,
+{
     let mut seen = BTreeSet::new();
+    let mut candidate_count = 0usize;
+    let mut diagnostics = Vec::new();
     for path in paths {
-        let remaining = max.map(|limit| limit.saturating_sub(candidates.len()));
+        let remaining = max.map(|limit| limit.saturating_sub(candidate_count));
         if remaining == Some(0) {
             break;
         }
@@ -646,25 +702,37 @@ fn library_discover_command_json(
                 for row in rows {
                     let identity = (row.format_label.clone(), row.root_fingerprint.clone());
                     if seen.insert(identity) {
-                        candidates.push(row);
+                        candidate_count = candidate_count.saturating_add(1);
+                        emit(&json!({
+                            "event": "candidate",
+                            "status": "detected",
+                            "candidate": row,
+                        }))?;
+                        if max.is_some_and(|limit| candidate_count >= limit) {
+                            break;
+                        }
                     }
                 }
             }
-            Err(error) => diagnostics.push(
-                lvcore::Diagnostic::warning(
+            Err(error) => {
+                let diagnostic = lvcore::Diagnostic::warning(
                     "library_discovery_failed",
                     format!("package discovery failed for {}: {error}", path.display()),
                 )
-                .with_context("path", path.display().to_string()),
-            ),
+                .with_context("path", path.display().to_string());
+                diagnostics.push(diagnostic.clone());
+                emit(&json!({
+                    "event": "discovery",
+                    "status": "error",
+                    "path": path,
+                    "diagnostics": [diagnostic],
+                }))?;
+            }
         }
     }
-    if let Some(limit) = max {
-        candidates.truncate(limit);
-    }
-    let candidate_count = candidates.len();
-    Ok(json!({
-        "candidates": candidates,
+    emit(&json!({
+        "event": "summary",
+        "status": "ok",
         "candidate_count": candidate_count,
         "diagnostics": diagnostics,
     }))
