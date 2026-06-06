@@ -270,7 +270,7 @@ fn exact_lved_search_where(
 ) -> Option<(String, Vec<String>)> {
     if has_column(search_columns, "filter") {
         let like_parameter = format!("%∥{}∥%", escape_sql_like(normalized));
-        if let Some(match_query) = exact_lved_filter_prefilter_query(normalized) {
+        if let Some(match_query) = exact_lved_filter_prefilter_query(normalized, search_columns) {
             let where_clause = if prefer_direct_fts {
                 "search match ? and s.filter like ? escape '\\'"
             } else {
@@ -290,14 +290,22 @@ fn exact_lved_search_where(
     None
 }
 
-fn exact_lved_filter_prefilter_query(normalized: &str) -> Option<String> {
-    let terms = fts_tokens(normalized, false)
-        .into_iter()
-        .filter(|token| token.chars().any(|ch| ch.is_ascii_alphanumeric()))
-        .map(|token| fts_term(&token, false))
-        .filter(|term| !term.is_empty())
-        .collect::<Vec<_>>();
-    (!terms.is_empty()).then(|| terms.join(" "))
+fn exact_lved_filter_prefilter_query(
+    normalized: &str,
+    search_columns: &[String],
+) -> Option<String> {
+    if !normalized.chars().any(|ch| ch.is_ascii_alphanumeric()) {
+        return None;
+    }
+    fts_query("part", normalized, search_columns, false, false).or_else(|| {
+        let terms = fts_tokens(normalized, false)
+            .into_iter()
+            .filter(|token| token.chars().any(|ch| ch.is_ascii_alphanumeric()))
+            .map(|token| fts_term(&token, false))
+            .filter(|term| !term.is_empty())
+            .collect::<Vec<_>>();
+        (!terms.is_empty()).then(|| terms.join(" "))
+    })
 }
 
 pub(super) fn lved_available_search_modes(schema: &LvedSqliteSchema) -> Vec<SearchMode> {
@@ -519,7 +527,7 @@ mod tests {
 
         assert!(where_clause.contains("search match ?"));
         assert!(where_clause.contains("s.filter like ?"));
-        assert_eq!(parameters, vec!["abacus", "%∥abacus∥%"]);
+        assert_eq!(parameters, vec!["part:abacus", "%∥abacus∥%"]);
     }
 
     #[test]
@@ -542,6 +550,6 @@ mod tests {
             exact_lved_search_where("131i", &columns, false).expect("exact filter search");
 
         assert!(where_clause.contains("select rowid from search where search match ?"));
-        assert_eq!(parameters, vec!["131i", "%∥131i∥%"]);
+        assert_eq!(parameters, vec!["part:131i", "%∥131i∥%"]);
     }
 }
