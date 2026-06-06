@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use super::drivers::ReaderBookPackage;
-use super::ssed_search::{normalize_search_match_text, reverse_search_match_text};
+use super::ssed_search::{
+    normalize_search_match_text, reverse_search_match_text, ssed_display_label_match_texts,
+};
 use crate::diagnostics::Diagnostic;
 use crate::error::Result;
 use crate::gaiji::GaijiPolicy;
@@ -184,11 +186,18 @@ impl<'a> SsedIndexSearchCollector<'a> {
         if display == row.key {
             return false;
         }
-        let mut display_key = normalize_search_match_text(&display);
-        if ssed_index_component_name_is_backward(&row.component) {
-            display_key = reverse_search_match_text(&display_key);
+        let mut display_keys = ssed_display_label_match_texts(&display);
+        if display_keys.is_empty() {
+            return false;
         }
-        search_match_satisfied(self.mode, &display_key, self.needle)
+        if ssed_index_component_name_is_backward(&row.component) {
+            for display_key in &mut display_keys {
+                *display_key = reverse_search_match_text(display_key);
+            }
+        }
+        display_keys
+            .iter()
+            .any(|display_key| search_match_satisfied(self.mode, display_key, self.needle))
     }
 
     fn emit_hit(&mut self, row: SsedIndexRow) -> Result<()> {

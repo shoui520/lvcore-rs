@@ -167,6 +167,67 @@ pub(super) fn normalize_search_match_text(value: &str) -> String {
     katakana_to_hiragana_text(&narrow_fullwidth_ascii_text(value)).to_lowercase()
 }
 
+pub(super) fn ssed_display_label_match_texts(display: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    push_unique_display_label_match_text(&mut candidates, normalize_search_match_text(display));
+    if let Some(headword) = ssed_visible_title_headword_segment(display) {
+        push_unique_display_label_match_text(
+            &mut candidates,
+            normalize_search_match_text(headword),
+        );
+    }
+    candidates
+}
+
+fn push_unique_display_label_match_text(candidates: &mut Vec<String>, candidate: String) {
+    if !candidate.is_empty() && !candidates.iter().any(|existing| existing == &candidate) {
+        candidates.push(candidate);
+    }
+}
+
+fn ssed_visible_title_headword_segment(display: &str) -> Option<&str> {
+    let display = display.trim();
+    if display.is_empty() {
+        return None;
+    }
+    let end = display
+        .char_indices()
+        .find_map(|(index, ch)| {
+            (ch.is_whitespace() || ssed_visible_title_metadata_boundary(ch)).then_some(index)
+        })
+        .unwrap_or(display.len());
+    let headword = display[..end].trim();
+    (!headword.is_empty() && headword != display).then_some(headword)
+}
+
+fn ssed_visible_title_metadata_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '【' | '［'
+            | '['
+            | '〖'
+            | '〘'
+            | '《'
+            | '〈'
+            | '('
+            | '（'
+            | '〔'
+            | '<'
+            | '＜'
+            | ':'
+            | '：'
+            | ','
+            | '，'
+            | '、'
+            | ';'
+            | '；'
+            | '/'
+            | '／'
+            | '|'
+            | '｜'
+    )
+}
+
 pub(super) fn reverse_search_match_text(value: &str) -> String {
     value.chars().rev().collect()
 }
