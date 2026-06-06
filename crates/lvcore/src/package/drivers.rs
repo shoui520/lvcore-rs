@@ -197,6 +197,7 @@ use crate::ssed_multi::{
 use crate::ssed_panel::{
     SsedPanelBinRecord, SsedPanelDataRef, SsedPanelInlineCell, SsedPanelXml, parse_panel_bin,
     parse_panel_bin_page, parse_panel_plist_value_for_panel, parse_panel_xml_bytes,
+    plist_value_label_text as ssed_panel_plist_value_label_text,
 };
 use crate::ssed_pcmdata::{
     PcmDataParseResult, pcmdata_audio_summary, pcmdata_portable_audio_bytes,

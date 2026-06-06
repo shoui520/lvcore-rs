@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::plist_xml::{PlistValue, parse_xml_plist};
+use crate::ssed_hc::decode_hc_stream_basic_text;
 use crate::ssed_index::decode_title_text;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -882,14 +883,86 @@ fn plist_string_opt(
         .find(|value| !value.is_empty())
 }
 
-fn plist_value_label_text(value: &PlistValue) -> Option<String> {
+pub(crate) fn plist_value_label_text(value: &PlistValue) -> Option<String> {
     if let Some(text) = value.as_str() {
-        let text = text.trim();
-        return (!text.is_empty()).then(|| text.to_owned());
+        let text = normalize_plist_label_text(text);
+        return (!text.is_empty()).then_some(text);
     }
     let data = value.as_data()?;
-    let text = decode_title_text(data).trim().to_owned();
-    (!text.is_empty()).then_some(text)
+    let title_text = normalize_plist_label_text(&decode_title_text(data));
+    let hc_text = normalize_plist_label_text(&decode_hc_stream_basic_text(data).text);
+    let text = best_plist_data_label(&title_text, &hc_text);
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+fn best_plist_data_label<'a>(title_text: &'a str, hc_text: &'a str) -> &'a str {
+    match (title_text.is_empty(), hc_text.is_empty()) {
+        (true, true) => "",
+        (false, true) => title_text,
+        (true, false) => hc_text,
+        (false, false) => {
+            if plist_label_text_looks_noisy(title_text)
+                || (!plist_label_text_looks_noisy(hc_text) && hc_text.len() < title_text.len())
+            {
+                hc_text
+            } else {
+                title_text
+            }
+        }
+    }
+}
+
+fn normalize_plist_label_text(value: &str) -> String {
+    let first_visible_line = value
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .split(['■', '§'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    strip_decoded_plist_label_prefix(first_visible_line).to_owned()
+}
+
+fn strip_decoded_plist_label_prefix(value: &str) -> &str {
+    let value = value.trim();
+    let Some(rest) = value.strip_prefix('`') else {
+        return value;
+    };
+    if rest.chars().next().is_some_and(|ch| {
+        matches!(ch, '【' | '［' | '[' | '(' | '（') || is_japanese_label_char(ch)
+    }) {
+        rest.trim_start()
+    } else {
+        value
+    }
+}
+
+fn plist_label_text_looks_noisy(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return true;
+    }
+    if value.starts_with('`') {
+        return true;
+    }
+    let total = value.chars().count();
+    if total < 8 {
+        return false;
+    }
+    let ascii_punctuation = value.chars().filter(|ch| ch.is_ascii_punctuation()).count();
+    ascii_punctuation.saturating_mul(3) > total
+}
+
+fn is_japanese_label_char(value: char) -> bool {
+    matches!(
+        value,
+        '\u{3040}'..='\u{30ff}'
+            | '\u{3400}'..='\u{9fff}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{ff66}'..='\u{ff9f}'
+    )
 }
 
 fn plist_i64(dict: &std::collections::BTreeMap<String, PlistValue>, key: &str) -> Option<i64> {
@@ -1077,6 +1150,75 @@ mod tests {
         assert_eq!(parsed.inline_cells[0].label, "あ");
         assert_eq!(parsed.inline_cells[0].row, Some(0));
         assert_eq!(parsed.data_refs[0].filename, r"Panel\All-A.bin");
+    }
+
+    #[test]
+    fn plist_data_labels_decode_hc_fragments_without_search_markers() {
+        let mut label = vec![0x1f, 0x09, 0x00, 0x01, 0x1f, 0x04];
+        label.extend_from_slice(&body_jis("`[alpha]"));
+        label.extend_from_slice(&[0x1f, 0x05, 0x1f, 0x0a]);
+        label.extend_from_slice(&body_jis("[alpha]■search§alias"));
+        let value = PlistValue::Array(vec![PlistValue::Dict(
+            [
+                ("item".to_owned(), PlistValue::Data(label)),
+                ("block".to_owned(), PlistValue::Integer(2)),
+                ("offset".to_owned(), PlistValue::Integer(4)),
+            ]
+            .into_iter()
+            .collect(),
+        )]);
+
+        let parsed = parse_panel_plist_value_for_panel(&value, None).unwrap();
+
+        assert_eq!(parsed.inline_cells[0].label, "[alpha]");
+    }
+
+    fn body_jis(value: &str) -> Vec<u8> {
+        value
+            .chars()
+            .flat_map(|ch| {
+                let body_ch = if (0x20..=0x7e).contains(&(ch as u32)) {
+                    if ch == ' ' {
+                        '\u{3000}'
+                    } else {
+                        char::from_u32(ch as u32 + 0xfee0).unwrap_or(ch)
+                    }
+                } else {
+                    ch
+                };
+                let body_text = body_ch.to_string();
+                let (encoded, _encoding, _had_errors) = SHIFT_JIS.encode(&body_text);
+                encoded
+                    .chunks(2)
+                    .next()
+                    .and_then(sjis_pair_to_jis_pair)
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    fn sjis_pair_to_jis_pair(sjis: &[u8]) -> Option<Vec<u8>> {
+        if sjis.len() != 2 {
+            return None;
+        }
+        let lead = sjis[0];
+        let trail = sjis[1];
+        let row_base = if (0x81..=0x9f).contains(&lead) {
+            (lead - 0x81) * 2
+        } else if (0xe0..=0xef).contains(&lead) {
+            (lead - 0xc1) * 2
+        } else {
+            return None;
+        };
+        let (row, cell) = if (0x9f..=0xfc).contains(&trail) {
+            (row_base + 1, trail - 0x9f)
+        } else if (0x40..=0xfc).contains(&trail) && trail != 0x7f {
+            let adjusted = if trail >= 0x80 { trail - 1 } else { trail };
+            (row_base, adjusted - 0x40)
+        } else {
+            return None;
+        };
+        Some(vec![row + 0x21, cell + 0x21])
     }
 
     #[test]

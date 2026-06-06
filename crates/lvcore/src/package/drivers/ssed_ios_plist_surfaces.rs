@@ -793,13 +793,7 @@ fn plist_string_opt(dict: &BTreeMap<String, PlistValue>, keys: &[&str]) -> Optio
 }
 
 fn plist_value_label_text(value: &PlistValue) -> Option<String> {
-    if let Some(text) = value.as_str() {
-        let text = text.trim();
-        return (!text.is_empty()).then(|| text.to_owned());
-    }
-    let data = value.as_data()?;
-    let text = decode_title_text(data).trim().to_owned();
-    (!text.is_empty()).then_some(text)
+    ssed_panel_plist_value_label_text(value)
 }
 
 fn plist_u32(dict: &BTreeMap<String, PlistValue>, key: &str) -> Option<u32> {

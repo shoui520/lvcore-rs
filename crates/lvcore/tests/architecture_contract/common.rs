@@ -712,9 +712,7 @@ pub(crate) fn simple_index_raw_ascii_fixture_rows(rows: &[(&str, u32, u16, u32, 
     page
 }
 
-pub(crate) fn simple_index_raw_key_fixture_rows(
-    rows: &[(&[u8], u32, u16, u32, u16)],
-) -> Vec<u8> {
+pub(crate) fn simple_index_raw_key_fixture_rows(rows: &[(&[u8], u32, u16, u32, u16)]) -> Vec<u8> {
     let mut page = vec![0u8; 2048];
     page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
     page[2..4].copy_from_slice(&(rows.len() as u16).to_be_bytes());
