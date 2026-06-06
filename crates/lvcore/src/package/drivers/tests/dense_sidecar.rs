@@ -136,6 +136,64 @@ fn dense_honmon_address_target_resolves_sidecar_html() {
 }
 
 #[test]
+fn dense_honmon_plain_anchor_body_is_preserved_as_display_html() {
+    let dir = tempdir().unwrap();
+    let catalog =
+        write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::PlainOnlyBodyRows);
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let target = TargetToken::new(&InternalTarget::SsedDenseAnchor {
+        anchor: "00000001".to_owned(),
+        resolver_hint: None,
+    })
+    .unwrap();
+
+    let body = package.visual_body_for_target(&target).unwrap();
+
+    assert_eq!(
+        body,
+        VisualBody::PreservedHtml {
+            html: "<div class=\"lvcore-sidecar-text\">alpha plain body<br>second line</div>"
+                .to_owned(),
+            source: BodySourceKind::SidecarText,
+        }
+    );
+    let input = package.renderer_input_for_target(&target).unwrap();
+    assert!(matches!(
+        input,
+        RendererInput::PreservedHtml {
+            source: BodySourceKind::SidecarText,
+            ..
+        }
+    ));
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(
+        view.display_html.as_deref(),
+        Some("<div class=\"lvcore-sidecar-text\">alpha plain body<br>second line</div>")
+    );
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "semantic_fallback")
+    );
+}
+
+#[test]
 fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     let dir = tempdir().unwrap();
     let package_root = dir.path().join("Book");

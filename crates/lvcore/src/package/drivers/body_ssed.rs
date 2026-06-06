@@ -430,7 +430,10 @@ impl ReaderBookPackage {
                         },
                     })
                 } else {
-                    Ok(VisualBody::SemanticFallback { text: body.text })
+                    Ok(VisualBody::PreservedHtml {
+                        html: sidecar_plain_text_to_html(&body.text),
+                        source: BodySourceKind::SidecarText,
+                    })
                 }
             }
             SsedSidecarLookup::MissingRow { diagnostics, .. } => Ok(VisualBody::Unsupported {

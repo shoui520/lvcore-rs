@@ -34,6 +34,7 @@ enum DenseSidecarFixture {
     TitleOnlyThenBodyRows,
     ShardedTContentsBodyRows,
     BlobBodyRows,
+    PlainOnlyBodyRows,
     EntityTitleRows,
     MissingBetaRow,
     OrderedHonbunRows,
@@ -133,6 +134,9 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
         }
         DenseSidecarFixture::BlobBodyRows => {
             write_dense_body_db(root.join("body.db"), true, true, true);
+        }
+        DenseSidecarFixture::PlainOnlyBodyRows => {
+            write_dense_plain_body_db(root.join("body.db"));
         }
         DenseSidecarFixture::EntityTitleRows => {
             write_dense_body_db_with_entity_title(root.join("body.db"));
@@ -279,6 +283,21 @@ fn write_dense_body_db(path: PathBuf, alpha: bool, beta: bool, blob: bool) {
                 .unwrap();
         }
     }
+}
+
+fn write_dense_plain_body_db(path: PathBuf) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "create table t_contents (f_DataId integer primary key, f_Title text, f_Html text, f_Plane text);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "insert into t_contents values (?, ?, ?, ?)",
+            (1, "alpha", "", "alpha plain body\nsecond line"),
+        )
+        .unwrap();
 }
 
 fn write_dense_body_db_with_lved_links(path: PathBuf) {
