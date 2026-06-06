@@ -611,6 +611,108 @@ fn library_search_results_include_sequence_for_continuous_view() {
 }
 
 #[test]
+fn library_all_book_fulltext_search_supports_continuous_view() {
+    let first = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(first.path());
+    {
+        let connection = Connection::open(first.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update list set title = 'first fulltext' where refid = 100",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "update search set fts = 'shared fulltext body' where rowid = 1",
+                [],
+            )
+            .unwrap();
+    }
+
+    let second = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(second.path());
+    {
+        let connection = Connection::open(second.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update list set title = 'second fulltext' where refid = 100",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "update search set fts = 'shared fulltext body' where rowid = 1",
+                [],
+            )
+            .unwrap();
+    }
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let first_id = library.open_path(first.path(), &registry).unwrap();
+    let second_id = library.open_path(second.path(), &registry).unwrap();
+
+    let page = library
+        .search(&SearchQuery {
+            scope: SearchScope::AllBooks,
+            mode: SearchMode::FullText,
+            query: "shared".to_owned(),
+            cursor: None,
+            limit: 2,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 2);
+    assert!(
+        page.hits
+            .iter()
+            .any(|hit| { hit.book_id == first_id && hit.title_text == "first fulltext" })
+    );
+    assert!(
+        page.hits
+            .iter()
+            .any(|hit| { hit.book_id == second_id && hit.title_text == "second fulltext" })
+    );
+    let sequence = page
+        .result_sequence
+        .as_deref()
+        .expect("all-book fulltext search should return a sequence");
+    let center_book_id = page.hits[0].book_id.clone();
+    let after_book_id = page.hits[1].book_id.clone();
+
+    let window = library
+        .resolve_search_result_window_routed(
+            &center_book_id,
+            &page.hits[0].target,
+            sequence,
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(window.center.book_id, center_book_id);
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].book_id, after_book_id);
+    assert!(
+        window
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "search_result_sequence_deferred")
+    );
+}
+
+#[test]
 fn library_search_cursor_restarts_when_scope_order_changes() {
     let first = tempdir().unwrap();
     fs::write(first.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
