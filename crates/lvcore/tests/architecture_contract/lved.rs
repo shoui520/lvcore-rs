@@ -197,6 +197,54 @@ fn lved_search_is_cursor_paged_by_backend() {
 }
 
 #[test]
+fn lved_same_book_dataid_links_preserve_scroll_anchor() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><a href=\"lved.dataid:105#dest\">beta</a></article>' where id = 100",
+                [],
+            )
+            .unwrap();
+    }
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let source = TargetToken::new(&InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id: 100,
+        anchor: None,
+        query: None,
+    })
+    .unwrap();
+    let view = package
+        .render_target(&source, &RenderOptions::default())
+        .unwrap();
+    let link = view
+        .links
+        .iter()
+        .find(|link| link.kind == TargetKind::LvedRow)
+        .expect("same-book LVED dataid link should become a row target");
+
+    let linked = package
+        .render_target(&link.token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(linked.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(linked.scroll_anchor.as_deref(), Some("dest"));
+    assert!(
+        linked
+            .display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("<h1>Beta</h1>"))
+    );
+}
+
+#[test]
 fn lved_advanced_search_mode_uses_named_search_column() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());
