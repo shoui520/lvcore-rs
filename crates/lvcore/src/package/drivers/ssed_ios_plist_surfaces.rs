@@ -22,6 +22,62 @@ pub(super) struct SsedIosHtmlListItem {
     pub html: String,
 }
 
+#[derive(Debug, Default)]
+struct SsedIosTableListResolutionStats {
+    address_rows: usize,
+    unresolved_rows: usize,
+    converted_rows: usize,
+    raw_min_block: Option<u32>,
+    raw_max_block: Option<u32>,
+    raw_min_offset: Option<u32>,
+    raw_max_offset: Option<u32>,
+    converted_min_block: Option<u32>,
+    converted_max_block: Option<u32>,
+}
+
+impl SsedIosTableListResolutionStats {
+    fn record(
+        &mut self,
+        raw_block: u32,
+        raw_offset: u32,
+        converted_block: u32,
+        converted_offset: u32,
+        resolved: bool,
+    ) {
+        self.address_rows = self.address_rows.saturating_add(1);
+        self.raw_min_block = Some(
+            self.raw_min_block
+                .map_or(raw_block, |value| value.min(raw_block)),
+        );
+        self.raw_max_block = Some(
+            self.raw_max_block
+                .map_or(raw_block, |value| value.max(raw_block)),
+        );
+        self.raw_min_offset = Some(
+            self.raw_min_offset
+                .map_or(raw_offset, |value| value.min(raw_offset)),
+        );
+        self.raw_max_offset = Some(
+            self.raw_max_offset
+                .map_or(raw_offset, |value| value.max(raw_offset)),
+        );
+        self.converted_min_block = Some(
+            self.converted_min_block
+                .map_or(converted_block, |value| value.min(converted_block)),
+        );
+        self.converted_max_block = Some(
+            self.converted_max_block
+                .map_or(converted_block, |value| value.max(converted_block)),
+        );
+        if (raw_block, raw_offset) != (converted_block, converted_offset) {
+            self.converted_rows = self.converted_rows.saturating_add(1);
+        }
+        if !resolved {
+            self.unresolved_rows = self.unresolved_rows.saturating_add(1);
+        }
+    }
+}
+
 impl ReaderBookPackage {
     pub(super) fn ssed_ios_panel_plist_sources(&self) -> Result<Vec<SsedIosPlistSurfaceSource>> {
         let mut sources = Vec::new();
@@ -85,8 +141,7 @@ impl ReaderBookPackage {
     ) -> Result<(NavigationStatus, Vec<Diagnostic>)> {
         let plist = self.cached_ssed_panel_plist(&source.bytes, &source.label)?;
         let rows = plist.as_array().unwrap_or_default();
-        let mut address_rows = 0usize;
-        let mut unresolved_rows = 0usize;
+        let mut stats = SsedIosTableListResolutionStats::default();
         for row in rows {
             let Some(dict) = row.as_dict() else {
                 continue;
@@ -98,14 +153,15 @@ impl ReaderBookPackage {
             let Some(block) = plist_u32(dict, "block").filter(|value| *value > 0) else {
                 continue;
             };
-            address_rows = address_rows.saturating_add(1);
-            let (block, offset) =
-                self.convert_ios_ssed_address(block, plist_u32(dict, "offset").unwrap_or(0))?;
+            let raw_block = block;
+            let raw_offset = plist_u32(dict, "offset").unwrap_or(0);
+            let (block, offset) = self.convert_ios_ssed_address(raw_block, raw_offset)?;
             let mut row_diagnostics = Vec::new();
-            if self
+            let resolved = self
                 .ssed_target_for_loose_address(block, offset, &mut row_diagnostics)?
-                .is_some()
-            {
+                .is_some();
+            stats.record(raw_block, raw_offset, block, offset, resolved);
+            if resolved {
                 return Ok((
                     NavigationStatus::Available,
                     vec![Diagnostic::info(
@@ -114,9 +170,8 @@ impl ReaderBookPackage {
                     )],
                 ));
             }
-            unresolved_rows = unresolved_rows.saturating_add(1);
         }
-        if address_rows == 0 {
+        if stats.address_rows == 0 {
             return Ok((
                 NavigationStatus::Empty,
                 vec![Diagnostic::info(
@@ -127,14 +182,7 @@ impl ReaderBookPackage {
         }
         Ok((
             NavigationStatus::Deferred,
-            vec![
-                Diagnostic::warning(
-                    "ssed_ios_table_list_unresolved",
-                    "iOS tableList.plist address rows did not resolve to package-owned entry targets",
-                )
-                .with_context("address_rows", address_rows.to_string())
-                .with_context("unresolved_rows", unresolved_rows.to_string()),
-            ],
+            vec![self.ssed_ios_table_list_unresolved_diagnostic(&stats)],
         ))
     }
 
@@ -200,7 +248,7 @@ impl ReaderBookPackage {
         let offset = decode_offset_cursor(cursor);
         let mut items = Vec::new();
         let mut has_more = false;
-        let mut diagnostics = Vec::new();
+        let mut stats = SsedIosTableListResolutionStats::default();
         for (index, row) in rows.iter().enumerate().skip(offset) {
             if items.len() >= limit {
                 has_more = true;
@@ -216,9 +264,12 @@ impl ReaderBookPackage {
             let Some(block) = plist_u32(dict, "block").filter(|value| *value > 0) else {
                 continue;
             };
-            let (block, offset) =
-                self.convert_ios_ssed_address(block, plist_u32(dict, "offset").unwrap_or(0))?;
-            let target = self.ssed_target_for_loose_address(block, offset, &mut diagnostics)?;
+            let raw_block = block;
+            let raw_offset = plist_u32(dict, "offset").unwrap_or(0);
+            let (block, offset) = self.convert_ios_ssed_address(raw_block, raw_offset)?;
+            let mut row_diagnostics = Vec::new();
+            let target = self.ssed_target_for_loose_address(block, offset, &mut row_diagnostics)?;
+            stats.record(raw_block, raw_offset, block, offset, target.is_some());
             let Some(target) = target else {
                 continue;
             };
@@ -232,10 +283,10 @@ impl ReaderBookPackage {
                 diagnostics: rich_label.diagnostics,
             });
         }
-        if !diagnostics.is_empty() && items.is_empty() {
+        if stats.address_rows > 0 && items.is_empty() {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
-                diagnostics,
+                diagnostics: vec![self.ssed_ios_table_list_unresolved_diagnostic(&stats)],
             });
         }
         let next_cursor = has_more.then(|| offset.saturating_add(limit).to_string());
@@ -244,6 +295,67 @@ impl ReaderBookPackage {
             items,
             next_cursor,
         })
+    }
+
+    fn ssed_ios_table_list_unresolved_diagnostic(
+        &self,
+        stats: &SsedIosTableListResolutionStats,
+    ) -> Diagnostic {
+        let mut diagnostic = Diagnostic::warning(
+            "ssed_ios_table_list_unresolved",
+            "iOS tableList.plist address rows did not resolve to package-owned entry targets",
+        )
+        .with_context("address_rows", stats.address_rows.to_string())
+        .with_context("unresolved_rows", stats.unresolved_rows.to_string())
+        .with_context("converted_rows", stats.converted_rows.to_string())
+        .with_context(
+            "convert_addr_payloads",
+            self.retained_ios_convert_addr_payloads.len().to_string(),
+        );
+        if let Some(value) = stats.raw_min_block {
+            diagnostic = diagnostic.with_context("raw_min_block", value.to_string());
+        }
+        if let Some(value) = stats.raw_max_block {
+            diagnostic = diagnostic.with_context("raw_max_block", value.to_string());
+        }
+        if let Some(value) = stats.raw_min_offset {
+            diagnostic = diagnostic.with_context("raw_min_offset", value.to_string());
+        }
+        if let Some(value) = stats.raw_max_offset {
+            diagnostic = diagnostic.with_context("raw_max_offset", value.to_string());
+        }
+        if let Some(value) = stats.converted_min_block {
+            diagnostic = diagnostic.with_context("converted_min_block", value.to_string());
+        }
+        if let Some(value) = stats.converted_max_block {
+            diagnostic = diagnostic.with_context("converted_max_block", value.to_string());
+        }
+        if let Some(catalog) = &self.ssed_catalog {
+            let component_ranges = catalog
+                .components
+                .iter()
+                .filter(|component| component.has_positive_range());
+            let min_component_block = component_ranges
+                .clone()
+                .map(|component| component.start_block)
+                .min();
+            let max_component_block = component_ranges.map(|component| component.end_block).max();
+            if let Some(value) = min_component_block {
+                diagnostic = diagnostic.with_context("component_min_block", value.to_string());
+            }
+            if let Some(value) = max_component_block {
+                diagnostic = diagnostic.with_context("component_max_block", value.to_string());
+            }
+            if let Some(component) = catalog
+                .components_by_role(SsedComponentRole::Honmon)
+                .find(|component| component.has_positive_range())
+            {
+                diagnostic = diagnostic
+                    .with_context("honmon_start_block", component.start_block.to_string())
+                    .with_context("honmon_end_block", component.end_block.to_string());
+            }
+        }
+        diagnostic
     }
 
     pub(super) fn resolve_ssed_ios_table_list_window(

@@ -1184,13 +1184,63 @@ fn ssed_ios_table_list_with_unresolved_addresses_is_deferred() {
 
     assert_eq!(surface.status, NavigationStatus::Deferred);
     assert!(surface.target.is_none());
-    assert!(surface.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "ssed_ios_table_list_unresolved"
-            && diagnostic
-                .context
-                .get("address_rows")
-                .is_some_and(|value| value == "1")
-    }));
+    let diagnostic = surface
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "ssed_ios_table_list_unresolved")
+        .expect("unresolved tableList.plist rows should have one aggregate diagnostic");
+    assert_eq!(
+        diagnostic.context.get("address_rows").map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        diagnostic
+            .context
+            .get("unresolved_rows")
+            .map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        diagnostic
+            .context
+            .get("convert_addr_payloads")
+            .map(String::as_str),
+        Some("0")
+    );
+    assert_eq!(
+        diagnostic.context.get("raw_min_block").map(String::as_str),
+        Some("231605")
+    );
+    assert_eq!(
+        diagnostic.context.get("raw_max_block").map(String::as_str),
+        Some("231605")
+    );
+    assert_eq!(
+        diagnostic.context.get("raw_min_offset").map(String::as_str),
+        Some("1770")
+    );
+    assert_eq!(
+        diagnostic.context.get("raw_max_offset").map(String::as_str),
+        Some("1770")
+    );
+    assert!(diagnostic.context.contains_key("component_min_block"));
+    assert!(diagnostic.context.contains_key("component_max_block"));
+    assert!(diagnostic.context.contains_key("honmon_start_block"));
+    assert!(diagnostic.context.contains_key("honmon_end_block"));
+
+    let opened = package
+        .open_surface("ios-table-list:tableList.plist")
+        .unwrap();
+    let NavigationSurface::Deferred { diagnostics, .. } = opened else {
+        panic!("unresolved tableList.plist should open as a diagnostic surface");
+    };
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "ssed_ios_table_list_unresolved");
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_loose_address_unresolved")
+    );
 }
 
 #[test]
