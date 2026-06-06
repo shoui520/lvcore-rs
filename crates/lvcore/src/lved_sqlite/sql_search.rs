@@ -318,20 +318,21 @@ fn exact_lved_filter_prefilter_query(
     normalized: &str,
     search_columns: &[String],
 ) -> Option<String> {
-    if !normalized.chars().any(|ch| ch.is_ascii_alphanumeric()) {
+    if !normalized.chars().any(char::is_alphanumeric) {
         return None;
     }
     let short_headword_prefilter =
-        normalized.chars().count() == 1 && normalized.chars().all(|ch| ch.is_ascii_alphanumeric());
+        normalized.chars().count() == 1 && normalized.chars().all(char::is_alphanumeric);
     if short_headword_prefilter
         && let Some(query) = fts_query("forward", normalized, search_columns, true, false)
     {
         return Some(query);
     }
-    fts_query("part", normalized, search_columns, false, false).or_else(|| {
-        let terms = fts_tokens(normalized, false)
+    let split_chars = should_split_chars(normalized);
+    fts_query("part", normalized, search_columns, false, split_chars).or_else(|| {
+        let terms = fts_tokens(normalized, split_chars)
             .into_iter()
-            .filter(|token| token.chars().any(|ch| ch.is_ascii_alphanumeric()))
+            .filter(|token| token.chars().any(char::is_alphanumeric))
             .map(|token| fts_term(&token, false))
             .filter(|term| !term.is_empty())
             .collect::<Vec<_>>();
@@ -675,16 +676,42 @@ mod tests {
     }
 
     #[test]
-    fn exact_filter_search_keeps_like_scan_for_non_ascii_terms() {
+    fn exact_filter_search_prefilters_non_ascii_terms_with_fts() {
         let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
 
         let (where_clause, parameters) =
             exact_lved_search_where("あいう", primary_provider(&columns), true)
                 .expect("exact filter search");
 
+        assert!(where_clause.contains("\"search\" match ?"));
+        assert!(where_clause.contains("s.filter like ?"));
+        assert_eq!(parameters, vec!["part:あ part:い part:う", "%∥あいう∥%"]);
+    }
+
+    #[test]
+    fn exact_filter_search_uses_forward_prefilter_for_short_non_ascii_headwords() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+
+        let (where_clause, parameters) =
+            exact_lved_search_where("あ", primary_provider(&columns), true)
+                .expect("exact filter search");
+
+        assert!(where_clause.contains("\"search\" match ?"));
+        assert!(where_clause.contains("s.filter like ?"));
+        assert_eq!(parameters, vec!["forward:あ*", "%∥あ∥%"]);
+    }
+
+    #[test]
+    fn exact_filter_search_keeps_like_scan_for_symbol_only_terms() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+
+        let (where_clause, parameters) =
+            exact_lved_search_where("／", primary_provider(&columns), true)
+                .expect("exact filter search");
+
         assert!(!where_clause.contains("\"search\" match ?"));
         assert_eq!(where_clause, "s.filter like ? escape '\\'");
-        assert_eq!(parameters, vec!["%∥あいう∥%"]);
+        assert_eq!(parameters, vec!["%∥／∥%"]);
     }
 
     #[test]
