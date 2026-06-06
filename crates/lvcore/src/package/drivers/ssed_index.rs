@@ -350,6 +350,137 @@ impl ReaderBookPackage {
         Ok(diagnostics)
     }
 
+    pub(super) fn scan_ssed_ordered_index_rows_with_filters(
+        &self,
+        row_limit: Option<usize>,
+        mut component_may_match: impl FnMut(&SsedComponent) -> bool,
+        mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<Vec<Diagnostic>> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(vec![Diagnostic::error(
+                "ssed_catalog_missing",
+                "SSED ordered index scanning requires a parsed SSEDINFO catalog",
+            )]);
+        };
+        let mut diagnostics = Vec::new();
+        let mut row_count = 0usize;
+        'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
+            if row_limit.is_some_and(|limit| row_count >= limit) {
+                break;
+            }
+            if !component_may_match(component) {
+                continue;
+            }
+            if !is_supported_index_type(component.component_type) {
+                diagnostics.push(
+                    Diagnostic::info(
+                        "ssed_index_variant_deferred",
+                        format!("{} is not a supported index component", component.filename),
+                    )
+                    .with_context("component", &component.filename),
+                );
+                continue;
+            }
+            let path = match self.resolve_readable_ssed_component_path(component) {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    diagnostics.push(
+                        Diagnostic::info(
+                            "ssed_index_component_missing",
+                            format!("{} is declared but not present on disk", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_index_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+            };
+            let mut reader = SsedDataFile::open(&path)?;
+            let component_read_base = ssed_component_read_base(component, &reader);
+            let page_count = component.block_count() as usize;
+            if page_count == 0 {
+                continue;
+            }
+            let mut stack = vec![0usize];
+            let mut visited = HashSet::new();
+            let mut scan_state = SsedIndexScanState::default();
+            while let Some(page_index) = stack.pop() {
+                if row_limit.is_some_and(|limit| row_count >= limit) {
+                    break 'components;
+                }
+                if page_index >= page_count || !visited.insert(page_index) {
+                    continue;
+                }
+                let page = read_index_page(&mut reader, component_read_base, page_index)?;
+                if page.len() < 4 {
+                    continue;
+                }
+                let word = u16::from_be_bytes([page[0], page[1]]);
+                if is_leaf_page(word) {
+                    let logical_block = component.start_block + page_index as u32;
+                    let (page_rows, unknown) = parse_supported_leaf_page(
+                        &component.filename,
+                        component.component_type,
+                        page,
+                        page_index as u32,
+                        logical_block,
+                        &mut scan_state,
+                    );
+                    if unknown > 0 {
+                        diagnostics.push(
+                            Diagnostic::warning(
+                                "ssed_index_unknown_leaf_bytes",
+                                format!(
+                                    "{} had {unknown} unknown ordered index leaf row(s)",
+                                    component.filename
+                                ),
+                            )
+                            .with_context("component", &component.filename),
+                        );
+                    }
+                    for row in page_rows {
+                        if row_limit.is_some_and(|limit| row_count >= limit) {
+                            break 'components;
+                        }
+                        row_count = row_count.saturating_add(1);
+                        if !on_row(row)? {
+                            break 'components;
+                        }
+                    }
+                    continue;
+                }
+                let child_rows = parse_internal_page(
+                    &component.filename,
+                    page,
+                    page_index as u32,
+                    component.start_block + page_index as u32,
+                );
+                for child in child_rows.into_iter().rev() {
+                    if child.child_block < component.start_block {
+                        continue;
+                    }
+                    let child_page = (child.child_block - component.start_block) as usize;
+                    if child_page < page_count {
+                        stack.push(child_page);
+                    }
+                }
+            }
+        }
+        Ok(diagnostics)
+    }
+
     pub(super) fn scan_ssed_partial_index_rows_paged(
         &self,
         needle: &str,

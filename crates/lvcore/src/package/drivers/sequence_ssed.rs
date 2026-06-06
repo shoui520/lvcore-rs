@@ -118,7 +118,7 @@ impl ReaderBookPackage {
         let mut before_rows = VecDeque::<SsedIndexRow>::with_capacity(request.before);
         let mut center_row = None::<SsedIndexRow>;
         let mut tail_rows = Vec::<SsedIndexRow>::with_capacity(request.after.saturating_add(1));
-        let mut diagnostics = self.scan_ssed_simple_index_rows_with_filters(
+        let mut diagnostics = self.scan_ssed_ordered_index_rows_with_filters(
             None,
             |component| {
                 if skip_backward_rows && ssed_index_component_name_is_backward(&component.filename)
@@ -130,7 +130,6 @@ impl ReaderBookPackage {
                 }
                 true
             },
-            |_, _| true,
             |row| {
                 let current_ordinal = row_ordinal;
                 row_ordinal = row_ordinal.saturating_add(1);

@@ -2,6 +2,8 @@ use std::cell::Cell;
 
 use super::*;
 
+const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 8192;
+
 impl ReaderBookPackage {
     pub(super) fn search_ssed_simple_indexes(&self, query: &SearchQuery) -> Result<SearchPage> {
         if query.limit == 0 {
@@ -146,6 +148,65 @@ impl ReaderBookPackage {
             physical_next_cursor = scan_result.next_cursor;
             fallback_collector.extend_diagnostics(scan_result.diagnostics);
             collector = fallback_collector;
+        }
+        if !collector.has_hits()
+            && query.cursor.is_none()
+            && matches!(
+                query.mode,
+                SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+            )
+        {
+            let mut fallback_collector = SsedIndexSearchCollector::new(
+                self,
+                &query.mode,
+                &needle,
+                offset,
+                page_limit,
+                query.label_gaiji_policy(),
+            )
+            .with_display_label_matching();
+            let mut checked_rows = 0usize;
+            let skip_backward_rows = self.ssed_has_forward_browse_index();
+            let fallback_diagnostics = self.scan_ssed_ordered_index_rows_with_filters(
+                None,
+                |component| {
+                    if skip_backward_rows
+                        && ssed_index_component_name_is_backward(&component.filename)
+                    {
+                        return false;
+                    }
+                    self.resolve_readable_ssed_component_path(component)
+                        .ok()
+                        .flatten()
+                        .is_some()
+                },
+                |row| {
+                    checked_rows = checked_rows.saturating_add(1);
+                    if checked_rows > SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS {
+                        return Ok(false);
+                    }
+                    let keep_scanning = fallback_collector.push_row(row)?;
+                    Ok(keep_scanning && !fallback_collector.has_hits())
+                },
+            )?;
+            fallback_collector.extend_diagnostics(fallback_diagnostics);
+            if checked_rows > SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS {
+                fallback_collector.extend_diagnostics(vec![
+                    Diagnostic::info(
+                        "ssed_title_label_search_fallback_limited",
+                        "SSED title-label fallback search reached its bounded row budget before exhausting all title/index rows",
+                    )
+                    .with_context(
+                        "checked_rows",
+                        SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS.to_string(),
+                    ),
+                ]);
+            }
+            if fallback_collector.has_hits() {
+                collector = fallback_collector;
+            } else {
+                collector.extend_diagnostics(fallback_collector.into_search_page(0).diagnostics);
+            }
         }
         let mut page = collector.into_search_page(query.limit);
         if page.next_cursor.is_none() {

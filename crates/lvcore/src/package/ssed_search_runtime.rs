@@ -105,6 +105,7 @@ pub(super) struct SsedIndexSearchCollector<'a> {
     seen_targets: HashSet<String>,
     pending_row: Option<SsedIndexRow>,
     gaiji_policy: GaijiPolicy,
+    match_display_label: bool,
 }
 
 impl<'a> SsedIndexSearchCollector<'a> {
@@ -128,7 +129,13 @@ impl<'a> SsedIndexSearchCollector<'a> {
             seen_targets: HashSet::new(),
             pending_row: None,
             gaiji_policy,
+            match_display_label: false,
         }
+    }
+
+    pub(super) fn with_display_label_matching(mut self) -> Self {
+        self.match_display_label = true;
+        self
     }
 
     pub(super) fn push_row(&mut self, row: SsedIndexRow) -> Result<bool> {
@@ -142,14 +149,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
                 return Ok(false);
             }
         }
-        let key = ssed_index_row_match_text(&row);
-        let row_matches = match self.mode {
-            SearchMode::Exact => key == self.needle,
-            SearchMode::Forward => key.starts_with(self.needle),
-            SearchMode::Backward => key.ends_with(self.needle),
-            SearchMode::Partial => key.contains(self.needle),
-            SearchMode::FullText | SearchMode::Advanced(_) => false,
-        };
+        let row_matches = self.row_matches(&row);
         if !row_matches {
             return Ok(true);
         }
@@ -170,6 +170,25 @@ impl<'a> SsedIndexSearchCollector<'a> {
         self.pending_row = Some(row);
         self.matched_count = self.matched_count.saturating_add(1);
         Ok(true)
+    }
+
+    fn row_matches(&self, row: &SsedIndexRow) -> bool {
+        let key = ssed_index_row_match_text(row);
+        if search_match_satisfied(self.mode, &key, self.needle) {
+            return true;
+        }
+        if !self.match_display_label {
+            return false;
+        }
+        let display = self.package.ssed_display_text_for_index_row(row);
+        if display == row.key {
+            return false;
+        }
+        let mut display_key = normalize_search_match_text(&display);
+        if ssed_index_component_name_is_backward(&row.component) {
+            display_key = reverse_search_match_text(&display_key);
+        }
+        search_match_satisfied(self.mode, &display_key, self.needle)
     }
 
     fn emit_hit(&mut self, row: SsedIndexRow) -> Result<()> {
@@ -245,6 +264,16 @@ impl<'a> SsedIndexSearchCollector<'a> {
             result_sequence: None,
             diagnostics: self.diagnostics,
         }
+    }
+}
+
+fn search_match_satisfied(mode: &SearchMode, key: &str, needle: &str) -> bool {
+    match mode {
+        SearchMode::Exact => key == needle,
+        SearchMode::Forward => key.starts_with(needle),
+        SearchMode::Backward => key.ends_with(needle),
+        SearchMode::Partial => key.contains(needle),
+        SearchMode::FullText | SearchMode::Advanced(_) => false,
     }
 }
 

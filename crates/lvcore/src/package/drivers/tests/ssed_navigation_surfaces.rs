@@ -3,6 +3,157 @@ use std::fs;
 use super::*;
 
 #[test]
+fn ssed_title_index_browse_uses_internal_tree_order_not_physical_leaf_order() {
+    let dir = tempdir().unwrap();
+
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[b"alpha body\0beta body"], 100, 100),
+    )
+    .unwrap();
+
+    let mut titles = Vec::new();
+    let alpha_title_offset = 0u16;
+    titles.extend_from_slice(b"alpha\x1f\x0a");
+    let beta_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"beta\x1f\x0a");
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[&titles], 300, 300),
+    )
+    .unwrap();
+
+    let mut internal = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    internal[0..2].copy_from_slice(&0x0002u16.to_be_bytes());
+    internal[2..4].copy_from_slice(&2u16.to_be_bytes());
+    let mut pos = 4usize;
+    write_internal_index_row(&mut internal, &mut pos, b"a", 202);
+    write_internal_index_row(&mut internal, &mut pos, b"b", 201);
+
+    let mut beta_leaf = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    beta_leaf[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    beta_leaf[2..4].copy_from_slice(&1u16.to_be_bytes());
+    let mut beta_pos = 4usize;
+    write_simple_index_row(
+        &mut beta_leaf,
+        &mut beta_pos,
+        b"beta",
+        100,
+        11,
+        300,
+        beta_title_offset,
+    );
+
+    let mut alpha_leaf = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    alpha_leaf[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    alpha_leaf[2..4].copy_from_slice(&1u16.to_be_bytes());
+    let mut alpha_pos = 4usize;
+    write_simple_index_row(
+        &mut alpha_leaf,
+        &mut alpha_pos,
+        b"alpha",
+        100,
+        0,
+        300,
+        alpha_title_offset,
+    );
+
+    let mut index_stream = Vec::new();
+    index_stream.extend_from_slice(&internal);
+    index_stream.extend_from_slice(&beta_leaf);
+    index_stream.extend_from_slice(&alpha_leaf);
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_stream], 200, 202),
+    )
+    .unwrap();
+
+    let catalog = SsedCatalog {
+        title: "Ordered".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x91,
+                start_block: 200,
+                end_block: 202,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Ordered".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = &surface else {
+        panic!("expected title/index browse surface");
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].label_text, "alpha");
+    assert_eq!(items[1].label_text, "beta");
+
+    let beta = surface
+        .actionable_targets()
+        .into_iter()
+        .find(|target| target.label_text == "beta")
+        .unwrap();
+    let window = package
+        .resolve_target_window(
+            &beta.target,
+            beta.sequence_hint.as_ref(),
+            1,
+            0,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.center.title.as_deref(), Some("beta"));
+    assert_eq!(window.before.len(), 1);
+    assert_eq!(window.before[0].title.as_deref(), Some("alpha"));
+}
+
+#[test]
 fn ssed_screen_menu_surface_exposes_backgrounds_and_hotspot_targets() {
     let dir = tempdir().unwrap();
     let mut screen_menu = Vec::new();
@@ -116,6 +267,13 @@ fn ssed_screen_menu_surface_exposes_backgrounds_and_hotspot_targets() {
             offset: 0
         } if component == "HONMON.DIC"
     ));
+}
+
+fn write_internal_index_row(page: &mut [u8], pos: &mut usize, key: &[u8], child_block: u32) {
+    page[*pos..*pos + key.len()].copy_from_slice(key);
+    *pos += 2;
+    page[*pos..*pos + 4].copy_from_slice(&child_block.to_be_bytes());
+    *pos += 4;
 }
 
 #[test]

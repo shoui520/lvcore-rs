@@ -411,12 +411,11 @@ impl ReaderBookPackage {
         let mut rows = Vec::new();
         let mut seen = 0usize;
         let skip_backward_rows = self.ssed_has_forward_browse_index();
-        let diagnostics = self.scan_ssed_simple_index_rows_with_filters(
+        let diagnostics = self.scan_ssed_ordered_index_rows_with_filters(
             None,
             |component| {
                 !(skip_backward_rows && ssed_index_component_name_is_backward(&component.filename))
             },
-            |_, _| true,
             |row| {
                 if seen >= offset {
                     rows.push(row);
