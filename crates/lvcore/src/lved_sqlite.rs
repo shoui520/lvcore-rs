@@ -435,6 +435,12 @@ impl LvedSqliteStore {
         })
     }
 
+    pub fn info_title_text(&self, row_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .info_html(row_id)?
+            .and_then(|html| html_text_lines(&html).into_iter().next()))
+    }
+
     pub fn info_html_by_name(&self, name: &str) -> Result<Option<String>> {
         self.with_connection(|connection| {
             let schema = self.schema(connection)?;

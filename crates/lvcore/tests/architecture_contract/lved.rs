@@ -458,6 +458,7 @@ fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
         .render_target(&null_id_page.target, &RenderOptions::default())
         .unwrap();
     assert_eq!(null_id_view.kind, ResolvedTargetKind::InfoPage);
+    assert_eq!(null_id_view.title.as_deref(), Some("Null id info"));
     assert_eq!(
         null_id_view.display_html.as_deref(),
         Some("<h1>Null id info</h1>")
