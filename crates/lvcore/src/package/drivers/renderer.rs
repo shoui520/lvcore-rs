@@ -405,11 +405,24 @@ impl ReaderBookPackage {
 
     fn generic_html_data_url(&self, token: &str) -> Result<Option<String>> {
         let resource_token = ResourceToken::from_opaque(token.to_owned());
+        let internal_resource = resource_token.decode()?;
         let resource_ref = self.resolve_resource(&resource_token)?;
         let Some(mime_type) = resource_ref.mime_type.as_deref() else {
             return Ok(None);
         };
-        let bytes = self.read_resource(&resource_token)?;
+        let bytes = match self.read_resource(&resource_token) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                if let Some(data_url) = generic_html_optional_missing_resource_data_url(
+                    &internal_resource,
+                    mime_type,
+                    &error,
+                ) {
+                    return Ok(Some(data_url));
+                }
+                return Err(error);
+            }
+        };
         if bytes.len() > generic_html_inline_resource_max_bytes() {
             return Ok(None);
         }
@@ -489,6 +502,32 @@ impl ReaderBookPackage {
         })?;
         Ok(())
     }
+}
+
+fn generic_html_optional_missing_resource_data_url(
+    resource: &InternalResource,
+    mime_type: &str,
+    error: &Error,
+) -> Option<String> {
+    let InternalResource::ChmFile {
+        entry_path,
+        resource_kind: ResourceKind::Javascript,
+        ..
+    } = resource
+    else {
+        return None;
+    };
+    if !entry_path
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("font.js"))
+    {
+        return None;
+    }
+    if !error.to_string().contains("CHM entry not found") {
+        return None;
+    }
+    Some(generic_html_data_url(mime_type, b""))
 }
 
 fn rewrite_hc_common_html_link_hrefs(mut html: String, links: &[TargetLink]) -> String {
@@ -796,5 +835,42 @@ impl RendererProvider for ReaderBookPackage {
             }
         }?;
         self.finalize_resolved_view(view, options)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_html_stubs_missing_observed_chm_font_js_only() {
+        let error = Error::Driver("CHM entry not found: Source/font.js".to_owned());
+        let font_js = InternalResource::ChmFile {
+            chm_path: "HANREI.chm".to_owned(),
+            entry_path: "Source/font.js".to_owned(),
+            resource_kind: ResourceKind::Javascript,
+        };
+        let css = InternalResource::ChmFile {
+            chm_path: "HANREI.chm".to_owned(),
+            entry_path: "Source/css.css".to_owned(),
+            resource_kind: ResourceKind::Css,
+        };
+        let image = InternalResource::ChmFile {
+            chm_path: "HANREI.chm".to_owned(),
+            entry_path: "Source/pic.png".to_owned(),
+            resource_kind: ResourceKind::Image,
+        };
+
+        assert_eq!(
+            generic_html_optional_missing_resource_data_url(&font_js, "text/javascript", &error)
+                .as_deref(),
+            Some("data:text/javascript;base64,")
+        );
+        assert!(
+            generic_html_optional_missing_resource_data_url(&css, "text/css", &error).is_none()
+        );
+        assert!(
+            generic_html_optional_missing_resource_data_url(&image, "image/png", &error).is_none()
+        );
     }
 }
