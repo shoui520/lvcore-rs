@@ -629,6 +629,13 @@ impl ReaderBookPackage {
             return Ok(page);
         }
         if honmon_body_window_scan_needed
+            && query.cursor.is_none()
+            && let Some(page) =
+                self.ssed_fulltext_initial_partial_title_index_prepass(query, &needle, page_limit)?
+        {
+            return Ok(page);
+        }
+        if honmon_body_window_scan_needed
             && title_cursor.is_some()
             && let Some(page) = self.ssed_fulltext_title_index_prepass(
                 query,
@@ -1476,6 +1483,43 @@ impl ReaderBookPackage {
         }
         let mut page = collector.into_search_page(query.limit);
         page.next_cursor = Some("body:0".to_owned());
+        page.diagnostics.insert(
+            0,
+            Diagnostic::info(
+                "ssed_fulltext_title_index_prepass",
+                "SSED full-text search returned native title/index matches before scanning HONMON bodies",
+            ),
+        );
+        Ok(Some(page))
+    }
+
+    fn ssed_fulltext_initial_partial_title_index_prepass(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        page_limit: usize,
+    ) -> Result<Option<SearchPage>> {
+        let mut collector = SsedIndexSearchCollector::new(
+            self,
+            &SearchMode::Partial,
+            needle,
+            0,
+            page_limit,
+            query.label_gaiji_policy(),
+        )
+        .with_display_label_matching();
+        let scan_diagnostics =
+            self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
+        collector.extend_diagnostics(scan_diagnostics);
+        if !collector.has_hits() {
+            return Ok(None);
+        }
+        let mut page = collector.into_search_page(query.limit);
+        page.next_cursor = page
+            .next_cursor
+            .as_deref()
+            .map(|cursor| format!("title:{cursor}"))
+            .or_else(|| Some("body:0".to_owned()));
         page.diagnostics.insert(
             0,
             Diagnostic::info(

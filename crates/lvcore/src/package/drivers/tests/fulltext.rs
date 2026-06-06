@@ -108,7 +108,58 @@ fn ssed_fulltext_searches_native_title_labels_before_body_rows() {
                 book_id: package.metadata().book_id.clone(),
             },
             mode: SearchMode::FullText,
-            query: "あ".to_owned(),
+            query: "本文".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "本文見出し");
+    assert_eq!(page.next_cursor.as_deref(), Some("body:0"));
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_title_index_prepass")
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+    );
+}
+
+#[test]
+fn ssed_fulltext_searches_partial_native_title_labels_before_body_rows() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic fulltext".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "見出".to_owned(),
             cursor: None,
             limit: 1,
             gaiji_policy: None,
@@ -526,12 +577,16 @@ fn write_ssed_fulltext_fixture(root: &Path) -> SsedCatalog {
     let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
     index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
     index_page[2..4].copy_from_slice(&1u16.to_be_bytes());
-    index_page[4] = 2;
-    index_page[5..7].copy_from_slice(&[0x24, 0x22]);
-    index_page[7..11].copy_from_slice(&100u32.to_be_bytes());
-    index_page[11..13].copy_from_slice(&0u16.to_be_bytes());
-    index_page[13..17].copy_from_slice(&300u32.to_be_bytes());
-    index_page[17..19].copy_from_slice(&0u16.to_be_bytes());
+    let mut pos = 4usize;
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        &body_jis("本文見出し"),
+        100,
+        0,
+        300,
+        0,
+    );
     fs::write(
         root.join("FHINDEX.DIC"),
         fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
