@@ -34,6 +34,7 @@ enum DenseSidecarFixture {
     TitleOnlyThenBodyRows,
     ShardedTContentsBodyRows,
     BlobBodyRows,
+    EntityTitleRows,
     MissingBetaRow,
     OrderedHonbunRows,
 }
@@ -132,6 +133,9 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
         }
         DenseSidecarFixture::BlobBodyRows => {
             write_dense_body_db(root.join("body.db"), true, true, true);
+        }
+        DenseSidecarFixture::EntityTitleRows => {
+            write_dense_body_db_with_entity_title(root.join("body.db"));
         }
         DenseSidecarFixture::MissingBetaRow => {
             write_dense_body_db(root.join("body.db"), true, false, false);
@@ -312,6 +316,26 @@ fn write_dense_body_db_with_lved_links(path: PathBuf) {
                 create table media (No integer primary key, f_name text, f_type integer, f_main blob);
                 insert into media values (1, 'sidecar_pic', 1, x'FFD8FFE0');
                 ",
+        )
+        .unwrap();
+}
+
+fn write_dense_body_db_with_entity_title(path: PathBuf) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "create table t_contents (f_DataId integer primary key, f_Title blob, f_Html blob, f_Plane blob);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "insert into t_contents values (?, ?, ?, ?)",
+            (
+                2,
+                "<span>&amp;#x00E0; &#x002A;abaisser</span>".as_bytes(),
+                "<div>entity sidecar html</div>".as_bytes(),
+                "entity sidecar body".as_bytes(),
+            ),
         )
         .unwrap();
 }

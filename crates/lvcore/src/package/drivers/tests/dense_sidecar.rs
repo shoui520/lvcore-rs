@@ -1376,6 +1376,53 @@ fn dense_honmon_fulltext_searches_sidecar_body() {
 }
 
 #[test]
+fn dense_honmon_fulltext_decodes_entity_title_labels() {
+    let dir = tempdir().unwrap();
+    let catalog =
+        write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::EntityTitleRows);
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "entity sidecar body".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "à *abaisser");
+    assert!(page.hits[0].title_html.contains("à *abaisser"));
+    assert!(!page.hits[0].title_text.contains("&#x"));
+    assert!(!page.hits[0].title_html.contains("&#x"));
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "2"
+    ));
+}
+
+#[test]
 fn title_only_sidecar_does_not_block_dense_body_sidecar() {
     let dir = tempdir().unwrap();
     let catalog =
