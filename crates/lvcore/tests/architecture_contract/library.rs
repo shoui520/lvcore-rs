@@ -613,6 +613,85 @@ fn library_search_results_include_sequence_for_continuous_view() {
 }
 
 #[test]
+fn selected_book_search_sequence_uses_frontend_scope_order() {
+    let first = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(first.path());
+    {
+        let connection = Connection::open(first.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update list set title = 'first alpha' where refid = 100",
+                [],
+            )
+            .unwrap();
+    }
+
+    let second = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(second.path());
+    {
+        let connection = Connection::open(second.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update list set title = 'second alpha' where refid = 100",
+                [],
+            )
+            .unwrap();
+    }
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let first_id = library.open_path(first.path(), &registry).unwrap();
+    let second_id = library.open_path(second.path(), &registry).unwrap();
+
+    let page = library
+        .search(&SearchQuery {
+            scope: SearchScope::SelectedBooks {
+                book_ids: vec![second_id.clone(), first_id.clone()],
+            },
+            mode: SearchMode::Forward,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 2,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 2);
+    assert_eq!(page.hits[0].book_id, second_id);
+    assert_eq!(page.hits[0].title_text, "second alpha");
+    assert_eq!(page.hits[1].book_id, first_id);
+    assert_eq!(page.hits[1].title_text, "first alpha");
+    let sequence = page
+        .result_sequence
+        .as_deref()
+        .expect("selected-book search should return an ordered sequence");
+
+    let window = library
+        .resolve_search_result_window_routed(
+            &second_id,
+            &page.hits[0].target,
+            sequence,
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(window.center.book_id, second_id);
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].book_id, first_id);
+    assert_eq!(window.after[0].view.title.as_deref(), Some("first alpha"));
+}
+
+#[test]
 fn library_all_book_fulltext_search_supports_continuous_view() {
     let first = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(first.path());
