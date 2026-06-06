@@ -1,7 +1,7 @@
 use super::common::*;
 
 #[test]
-fn ios_ssed_shell_with_known_retained_fts_dbc_opens_lved_search_payload() {
+fn ios_dbc_package_with_retained_ssed_idx_opens_as_lved_search_payload() {
     let root = tempdir().unwrap();
     let package_root = root.path().join("OXFPEU4");
     fs::create_dir(&package_root).unwrap();
@@ -57,7 +57,7 @@ fn ios_ssed_shell_with_known_retained_fts_dbc_opens_lved_search_payload() {
     .unwrap();
 
     let package = DriverRegistry::default().open_best(&package_root).unwrap();
-    assert_eq!(package.metadata().format_family, FormatFamily::Ssed);
+    assert_eq!(package.metadata().format_family, FormatFamily::LvedSqlite3);
     assert!(
         package
             .metadata()

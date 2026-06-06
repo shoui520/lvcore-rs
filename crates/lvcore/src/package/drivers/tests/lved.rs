@@ -84,6 +84,19 @@ fn explicit_ios_dbc_payload_detects_as_lved_even_with_retained_ssed_idx() {
             .iter()
             .any(|row| row.format_family == FormatFamily::Ssed)
     );
+
+    let detected_package = DriverRegistry::default().detect(&package).unwrap();
+
+    assert_eq!(detected_package[0].format_family, FormatFamily::LvedSqlite3);
+    assert_eq!(
+        detected_package[0].title.as_deref(),
+        Some("Oxford Test Dictionary")
+    );
+    assert!(
+        detected_package
+            .iter()
+            .any(|row| row.format_family == FormatFamily::Ssed)
+    );
 }
 
 #[cfg(unix)]
