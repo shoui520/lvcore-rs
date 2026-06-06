@@ -6,6 +6,7 @@ const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 20_480;
 const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 2;
 const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 128;
+const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 
@@ -584,6 +585,27 @@ impl ReaderBookPackage {
         )
     }
 
+    fn ssed_fulltext_can_scan_all_title_indexes(&self) -> bool {
+        let Some(catalog) = &self.ssed_catalog else {
+            return false;
+        };
+        let skip_backward_rows = self.ssed_has_forward_browse_index();
+        let mut block_count = 0u32;
+        for component in catalog.components_by_role(SsedComponentRole::Index) {
+            if skip_backward_rows && ssed_index_component_name_is_backward(&component.filename) {
+                continue;
+            }
+            if !is_supported_index_type(component.component_type) {
+                continue;
+            }
+            block_count = block_count.saturating_add(component.block_count());
+            if block_count > SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS {
+                return false;
+            }
+        }
+        block_count > 0
+    }
+
     fn search_ssed_fulltext_body_windows(&self, query: &SearchQuery) -> Result<SearchPage> {
         let needle = normalize_search_match_text(&query.query);
         if needle.is_empty() {
@@ -636,13 +658,9 @@ impl ReaderBookPackage {
             return Ok(page);
         }
         if honmon_body_window_scan_needed
-            && title_cursor.is_some()
-            && let Some(page) = self.ssed_fulltext_title_index_prepass(
-                query,
-                &needle,
-                title_cursor.unwrap_or(0),
-                page_limit,
-            )?
+            && let Some(title_cursor) = title_cursor
+            && let Some(page) =
+                self.ssed_fulltext_title_index_prepass(query, &needle, title_cursor, page_limit)?
         {
             return Ok(page);
         }
@@ -1508,9 +1526,14 @@ impl ReaderBookPackage {
             query.label_gaiji_policy(),
         )
         .with_display_label_matching();
-        let scan_diagnostics =
-            self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
-        collector.extend_diagnostics(scan_diagnostics);
+        let physical_next_cursor = if self.ssed_fulltext_can_scan_all_title_indexes() {
+            let scan_diagnostics =
+                self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
+            collector.extend_diagnostics(scan_diagnostics);
+            None
+        } else {
+            self.scan_ssed_partial_index_rows_paged_until_visible(needle, None, &mut collector)?
+        };
         if !collector.has_hits() {
             return Ok(None);
         }
@@ -1519,6 +1542,7 @@ impl ReaderBookPackage {
             .next_cursor
             .as_deref()
             .map(|cursor| format!("title:{cursor}"))
+            .or_else(|| physical_next_cursor.map(|cursor| format!("title:{cursor}")))
             .or_else(|| Some("body:0".to_owned()));
         page.diagnostics.insert(
             0,
@@ -1561,29 +1585,44 @@ impl ReaderBookPackage {
         &self,
         query: &SearchQuery,
         needle: &str,
-        title_offset: usize,
+        title_cursor: SsedFulltextTitleCursor,
         page_limit: usize,
     ) -> Result<Option<SearchPage>> {
         let mut collector = SsedIndexSearchCollector::new(
             self,
             &SearchMode::Partial,
             needle,
-            title_offset,
+            match title_cursor {
+                SsedFulltextTitleCursor::MatchedOffset(offset) => offset,
+                SsedFulltextTitleCursor::Physical(_) => 0,
+            },
             page_limit,
             query.label_gaiji_policy(),
         )
         .with_display_label_matching();
-        let scan_diagnostics =
-            self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
-        collector.extend_diagnostics(scan_diagnostics);
+        let physical_next_cursor = match title_cursor {
+            SsedFulltextTitleCursor::MatchedOffset(_) => {
+                let scan_diagnostics =
+                    self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
+                collector.extend_diagnostics(scan_diagnostics);
+                None
+            }
+            SsedFulltextTitleCursor::Physical(cursor) => self
+                .scan_ssed_partial_index_rows_paged_until_visible(
+                    needle,
+                    Some(cursor),
+                    &mut collector,
+                )?,
+        };
         let mut page = collector.into_search_page(query.limit);
-        if page.hits.len() < query.limit {
+        if page.hits.is_empty() {
             return Ok(None);
         }
         page.next_cursor = page
             .next_cursor
             .as_deref()
             .map(|cursor| format!("title:{cursor}"))
+            .or_else(|| physical_next_cursor.map(|cursor| format!("title:{cursor}")))
             .or_else(|| Some("body:0".to_owned()));
         page.diagnostics.insert(
             0,
@@ -1673,10 +1712,21 @@ fn ssed_index_page_may_point_to_body_blocks(page: &[u8], body_blocks: &HashSet<u
     })
 }
 
-fn decode_ssed_fulltext_title_cursor(cursor: Option<&str>) -> Option<usize> {
-    cursor?
-        .strip_prefix("title:")
-        .and_then(|value| value.parse::<usize>().ok())
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SsedFulltextTitleCursor {
+    MatchedOffset(usize),
+    Physical(SsedPartialIndexScanCursor),
+}
+
+fn decode_ssed_fulltext_title_cursor(cursor: Option<&str>) -> Option<SsedFulltextTitleCursor> {
+    let value = cursor?.strip_prefix("title:")?;
+    if let Some(cursor) = decode_ssed_partial_index_scan_cursor(Some(value)) {
+        return Some(SsedFulltextTitleCursor::Physical(cursor));
+    }
+    value
+        .parse::<usize>()
+        .ok()
+        .map(SsedFulltextTitleCursor::MatchedOffset)
 }
 
 fn decode_ssed_fulltext_body_cursor(cursor: Option<&str>) -> usize {
