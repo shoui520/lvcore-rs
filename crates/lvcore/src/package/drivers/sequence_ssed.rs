@@ -29,6 +29,7 @@ struct SsedTitleIndexWindowScanRequest<'a> {
     after: usize,
     options: &'a RenderOptions,
     component_filter: Option<&'a str>,
+    key_filter: Option<&'a str>,
     start_offset: Option<usize>,
     allow_miss: bool,
 }
@@ -76,6 +77,8 @@ impl ReaderBookPackage {
             _ => return Ok(None),
         };
 
+        let multi_key_filter = ssed_title_index_multi_key_filter(sequence_hint);
+
         if let Some(cursor) = ssed_title_index_cursor(sequence_hint, before)
             && let Some(window) =
                 self.resolve_ssed_title_index_window_scan(SsedTitleIndexWindowScanRequest {
@@ -87,6 +90,7 @@ impl ReaderBookPackage {
                     after,
                     options,
                     component_filter: Some(cursor.component.as_str()),
+                    key_filter: multi_key_filter.as_deref(),
                     start_offset: Some(cursor.start_offset),
                     allow_miss: true,
                 })?
@@ -103,6 +107,7 @@ impl ReaderBookPackage {
             after,
             options,
             component_filter: None,
+            key_filter: multi_key_filter.as_deref(),
             start_offset: None,
             allow_miss: false,
         })
@@ -131,6 +136,11 @@ impl ReaderBookPackage {
                 true
             },
             |row| {
+                if let Some(filter) = request.key_filter
+                    && normalize_search_match_text(&row.key) != filter
+                {
+                    return Ok(true);
+                }
                 let current_ordinal = row_ordinal;
                 row_ordinal = row_ordinal.saturating_add(1);
                 if request
@@ -886,6 +896,15 @@ fn ssed_title_index_cursor(
         component: component.to_owned(),
         start_offset: offset.saturating_sub(before),
     })
+}
+
+fn ssed_title_index_multi_key_filter(sequence_hint: Option<&SequenceHint>) -> Option<String> {
+    let Some(SequenceHint::TitleIndexOrder { value, .. }) = sequence_hint else {
+        return None;
+    };
+    parse_ssed_multi_surface_id(value)
+        .and_then(|surface| surface.filter)
+        .map(|filter| normalize_search_match_text(&filter))
 }
 
 #[cfg(test)]

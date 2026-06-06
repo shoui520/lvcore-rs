@@ -1418,8 +1418,12 @@ fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
         sseddata_literal_fixture(&selector_menu_fixture(&["CAT", "DOG"])),
     )
     .unwrap();
-    let mut titles = b"alpha title\x1f\x0a".to_vec();
-    titles.resize(32, 0);
+    let mut titles = Vec::new();
+    let alpha_title_offset = 0u16;
+    titles.extend_from_slice(b"alpha title\x1f\x0a");
+    let dog_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"dog title\x1f\x0a");
+    let beta_title_offset = u16::try_from(titles.len()).unwrap();
     titles.extend_from_slice(b"beta title\x1f\x0a");
     fs::write(
         dir.path().join("MUL1_1_2.DIC"),
@@ -1429,8 +1433,9 @@ fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
     fs::write(
         dir.path().join("MUL1_1_3.DIC"),
         sseddata_literal_fixture(&simple_index_fixture_rows(&[
-            ("CAT", 1, 8, 22, 0),
-            ("DOG", 1, 12, 22, 32),
+            ("CAT", 1, 8, 22, alpha_title_offset),
+            ("DOG", 1, 12, 22, dog_title_offset),
+            ("CAT", 1, 16, 22, beta_title_offset),
         ])),
     )
     .unwrap();
@@ -1473,11 +1478,12 @@ fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
     };
 
     let filtered = package.open_surface_page(&surface_id, None, 10).unwrap();
-    let NavigationSurface::TitleIndexBrowse { items, .. } = filtered else {
+    let NavigationSurface::TitleIndexBrowse { ref items, .. } = filtered else {
         panic!("selector child should resolve to title/index items");
     };
-    assert_eq!(items.len(), 1);
+    assert_eq!(items.len(), 2);
     assert_eq!(items[0].label_text, "alpha title");
+    assert_eq!(items[1].label_text, "beta title");
     assert_eq!(
         items[0].target.decode().unwrap(),
         InternalTarget::SsedIndexAddress {
@@ -1487,6 +1493,18 @@ fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
             index_component: "MUL1_1_3.DIC".to_owned(),
         }
     );
+    let first = filtered.actionable_targets().remove(0);
+    let window = package
+        .resolve_target_window(
+            &first.target,
+            first.sequence_hint.as_ref(),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].title.as_deref(), Some("beta title"));
 }
 
 #[test]
