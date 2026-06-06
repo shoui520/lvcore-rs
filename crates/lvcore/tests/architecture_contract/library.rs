@@ -754,16 +754,10 @@ fn library_all_book_fulltext_search_supports_continuous_view() {
         .unwrap();
 
     assert_eq!(page.hits.len(), 2);
-    assert!(
-        page.hits
-            .iter()
-            .any(|hit| { hit.book_id == first_id && hit.title_text == "first fulltext" })
-    );
-    assert!(
-        page.hits
-            .iter()
-            .any(|hit| { hit.book_id == second_id && hit.title_text == "second fulltext" })
-    );
+    assert_eq!(page.hits[0].book_id, first_id);
+    assert_eq!(page.hits[0].title_text, "first fulltext");
+    assert_eq!(page.hits[1].book_id, second_id);
+    assert_eq!(page.hits[1].title_text, "second fulltext");
     let sequence = page
         .result_sequence
         .as_deref()

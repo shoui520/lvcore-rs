@@ -33,6 +33,7 @@ use scope::{
 #[derive(Default)]
 pub struct BookLibrary {
     books: BTreeMap<BookId, Box<dyn BookPackage>>,
+    book_order: Vec<BookId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +237,7 @@ impl BookLibrary {
         if self.books.contains_key(&book_id) {
             return false;
         }
+        self.book_order.push(book_id.clone());
         self.books.insert(book_id, package);
         true
     }
@@ -249,13 +251,16 @@ impl BookLibrary {
     }
 
     pub fn metadata(&self) -> Vec<&BookMetadata> {
-        self.books.values().map(|book| book.metadata()).collect()
+        self.book_order
+            .iter()
+            .filter_map(|book_id| self.books.get(book_id).map(|book| book.metadata()))
+            .collect()
     }
 
     pub fn metadata_snapshot(&self) -> Vec<BookMetadata> {
-        self.books
-            .values()
-            .map(|book| book.metadata().clone())
+        self.metadata()
+            .into_iter()
+            .cloned()
             .collect()
     }
 
@@ -612,7 +617,7 @@ impl BookLibrary {
                 Ok(page)
             }
             SearchScope::SelectedBooks { book_ids } => self.search_many(book_ids.iter(), query),
-            SearchScope::AllBooks => self.search_many(self.books.keys(), query),
+            SearchScope::AllBooks => self.search_many(self.book_order.iter(), query),
         }
     }
 
