@@ -722,7 +722,10 @@ fn multiview_law_list_targets_resolve_to_navigation_and_law_bodies() {
     let anchored_list_view = package
         .render_target(&anchored_list_target, &RenderOptions::default())
         .unwrap();
-    assert_eq!(anchored_list_view.kind, ResolvedTargetKind::NavigationSurface);
+    assert_eq!(
+        anchored_list_view.kind,
+        ResolvedTargetKind::NavigationSurface
+    );
     assert_eq!(anchored_list_view.scroll_anchor.as_deref(), Some("top"));
     assert!(matches!(
         anchored_list_view.surface.as_ref(),

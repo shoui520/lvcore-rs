@@ -819,7 +819,8 @@ impl RendererProvider for ReaderBookPackage {
                     );
                 }
                 let _ = anchor;
-                if let Some(view) = self.view_for_multiview_navigation_target(token.clone(), &href)?
+                if let Some(view) =
+                    self.view_for_multiview_navigation_target(token.clone(), &href)?
                 {
                     Ok(view)
                 } else {
