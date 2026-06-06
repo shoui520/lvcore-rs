@@ -45,7 +45,9 @@ fn keyless_plain_sqlite_main_data_is_discoverable() {
     let payload = dir.path().join("main.data");
     {
         let connection = Connection::open(&payload).unwrap();
-        connection.execute_batch("create table info (id integer);").unwrap();
+        connection
+            .execute_batch("create table info (id integer);")
+            .unwrap();
     }
 
     let store = LvedSqliteStore::discover(dir.path()).unwrap().unwrap();
