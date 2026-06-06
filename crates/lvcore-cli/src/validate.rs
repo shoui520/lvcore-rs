@@ -1254,8 +1254,16 @@ fn select_search_probe_query(
         if query == "a" && search_probe_lookup_text(label).is_none() {
             continue;
         }
-        let Ok((page, _)) = search_with_empty_cursor_follow(library, book_id, mode, &query, 1)
-        else {
+        let Ok(page) = library.search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: book_id.clone(),
+            },
+            mode: mode.clone(),
+            query: query.clone(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        }) else {
             continue;
         };
         if !page.hits.is_empty() {
