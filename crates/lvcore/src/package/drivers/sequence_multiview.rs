@@ -49,13 +49,13 @@ impl ReaderBookPackage {
             return Ok(None);
         };
         let mut ordered = Vec::new();
-        for index in 0..self.multiview_menu_surface_files()?.len() {
-            let surface_id = super::multiview_navigation::multiview_menu_surface_id(index);
-            let surface = self.open_multiview_menu_surface(&surface_id, None, usize::MAX)?;
-            let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
-                continue;
-            };
-            collect_navigation_node_targets(&nodes, &mut ordered);
+        for menu_file in self.multiview_menu_surface_files()? {
+            let bytes = self.storage.read(Path::new(&menu_file))?;
+            let xml = String::from_utf8(bytes).map_err(|error| {
+                Error::Driver(format!("{menu_file} is not valid UTF-8: {error}"))
+            })?;
+            let items = parse_menu_data(&xml)?;
+            collect_multiview_menu_ordered_targets(&items, &mut ordered)?;
         }
         let Some(center_index) = ordered.iter().position(|candidate| {
             matches!(

@@ -378,16 +378,17 @@ pub(super) fn navigation_node_mut_at_path<'a>(
     Some(node)
 }
 
-pub(super) fn collect_navigation_node_targets(
-    nodes: &[NavigationNode],
+pub(super) fn collect_multiview_menu_ordered_targets(
+    items: &[MultiviewMenuItem],
     out: &mut Vec<TargetToken>,
-) {
-    for node in nodes {
-        if let Some(target) = &node.target {
-            out.push(target.clone());
+) -> Result<()> {
+    for item in items {
+        if let Some(target) = multiview_menu_item_target(item)? {
+            out.push(target);
         }
-        collect_navigation_node_targets(&node.children, out);
+        collect_multiview_menu_ordered_targets(&item.children, out)?;
     }
+    Ok(())
 }
 
 pub(super) fn collect_panel_cell_ordered_targets(

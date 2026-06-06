@@ -69,9 +69,7 @@ impl ReaderBookPackage {
                 };
                 store.content_title_text(row_id)
             }
-            InternalTarget::LvedRow { table, row_id, .. }
-                if table.eq_ignore_ascii_case("info") =>
-            {
+            InternalTarget::LvedRow { table, row_id, .. } if table.eq_ignore_ascii_case("info") => {
                 let Some(store) = &self.lved_store else {
                     return Ok(None);
                 };
