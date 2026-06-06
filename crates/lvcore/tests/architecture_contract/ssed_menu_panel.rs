@@ -1480,10 +1480,11 @@ fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
     assert_eq!(items[0].label_text, "alpha title");
     assert_eq!(
         items[0].target.decode().unwrap(),
-        InternalTarget::SsedAddress {
+        InternalTarget::SsedIndexAddress {
             component: "HONMON.DIC".to_owned(),
             block: 1,
             offset: 8,
+            index_component: "MUL1_1_3.DIC".to_owned(),
         }
     );
 }
@@ -1553,6 +1554,15 @@ fn ssed_multi_descriptor_resolves_embedded_selector_components() {
     };
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].label_text, "alpha title");
+    assert_eq!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedIndexAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 0,
+            index_component: "MULTI1.DIC".to_owned(),
+        }
+    );
 }
 
 #[test]

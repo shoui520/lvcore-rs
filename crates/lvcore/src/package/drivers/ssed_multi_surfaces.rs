@@ -274,7 +274,7 @@ impl ReaderBookPackage {
                 .or_else(|| self.ssed_title_text(row.title))
                 .unwrap_or_else(|| row.target_key.clone());
             let label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
-            let target = match self.ssed_target_for_index_pointer(row.body)? {
+            let target = match self.ssed_target_for_search_index_row(&row)? {
                 Ok(target) => target,
                 Err(diagnostic) => {
                     diagnostics.push(diagnostic);
