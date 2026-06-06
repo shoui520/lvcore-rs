@@ -818,11 +818,10 @@ where
                             .with_context("book_id", book_id.0.clone());
                             diagnostics.push(diagnostic.clone());
                             emit(&json!({
-                                "event": "book",
+                                "event": "diagnostic",
                                 "status": "skipped_duplicate",
                                 "path": root,
                                 "book_id": book_id,
-                                "metadata": metadata,
                                 "diagnostics": [diagnostic],
                                 "elapsed_ms": elapsed_ms,
                             }))?;
@@ -836,7 +835,7 @@ where
                         .with_context("path", root.display().to_string());
                         diagnostics.push(diagnostic.clone());
                         emit(&json!({
-                            "event": "book",
+                            "event": "diagnostic",
                             "status": "error",
                             "path": root,
                             "diagnostics": [diagnostic],

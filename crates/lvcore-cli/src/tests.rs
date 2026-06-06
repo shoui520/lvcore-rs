@@ -230,7 +230,7 @@ fn library_import_jsonl_streams_package_rows_and_summary() {
 }
 
 #[test]
-fn library_import_jsonl_reports_duplicate_rows_without_reopening_summary_count() {
+fn library_import_jsonl_reports_duplicates_as_diagnostics_not_book_rows() {
     let dir = tempfile::tempdir().unwrap();
     let package = dir.path().join("NestedDictionary");
     fs::create_dir_all(&package).unwrap();
@@ -248,7 +248,14 @@ fn library_import_jsonl_reports_duplicate_rows_without_reopening_summary_count()
     )
     .unwrap();
 
-    assert!(rows.iter().any(|row| row["status"] == "skipped_duplicate"));
+    let book_rows = rows
+        .iter()
+        .filter(|row| row["event"] == "book")
+        .collect::<Vec<_>>();
+    assert_eq!(book_rows.len(), 1);
+    assert!(rows.iter().any(|row| {
+        row["event"] == "diagnostic" && row["status"] == "skipped_duplicate"
+    }));
     assert_eq!(rows.last().unwrap()["event"], "summary");
     assert_eq!(rows.last().unwrap()["book_count"], 1);
 }

@@ -84,9 +84,11 @@ For progressive UI updates, the developer CLI mirrors this split:
 
 - `library-discover --jsonl` streams cheap candidate rows for cache comparison
   and ends with a summary row.
-- `library-import --jsonl` streams one opened/skipped/error row per package and
-  a final summary, so the frontend does not need to wait for an entire corpus
-  import before showing usable books.
+- `library-import --jsonl` streams cacheable `book` rows only for successfully
+  opened books, emits duplicate/open-failure cases as diagnostic rows, and ends
+  with a summary. The frontend does not need to wait for an entire corpus import
+  before showing usable books, and it does not need to special-case duplicate
+  book rows.
 
 The frontend cache may store candidate fingerprints, book metadata, app-supplied
 icon state, recently rendered snippets, and bookmark/history tokens. It should

@@ -2129,7 +2129,7 @@ mod tests {
         let dir = tempdir().unwrap();
         write_many_row_lved_fixture(dir.path(), 2);
         fs::write(
-            dir.path().join("BHINDEX.DIC"),
+            dir.path().join("COLSCR.DIC"),
             sseddata_literal_fixture(b"retained"),
         )
         .unwrap();
@@ -2149,7 +2149,7 @@ mod tests {
             row["diagnostics"][0]["code"],
             "retained_ssed_component_deferred"
         );
-        assert_eq!(row["diagnostics"][0]["context"]["filename"], "BHINDEX.DIC");
+        assert_eq!(row["diagnostics"][0]["context"]["filename"], "COLSCR.DIC");
     }
 
     fn write_many_row_lved_fixture(root: &Path, row_count: usize) {
