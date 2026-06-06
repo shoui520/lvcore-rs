@@ -17,11 +17,11 @@ use super::metadata_for;
 #[cfg(test)]
 use super::open_single_book_library;
 
-const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 32;
+const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 8;
 const VALIDATE_SEARCH_HIT_RENDER_LIMIT: usize = 3;
 const VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT: usize = 8;
 const VALIDATE_SURFACE_TARGET_PAGE_LIMIT: usize = 16;
-const VALIDATE_SURFACE_PAGE_LIMIT: usize = 100;
+const VALIDATE_SURFACE_PROBE_PAGE_LIMIT: usize = 16;
 const VALIDATE_EMPTY_SEARCH_CURSOR_FOLLOW_LIMIT: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
@@ -171,7 +171,7 @@ fn exercise_reader_paths(
             continue;
         }
         let started = Instant::now();
-        let mut row = match library.open_surface(book_id, &surface.surface_id) {
+        let mut row = match open_surface_probe_page(library, book_id, &surface.surface_id, None) {
             Ok(opened) => {
                 if let NavigationSurface::Deferred { diagnostics, .. } = &opened {
                     let mut row = json!({
@@ -376,7 +376,7 @@ fn surface_probe_targets(
             book_id,
             surface_id,
             cursor.as_deref(),
-            VALIDATE_SURFACE_PAGE_LIMIT,
+            VALIDATE_SURFACE_PROBE_PAGE_LIMIT,
         )?;
         pages_scanned += 1;
         resource_targets = page.actionable_targets();
@@ -1165,7 +1165,8 @@ fn search_probe_labels(
             {
                 continue;
             }
-            let Ok(opened) = library.open_surface(book_id, &surface.surface_id) else {
+            let Ok(opened) = open_surface_probe_page(library, book_id, &surface.surface_id, None)
+            else {
                 continue;
             };
             collect_actionable_probe_labels(&opened, &mut labels);
@@ -1181,6 +1182,20 @@ fn search_probe_labels(
         labels.push("a".to_owned());
     }
     labels
+}
+
+fn open_surface_probe_page(
+    library: &BookLibrary,
+    book_id: &BookId,
+    surface_id: &str,
+    cursor: Option<&str>,
+) -> lvcore::Result<NavigationSurface> {
+    library.open_surface_page(
+        book_id,
+        surface_id,
+        cursor,
+        VALIDATE_SURFACE_PROBE_PAGE_LIMIT,
+    )
 }
 
 fn collect_actionable_probe_labels(surface: &NavigationSurface, out: &mut Vec<String>) {
@@ -1455,6 +1470,10 @@ fn search_mode_key(mode: &SearchMode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use rusqlite::Connection;
+    use tempfile::tempdir;
 
     #[test]
     fn diagnostic_fields_include_counts_and_bounded_samples() {
@@ -1535,6 +1554,104 @@ mod tests {
             search_probe_query("０°人工歯(zero degree teeth)", &SearchMode::FullText),
             "人工"
         );
+    }
+
+    #[test]
+    fn validate_deep_surface_probe_uses_bounded_pages() {
+        let dir = tempdir().unwrap();
+        write_many_row_lved_fixture(dir.path(), 20);
+
+        let row = validate_package_json(
+            &DriverRegistry::default(),
+            dir.path(),
+            ValidateOptions {
+                deep: true,
+                include_expensive_search: false,
+            },
+        );
+        let lved_list = row["exercises"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|exercise| exercise["surface_id"] == "lved-list")
+            .expect("expected LVED list surface validation row");
+
+        assert_eq!(lved_list["status"], "ok");
+        assert_eq!(lved_list["pages_scanned"], 1);
+        assert_eq!(lved_list["remaining_cursor"], "16");
+    }
+
+    #[test]
+    fn validate_resource_scans_are_bounded_by_family() {
+        assert_eq!(resource_scan_limit_for(FormatFamily::Ssed), 1);
+        assert_eq!(
+            resource_scan_limit_for(FormatFamily::LvedSqlite3),
+            VALIDATE_RESOURCE_TARGET_SCAN_LIMIT
+        );
+        assert_eq!(
+            resource_scan_limit_for(FormatFamily::LvlMultiView),
+            VALIDATE_RESOURCE_TARGET_SCAN_LIMIT
+        );
+        assert_eq!(
+            resource_scan_limit_for(FormatFamily::Hourei),
+            VALIDATE_RESOURCE_TARGET_SCAN_LIMIT
+        );
+        assert_eq!(VALIDATE_RESOURCE_TARGET_SCAN_LIMIT, 8);
+    }
+
+    fn write_many_row_lved_fixture(root: &Path, row_count: usize) {
+        let key = "test-key";
+        let payload = root.join("main.data");
+        let connection = Connection::open(&payload).unwrap();
+        connection.pragma_update(None, "key", key).unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute_batch(
+                "
+                create table info (id integer, type integer, name text primary key, body text, media text);
+                insert into info values (1, 1, 'about.html', '<h1>Validator Fixture</h1>', '');
+                create table content (id integer primary key, type integer, body text, media text);
+                create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                create virtual table search using fts4(forward, back, part, fts, advanced1, advanced2, filter);
+                ",
+            )
+            .unwrap();
+        for index in 0..row_count {
+            let id = index as i64 + 1;
+            let content_id = 1000 + index as i64;
+            let title = format!("alpha{index:02}");
+            let body = format!("<article><h1>{title}</h1></article>");
+            connection
+                .execute(
+                    "insert into content values (?1, 1, ?2, '')",
+                    (content_id, body.as_str()),
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "insert into list values (?1, ?2, 1, '', ?3, '')",
+                    (id, content_id, title.as_str()),
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                     values (?1, ?2, ?3, ?4, ?5, '', '', ?6)",
+                    (
+                        id,
+                        title.as_str(),
+                        title.chars().rev().collect::<String>(),
+                        title.as_str(),
+                        body.as_str(),
+                        format!("∥{title}∥"),
+                    ),
+                )
+                .unwrap();
+        }
+        drop(connection);
+        fs::write(root.join("main.key"), key).unwrap();
     }
 
     #[test]
