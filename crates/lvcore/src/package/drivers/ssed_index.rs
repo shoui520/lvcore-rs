@@ -960,6 +960,25 @@ impl ReaderBookPackage {
     }
 
     pub(super) fn ssed_title_text(&self, pointer: SsedIndexPointer) -> Option<String> {
+        let cache_key = (pointer.block, pointer.offset);
+        if let Ok(cache) = self.ssed_title_text_cache.lock()
+            && let Some(cached) = cache.get(&cache_key)
+        {
+            return cached.as_ref().map(|value| value.to_string());
+        }
+        let decoded = self.decode_ssed_title_text_uncached(pointer);
+        if let Ok(mut cache) = self.ssed_title_text_cache.lock() {
+            cache.insert(
+                cache_key,
+                decoded
+                    .as_ref()
+                    .map(|value| Arc::<str>::from(value.as_str())),
+            );
+        }
+        decoded
+    }
+
+    fn decode_ssed_title_text_uncached(&self, pointer: SsedIndexPointer) -> Option<String> {
         let catalog = self.ssed_catalog.as_ref()?;
         let component = catalog.component_for_address(pointer.block)?;
         if component.role != SsedComponentRole::Title {

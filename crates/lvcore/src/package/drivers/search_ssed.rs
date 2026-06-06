@@ -216,7 +216,11 @@ impl ReaderBookPackage {
         if page.next_cursor.is_none() {
             page.next_cursor = physical_next_cursor;
         }
-        if page.next_cursor.is_none() && query.cursor.is_none() && page.hits.len() < query.limit {
+        if page.next_cursor.is_none()
+            && query.cursor.is_none()
+            && page.hits.len() < query.limit
+            && ssed_sidecar_title_auto_append_is_bounded(&query.query)
+        {
             self.append_ssed_sidecar_title_hits(query, &mut page, 0)?;
         }
         Ok(page)
@@ -1345,5 +1349,25 @@ fn ssed_sidecar_title_search_mode(mode: &SearchMode) -> Option<SsedSidecarTitleS
         SearchMode::Backward => Some(SsedSidecarTitleSearchMode::Backward),
         SearchMode::Partial => Some(SsedSidecarTitleSearchMode::Partial),
         SearchMode::FullText | SearchMode::Advanced(_) => None,
+    }
+}
+
+fn ssed_sidecar_title_auto_append_is_bounded(query: &str) -> bool {
+    let query = query.trim();
+    !query.is_empty() && query.is_ascii()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ssed_sidecar_title_auto_append_is_bounded;
+
+    #[test]
+    fn sidecar_title_auto_append_is_limited_to_bounded_ascii_queries() {
+        assert!(ssed_sidecar_title_auto_append_is_bounded("et"));
+        assert!(ssed_sidecar_title_auto_append_is_bounded(" abaisser "));
+        assert!(!ssed_sidecar_title_auto_append_is_bounded(""));
+        assert!(!ssed_sidecar_title_auto_append_is_bounded("◯に"));
+        assert!(!ssed_sidecar_title_auto_append_is_bounded("白水"));
+        assert!(!ssed_sidecar_title_auto_append_is_bounded("ａｂｃ"));
     }
 }
