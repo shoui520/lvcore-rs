@@ -10,9 +10,9 @@ use super::drivers::{
     SsedDriver,
 };
 use super::ssed_detection::{
-    detect_ssed_package, inferred_folder_title, load_package_uni_gaiji_maps, multiview_menu_files,
-    multiview_menu_title, package_root_for_detection, ssed_capabilities, ssed_catalog_for_root,
-    usable_multiview_title,
+    detect_ssed_package, discover_retained_sseddata_components, inferred_folder_title,
+    load_package_uni_gaiji_maps, multiview_menu_files, multiview_menu_title,
+    package_root_for_detection, ssed_capabilities, ssed_catalog_for_root, usable_multiview_title,
 };
 use super::{BookPackage, DetectedPackage, FormatFamily, PackageDriver};
 use crate::error::{Error, Result};
@@ -288,6 +288,7 @@ impl LvedSqliteDriver {
         let package_root = detection.root.clone();
         let summary = store.summary()?;
         let search_modes = store.search_modes()?;
+        let retained_ssed_components = discover_retained_sseddata_components(&package_root)?;
         detection.title = summary
             .title
             .clone()
@@ -299,6 +300,7 @@ impl LvedSqliteDriver {
             PackageStores {
                 lved_store: Some(store),
                 lved_summary: Some(summary),
+                retained_ssed_components,
                 search_modes,
                 ..Default::default()
             },

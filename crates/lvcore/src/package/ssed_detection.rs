@@ -17,11 +17,16 @@ use crate::error::{Error, Result};
 use crate::gaiji::{normalize_gaiji_identity, parse_ccaltstr_gaiji_map, parse_uni_gaiji_map};
 use crate::multiview::parse_menu_data;
 use crate::plist_xml::parse_xml_plist;
-use crate::ssed::{ANDROID_LVEDINFO_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponentRole};
+use crate::ssed::{
+    ANDROID_LVEDINFO_MAGIC, SSEDDATA_MAGIC, SSEDINFO_MAGIC, SsedCatalog, SsedComponentRole,
+    SsedDataHeader,
+};
 use crate::ssed_aux_index::{is_numeric_aux_index_filename, parse_aux_index_specs_from_exinfo};
 use crate::ssed_menu::parse_menu_stream;
 use crate::ssed_panel::exinfo_panel_metadata_name;
 use crate::storage::{DirectoryStorage, StorageBackend, regular_file_inside_root};
+
+use super::drivers::RetainedSsedComponent;
 
 pub(super) const SSED_NAVIGATION_DETECTION_MAX_BYTES: usize = 1024 * 1024;
 
@@ -292,6 +297,79 @@ pub(super) fn ssed_catalog_for_root(root: &Path) -> Result<SsedCatalog> {
     Err(Error::Driver(
         "SSED catalog vanished after detection".to_owned(),
     ))
+}
+
+pub(super) fn discover_retained_sseddata_components(
+    root: &Path,
+) -> Result<Vec<RetainedSsedComponent>> {
+    let mut components = Vec::new();
+    if !root.is_dir() {
+        return Ok(components);
+    }
+    for entry in fs::read_dir(root)? {
+        let path = entry?.path();
+        if !regular_file_inside_root(root, &path)? {
+            continue;
+        }
+        let Some(filename) = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+        else {
+            continue;
+        };
+        let Some((role, component_type)) = retained_ssed_component_name(&filename) else {
+            continue;
+        };
+        let mut prefix = [0_u8; 8];
+        let Ok(mut file) = File::open(&path) else {
+            continue;
+        };
+        let Ok(read) = file.read(&mut prefix) else {
+            continue;
+        };
+        if read != prefix.len() || prefix != *SSEDDATA_MAGIC {
+            continue;
+        }
+        let Ok(header) = SsedDataHeader::parse_file(&path) else {
+            continue;
+        };
+        components.push(RetainedSsedComponent {
+            filename,
+            role,
+            component_type,
+            start_block: header.start_block,
+            end_block: header.end_block,
+            chunk_count: header.chunk_count,
+        });
+    }
+    components.sort_by(|left, right| left.filename.cmp(&right.filename));
+    Ok(components)
+}
+
+fn retained_ssed_component_name(name: &str) -> Option<(SsedComponentRole, Option<u8>)> {
+    let upper = name.to_ascii_uppercase();
+    let found = match upper.as_str() {
+        "HONMON.DIC" | "HONMON.DIN" | "HONMON.DIW" | "HONMON" => {
+            (SsedComponentRole::Honmon, Some(0x00))
+        }
+        "MENU.DIC" => (SsedComponentRole::Menu, Some(0x01)),
+        "TOC.DIC" => (SsedComponentRole::Toc, Some(0x20)),
+        "FHTITLE.DIC" => (SsedComponentRole::Title, Some(0x03)),
+        "FKTITLE.DIC" => (SsedComponentRole::Title, Some(0x04)),
+        "KWTITLE.DIC" => (SsedComponentRole::Title, Some(0x05)),
+        "BKTITLE.DIC" => (SsedComponentRole::Title, Some(0x06)),
+        "BHTITLE.DIC" => (SsedComponentRole::Title, Some(0x07)),
+        "FHINDEX.DIC" => (SsedComponentRole::Index, Some(0x91)),
+        "FKINDEX.DIC" => (SsedComponentRole::Index, Some(0x90)),
+        "KWINDEX.DIC" => (SsedComponentRole::Index, Some(0x80)),
+        "CRINDEX.DIC" => (SsedComponentRole::Index, Some(0x81)),
+        "BKINDEX.DIC" => (SsedComponentRole::Index, Some(0x70)),
+        "BHINDEX.DIC" => (SsedComponentRole::Index, Some(0x71)),
+        "COLSCR.DIC" => (SsedComponentRole::Colscr, Some(0xd2)),
+        "PCMDATA.DIC" => (SsedComponentRole::PcmData, Some(0xd8)),
+        _ => return None,
+    };
+    Some(found)
 }
 
 pub(super) fn ssed_capabilities(catalog: &SsedCatalog, root: &Path) -> Vec<Capability> {

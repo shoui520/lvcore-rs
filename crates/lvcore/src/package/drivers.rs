@@ -275,6 +275,7 @@ pub struct ReaderBookPackage {
     retained_ios_full_db_payloads: Vec<IosDictFullDbPayload>,
     retained_ios_search_payloads: Vec<IosDictSearchPayload>,
     retained_ios_convert_addr_payloads: Vec<IosDictConvertAddrPayload>,
+    retained_ssed_components: Vec<RetainedSsedComponent>,
     gaiji_unicode_map: BTreeMap<String, String>,
     ssed_sidecar_body_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
@@ -305,8 +306,19 @@ pub(crate) struct PackageStores {
     pub multiview_store: Option<MultiviewStore>,
     pub hourei_store: Option<HoureiStore>,
     pub retained_ios_dictlist: Option<IosDictListInfo>,
+    pub retained_ssed_components: Vec<RetainedSsedComponent>,
     pub search_modes: Vec<SearchMode>,
     pub gaiji_unicode_map: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RetainedSsedComponent {
+    pub filename: String,
+    pub role: SsedComponentRole,
+    pub component_type: Option<u8>,
+    pub start_block: u32,
+    pub end_block: u32,
+    pub chunk_count: u16,
 }
 
 struct NormalizedHtmlRefs {
@@ -385,6 +397,7 @@ impl ReaderBookPackage {
             retained_ios_full_db_payloads,
             retained_ios_search_payloads,
             retained_ios_convert_addr_payloads,
+            retained_ssed_components: stores.retained_ssed_components,
             gaiji_unicode_map: stores.gaiji_unicode_map,
             ssed_sidecar_body_resolvers: OnceLock::new(),
             ssed_sidecar_media_resolvers: OnceLock::new(),
@@ -433,6 +446,28 @@ impl ReaderBookPackage {
                     "exists",
                     payload.absolute_path.is_file().to_string(),
                 )
+            })
+            .collect()
+    }
+
+    pub(super) fn retained_ssed_component_diagnostics(&self) -> Vec<Diagnostic> {
+        self.retained_ssed_components
+            .iter()
+            .map(|component| {
+                let mut diagnostic = Diagnostic::info(
+                    "retained_ssed_component_deferred",
+                    "Retained SSEDDATA component is present, but lvcore is not exposing it as a reader-facing surface until its target mapping is fully understood",
+                )
+                .with_context("filename", component.filename.clone())
+                .with_context("role", format!("{:?}", component.role))
+                .with_context("start_block", component.start_block.to_string())
+                .with_context("end_block", component.end_block.to_string())
+                .with_context("chunk_count", component.chunk_count.to_string());
+                if let Some(component_type) = component.component_type {
+                    diagnostic =
+                        diagnostic.with_context("component_type", format!("0x{component_type:02x}"));
+                }
+                diagnostic
             })
             .collect()
     }

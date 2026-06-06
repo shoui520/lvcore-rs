@@ -365,6 +365,21 @@ impl NavigationProvider for ReaderBookPackage {
         if self.lved_store.is_some() {
             self.push_lved_sqlite_home_surfaces(&mut surfaces)?;
         }
+        if !self.retained_ssed_components.is_empty() {
+            surfaces.push(HomeSurface {
+                href: None,
+                surface_id: "retained-ssed-components".to_owned(),
+                kind: NavigationSurfaceKind::Info,
+                status: NavigationStatus::Deferred,
+                title_html: "Retained SSED components".to_owned(),
+                title_text: "Retained SSED components".to_owned(),
+                target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                    surface_id: "retained-ssed-components".to_owned(),
+                    item_id: "root".to_owned(),
+                })?),
+                diagnostics: self.retained_ssed_component_diagnostics(),
+            });
+        }
         if self.has_multiview_provider() {
             for (index, path) in self.multiview_menu_surface_files()?.into_iter().enumerate() {
                 let surface_id = super::multiview_navigation::multiview_menu_surface_id(index);
@@ -549,6 +564,12 @@ impl NavigationProvider for ReaderBookPackage {
             }
             "lved-tree" if self.lved_store.is_some() => {
                 self.open_lved_tree_surface(surface_id, cursor, limit)
+            }
+            "retained-ssed-components" if !self.retained_ssed_components.is_empty() => {
+                Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: self.retained_ssed_component_diagnostics(),
+                })
             }
             "panels" if has_ssed_components => {
                 self.open_ssed_panel_surface(surface_id, cursor, limit, options)

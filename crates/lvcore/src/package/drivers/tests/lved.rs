@@ -165,6 +165,82 @@ fn retained_ssed_components_are_capabilities_not_family_gated() {
     assert_eq!(window.after[0].title.as_deref(), Some("beta"));
 }
 
+#[test]
+fn lved_retained_loose_sseddata_indexes_are_deferred_diagnostics() {
+    let dir = tempdir().unwrap();
+    write_lved_search_fixture(dir.path());
+    let index_page = simple_index_page_for_test(&[(&body_jis("alpha"), 100, 0)]);
+    fs::write(
+        dir.path().join("BHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("BKINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 201, 201),
+    )
+    .unwrap();
+
+    let package = LvedSqliteDriver.open(dir.path()).unwrap();
+    let surfaces = package.home_surfaces().unwrap();
+
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "lved-list"
+            && surface.kind == NavigationSurfaceKind::TitleIndexBrowse
+            && surface.status == NavigationStatus::Available
+    }));
+    assert!(
+        !surfaces
+            .iter()
+            .any(|surface| surface.surface_id == "title-index"),
+        "retained loose indexes without an SSED catalog must not expose fake SSED browsing"
+    );
+
+    let retained = surfaces
+        .iter()
+        .find(|surface| surface.surface_id == "retained-ssed-components")
+        .expect("retained component diagnostics should be visible");
+    assert_eq!(retained.kind, NavigationSurfaceKind::Info);
+    assert_eq!(retained.status, NavigationStatus::Deferred);
+    assert!(retained.target.is_some());
+    assert_eq!(retained.diagnostics.len(), 2);
+    assert!(retained.diagnostics.iter().all(|diagnostic| {
+        diagnostic.code == "retained_ssed_component_deferred"
+            && diagnostic.context.contains_key("filename")
+            && diagnostic.context.contains_key("component_type")
+    }));
+    assert!(retained.diagnostics.iter().any(|diagnostic| {
+        diagnostic.context.get("filename").map(String::as_str) == Some("BHINDEX.DIC")
+            && diagnostic.context.get("component_type").map(String::as_str) == Some("0x71")
+    }));
+
+    let opened = package.open_surface("retained-ssed-components").unwrap();
+    let NavigationSurface::Deferred {
+        surface_id,
+        diagnostics,
+    } = opened
+    else {
+        panic!("retained SSED components should open as deferred diagnostics");
+    };
+    assert_eq!(surface_id, "retained-ssed-components");
+    assert_eq!(diagnostics.len(), 2);
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "alp".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+}
+
 #[cfg(unix)]
 #[test]
 fn lved_detection_ignores_symlinked_payload_escape() {
