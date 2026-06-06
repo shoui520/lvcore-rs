@@ -1,3 +1,4 @@
+use super::ssed_surfaces::ssed_navigation_surface_page_cache_key;
 use super::*;
 
 struct SsedMultiRecordBrowseRequest<'a> {
@@ -127,6 +128,11 @@ impl ReaderBookPackage {
                 )],
             });
         };
+        let cache_key =
+            ssed_navigation_surface_page_cache_key(component, surface_id, cursor, limit, options);
+        if let Some(surface) = self.cached_ssed_navigation_surface_page(&cache_key)? {
+            return Ok(surface);
+        }
         let descriptor = match self.read_ssed_multi_descriptor(component) {
             Ok(descriptor) => descriptor,
             Err(error) => {
@@ -159,15 +165,18 @@ impl ReaderBookPackage {
                     )],
                 });
             };
-            return self.open_ssed_multi_record_browse_surface(SsedMultiRecordBrowseRequest {
-                surface_id,
-                descriptor_component: component,
-                record,
-                filter: parsed_surface.filter.as_deref(),
-                cursor,
-                limit,
-                options,
-            });
+            let surface =
+                self.open_ssed_multi_record_browse_surface(SsedMultiRecordBrowseRequest {
+                    surface_id,
+                    descriptor_component: component,
+                    record,
+                    filter: parsed_surface.filter.as_deref(),
+                    cursor,
+                    limit,
+                    options,
+                })?;
+            self.cache_ssed_navigation_surface_page(cache_key, &surface)?;
+            return Ok(surface);
         }
 
         let mut diagnostics = Vec::new();
@@ -184,11 +193,13 @@ impl ReaderBookPackage {
                 diagnostics,
             });
         }
-        Ok(NavigationSurface::HierarchicalTree {
+        let surface = NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
             nodes,
             next_cursor: None,
-        })
+        };
+        self.cache_ssed_navigation_surface_page(cache_key, &surface)?;
+        Ok(surface)
     }
 
     fn open_ssed_multi_record_browse_surface(

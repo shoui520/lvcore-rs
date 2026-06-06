@@ -45,7 +45,10 @@ impl ReaderBookPackage {
             .map_err(|error| Error::Driver(error.clone()))
     }
 
-    fn cached_ssed_navigation_surface_page(&self, key: &str) -> Result<Option<NavigationSurface>> {
+    pub(super) fn cached_ssed_navigation_surface_page(
+        &self,
+        key: &str,
+    ) -> Result<Option<NavigationSurface>> {
         let cache = self
             .ssed_navigation_surface_pages
             .lock()
@@ -53,7 +56,7 @@ impl ReaderBookPackage {
         Ok(cache.get(key).map(|surface| surface.as_ref().clone()))
     }
 
-    fn cache_ssed_navigation_surface_page(
+    pub(super) fn cache_ssed_navigation_surface_page(
         &self,
         key: String,
         surface: &NavigationSurface,
@@ -485,7 +488,7 @@ fn ssed_navigation_address_cursor_offset(
     })
 }
 
-fn ssed_navigation_surface_page_cache_key(
+pub(super) fn ssed_navigation_surface_page_cache_key(
     component: &SsedComponent,
     surface_id: &str,
     cursor: Option<&str>,
