@@ -112,6 +112,7 @@ fn validate_opened_package_json(
                 "title": metadata.title,
                 "capabilities": metadata.capabilities,
                 "search_modes": metadata.search_modes,
+                "diagnostics": metadata.diagnostics,
                 "surface_count": surfaces.len(),
                 "surfaces": surfaces,
                 "exercises": exercises,
@@ -126,6 +127,7 @@ fn validate_opened_package_json(
             "title": metadata.title,
             "capabilities": metadata.capabilities,
             "search_modes": metadata.search_modes,
+            "diagnostics": metadata.diagnostics,
             "error": error.to_string(),
         }),
     }
@@ -1599,6 +1601,34 @@ mod tests {
         assert_eq!(VALIDATE_RESOURCE_TARGET_SCAN_LIMIT, 8);
     }
 
+    #[test]
+    fn validate_reports_package_metadata_diagnostics() {
+        let dir = tempdir().unwrap();
+        write_many_row_lved_fixture(dir.path(), 2);
+        fs::write(
+            dir.path().join("BHINDEX.DIC"),
+            sseddata_literal_fixture(b"retained"),
+        )
+        .unwrap();
+
+        let row = validate_package_json(
+            &DriverRegistry::default(),
+            dir.path(),
+            ValidateOptions {
+                deep: false,
+                include_expensive_search: false,
+            },
+        );
+
+        assert_eq!(row["status"], "ok");
+        assert_eq!(row["diagnostics"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            row["diagnostics"][0]["code"],
+            "retained_ssed_component_deferred"
+        );
+        assert_eq!(row["diagnostics"][0]["context"]["filename"], "BHINDEX.DIC");
+    }
+
     fn write_many_row_lved_fixture(root: &Path, row_count: usize) {
         let key = "test-key";
         let payload = root.join("main.data");
@@ -1652,6 +1682,24 @@ mod tests {
         }
         drop(connection);
         fs::write(root.join("main.key"), key).unwrap();
+    }
+
+    fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
+        let chunk_offset = 0x44usize;
+        let mut data = vec![0u8; chunk_offset];
+        data[..8].copy_from_slice(lvcore::SSEDDATA_MAGIC);
+        data[0x0f] = 1;
+        data[0x16..0x18].copy_from_slice(&1u16.to_be_bytes());
+        data[0x18..0x1c].copy_from_slice(&1u32.to_be_bytes());
+        data[0x1c..0x20].copy_from_slice(&1u32.to_be_bytes());
+        data[0x40..0x44].copy_from_slice(&(chunk_offset as u32).to_be_bytes());
+        data.extend_from_slice(&[0, 0]);
+        data.extend_from_slice(&(literals.len() as u16).to_be_bytes());
+        data.push(0);
+        for literal in literals {
+            data.extend_from_slice(&[0, 0, *literal]);
+        }
+        data
     }
 
     #[test]
