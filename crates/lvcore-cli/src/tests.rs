@@ -121,6 +121,34 @@ fn registry_can_stream_discovered_packages_without_precollecting() {
 }
 
 #[test]
+fn library_discover_command_does_not_open_lved_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("CandidateOnly");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("main.data"), b"not decryptable sqlite").unwrap();
+    fs::write(package.join("main.key"), "test-key").unwrap();
+
+    let output = library_discover_command_json(
+        &DriverRegistry::default(),
+        &[dir.path().to_path_buf()],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(output["candidate_count"], 1);
+    assert_eq!(output["diagnostics"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        output["candidates"][0]["format_family"],
+        serde_json::json!("lved_sqlite3")
+    );
+    assert!(output["candidates"][0].get("title_hint").is_none());
+    assert_eq!(
+        output["candidates"][0]["root"].as_str().unwrap(),
+        package.to_string_lossy()
+    );
+}
+
+#[test]
 fn metadata_for_missing_book_id_returns_error_instead_of_panicking() {
     let library = BookLibrary::new();
     let book_id = BookId("missing-book".to_owned());

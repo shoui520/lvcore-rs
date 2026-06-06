@@ -125,6 +125,18 @@ pub struct DetectedPackage {
     pub evidence: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageCandidate {
+    pub root: PathBuf,
+    pub format_family: FormatFamily,
+    pub format_label: String,
+    pub confidence: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_hint: Option<String>,
+    pub root_fingerprint: String,
+    pub evidence: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PackageDiscoveryOptions {
     pub max: Option<usize>,
@@ -247,6 +259,26 @@ impl DriverRegistry {
             Ok(())
         })?;
         Ok(rows)
+    }
+
+    pub fn discover_package_candidates(
+        &self,
+        root: &Path,
+        options: PackageDiscoveryOptions,
+    ) -> Result<Vec<PackageCandidate>> {
+        let mut seen = BTreeSet::new();
+        let mut candidates = Vec::new();
+        for detected in self.discover_best_packages(root, options)? {
+            let candidate = package_candidate_from_detected(detected);
+            let identity = (
+                candidate.format_family.ui_label().to_owned(),
+                candidate.root_fingerprint.clone(),
+            );
+            if seen.insert(identity) {
+                candidates.push(candidate);
+            }
+        }
+        Ok(candidates)
     }
 
     pub fn for_each_best_package<F>(
@@ -379,6 +411,18 @@ impl DriverRegistry {
             }
         }
         Ok(())
+    }
+}
+
+fn package_candidate_from_detected(detected: DetectedPackage) -> PackageCandidate {
+    PackageCandidate {
+        root_fingerprint: ssed_detection::root_fingerprint(&detected.root),
+        format_label: detected.format_family.ui_label().to_owned(),
+        title_hint: detected.title,
+        root: detected.root,
+        format_family: detected.format_family,
+        confidence: detected.confidence,
+        evidence: detected.evidence,
     }
 }
 

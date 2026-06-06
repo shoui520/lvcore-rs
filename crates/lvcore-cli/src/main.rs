@@ -30,6 +30,14 @@ enum Command {
         /// Package root or payload path to inspect.
         path: PathBuf,
     },
+    /// Recursively discover package candidates without opening/decrypting them.
+    LibraryDiscover {
+        /// Package roots, payload paths, or corpus roots to inspect.
+        paths: Vec<PathBuf>,
+        /// Stop after this many discovered package candidates.
+        #[arg(long)]
+        max: Option<usize>,
+    },
     /// Recursively open packages and exercise reader-facing metadata/surfaces.
     Validate {
         /// Package roots or corpus roots to inspect.
@@ -354,6 +362,11 @@ fn main() -> Result<()> {
             let detected = registry.detect_all(&path, PackageDiscoveryOptions::default())?;
             write_json_pretty(&detected)?;
         }
+        Command::LibraryDiscover { paths, max } => {
+            let registry = DriverRegistry::default();
+            let output = library_discover_command_json(&registry, &paths, max)?;
+            write_json_pretty(&output)?;
+        }
         Command::Validate {
             paths,
             max,
@@ -600,6 +613,41 @@ fn open_library_from_paths(
     let report =
         library.try_open_discovered_paths(paths, registry, PackageDiscoveryOptions { max });
     (library, report)
+}
+
+fn library_discover_command_json(
+    registry: &DriverRegistry,
+    paths: &[PathBuf],
+    max: Option<usize>,
+) -> Result<serde_json::Value> {
+    let mut candidates = Vec::new();
+    let mut diagnostics = Vec::new();
+    for path in paths {
+        let remaining = max.map(|limit| limit.saturating_sub(candidates.len()));
+        if remaining == Some(0) {
+            break;
+        }
+        match registry.discover_package_candidates(path, PackageDiscoveryOptions { max: remaining })
+        {
+            Ok(mut rows) => candidates.append(&mut rows),
+            Err(error) => diagnostics.push(
+                lvcore::Diagnostic::warning(
+                    "library_discovery_failed",
+                    format!("package discovery failed for {}: {error}", path.display()),
+                )
+                .with_context("path", path.display().to_string()),
+            ),
+        }
+    }
+    if let Some(limit) = max {
+        candidates.truncate(limit);
+    }
+    let candidate_count = candidates.len();
+    Ok(json!({
+        "candidates": candidates,
+        "candidate_count": candidate_count,
+        "diagnostics": diagnostics,
+    }))
 }
 
 fn metadata_for(library: &BookLibrary, book_id: &BookId) -> Result<BookMetadata> {

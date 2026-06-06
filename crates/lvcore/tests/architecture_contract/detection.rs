@@ -52,6 +52,44 @@ fn driver_registry_discovers_packages_from_library_roots() {
 }
 
 #[test]
+fn driver_registry_exposes_cacheable_package_candidates_without_opening() {
+    let root = tempdir().unwrap();
+    let package = root.path().join("NestedBook");
+    fs::create_dir_all(&package).unwrap();
+    write_minimal_lved_sqlite_fixture(&package);
+
+    let candidates = DriverRegistry::default()
+        .discover_package_candidates(root.path(), PackageDiscoveryOptions::default())
+        .unwrap();
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].root, package);
+    assert_eq!(candidates[0].format_family, FormatFamily::LvedSqlite3);
+    assert_eq!(candidates[0].format_label, "LVED_SQLITE3");
+    assert!(candidates[0].title_hint.is_none());
+    assert_eq!(candidates[0].root_fingerprint.len(), 64);
+}
+
+#[test]
+fn package_candidate_discovery_deduplicates_same_book_fingerprint() {
+    let root = tempdir().unwrap();
+    let upper = root.path().join("_DCT_GEN2013");
+    let mixed = root.path().join("_DCT_Gen2013");
+    fs::create_dir_all(&upper).unwrap();
+    fs::create_dir_all(&mixed).unwrap();
+    fs::write(upper.join("Gen2013.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(mixed.join("Gen2013.IDX"), ssedinfo_fixture()).unwrap();
+
+    let candidates = DriverRegistry::default()
+        .discover_package_candidates(root.path(), PackageDiscoveryOptions::default())
+        .unwrap();
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].format_family, FormatFamily::Ssed);
+    assert_eq!(candidates[0].format_label, "SSED");
+}
+
+#[test]
 fn driver_registry_does_not_treat_resource_stores_as_packages() {
     let root = tempdir().unwrap();
     let package = root.path().join("BookWithResources");

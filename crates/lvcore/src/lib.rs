@@ -65,7 +65,8 @@ pub use navigation::{
 };
 pub use package::{
     BookAlias, BookAliasKind, BookId, BookMetadata, BookPackage, BookPackageExt, Capability,
-    DetectedPackage, DriverRegistry, FormatFamily, PackageDiscoveryOptions, PackageDriver,
+    DetectedPackage, DriverRegistry, FormatFamily, PackageCandidate, PackageDiscoveryOptions,
+    PackageDriver,
 };
 pub use render::{
     HcRendererProfile, HcRendererProfileSource, HcRendererProfileStatus, RenderCapability,
