@@ -376,7 +376,7 @@ impl ReaderBookPackage {
         let honmon_body_window_scan_needed =
             self.ssed_honmon_body_window_scan_is_needed(catalog, &mut diagnostics)?;
         if honmon_body_window_scan_needed
-            && title_cursor.is_some()
+            && (query.cursor.is_none() || title_cursor.is_some())
             && let Some(page) = self.ssed_fulltext_title_index_prepass(
                 query,
                 &needle,
@@ -565,7 +565,8 @@ impl ReaderBookPackage {
                     max_checked_rows: Some(SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS),
                     gaiji_policy: &label_policy,
                 })?;
-            if row_page.exhausted || query.cursor.is_none() || row_cursor.is_some() {
+            let row_page_has_hits = !row_page.hits.is_empty();
+            if row_page.exhausted || row_page_has_hits || row_cursor.is_some() {
                 diagnostics.extend(row_page.diagnostics);
                 hits.extend(row_page.hits);
                 let next_cursor = if row_page.exhausted {
@@ -581,6 +582,7 @@ impl ReaderBookPackage {
                     diagnostics,
                 });
             }
+            diagnostics.extend(row_page.diagnostics);
         }
         if !honmon_body_window_scan_needed {
             hits.truncate(query.limit);
@@ -1201,7 +1203,8 @@ impl ReaderBookPackage {
             title_offset,
             page_limit,
             query.label_gaiji_policy(),
-        );
+        )
+        .with_display_label_matching();
         let scan_diagnostics =
             self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
         collector.extend_diagnostics(scan_diagnostics);
