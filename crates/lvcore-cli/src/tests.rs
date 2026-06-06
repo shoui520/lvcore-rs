@@ -732,6 +732,11 @@ fn validate_deep_exercises_ssed_advertised_search_modes() {
     ] {
         assert!(kinds.contains(expected), "missing {expected}");
     }
+    let exact = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_exact")
+        .expect("missing exact validation row");
+    assert_eq!(exact["query"], "ａｌｐｈａ");
     let forward = exercises
         .iter()
         .find(|exercise| exercise["kind"] == "search_forward")

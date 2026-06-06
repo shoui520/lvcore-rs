@@ -1246,8 +1246,25 @@ fn select_search_probe_query(
     labels: &[String],
 ) -> String {
     let mut fallback = None;
-    for label in labels {
+    let mut exact_non_default_labels = labels
+        .iter()
+        .filter(|label| !is_default_search_probe_label(label))
+        .chain(
+            labels
+                .iter()
+                .filter(|label| is_default_search_probe_label(label)),
+        );
+    let mut normal_labels = labels.iter();
+    let label_iter: &mut dyn Iterator<Item = &String> = if *mode == SearchMode::Exact {
+        &mut exact_non_default_labels
+    } else {
+        &mut normal_labels
+    };
+    for label in label_iter {
         let query = search_probe_query(label, mode);
+        if !search_probe_query_is_useful(&query) {
+            continue;
+        }
         if fallback.is_none() {
             fallback = Some(query.clone());
         }
@@ -1271,6 +1288,14 @@ fn select_search_probe_query(
         }
     }
     fallback.unwrap_or_else(|| "a".to_owned())
+}
+
+fn is_default_search_probe_label(label: &str) -> bool {
+    matches!(label, "a" | "あ")
+}
+
+fn search_probe_query_is_useful(query: &str) -> bool {
+    query.chars().any(char::is_alphanumeric)
 }
 
 fn search_probe_prefix(title: &str) -> Option<String> {
@@ -1571,6 +1596,15 @@ mod tests {
             search_probe_query("０°人工歯(zero degree teeth)", &SearchMode::FullText),
             "人工"
         );
+    }
+
+    #[test]
+    fn search_probe_query_usefulness_rejects_symbol_only_terms() {
+        assert!(!search_probe_query_is_useful("〜\u{301}"));
+        assert!(!search_probe_query_is_useful("・—"));
+        assert!(search_probe_query_is_useful("007"));
+        assert!(search_probe_query_is_useful("ａｌｐｈａ"));
+        assert!(search_probe_query_is_useful("重要"));
     }
 
     #[test]
