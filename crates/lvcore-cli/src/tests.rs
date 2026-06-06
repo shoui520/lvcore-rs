@@ -799,7 +799,7 @@ fn home_command_reports_metadata_and_surfaces() {
     let output = home_command_json(&DriverRegistry::default(), dir.path()).unwrap();
 
     assert_eq!(output["metadata"]["format_family"], "lved_sqlite3");
-    assert_eq!(output["surface_count"].as_u64(), Some(4));
+    assert_eq!(output["surface_count"].as_u64(), Some(3));
     assert!(
         output["surfaces"]
             .as_array()
@@ -807,6 +807,13 @@ fn home_command_reports_metadata_and_surfaces() {
             .iter()
             .any(|surface| surface["surface_id"] == "lved-list"
                 && surface["status"] == "available")
+    );
+    assert!(
+        !output["surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|surface| surface["surface_id"] == "lved-tree")
     );
 }
 

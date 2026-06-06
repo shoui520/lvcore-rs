@@ -56,27 +56,21 @@ impl ReaderBookPackage {
                 .transpose()?,
             diagnostics: Vec::new(),
         });
-        surfaces.push(HomeSurface {
-            href: None,
-            surface_id: "lved-tree".to_owned(),
-            kind: NavigationSurfaceKind::LvedTree,
-            status: if tree_available {
-                NavigationStatus::Available
-            } else {
-                NavigationStatus::Missing
-            },
-            title_html: "LVED tree".to_owned(),
-            title_text: "LVED tree".to_owned(),
-            target: tree_available
-                .then(|| {
-                    TargetToken::new(&InternalTarget::MenuItem {
-                        surface_id: "lved-tree".to_owned(),
-                        item_id: "root".to_owned(),
-                    })
-                })
-                .transpose()?,
-            diagnostics: Vec::new(),
-        });
+        if tree_available {
+            surfaces.push(HomeSurface {
+                href: None,
+                surface_id: "lved-tree".to_owned(),
+                kind: NavigationSurfaceKind::LvedTree,
+                status: NavigationStatus::Available,
+                title_html: "LVED tree".to_owned(),
+                title_text: "LVED tree".to_owned(),
+                target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                    surface_id: "lved-tree".to_owned(),
+                    item_id: "root".to_owned(),
+                })?),
+                diagnostics: Vec::new(),
+            });
+        }
         Ok(())
     }
 }

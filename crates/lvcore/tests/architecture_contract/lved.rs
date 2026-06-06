@@ -371,6 +371,20 @@ fn lved_tree_surface_pages_top_level_nodes() {
 }
 
 #[test]
+fn lved_tree_surface_is_not_advertised_when_no_tree_index_exists() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    fs::remove_file(dir.path().join("res/tree.idx")).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(!package.home_surfaces().unwrap().iter().any(|surface| {
+        surface.kind == NavigationSurfaceKind::LvedTree
+            || surface.surface_id == "lved-tree"
+            || surface.status == NavigationStatus::Missing
+    }));
+}
+
+#[test]
 fn lved_retained_product_idx_opens_as_navigation_tree() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());
