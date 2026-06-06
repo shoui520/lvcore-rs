@@ -92,6 +92,8 @@ fn default_lved_media_index_cache() -> Arc<Mutex<BTreeMap<String, Arc<LvedMediaI
     Arc::new(Mutex::new(BTreeMap::new()))
 }
 
+const LVED_INFO_TITLE_PREFIX_CHARS: i64 = 8192;
+
 #[derive(Debug, Clone, Default)]
 struct LvedMediaIndex {
     by_name: BTreeMap<String, i64>,
@@ -432,20 +434,56 @@ impl LvedSqliteStore {
             if !schema.table_has_columns("info", &["id", "body"]) {
                 return Ok(None);
             }
-            let mut statement =
-                connection.prepare("select body from info where id = ? or rowid = ? limit 1")?;
-            let mut rows = statement.query((row_id, row_id))?;
-            let Some(row) = rows.next()? else {
-                return Ok(None);
-            };
-            Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
+            if let Some(html) = connection
+                .query_row(
+                    "select body from info where id = ? limit 1",
+                    [row_id],
+                    |row| sqlite_value_to_string(row.get_ref(0)?),
+                )
+                .optional()?
+            {
+                return Ok(Some(html));
+            }
+            connection
+                .query_row(
+                    "select body from info where rowid = ? limit 1",
+                    [row_id],
+                    |row| sqlite_value_to_string(row.get_ref(0)?),
+                )
+                .optional()
+                .map_err(Error::from)
         })
     }
 
     pub fn info_title_text(&self, row_id: i64) -> Result<Option<String>> {
-        Ok(self
-            .info_html(row_id)?
-            .and_then(|html| html_text_lines(&html).into_iter().next()))
+        self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
+            if !schema.table_has_columns("info", &["id", "body"]) {
+                return Ok(None);
+            }
+            let body_prefix = if let Some(body_prefix) = connection
+                .query_row(
+                    "select substr(body, 1, ?) from info where id = ? limit 1",
+                    (LVED_INFO_TITLE_PREFIX_CHARS, row_id),
+                    |row| sqlite_value_to_string(row.get_ref(0)?),
+                )
+                .optional()?
+            {
+                body_prefix
+            } else if let Some(body_prefix) = connection
+                .query_row(
+                    "select substr(body, 1, ?) from info where rowid = ? limit 1",
+                    (LVED_INFO_TITLE_PREFIX_CHARS, row_id),
+                    |row| sqlite_value_to_string(row.get_ref(0)?),
+                )
+                .optional()?
+            {
+                body_prefix
+            } else {
+                return Ok(None);
+            };
+            Ok(html_text_lines(&body_prefix).into_iter().next())
+        })
     }
 
     pub fn info_html_by_name(&self, name: &str) -> Result<Option<String>> {
@@ -465,10 +503,23 @@ impl LvedSqliteStore {
     }
 
     pub fn info_title_text_by_name(&self, name: &str) -> Result<Option<String>> {
-        Ok(self
-            .info_html_by_name(name)?
-            .and_then(|html| html_text_lines(&html).into_iter().next())
-            .or_else(|| nonempty_string(name.to_owned())))
+        self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
+            if !schema.table_has_columns("info", &["name", "body"]) {
+                return Ok(nonempty_string(name.to_owned()));
+            }
+            let mut statement =
+                connection.prepare("select substr(body, 1, ?) from info where name = ? limit 1")?;
+            let mut rows = statement.query((LVED_INFO_TITLE_PREFIX_CHARS, name))?;
+            let Some(row) = rows.next()? else {
+                return Ok(nonempty_string(name.to_owned()));
+            };
+            let body_prefix = sqlite_value_to_string(row.get_ref(0)?)?;
+            Ok(html_text_lines(&body_prefix)
+                .into_iter()
+                .next()
+                .or_else(|| nonempty_string(name.to_owned())))
+        })
     }
 
     pub fn named_html_by_name(&self, table: &str, name: &str) -> Result<Option<String>> {
@@ -493,10 +544,28 @@ impl LvedSqliteStore {
     }
 
     pub fn named_title_text_by_name(&self, table: &str, name: &str) -> Result<Option<String>> {
-        Ok(self
-            .named_html_by_name(table, name)?
-            .and_then(|html| html_text_lines(&html).into_iter().next())
-            .or_else(|| nonempty_string(name.to_owned())))
+        self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
+            if !is_safe_sqlite_identifier(table)
+                || !schema.table_has_columns(table, &["name", "body"])
+            {
+                return Ok(nonempty_string(name.to_owned()));
+            }
+            let sql = format!(
+                "select substr(body, 1, ?) from {} where name = ? limit 1",
+                quote_identifier(table)
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let mut rows = statement.query((LVED_INFO_TITLE_PREFIX_CHARS, name))?;
+            let Some(row) = rows.next()? else {
+                return Ok(nonempty_string(name.to_owned()));
+            };
+            let body_prefix = sqlite_value_to_string(row.get_ref(0)?)?;
+            Ok(html_text_lines(&body_prefix)
+                .into_iter()
+                .next()
+                .or_else(|| nonempty_string(name.to_owned())))
+        })
     }
 
     pub fn info_pages(&self, limit: usize) -> Result<Vec<LvedInfoPage>> {
@@ -510,23 +579,26 @@ impl LvedSqliteStore {
                 return Ok(Vec::new());
             }
             let mut statement = connection.prepare(
-                "select coalesce(id, rowid), name, body from info \
-                 order by coalesce(id, rowid), rowid limit ? offset ?",
+                "select coalesce(id, rowid), name, substr(body, 1, ?) from info \
+                 order by id, rowid limit ? offset ?",
             )?;
-            let rows = statement.query_map((limit as i64, offset as i64), |row| {
-                let name = sqlite_value_to_string(row.get_ref(1)?)?;
-                let body = sqlite_value_to_string(row.get_ref(2)?)?;
-                let title_text = html_text_lines(&body)
-                    .into_iter()
-                    .next()
-                    .unwrap_or_else(|| name.clone());
-                Ok(LvedInfoPage {
-                    id: row.get(0)?,
-                    name: name.clone(),
-                    title_html: title_text.clone(),
-                    title_text,
-                })
-            })?;
+            let rows = statement.query_map(
+                (LVED_INFO_TITLE_PREFIX_CHARS, limit as i64, offset as i64),
+                |row| {
+                    let name = sqlite_value_to_string(row.get_ref(1)?)?;
+                    let body_prefix = sqlite_value_to_string(row.get_ref(2)?)?;
+                    let title_text = html_text_lines(&body_prefix)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| name.clone());
+                    Ok(LvedInfoPage {
+                        id: row.get(0)?,
+                        name: name.clone(),
+                        title_html: title_text.clone(),
+                        title_text,
+                    })
+                },
+            )?;
             rows.collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(Error::from)
         })
