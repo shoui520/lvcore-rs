@@ -1512,7 +1512,8 @@ fn search_probe_suffix(title: &str) -> Option<String> {
     if chars.is_empty() {
         None
     } else {
-        Some(chars.into_iter().rev().collect())
+        let suffix = chars.into_iter().rev().collect::<String>();
+        (!suffix.chars().all(char::is_numeric)).then_some(suffix)
     }
 }
 
@@ -1913,6 +1914,11 @@ mod tests {
         assert_eq!(
             search_probe_query("0゜ 人工歯 ＜zero degree teeth＞", &SearchMode::Backward),
             "人工歯"
+        );
+        assert_eq!(
+            search_probe_suffix("0030.05 ～"),
+            None,
+            "numeric classification suffixes are poor backward-search probes"
         );
         assert_eq!(
             search_probe_query("関係 関係がある 〖0001.01〗", &SearchMode::Partial),
