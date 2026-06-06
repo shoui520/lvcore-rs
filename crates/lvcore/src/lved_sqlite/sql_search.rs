@@ -321,6 +321,13 @@ fn exact_lved_filter_prefilter_query(
     if !normalized.chars().any(|ch| ch.is_ascii_alphanumeric()) {
         return None;
     }
+    let short_headword_prefilter =
+        normalized.chars().count() == 1 && normalized.chars().all(|ch| ch.is_ascii_alphanumeric());
+    if short_headword_prefilter
+        && let Some(query) = fts_query("forward", normalized, search_columns, true, false)
+    {
+        return Some(query);
+    }
     fts_query("part", normalized, search_columns, false, false).or_else(|| {
         let terms = fts_tokens(normalized, false)
             .into_iter()
@@ -652,6 +659,19 @@ mod tests {
         assert!(where_clause.contains("\"search\" match ?"));
         assert!(where_clause.contains("s.filter like ?"));
         assert_eq!(parameters, vec!["part:abacus", "%∥abacus∥%"]);
+    }
+
+    #[test]
+    fn exact_filter_search_uses_forward_prefilter_for_short_ascii_headwords() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+
+        let (where_clause, parameters) =
+            exact_lved_search_where("a", primary_provider(&columns), true)
+                .expect("exact filter search");
+
+        assert!(where_clause.contains("\"search\" match ?"));
+        assert!(where_clause.contains("s.filter like ?"));
+        assert_eq!(parameters, vec!["forward:a*", "%∥a∥%"]);
     }
 
     #[test]
