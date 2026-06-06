@@ -1680,7 +1680,7 @@ fn ssed_partial_search_uses_physical_scan_cursor_for_sparse_indexes() {
         .next_cursor
         .as_deref()
         .expect("sparse scan should return a physical continuation cursor");
-    assert!(next_cursor.starts_with("ssed-partial-nonprefix-index:"));
+    assert!(next_cursor.starts_with("ssed-partial-nonprefix-noskip-index:"));
 
     let second = package
         .search(&SearchQuery {

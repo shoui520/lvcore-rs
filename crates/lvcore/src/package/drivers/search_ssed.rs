@@ -76,12 +76,13 @@ impl ReaderBookPackage {
                     query,
                     &needle,
                     Some(nonprefix_cursor),
+                    true,
                 );
             } else if query.cursor.is_none() {
                 if let Some(page) = self.search_ssed_partial_prefix_page(query, &needle, None)? {
                     return Ok(page);
                 }
-                return self.search_ssed_partial_nonprefix_page(query, &needle, None);
+                return self.search_ssed_partial_nonprefix_page(query, &needle, None, false);
             }
         }
 
@@ -261,18 +262,22 @@ impl ReaderBookPackage {
             let remaining = query.limit.saturating_sub(page.hits.len());
             if remaining > 0 {
                 if !page.hits.is_empty() && self.ssed_partial_nonprefix_fill_should_defer() {
-                    page.next_cursor = Some(encode_ssed_partial_nonprefix_cursor(None));
+                    page.next_cursor = Some(encode_ssed_partial_nonprefix_cursor(None, true));
                 } else {
                     let mut nonprefix_query = query.clone();
                     nonprefix_query.limit = remaining;
-                    let mut nonprefix_page =
-                        self.search_ssed_partial_nonprefix_page(&nonprefix_query, needle, None)?;
+                    let mut nonprefix_page = self.search_ssed_partial_nonprefix_page(
+                        &nonprefix_query,
+                        needle,
+                        None,
+                        true,
+                    )?;
                     page.hits.append(&mut nonprefix_page.hits);
                     page.diagnostics.extend(nonprefix_page.diagnostics);
                     page.next_cursor = nonprefix_page.next_cursor;
                 }
             } else {
-                page.next_cursor = Some(encode_ssed_partial_nonprefix_cursor(None));
+                page.next_cursor = Some(encode_ssed_partial_nonprefix_cursor(None, true));
             }
         }
         page.diagnostics.insert(
@@ -311,15 +316,20 @@ impl ReaderBookPackage {
         query: &SearchQuery,
         needle: &str,
         cursor: Option<SsedPartialNonprefixCursor>,
+        skip_prefix_rows: bool,
     ) -> Result<SearchPage> {
         let page_limit = query.limit.saturating_add(1);
+        let skip_prefix_rows = cursor
+            .as_ref()
+            .map(SsedPartialNonprefixCursor::skip_prefix_rows)
+            .unwrap_or(skip_prefix_rows);
         let offset = match cursor {
-            Some(SsedPartialNonprefixCursor::MatchedOffset(offset)) => offset,
-            Some(SsedPartialNonprefixCursor::Physical(_)) | None => 0,
+            Some(SsedPartialNonprefixCursor::MatchedOffset { offset, .. }) => offset,
+            Some(SsedPartialNonprefixCursor::Physical { .. }) | None => 0,
         };
         let physical_cursor = match cursor {
-            Some(SsedPartialNonprefixCursor::Physical(cursor)) => Some(cursor),
-            Some(SsedPartialNonprefixCursor::MatchedOffset(_)) | None => None,
+            Some(SsedPartialNonprefixCursor::Physical { cursor, .. }) => Some(cursor),
+            Some(SsedPartialNonprefixCursor::MatchedOffset { .. }) | None => None,
         };
         let mut collector = SsedIndexSearchCollector::new(
             self,
@@ -335,12 +345,13 @@ impl ReaderBookPackage {
                 needle,
                 physical_cursor,
                 &mut collector,
+                skip_prefix_rows,
             )?;
         let mut page = collector.into_search_page(query.limit);
         page.next_cursor = page
             .next_cursor
             .take()
-            .map(encode_ssed_partial_nonprefix_offset_cursor)
+            .map(|cursor| encode_ssed_partial_nonprefix_offset_cursor(cursor, skip_prefix_rows))
             .or(physical_next_cursor);
         Ok(page)
     }
@@ -409,6 +420,7 @@ impl ReaderBookPackage {
         needle: &str,
         cursor: Option<SsedPartialIndexScanCursor>,
         collector: &mut SsedIndexSearchCollector<'_>,
+        skip_prefix_rows: bool,
     ) -> Result<Option<String>> {
         let mut current_cursor = cursor;
         let mut advanced_empty_pages = 0usize;
@@ -420,12 +432,14 @@ impl ReaderBookPackage {
                     current_cursor,
                     SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET,
                     |row| {
-                        if ssed_title_label_fallback_row_matches(
-                            self,
-                            &SearchMode::Forward,
-                            needle,
-                            &row,
-                        ) {
+                        if skip_prefix_rows
+                            && ssed_title_label_fallback_row_matches(
+                                self,
+                                &SearchMode::Forward,
+                                needle,
+                                &row,
+                            )
+                        {
                             return Ok(true);
                         }
                         collector.push_row(row)
@@ -433,12 +447,14 @@ impl ReaderBookPackage {
                 )?
             } else {
                 self.scan_ssed_partial_index_rows_paged(needle, current_cursor, |row| {
-                    if ssed_title_label_fallback_row_matches(
-                        self,
-                        &SearchMode::Forward,
-                        needle,
-                        &row,
-                    ) {
+                    if skip_prefix_rows
+                        && ssed_title_label_fallback_row_matches(
+                            self,
+                            &SearchMode::Forward,
+                            needle,
+                            &row,
+                        )
+                    {
                         return Ok(true);
                     }
                     collector.push_row(row)
@@ -450,7 +466,9 @@ impl ReaderBookPackage {
                 let next_cursor = next_cursor
                     .as_deref()
                     .and_then(|cursor| decode_ssed_partial_index_scan_cursor(Some(cursor)))
-                    .map(|cursor| encode_ssed_partial_nonprefix_cursor(Some(cursor)));
+                    .map(|cursor| {
+                        encode_ssed_partial_nonprefix_cursor(Some(cursor), skip_prefix_rows)
+                    });
                 self.record_ssed_empty_physical_scan_advances(
                     collector,
                     advanced_empty_pages,
@@ -463,7 +481,9 @@ impl ReaderBookPackage {
                 let next_cursor = next_cursor
                     .as_deref()
                     .and_then(|cursor| decode_ssed_partial_index_scan_cursor(Some(cursor)))
-                    .map(|cursor| encode_ssed_partial_nonprefix_cursor(Some(cursor)));
+                    .map(|cursor| {
+                        encode_ssed_partial_nonprefix_cursor(Some(cursor), skip_prefix_rows)
+                    });
                 self.record_ssed_empty_physical_scan_advances(
                     collector,
                     advanced_empty_pages,
@@ -1982,13 +2002,36 @@ enum SsedFulltextTitleCursor {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SsedPartialNonprefixCursor {
-    MatchedOffset(usize),
-    Physical(SsedPartialIndexScanCursor),
+    MatchedOffset {
+        offset: usize,
+        skip_prefix_rows: bool,
+    },
+    Physical {
+        cursor: SsedPartialIndexScanCursor,
+        skip_prefix_rows: bool,
+    },
+}
+
+impl SsedPartialNonprefixCursor {
+    fn skip_prefix_rows(&self) -> bool {
+        match self {
+            Self::MatchedOffset {
+                skip_prefix_rows, ..
+            }
+            | Self::Physical {
+                skip_prefix_rows, ..
+            } => *skip_prefix_rows,
+        }
+    }
 }
 
 const SSED_PARTIAL_PREFIX_CURSOR_PREFIX: &str = "ssed-partial-prefix:";
 const SSED_PARTIAL_NONPREFIX_INDEX_CURSOR_PREFIX: &str = "ssed-partial-nonprefix-index:";
 const SSED_PARTIAL_NONPREFIX_OFFSET_CURSOR_PREFIX: &str = "ssed-partial-nonprefix-offset:";
+const SSED_PARTIAL_NONPREFIX_NOSKIP_INDEX_CURSOR_PREFIX: &str =
+    "ssed-partial-nonprefix-noskip-index:";
+const SSED_PARTIAL_NONPREFIX_NOSKIP_OFFSET_CURSOR_PREFIX: &str =
+    "ssed-partial-nonprefix-noskip-offset:";
 
 fn decode_ssed_partial_prefix_cursor(cursor: Option<&str>) -> Option<String> {
     cursor?
@@ -2003,35 +2046,63 @@ fn encode_ssed_partial_prefix_cursor(cursor: String) -> String {
 fn decode_ssed_partial_nonprefix_cursor(
     cursor: Option<&str>,
 ) -> Option<SsedPartialNonprefixCursor> {
-    if let Some(value) = cursor?.strip_prefix(SSED_PARTIAL_NONPREFIX_OFFSET_CURSOR_PREFIX) {
-        return value
-            .parse()
-            .ok()
-            .map(SsedPartialNonprefixCursor::MatchedOffset);
+    let cursor = cursor?;
+    if let Some(value) = cursor.strip_prefix(SSED_PARTIAL_NONPREFIX_OFFSET_CURSOR_PREFIX) {
+        return Some(SsedPartialNonprefixCursor::MatchedOffset {
+            offset: value.parse().ok()?,
+            skip_prefix_rows: true,
+        });
     }
-    let value = cursor?.strip_prefix(SSED_PARTIAL_NONPREFIX_INDEX_CURSOR_PREFIX)?;
+    if let Some(value) = cursor.strip_prefix(SSED_PARTIAL_NONPREFIX_NOSKIP_OFFSET_CURSOR_PREFIX) {
+        return Some(SsedPartialNonprefixCursor::MatchedOffset {
+            offset: value.parse().ok()?,
+            skip_prefix_rows: false,
+        });
+    }
+    if let Some(value) = cursor.strip_prefix(SSED_PARTIAL_NONPREFIX_INDEX_CURSOR_PREFIX) {
+        let (component_index, page_index) = value.split_once(':')?;
+        return Some(SsedPartialNonprefixCursor::Physical {
+            cursor: SsedPartialIndexScanCursor {
+                component_index: component_index.parse().ok()?,
+                page_index: page_index.parse().ok()?,
+            },
+            skip_prefix_rows: true,
+        });
+    }
+    let value = cursor.strip_prefix(SSED_PARTIAL_NONPREFIX_NOSKIP_INDEX_CURSOR_PREFIX)?;
     let (component_index, page_index) = value.split_once(':')?;
-    Some(SsedPartialNonprefixCursor::Physical(
-        SsedPartialIndexScanCursor {
+    Some(SsedPartialNonprefixCursor::Physical {
+        cursor: SsedPartialIndexScanCursor {
             component_index: component_index.parse().ok()?,
             page_index: page_index.parse().ok()?,
         },
-    ))
+        skip_prefix_rows: false,
+    })
 }
 
-fn encode_ssed_partial_nonprefix_cursor(cursor: Option<SsedPartialIndexScanCursor>) -> String {
+fn encode_ssed_partial_nonprefix_cursor(
+    cursor: Option<SsedPartialIndexScanCursor>,
+    skip_prefix_rows: bool,
+) -> String {
     let cursor = cursor.unwrap_or(SsedPartialIndexScanCursor {
         component_index: 0,
         page_index: 0,
     });
-    format!(
-        "{SSED_PARTIAL_NONPREFIX_INDEX_CURSOR_PREFIX}{}:{}",
-        cursor.component_index, cursor.page_index
-    )
+    let prefix = if skip_prefix_rows {
+        SSED_PARTIAL_NONPREFIX_INDEX_CURSOR_PREFIX
+    } else {
+        SSED_PARTIAL_NONPREFIX_NOSKIP_INDEX_CURSOR_PREFIX
+    };
+    format!("{prefix}{}:{}", cursor.component_index, cursor.page_index)
 }
 
-fn encode_ssed_partial_nonprefix_offset_cursor(offset: String) -> String {
-    format!("{SSED_PARTIAL_NONPREFIX_OFFSET_CURSOR_PREFIX}{offset}")
+fn encode_ssed_partial_nonprefix_offset_cursor(offset: String, skip_prefix_rows: bool) -> String {
+    let prefix = if skip_prefix_rows {
+        SSED_PARTIAL_NONPREFIX_OFFSET_CURSOR_PREFIX
+    } else {
+        SSED_PARTIAL_NONPREFIX_NOSKIP_OFFSET_CURSOR_PREFIX
+    };
+    format!("{prefix}{offset}")
 }
 
 fn decode_ssed_fulltext_title_cursor(cursor: Option<&str>) -> Option<SsedFulltextTitleCursor> {
@@ -2193,6 +2264,9 @@ fn ssed_fulltext_sidecar_title_prepass_is_bounded(query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
+        SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
+        decode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_cursor,
+        encode_ssed_partial_nonprefix_offset_cursor,
         ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_sidecar_title_auto_append_is_bounded,
     };
 
@@ -2216,5 +2290,48 @@ mod tests {
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("two words"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("犬"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("ｉｎ"));
+    }
+
+    #[test]
+    fn partial_nonprefix_cursors_preserve_prefix_skip_state() {
+        let old_index = "ssed-partial-nonprefix-index:2:56";
+        assert_eq!(
+            decode_ssed_partial_nonprefix_cursor(Some(old_index)),
+            Some(SsedPartialNonprefixCursor::Physical {
+                cursor: SsedPartialIndexScanCursor {
+                    component_index: 2,
+                    page_index: 56,
+                },
+                skip_prefix_rows: true,
+            })
+        );
+
+        let noskip_index = encode_ssed_partial_nonprefix_cursor(
+            Some(SsedPartialIndexScanCursor {
+                component_index: 2,
+                page_index: 56,
+            }),
+            false,
+        );
+        assert_eq!(noskip_index, "ssed-partial-nonprefix-noskip-index:2:56");
+        assert_eq!(
+            decode_ssed_partial_nonprefix_cursor(Some(&noskip_index)),
+            Some(SsedPartialNonprefixCursor::Physical {
+                cursor: SsedPartialIndexScanCursor {
+                    component_index: 2,
+                    page_index: 56,
+                },
+                skip_prefix_rows: false,
+            })
+        );
+
+        let noskip_offset = encode_ssed_partial_nonprefix_offset_cursor("17".to_owned(), false);
+        assert_eq!(
+            decode_ssed_partial_nonprefix_cursor(Some(&noskip_offset)),
+            Some(SsedPartialNonprefixCursor::MatchedOffset {
+                offset: 17,
+                skip_prefix_rows: false,
+            })
+        );
     }
 }
