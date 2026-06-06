@@ -177,21 +177,25 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     let html = view.display_html.as_deref().unwrap();
 
     assert!(!html.contains("lved.dataid:"));
+    assert!(!html.contains("lved.addr="));
     assert!(!html.contains("src=\"b129.png\""));
     assert!(!html.contains("src=\"furoku01_01.jpg\""));
     assert!(!html.contains("data = \"KG003173.svg\""));
     assert!(html.contains("lvcore://target/"));
     assert!(html.contains("lvcore://resource/"));
-    assert_eq!(view.links.len(), 2);
+    assert_eq!(view.links.len(), 3);
     assert_eq!(view.resources.len(), 5);
-    assert!(
-        view.links
-            .iter()
-            .all(|link| link.kind == TargetKind::SsedDenseAnchor)
-    );
     assert!(view.links.iter().any(|link| matches!(
         link.token.decode().unwrap(),
         InternalTarget::SsedDenseAnchor { anchor, resolver_hint: None } if anchor == "00000001"
+    )));
+    assert!(view.links.iter().any(|link| matches!(
+        link.token.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 100,
+            offset: 0,
+        } if component == "HONMON.DIC"
     )));
     let self_link = view
         .links
@@ -249,8 +253,18 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
         ]
     );
 
+    let alpha_dense_link = view
+        .links
+        .iter()
+        .find(|link| {
+            matches!(
+                link.token.decode().unwrap(),
+                InternalTarget::SsedDenseAnchor { anchor, resolver_hint: None } if anchor == "00000001"
+            )
+        })
+        .expect("expected alpha dense-anchor link");
     let linked_view = package
-        .render_target(&view.links[0].token, &RenderOptions::default())
+        .render_target(&alpha_dense_link.token, &RenderOptions::default())
         .unwrap();
     assert_eq!(
         linked_view.display_html.as_deref(),

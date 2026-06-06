@@ -73,6 +73,27 @@ impl ReaderBookPackage {
                         ));
                     }
                 }
+                LvedHtmlRefKind::Address => {
+                    if let Some(target) = lved_address_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            link.diagnostics.push(Diagnostic::info(
+                                "lved_address_deferred",
+                                "LVED address link is preserved as a typed target; this package did not provide an address resolver for it",
+                            ));
+                            links.push(link);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_address_ref_unparsed",
+                            format!("could not parse LVED address reference {raw_ref}"),
+                        ));
+                    }
+                }
                 LvedHtmlRefKind::DataId => {
                     if let Some(target) = lved_dataid_target(raw_ref) {
                         let token = TargetToken::new(&target)?;
@@ -221,6 +242,31 @@ impl ReaderBookPackage {
                         diagnostics.push(Diagnostic::warning(
                             "ssed_sidecar_lved_dataid_ref_unparsed",
                             format!("could not parse SSED sidecar LVED dataid reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::Address => {
+                    if let Some(address) = parse_lved_address(raw_ref) {
+                        if let Some(target) = self.ssed_target_for_loose_address(
+                            address.block,
+                            address.offset,
+                            &mut diagnostics,
+                        )? {
+                            let decoded = target.decode()?;
+                            if seen_target_tokens.insert(target.as_str().to_owned()) {
+                                links.push(TargetLink::new(raw_ref, &decoded)?);
+                            }
+                            output.push_str(&format!("lvcore://target/{}", target.as_str()));
+                        } else {
+                            output.push_str(raw_ref);
+                        }
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_address_ref_unparsed",
+                            format!(
+                                "could not parse SSED sidecar LVED address reference {raw_ref}"
+                            ),
                         ));
                     }
                 }

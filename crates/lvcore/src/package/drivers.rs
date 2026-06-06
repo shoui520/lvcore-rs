@@ -69,9 +69,10 @@ use super::html::{
     package_relative_html_reference, path_has_extension, sanitize_rich_label_html,
 };
 use super::lved_refs::{
-    LvedHtmlRefKind, is_lved_ref_terminator, lved_binran_target, lved_cross_book_target,
-    lved_dataid_anchor, lved_dataid_target, lved_image_resource, lved_info_target,
-    lved_media_resource, lved_pdf_resource, lved_viewer_hook_target, next_lved_ref,
+    LvedHtmlRefKind, is_lved_ref_terminator, lved_address_target, lved_binran_target,
+    lved_cross_book_target, lved_dataid_anchor, lved_dataid_target, lved_image_resource,
+    lved_info_target, lved_media_resource, lved_pdf_resource, lved_viewer_hook_target,
+    next_lved_ref,
 };
 use super::navigation_helpers::{
     OrderedSequenceTarget, collect_navigation_node_targets, collect_panel_cell_ordered_targets,
@@ -667,6 +668,7 @@ fn scroll_anchor_for_token(target: &TargetToken) -> Result<Option<String>> {
     Ok(match target.decode()? {
         InternalTarget::LvedRow { anchor, .. }
         | InternalTarget::LvedInfoPage { anchor, .. }
+        | InternalTarget::LvedAddress { anchor, .. }
         | InternalTarget::SsedAuxRecord { anchor, .. }
         | InternalTarget::HoureiLaw { anchor, .. }
         | InternalTarget::MultiviewHref { anchor, .. }

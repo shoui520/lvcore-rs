@@ -19,6 +19,7 @@ pub enum TargetKind {
     LvedInfoPage,
     LvedNamedPage,
     LvedCrossBook,
+    LvedAddress,
     LvedViewerHook,
     HoureiLaw,
     MultiviewHref,
@@ -94,6 +95,13 @@ pub enum InternalTarget {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         anchor: Option<String>,
     },
+    LvedAddress {
+        block: u32,
+        offset: u32,
+        raw: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
+    },
     LvedViewerHook {
         hook: String,
         value: String,
@@ -148,6 +156,7 @@ impl InternalTarget {
             Self::LvedInfoPage { .. } => TargetKind::LvedInfoPage,
             Self::LvedNamedPage { .. } => TargetKind::LvedNamedPage,
             Self::LvedCrossBook { .. } => TargetKind::LvedCrossBook,
+            Self::LvedAddress { .. } => TargetKind::LvedAddress,
             Self::LvedViewerHook { .. } => TargetKind::LvedViewerHook,
             Self::HoureiLaw { .. } => TargetKind::HoureiLaw,
             Self::MultiviewHref { .. } => TargetKind::MultiviewHref,

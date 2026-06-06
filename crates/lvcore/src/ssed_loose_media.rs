@@ -942,22 +942,41 @@ fn extract_loose_addresses(fragment: &str) -> Vec<LooseAddress> {
 }
 
 fn parse_lved_dot_addr(value: &str) -> Option<LooseAddress> {
-    let start = value.to_ascii_lowercase().find("lved.addr")?;
-    let after = start + "lved.addr".len();
-    let block_hex = value.get(after..after + 8)?;
-    let colon = value.as_bytes().get(after + 8).copied()?;
-    if colon != b':' {
-        return None;
+    let lower = value.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find("lved.addr") {
+        let start = cursor + relative_start;
+        if start > 0
+            && value
+                .as_bytes()
+                .get(start - 1)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        {
+            cursor = start.saturating_add("lved.addr".len());
+            continue;
+        }
+        let mut after = start + "lved.addr".len();
+        if value.as_bytes().get(after).copied() == Some(b'=') {
+            after += 1;
+        }
+        let block_hex = value.get(after..after + 8)?;
+        let (offset_start, raw_end) = if value.as_bytes().get(after + 8).copied() == Some(b':') {
+            (after + 9, after + 13)
+        } else {
+            (after + 8, after + 12)
+        };
+        let offset_hex = value.get(offset_start..raw_end)?;
+        if !is_hex(block_hex) || !is_hex(offset_hex) {
+            cursor = start.saturating_add("lved.addr".len());
+            continue;
+        }
+        return Some(LooseAddress {
+            raw: value[start..raw_end].to_owned(),
+            block: u32::from_str_radix(block_hex, 16).ok()?,
+            offset: u32::from_str_radix(offset_hex, 16).ok()?,
+        });
     }
-    let offset_hex = value.get(after + 9..after + 13)?;
-    if !is_hex(block_hex) || !is_hex(offset_hex) {
-        return None;
-    }
-    Some(LooseAddress {
-        raw: value[start..after + 13].to_owned(),
-        block: u32::from_str_radix(block_hex, 16).ok()?,
-        offset: u32::from_str_radix(offset_hex, 16).ok()?,
-    })
+    None
 }
 
 fn parse_lvaddr_url(value: &str) -> Option<LooseAddress> {

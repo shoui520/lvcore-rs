@@ -1,5 +1,6 @@
 use super::html::html_unescape_minimal;
 use crate::resources::{InternalResource, ResourceKind};
+use crate::ssed_loose_media::parse_lved_address;
 use crate::target::InternalTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7,6 +8,7 @@ pub(super) enum LvedHtmlRefKind {
     Media,
     Image,
     Pdf,
+    Address,
     DataId,
     CrossBook,
     Info,
@@ -22,6 +24,7 @@ pub(super) fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
         ("lved.image:", LvedHtmlRefKind::Image),
         ("lved.imag:", LvedHtmlRefKind::Image),
         ("lved.pdf:", LvedHtmlRefKind::Pdf),
+        ("lved.addr", LvedHtmlRefKind::Address),
         ("lved.dataid.dict.", LvedHtmlRefKind::CrossBook),
         ("lved.contentlink:", LvedHtmlRefKind::CrossBook),
         ("lved.dataid.result:", LvedHtmlRefKind::DataId),
@@ -40,6 +43,10 @@ pub(super) fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
     let mut cursor = 0usize;
     while let Some(relative_index) = value[cursor..].find("lved") {
         let index = cursor + relative_index;
+        if !is_lved_ref_boundary(value, index) {
+            cursor = index.saturating_add("lved".len());
+            continue;
+        }
         let rest = &value[index..];
         if let Some((_, kind)) = patterns
             .iter()
@@ -50,6 +57,14 @@ pub(super) fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
         cursor = index.saturating_add("lved".len());
     }
     None
+}
+
+fn is_lved_ref_boundary(value: &str, index: usize) -> bool {
+    index == 0
+        || !value
+            .as_bytes()
+            .get(index - 1)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
 }
 
 pub(super) fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
@@ -187,6 +202,24 @@ pub(super) fn lved_cross_book_target(raw_ref: &str) -> Option<InternalTarget> {
     None
 }
 
+pub(super) fn lved_address_target(raw_ref: &str) -> Option<InternalTarget> {
+    let address = parse_lved_address(raw_ref)?;
+    let suffix = raw_ref
+        .find(&address.raw)
+        .map(|index| &raw_ref[index + address.raw.len()..])
+        .unwrap_or("");
+    let anchor = suffix
+        .strip_prefix('#')
+        .map(html_unescape_minimal)
+        .filter(|value| !value.is_empty());
+    Some(InternalTarget::LvedAddress {
+        block: address.block,
+        offset: address.offset,
+        raw: html_unescape_minimal(raw_ref),
+        anchor,
+    })
+}
+
 pub(super) fn lved_info_target(raw_ref: &str) -> Option<InternalTarget> {
     let value = raw_ref.strip_prefix("lved.info:")?;
     let (name, anchor) = split_lved_target_anchor(value);
@@ -271,6 +304,8 @@ mod tests {
 
     #[test]
     fn parses_lved_targets_and_preserves_viewer_hooks() {
+        assert!(next_lved_ref("uplved.addr000291540042").is_none());
+
         assert_eq!(
             lved_dataid_anchor("lved.dataid:00157445#body"),
             Some(("00157445".to_owned(), Some("body".to_owned())))
@@ -294,6 +329,19 @@ mod tests {
         };
         assert_eq!(dict_code, "BUREI");
         assert_eq!(content_id, "400");
+
+        let Some(InternalTarget::LvedAddress {
+            block,
+            offset,
+            anchor,
+            ..
+        }) = lved_address_target("lved.addr=00029154:0042#jump")
+        else {
+            panic!("expected LVED address target");
+        };
+        assert_eq!(block, 0x0002_9154);
+        assert_eq!(offset, 0x0042);
+        assert_eq!(anchor.as_deref(), Some("jump"));
 
         let InternalTarget::LvedViewerHook { hook, value } =
             lved_viewer_hook_target("lved.plugin:sample")

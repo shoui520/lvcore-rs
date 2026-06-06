@@ -644,6 +644,18 @@ impl RendererProvider for ReaderBookPackage {
                     ),
                 ),
             )),
+            InternalTarget::LvedAddress {
+                block, offset, raw, ..
+            } => Ok(ResolvedTargetView::unsupported(
+                token.clone(),
+                "LVED address link",
+                Diagnostic::info(
+                    "lved_address_deferred",
+                    format!(
+                        "LVED address link {raw} points to block {block:08x} offset {offset:04x}; no address resolver is available for this package"
+                    ),
+                ),
+            )),
             InternalTarget::LvedViewerHook { hook, value } => Ok(ResolvedTargetView::unsupported(
                 token.clone(),
                 "LVED viewer hook",

@@ -5,6 +5,18 @@ fn parses_lved_addr_links() {
     let parsed = parse_lved_address(r#"href="lved.addr0000f768:00a2""#).unwrap();
     assert_eq!(parsed.block, 0x0000f768);
     assert_eq!(parsed.offset, 0x00a2);
+
+    let equals = parse_lved_address(r#"href="lved.addr=00000711:032e""#).unwrap();
+    assert_eq!(equals.raw, "lved.addr=00000711:032e");
+    assert_eq!(equals.block, 0x0000_0711);
+    assert_eq!(equals.offset, 0x032e);
+
+    let compact = parse_lved_address(r#"href="lved.addr0000017c04fc""#).unwrap();
+    assert_eq!(compact.raw, "lved.addr0000017c04fc");
+    assert_eq!(compact.block, 0x0000_017c);
+    assert_eq!(compact.offset, 0x04fc);
+
+    assert!(parse_lved_address(r#"href="uplved.addr0000017c04fc""#).is_none());
 }
 
 #[test]

@@ -621,6 +621,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
                     <a href="lved.dataid.dict.STEDABBR:300#cross">dict</a>
                     <a href="lved.contentlink:BUREI.400#note">contentlink</a>
                     <a href="lved.binran:usage.html#top">binran</a>
+                    <a href="lved.addr=00029154:0042">addr</a>
                     <a href="lved.bookmark:C001">bookmark</a>
                     <img src="lved.image:fig01.png">
                     <a href="lved.pdf:manual.pdf">pdf</a>
@@ -659,6 +660,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
         "lved.dataid.dict.",
         "lved.contentlink:",
         "lved.binran:",
+        "lved.addr=",
         "lved.bookmark:",
         "lved.image:",
         "lved.pdf:",
@@ -680,6 +682,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
             TargetKind::LvedCrossBook,
             TargetKind::LvedCrossBook,
             TargetKind::LvedNamedPage,
+            TargetKind::LvedAddress,
             TargetKind::LvedViewerHook,
         ]
     );
@@ -709,5 +712,29 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "lved_cross_book_deferred")
+    );
+
+    let address = view
+        .links
+        .iter()
+        .find(|link| link.kind == TargetKind::LvedAddress)
+        .unwrap();
+    assert!(matches!(
+        address.token.decode().unwrap(),
+        InternalTarget::LvedAddress {
+            block: 0x0002_9154,
+            offset: 0x0042,
+            ..
+        }
+    ));
+    let address_view = package
+        .render_target(&address.token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(address_view.kind, ResolvedTargetKind::Unsupported);
+    assert!(
+        address_view
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lved_address_deferred")
     );
 }
