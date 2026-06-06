@@ -580,6 +580,25 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
             .unwrap()
             .contains("<h1>あとがき</h1>")
     );
+
+    let anchored_target = lvcore::TargetToken::new(&InternalTarget::MultiviewHref {
+        href: "000001".to_owned(),
+        anchor: Some("section-1".to_owned()),
+    })
+    .unwrap();
+    let anchored_view = package
+        .render_target(&anchored_target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(anchored_view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(anchored_view.scroll_anchor.as_deref(), Some("section-1"));
+    assert_eq!(anchored_view.title.as_deref(), Some("まえがき"));
+    assert!(
+        anchored_view
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("<article><h1>まえがき</h1>")
+    );
 }
 
 #[test]
@@ -694,6 +713,21 @@ fn multiview_law_list_targets_resolve_to_navigation_and_law_bodies() {
             .iter()
             .all(|diagnostic| diagnostic.code != "sequence_deferred")
     );
+
+    let anchored_list_target = lvcore::TargetToken::new(&InternalTarget::MultiviewHref {
+        href: "50on".to_owned(),
+        anchor: Some("top".to_owned()),
+    })
+    .unwrap();
+    let anchored_list_view = package
+        .render_target(&anchored_list_target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(anchored_list_view.kind, ResolvedTargetKind::NavigationSurface);
+    assert_eq!(anchored_list_view.scroll_anchor.as_deref(), Some("top"));
+    assert!(matches!(
+        anchored_list_view.surface.as_ref(),
+        Some(NavigationSurface::TitleIndexBrowse { .. })
+    ));
 
     let law_view = package
         .render_target(&items[0].target, &RenderOptions::default())

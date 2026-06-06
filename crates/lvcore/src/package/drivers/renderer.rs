@@ -62,6 +62,7 @@ impl ReaderBookPackage {
         let Some((title, surface)) = self.multiview_navigation_surface_for_href(href)? else {
             return Ok(None);
         };
+        let scroll_anchor = scroll_anchor_for_token(&target)?;
         Ok(Some(ResolvedTargetView {
             href: String::new(),
             kind: ResolvedTargetKind::NavigationSurface,
@@ -69,7 +70,7 @@ impl ReaderBookPackage {
             title: Some(title),
             display_html: None,
             basic_text: None,
-            scroll_anchor: None,
+            scroll_anchor,
             surface: Some(surface),
             resources: Vec::new(),
             links: Vec::new(),
@@ -808,9 +809,7 @@ impl RendererProvider for ReaderBookPackage {
                     options,
                 ),
             InternalTarget::MultiviewHref { href, anchor } => {
-                if anchor.is_none()
-                    && let Some(surface_id) = self.multiview_menu_surface_id_for_href(&href)?
-                {
+                if let Some(surface_id) = self.multiview_menu_surface_id_for_href(&href)? {
                     return self.view_for_navigation_surface_target(
                         token.clone(),
                         &surface_id,
@@ -819,9 +818,8 @@ impl RendererProvider for ReaderBookPackage {
                         options,
                     );
                 }
-                if anchor.is_none()
-                    && let Some(view) =
-                        self.view_for_multiview_navigation_target(token.clone(), &href)?
+                let _ = anchor;
+                if let Some(view) = self.view_for_multiview_navigation_target(token.clone(), &href)?
                 {
                     Ok(view)
                 } else {
