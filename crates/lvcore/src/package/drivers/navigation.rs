@@ -86,6 +86,11 @@ impl ReaderBookPackage {
 impl NavigationProvider for ReaderBookPackage {
     fn home_surfaces(&self) -> Result<Vec<HomeSurface>> {
         let mut surfaces = Vec::new();
+        let lved_is_primary_family =
+            self.metadata.format_family == FormatFamily::LvedSqlite3 && self.lved_store.is_some();
+        if lved_is_primary_family {
+            self.push_lved_sqlite_home_surfaces(&mut surfaces)?;
+        }
         if self.ssed_catalog.is_some() || self.metadata.format_family == FormatFamily::Ssed {
             if let Some(surface) = self.ssed_navigation_home_surface(
                 "menu",
@@ -362,7 +367,7 @@ impl NavigationProvider for ReaderBookPackage {
                     });
             }
         }
-        if self.lved_store.is_some() {
+        if self.lved_store.is_some() && !lved_is_primary_family {
             self.push_lved_sqlite_home_surfaces(&mut surfaces)?;
         }
         if self.has_multiview_provider() {

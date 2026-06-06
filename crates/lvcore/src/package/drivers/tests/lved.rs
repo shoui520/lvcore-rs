@@ -260,6 +260,18 @@ fn lved_adopts_reader_reachable_retained_ssed_catalog_as_secondary_surface() {
     assert!(surfaces.iter().any(|surface| {
         surface.surface_id == "title-index" && surface.status == NavigationStatus::Available
     }));
+    let lved_position = surfaces
+        .iter()
+        .position(|surface| surface.surface_id == "lved-list")
+        .unwrap();
+    let retained_position = surfaces
+        .iter()
+        .position(|surface| surface.surface_id == "title-index")
+        .unwrap();
+    assert!(
+        lved_position < retained_position,
+        "LVED-native navigation must remain primary when retained SSED is secondary"
+    );
 
     let surface = package.open_surface_page("title-index", None, 10).unwrap();
     let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
