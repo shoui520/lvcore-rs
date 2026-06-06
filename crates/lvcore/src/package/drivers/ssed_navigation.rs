@@ -441,16 +441,17 @@ fn ssed_encyclopedia_row_target(
 
 pub(super) fn ssed_aux_index_rows_to_nodes(
     package: &ReaderBookPackage,
-    rows: &[SsedAuxIndexRow],
+    visible_rows: &[SsedAuxIndexRow],
+    all_rows: &[SsedAuxIndexRow],
     diagnostics: &mut Vec<Diagnostic>,
     gaiji_policy: &GaijiPolicy,
 ) -> Result<Vec<NavigationNode>> {
     let mut roots = Vec::new();
     let mut path = Vec::<usize>::new();
 
-    for (index, row) in rows.iter().enumerate() {
+    for (index, row) in visible_rows.iter().enumerate() {
         let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
-        let next_target_row = nearest_higher_aux_target_row(rows, row);
+        let next_target_row = nearest_higher_aux_target_row(all_rows, row);
         let mut node_diagnostics = rich_label.diagnostics;
         let target =
             ssed_aux_index_row_target(package, row, next_target_row, &mut node_diagnostics)?;
@@ -490,15 +491,17 @@ pub(super) fn ssed_aux_index_rows_to_nodes(
 
 pub(super) fn ssed_aux_index_rows_to_flat_nodes(
     package: &ReaderBookPackage,
-    rows: &[SsedAuxIndexRow],
+    visible_rows: &[SsedAuxIndexRow],
+    all_rows: &[SsedAuxIndexRow],
     _diagnostics: &mut Vec<Diagnostic>,
     gaiji_policy: &GaijiPolicy,
 ) -> Result<Vec<NavigationNode>> {
-    rows.iter()
+    visible_rows
+        .iter()
         .enumerate()
         .map(|(index, row)| {
             let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
-            let next_target_row = nearest_higher_aux_target_row(rows, row);
+            let next_target_row = nearest_higher_aux_target_row(all_rows, row);
             let mut node_diagnostics = rich_label.diagnostics;
             let target =
                 ssed_aux_index_row_target(package, row, next_target_row, &mut node_diagnostics)?;

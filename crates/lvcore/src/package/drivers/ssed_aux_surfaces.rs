@@ -293,11 +293,18 @@ impl ReaderBookPackage {
         }
         let mut diagnostics = Vec::new();
         let nodes = if offset == 0 {
-            ssed_aux_index_rows_to_nodes(self, page_rows, &mut diagnostics, &options.gaiji_policy)?
+            ssed_aux_index_rows_to_nodes(
+                self,
+                page_rows,
+                &rows,
+                &mut diagnostics,
+                &options.gaiji_policy,
+            )?
         } else {
             ssed_aux_index_rows_to_flat_nodes(
                 self,
                 page_rows,
+                &rows,
                 &mut diagnostics,
                 &options.gaiji_policy,
             )?

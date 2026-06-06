@@ -575,6 +575,21 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0].label_text, "大辞林 第四版");
     assert_eq!(nodes[0].children[0].label_text, "季語");
+    assert!(matches!(
+        nodes[0].children[0]
+            .target
+            .as_ref()
+            .unwrap()
+            .decode()
+            .unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block: 0x5221,
+            offset: 0x0722,
+            end_block: 0x5221,
+            end_offset: 0x0750
+        } if component == "HONMON.DIC"
+    ));
     assert_eq!(next_cursor.as_deref(), Some("2"));
 
     let second_page = package

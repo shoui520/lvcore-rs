@@ -90,6 +90,16 @@ fn title_index_surfaces_are_cursor_paged_by_backend() {
             end_offset: 4,
         }
     );
+    assert_eq!(
+        items[1].target.decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component: "HONMON.DIC".to_owned(),
+            block: 1,
+            offset: 4,
+            end_block: 1,
+            end_offset: 6,
+        }
+    );
     assert_eq!(next_cursor.as_deref(), Some("2"));
 
     let second = package

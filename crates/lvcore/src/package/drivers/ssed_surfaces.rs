@@ -159,18 +159,19 @@ impl ReaderBookPackage {
             });
         }
         let offset = decode_offset_cursor(cursor);
-        let (mut rows, mut diagnostics) =
+        let (rows, mut diagnostics) =
             self.ssed_simple_index_rows_page(offset, limit.saturating_add(1))?;
         let next_cursor = (rows.len() > limit).then(|| (offset + limit).to_string());
-        rows.truncate(limit);
-        if rows.is_empty() && !diagnostics.is_empty() {
+        let visible_len = rows.len().min(limit);
+        let visible_rows = &rows[..visible_len];
+        if visible_rows.is_empty() && !diagnostics.is_empty() {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics,
             });
         }
         let mut items = Vec::new();
-        for (index, row) in rows.iter().enumerate() {
+        for (index, row) in visible_rows.iter().enumerate() {
             let label = self
                 .ssed_title_text(row.title)
                 .unwrap_or_else(|| row.key.clone());
