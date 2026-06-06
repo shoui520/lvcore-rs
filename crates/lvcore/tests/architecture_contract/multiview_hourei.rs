@@ -468,6 +468,7 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
         .render_target(&target, &RenderOptions::default())
         .unwrap();
     assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(view.title.as_deref(), Some("まえがき"));
     let html = view.display_html.as_deref().unwrap();
     assert!(html.contains("<article><h1>まえがき</h1><p>body</p>"));
     assert!(html.contains(r#"<a href="lvcore://target/"#));

@@ -47,6 +47,13 @@ impl ReaderBookPackage {
                 };
                 store.content_title_text(row_id)
             }
+            InternalTarget::MultiviewHref { href, anchor } => {
+                let Some(store) = &self.multiview_store else {
+                    return Ok(None);
+                };
+                let lookup = anchor.as_deref().unwrap_or(&href);
+                Ok(store.body_for_href(lookup)?.map(|body| body.title))
+            }
             _ => Ok(None),
         }
     }
