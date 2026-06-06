@@ -129,6 +129,7 @@ fn dense_honmon_address_target_resolves_sidecar_html() {
     let view = package
         .render_target(&target, &RenderOptions::default())
         .unwrap();
+    assert_eq!(view.title.as_deref(), Some("beta"));
     assert_eq!(
         view.display_html.as_deref(),
         Some("<div>beta sidecar html</div>")
@@ -182,6 +183,7 @@ fn dense_honmon_plain_anchor_body_is_preserved_as_display_html() {
     let view = package
         .render_target(&target, &RenderOptions::default())
         .unwrap();
+    assert_eq!(view.title.as_deref(), Some("alpha"));
     assert_eq!(
         view.display_html.as_deref(),
         Some("<div class=\"lvcore-sidecar-text\">alpha plain body<br>second line</div>")

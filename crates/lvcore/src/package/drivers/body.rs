@@ -39,6 +39,28 @@ impl ReaderBookPackage {
             } => Ok(self
                 .ssed_ios_html_list_item(&source_id, index)?
                 .map(|item| item.label_text)),
+            InternalTarget::SsedDenseAnchor {
+                anchor,
+                resolver_hint,
+            } => self.ssed_sidecar_title_for_dense_anchor(&anchor, resolver_hint.as_deref()),
+            InternalTarget::SsedAddress {
+                component,
+                block,
+                offset,
+            }
+            | InternalTarget::SsedIndexAddress {
+                component,
+                block,
+                offset,
+                index_component: _,
+            }
+            | InternalTarget::SsedBoundedAddress {
+                component,
+                block,
+                offset,
+                end_block: _,
+                end_offset: _,
+            } => self.ssed_title_for_address_target(&component, block, offset),
             InternalTarget::LvedRow { table, row_id, .. }
                 if table.eq_ignore_ascii_case("content") =>
             {
@@ -53,6 +75,102 @@ impl ReaderBookPackage {
                 };
                 let lookup = anchor.as_deref().unwrap_or(&href);
                 Ok(store.body_for_href(lookup)?.map(|body| body.title))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn ssed_sidecar_title_for_dense_anchor(
+        &self,
+        anchor: &str,
+        resolver_hint: Option<&str>,
+    ) -> Result<Option<String>> {
+        match lookup_ssed_dense_sidecar_body_with_resolvers(
+            self.ssed_sidecar_body_resolvers()?,
+            anchor,
+            resolver_hint,
+        )? {
+            SsedSidecarLookup::Resolved(body) if !body.title.trim().is_empty() => {
+                Ok(Some(body.title))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn ssed_title_for_address_target(
+        &self,
+        requested_component: &str,
+        block: u32,
+        offset: u32,
+    ) -> Result<Option<String>> {
+        let (block, offset) = self.convert_ios_ssed_address(block, offset)?;
+        let Some(catalog) = &self.ssed_catalog else {
+            return self.ssed_sidecar_title_for_address(block, offset);
+        };
+        let Some(component) = catalog
+            .component_named(requested_component)
+            .or_else(|| catalog.component_for_address(block))
+        else {
+            return self.ssed_sidecar_title_for_address(block, offset);
+        };
+        let Some(component_offset) = component.relative_offset(block, offset) else {
+            return self.ssed_sidecar_title_for_address(block, offset);
+        };
+        if component.role == SsedComponentRole::Honmon {
+            if let Some(anchor_id) = self.ssed_dense_anchor_at_component_offset(
+                component,
+                usize::try_from(component_offset).unwrap_or(usize::MAX),
+            )? && let Some(title) = self.ssed_sidecar_title_for_dense_anchor(&anchor_id, None)?
+            {
+                return Ok(Some(title));
+            }
+            if let Some(title) =
+                self.ssed_ordered_honbun_title_at_component_offset(component, component_offset)?
+            {
+                return Ok(Some(title));
+            }
+        }
+        self.ssed_sidecar_title_for_address(block, offset)
+    }
+
+    fn ssed_ordered_honbun_title_at_component_offset(
+        &self,
+        component: &SsedComponent,
+        component_offset: u64,
+    ) -> Result<Option<String>> {
+        if !self
+            .ssed_sidecar_body_resolvers()?
+            .iter()
+            .any(SsedSidecarBodyResolver::is_ordered_honbun_renderer_body)
+        {
+            return Ok(None);
+        }
+        let Some(row_index) =
+            self.ssed_entry_slice_row_index_at_component_offset(component, component_offset)?
+        else {
+            return Ok(None);
+        };
+        match lookup_ssed_ordered_honbun_body_by_row(self.ssed_sidecar_body_resolvers()?, row_index)?
+        {
+            SsedSidecarLookup::Resolved(body) if !body.title.trim().is_empty() => {
+                Ok(Some(body.title))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn ssed_sidecar_title_for_address(
+        &self,
+        block: u32,
+        offset: u32,
+    ) -> Result<Option<String>> {
+        match lookup_ssed_sidecar_body_by_address_with_resolvers(
+            self.ssed_sidecar_body_resolvers()?,
+            block,
+            offset,
+        )? {
+            SsedSidecarLookup::Resolved(body) if !body.title.trim().is_empty() => {
+                Ok(Some(body.title))
             }
             _ => Ok(None),
         }

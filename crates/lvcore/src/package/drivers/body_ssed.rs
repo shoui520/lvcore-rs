@@ -250,7 +250,7 @@ impl ReaderBookPackage {
         }
     }
 
-    fn ssed_entry_slice_row_index_at_component_offset(
+    pub(super) fn ssed_entry_slice_row_index_at_component_offset(
         &self,
         component: &SsedComponent,
         component_offset: u64,
