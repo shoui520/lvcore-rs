@@ -24,6 +24,42 @@ fn lved_book_id_uses_package_code_without_windows_folder_wrapper() {
 }
 
 #[test]
+fn lved_main_dbc_book_id_and_alias_use_package_code_not_main() {
+    let dir = tempdir().unwrap();
+    let package_root = dir.path().join("_DCT_OXFPEU4");
+    fs::create_dir_all(&package_root).unwrap();
+    write_minimal_lved_sqlite_fixture(&package_root);
+    fs::rename(
+        package_root.join("main.data"),
+        package_root.join("main.dbc"),
+    )
+    .unwrap();
+    fs::rename(
+        package_root.join("main.key"),
+        package_root.join("OXFPEU4.key"),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvedSqlite3);
+    assert!(
+        metadata.book_id.0.starts_with("LVED_SQLITE3:OXFPEU4:"),
+        "{}",
+        metadata.book_id.0
+    );
+    assert!(
+        !metadata.book_id.0.contains(":MAIN:"),
+        "{}",
+        metadata.book_id.0
+    );
+    assert!(package.routing_aliases().iter().any(|alias| {
+        alias.kind == lvcore::BookAliasKind::LvedDictCode && alias.value == "OXFPEU4"
+    }));
+}
+
+#[test]
 fn lved_preserved_html_packages_do_not_advertise_deferred_rendering() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());
