@@ -95,7 +95,7 @@ fn ssed_body_search_anchor_candidates(query: &str) -> Vec<Vec<u8>> {
     let mut best = String::new();
     let mut current = String::new();
     for ch in query.chars() {
-        if ch.is_ascii_alphabetic() || ch.is_whitespace() {
+        if ch.is_ascii_alphabetic() || is_foldable_latin_letter(ch) || ch.is_whitespace() {
             if current.chars().count() > best.chars().count() {
                 best = std::mem::take(&mut current);
             } else {
@@ -164,7 +164,10 @@ pub(super) fn ssed_fulltext_snippet_html(body_text: &str, query: &str) -> Option
 }
 
 pub(super) fn normalize_search_match_text(value: &str) -> String {
-    katakana_to_hiragana_text(&narrow_fullwidth_ascii_text(value)).to_lowercase()
+    fold_latin_diacritics_text(&katakana_to_hiragana_text(&narrow_fullwidth_ascii_text(
+        value,
+    )))
+    .to_lowercase()
 }
 
 pub(super) fn ssed_display_label_match_texts(display: &str) -> Vec<String> {
@@ -368,6 +371,68 @@ fn katakana_to_hiragana_text(value: &str) -> String {
         .collect()
 }
 
+fn fold_latin_diacritics_text(value: &str) -> String {
+    value.chars().map(fold_latin_diacritic_char).collect()
+}
+
+fn is_foldable_latin_letter(ch: char) -> bool {
+    ch != fold_latin_diacritic_char(ch) && fold_latin_diacritic_char(ch).is_ascii_alphabetic()
+}
+
+fn fold_latin_diacritic_char(ch: char) -> char {
+    match ch {
+        'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'Ā' | 'Ă' | 'Ą' | 'Ǎ' | 'Ȁ' | 'Ȃ' | 'Ạ' | 'Ả' | 'Ấ'
+        | 'Ầ' | 'Ẩ' | 'Ẫ' | 'Ậ' | 'Ắ' | 'Ằ' | 'Ẳ' | 'Ẵ' | 'Ặ' => 'A',
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' | 'ǎ' | 'ȁ' | 'ȃ' | 'ạ' | 'ả' | 'ấ'
+        | 'ầ' | 'ẩ' | 'ẫ' | 'ậ' | 'ắ' | 'ằ' | 'ẳ' | 'ẵ' | 'ặ' => 'a',
+        'Ç' | 'Ć' | 'Ĉ' | 'Ċ' | 'Č' => 'C',
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => 'c',
+        'Ð' | 'Ď' | 'Đ' => 'D',
+        'ð' | 'ď' | 'đ' => 'd',
+        'È' | 'É' | 'Ê' | 'Ë' | 'Ē' | 'Ĕ' | 'Ė' | 'Ę' | 'Ě' | 'Ȅ' | 'Ȇ' | 'Ẹ' | 'Ẻ' | 'Ẽ' | 'Ế'
+        | 'Ề' | 'Ể' | 'Ễ' | 'Ệ' => 'E',
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' | 'ȅ' | 'ȇ' | 'ẹ' | 'ẻ' | 'ẽ' | 'ế'
+        | 'ề' | 'ể' | 'ễ' | 'ệ' => 'e',
+        'Ĝ' | 'Ğ' | 'Ġ' | 'Ģ' => 'G',
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => 'g',
+        'Ĥ' | 'Ħ' => 'H',
+        'ĥ' | 'ħ' => 'h',
+        'Ì' | 'Í' | 'Î' | 'Ï' | 'Ĩ' | 'Ī' | 'Ĭ' | 'Į' | 'İ' | 'Ǐ' | 'Ȉ' | 'Ȋ' | 'Ị' | 'Ỉ' => {
+            'I'
+        }
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' | 'ǐ' | 'ȉ' | 'ȋ' | 'ị' | 'ỉ' => {
+            'i'
+        }
+        'Ĵ' => 'J',
+        'ĵ' => 'j',
+        'Ķ' => 'K',
+        'ķ' => 'k',
+        'Ĺ' | 'Ļ' | 'Ľ' | 'Ŀ' | 'Ł' => 'L',
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => 'l',
+        'Ñ' | 'Ń' | 'Ņ' | 'Ň' => 'N',
+        'ñ' | 'ń' | 'ņ' | 'ň' => 'n',
+        'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' | 'Ō' | 'Ŏ' | 'Ő' | 'Ǒ' | 'Ȍ' | 'Ȏ' | 'Ọ' | 'Ỏ' | 'Ố'
+        | 'Ồ' | 'Ổ' | 'Ỗ' | 'Ộ' | 'Ớ' | 'Ờ' | 'Ở' | 'Ỡ' | 'Ợ' => 'O',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' | 'ǒ' | 'ȍ' | 'ȏ' | 'ọ' | 'ỏ' | 'ố'
+        | 'ồ' | 'ổ' | 'ỗ' | 'ộ' | 'ớ' | 'ờ' | 'ở' | 'ỡ' | 'ợ' => 'o',
+        'Ŕ' | 'Ŗ' | 'Ř' => 'R',
+        'ŕ' | 'ŗ' | 'ř' => 'r',
+        'Ś' | 'Ŝ' | 'Ş' | 'Š' => 'S',
+        'ś' | 'ŝ' | 'ş' | 'š' => 's',
+        'Ţ' | 'Ť' | 'Ŧ' => 'T',
+        'ţ' | 'ť' | 'ŧ' => 't',
+        'Ù' | 'Ú' | 'Û' | 'Ü' | 'Ũ' | 'Ū' | 'Ŭ' | 'Ů' | 'Ű' | 'Ų' | 'Ǔ' | 'Ȕ' | 'Ȗ' | 'Ụ' | 'Ủ'
+        | 'Ứ' | 'Ừ' | 'Ử' | 'Ữ' | 'Ự' => 'U',
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' | 'ǔ' | 'ȕ' | 'ȗ' | 'ụ' | 'ủ'
+        | 'ứ' | 'ừ' | 'ử' | 'ữ' | 'ự' => 'u',
+        'Ý' | 'Ŷ' | 'Ÿ' | 'Ỳ' | 'Ỵ' | 'Ỷ' | 'Ỹ' => 'Y',
+        'ý' | 'ÿ' | 'ŷ' | 'ỳ' | 'ỵ' | 'ỷ' | 'ỹ' => 'y',
+        'Ź' | 'Ż' | 'Ž' => 'Z',
+        'ź' | 'ż' | 'ž' => 'z',
+        _ => ch,
+    }
+}
+
 fn hiragana_to_katakana_text(value: &str) -> String {
     value
         .chars()
@@ -400,6 +465,25 @@ mod tests {
         assert_eq!(
             normalize_search_match_text("ＡＣＴＡ アクタ"),
             "acta あくた"
+        );
+    }
+
+    #[test]
+    fn search_match_normalization_folds_latin_accents_only() {
+        assert_eq!(normalize_search_match_text("coeffìcient"), "coefficient");
+        assert_eq!(normalize_search_match_text("ÉCOLE Über"), "ecole uber");
+        assert_eq!(normalize_search_match_text("が ガ"), "が が");
+    }
+
+    #[test]
+    fn body_byte_prefilter_does_not_anchor_on_latin_accents() {
+        assert!(ssed_body_search_byte_candidates("coeffìcient").is_empty());
+
+        let candidates = ssed_body_search_byte_candidates("français犬");
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("犬"))
         );
     }
 
