@@ -1715,11 +1715,39 @@ fn search_probe_exact_text(title: &str) -> Option<String> {
     {
         return Some(run);
     }
+    if let Some(full_label) = search_probe_full_label_text(title)
+        && full_label != lookup
+        && search_probe_exact_should_use_full_label(&full_label, &lookup)
+    {
+        return Some(full_label);
+    }
     Some(lookup)
 }
 
 fn search_probe_lookup_is_nonword_prefix(value: &str) -> bool {
     value.chars().count() > 1 && !value.chars().any(char::is_alphabetic)
+}
+
+fn search_probe_full_label_text(title: &str) -> Option<String> {
+    let text = search_probe_partial_source_text(title)?;
+    let text = text
+        .split(['|', '｜'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
+fn search_probe_exact_should_use_full_label(value: &str, lookup: &str) -> bool {
+    if value
+        .strip_prefix(lookup)
+        .map(str::trim_start)
+        .is_some_and(|suffix| suffix.starts_with('<') || suffix.starts_with('＜'))
+    {
+        return false;
+    }
+    value.chars().next().is_some_and(|ch| !ch.is_alphabetic())
 }
 
 fn search_mode_key(mode: &SearchMode) -> String {
@@ -1844,6 +1872,18 @@ mod tests {
         assert_eq!(
             search_probe_query("0゜ 人工歯 ＜zero degree teeth＞", &SearchMode::Exact),
             "人工歯"
+        );
+        assert_eq!(
+            search_probe_query(".com company", &SearchMode::Exact),
+            ".com company"
+        );
+        assert_eq!(
+            search_probe_query("０°人工歯(zero degree teeth)", &SearchMode::Exact),
+            "０°人工歯(zero degree teeth)"
+        );
+        assert_eq!(
+            search_probe_query("0030.05 ～", &SearchMode::Exact),
+            "0030.05 ～"
         );
         assert_eq!(search_probe_lookup_text("【】"), None);
         assert_eq!(search_probe_query("【角】", &SearchMode::Exact), "角");
