@@ -289,10 +289,10 @@ impl LvedSqliteDriver {
         let package_root = detection.root.clone();
         let summary = store.summary()?;
         let search_modes = store.search_modes()?;
-        let retained_ssed_catalog = retained_ssed_catalog_for_lved_reader(&package_root)?;
+        let retained_ssed_catalogs = retained_ssed_catalogs_for_lved_reader(&package_root)?;
         let retained_ssed_components = discover_retained_sseddata_components(&package_root)?;
         let mut capabilities = lved_capabilities(&search_modes, &summary);
-        if let Some(catalog) = &retained_ssed_catalog {
+        if let Some(catalog) = &retained_ssed_catalogs.reader_catalog {
             extend_unique_capabilities(
                 &mut capabilities,
                 ssed_capabilities(catalog, &package_root),
@@ -307,7 +307,8 @@ impl LvedSqliteDriver {
             detection,
             capabilities,
             PackageStores {
-                ssed_catalog: retained_ssed_catalog,
+                ssed_catalog: retained_ssed_catalogs.reader_catalog,
+                retained_ssed_component_catalog: retained_ssed_catalogs.component_catalog,
                 lved_store: Some(store),
                 lved_summary: Some(summary),
                 retained_ssed_components,
@@ -318,9 +319,17 @@ impl LvedSqliteDriver {
     }
 }
 
-fn retained_ssed_catalog_for_lved_reader(root: &Path) -> Result<Option<SsedCatalog>> {
+struct RetainedSsedCatalogs {
+    component_catalog: Option<SsedCatalog>,
+    reader_catalog: Option<SsedCatalog>,
+}
+
+fn retained_ssed_catalogs_for_lved_reader(root: &Path) -> Result<RetainedSsedCatalogs> {
     let Ok(catalog) = ssed_catalog_for_root(root) else {
-        return Ok(None);
+        return Ok(RetainedSsedCatalogs {
+            component_catalog: None,
+            reader_catalog: None,
+        });
     };
     let storage = DirectoryStorage::new(root.to_path_buf());
     let has_reader_surface = has_decodable_ssed_index_rows(&catalog, &storage)
@@ -328,7 +337,10 @@ fn retained_ssed_catalog_for_lved_reader(root: &Path) -> Result<Option<SsedCatal
         || catalog.has_role(SsedComponentRole::Toc)
         || catalog.has_role(SsedComponentRole::MultiDescriptor)
         || catalog.has_role(SsedComponentRole::ScreenMenu);
-    Ok(has_reader_surface.then_some(catalog))
+    Ok(RetainedSsedCatalogs {
+        reader_catalog: has_reader_surface.then_some(catalog.clone()),
+        component_catalog: Some(catalog),
+    })
 }
 
 impl PackageDriver for LvlMultiViewDriver {

@@ -309,6 +309,7 @@ pub(crate) struct PackageStores {
     pub multiview_store: Option<MultiviewStore>,
     pub hourei_store: Option<HoureiStore>,
     pub retained_ios_dictlist: Option<IosDictListInfo>,
+    pub retained_ssed_component_catalog: Option<SsedCatalog>,
     pub retained_ssed_components: Vec<RetainedSsedComponent>,
     pub search_modes: Vec<SearchMode>,
     pub gaiji_unicode_map: BTreeMap<String, String>,
@@ -456,11 +457,15 @@ impl ReaderBookPackage {
 }
 
 fn package_metadata_diagnostics(stores: &PackageStores) -> Vec<Diagnostic> {
+    let retained_component_catalog = stores
+        .ssed_catalog
+        .as_ref()
+        .or(stores.retained_ssed_component_catalog.as_ref());
     stores
         .retained_ssed_components
         .iter()
         .filter(|component| {
-            !stores.ssed_catalog.as_ref().is_some_and(|catalog| {
+            !retained_component_catalog.is_some_and(|catalog| {
                 retained_ssed_component_is_catalog_backed(component, catalog)
             })
         })

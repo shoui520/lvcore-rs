@@ -231,6 +231,43 @@ fn lved_retained_loose_sseddata_indexes_are_deferred_diagnostics() {
 }
 
 #[test]
+fn lved_cataloged_nonreader_retained_components_are_not_deferred_noise() {
+    let dir = tempdir().unwrap();
+    write_lved_search_fixture(dir.path());
+    write_retained_ssedinfo_idx(dir.path(), "RETAINED.IDX");
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[b"\x1f\x0a retained body"], 100, 100),
+    )
+    .unwrap();
+
+    let package = LvedSqliteDriver.open(dir.path()).unwrap();
+
+    assert_eq!(package.metadata().format_family, FormatFamily::LvedSqlite3);
+    assert!(
+        package
+            .metadata()
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "retained_ssed_component_deferred"),
+        "catalog-backed retained components should not be reported as unresolved loose components"
+    );
+
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(
+        !surfaces
+            .iter()
+            .any(|surface| surface.surface_id == "title-index"),
+        "a retained catalog with no decodable index rows must not expose a fake SSED surface"
+    );
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "lved-list"
+            && surface.kind == NavigationSurfaceKind::TitleIndexBrowse
+            && surface.status == NavigationStatus::Available
+    }));
+}
+
+#[test]
 fn lved_adopts_reader_reachable_retained_ssed_catalog_as_secondary_surface() {
     let dir = tempdir().unwrap();
     write_lved_search_fixture(dir.path());
