@@ -113,7 +113,7 @@ fn ssed_search_falls_back_to_visible_title_label_when_index_key_differs() {
 }
 
 #[test]
-fn ssed_visible_title_label_fallback_returns_scan_cursor_when_bounded() {
+fn ssed_visible_title_label_fallback_avoids_empty_first_page_for_deep_matches() {
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("DICT.IDX"),
@@ -162,35 +162,14 @@ fn ssed_visible_title_label_fallback_returns_scan_cursor_when_bounded() {
             gaiji_policy: None,
         })
         .unwrap();
-    assert!(first.hits.is_empty());
-    let cursor = first
-        .next_cursor
-        .as_deref()
-        .expect("bounded visible-title fallback should expose a resume cursor");
-    assert!(cursor.starts_with("ssed-title-label:"));
+    assert_eq!(first.hits.len(), 1);
+    assert_eq!(first.hits[0].title_text, "target");
     assert!(
         first
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "ssed_title_label_search_fallback_limited"),
-        "bounded fallback should explain why the first page has no hit yet"
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("ssed-title-label:"))
     );
-
-    let second = package
-        .search(&SearchQuery {
-            scope: SearchScope::CurrentBook {
-                book_id: package.metadata().book_id.clone(),
-            },
-            mode: SearchMode::Exact,
-            query: "target".to_owned(),
-            cursor: Some(cursor.to_owned()),
-            limit: 10,
-            gaiji_policy: None,
-        })
-        .unwrap();
-    assert_eq!(second.hits.len(), 1);
-    assert_eq!(second.hits[0].title_text, "target");
-    assert!(second.next_cursor.is_none());
 }
 
 #[test]

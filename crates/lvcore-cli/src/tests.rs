@@ -746,7 +746,7 @@ fn validate_deep_exercises_ssed_advertised_search_modes() {
 }
 
 #[test]
-fn validate_deep_follows_empty_search_cursor_pages() {
+fn validate_deep_does_not_need_empty_cursor_pages_for_deep_visible_title_hits() {
     let dir = tempfile::tempdir().unwrap();
     write_ssed_visible_title_cursor_cli_fixture(dir.path());
 
@@ -757,10 +757,14 @@ fn validate_deep_follows_empty_search_cursor_pages() {
         search_with_empty_cursor_follow(&library, &book_id, &SearchMode::Exact, "target", 10)
             .unwrap();
 
-    assert_eq!(cursor_pages_followed, 1);
+    assert_eq!(cursor_pages_followed, 0);
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "ｔａｒｇｅｔ");
-    assert!(page.next_cursor.is_none());
+    assert!(
+        page.next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("ssed-title-label:"))
+    );
 }
 
 #[test]

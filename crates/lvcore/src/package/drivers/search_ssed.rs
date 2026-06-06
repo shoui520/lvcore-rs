@@ -3,6 +3,7 @@ use std::{cell::Cell, collections::HashSet};
 use super::*;
 
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
+const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 4096;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 
@@ -229,7 +230,12 @@ impl ReaderBookPackage {
                     checked_rows = checked_rows.saturating_add(1);
                     return Ok(true);
                 }
-                if scanned_rows >= SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS {
+                let row_budget = if hits.is_empty() {
+                    SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS
+                } else {
+                    SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS
+                };
+                if scanned_rows >= row_budget {
                     stopped = SsedTitleLabelFallbackStop::Budget;
                     return Ok(false);
                 }
