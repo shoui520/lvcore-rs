@@ -3,9 +3,20 @@ use rusqlite::{Connection, Row, params_from_iter};
 use std::collections::BTreeMap;
 
 use super::title::html_to_text;
-use super::{LvedSearchHit, LvedSqliteSchema, has_column, nonempty_string, sqlite_value_to_string};
+use super::{
+    LvedSearchHit, LvedSqliteSchema, has_column, nonempty_string, quote_identifier,
+    sqlite_value_to_string,
+};
 use crate::error::{Error, Result};
 use crate::search::SearchMode;
+
+#[derive(Debug, Clone, Copy)]
+struct LvedSearchProvider<'a> {
+    search_table: &'static str,
+    list_table: &'static str,
+    search_columns: &'a [String],
+    list_columns: &'a [String],
+}
 
 pub(super) fn search_lved_sqlite_connection(
     connection: &Connection,
@@ -15,25 +26,20 @@ pub(super) fn search_lved_sqlite_connection(
     offset: usize,
     limit: usize,
 ) -> Result<Vec<LvedSearchHit>> {
-    if !schema.table_exists("search") || !schema.table_exists("list") {
-        return Ok(Vec::new());
-    }
-    let search_columns = schema.columns("search");
-    let list_columns = schema.columns("list");
-    if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
-        return Ok(Vec::new());
-    }
     let normalized_variants = lved_query_variants(query);
     if normalized_variants.is_empty() {
         return Ok(Vec::new());
     }
+    let Some(provider) = lved_search_provider_for_mode(schema, mode) else {
+        return Ok(Vec::new());
+    };
     if normalized_variants.len() > 1
         && let Some(match_queries) =
-            lved_fts_match_queries(&normalized_variants, mode, search_columns)
+            lved_fts_match_queries(&normalized_variants, mode, provider.search_columns)
     {
         return search_lved_sqlite_fts_variants(
             connection,
-            list_columns,
+            provider,
             &match_queries,
             offset,
             limit,
@@ -48,7 +54,7 @@ pub(super) fn search_lved_sqlite_connection(
     let mut parameters = Vec::new();
     for normalized in normalized_variants {
         if let Some((where_clause, mut variant_parameters)) =
-            lved_search_where(&normalized, mode, search_columns, prefer_direct_fts)
+            lved_search_where(&normalized, mode, provider, prefer_direct_fts)
         {
             where_clauses.push(format!("({where_clause})"));
             parameters.append(&mut variant_parameters);
@@ -59,10 +65,12 @@ pub(super) fn search_lved_sqlite_connection(
     }
     let where_clause = where_clauses.join(" or ");
 
-    let projection = lved_list_projection(list_columns);
+    let projection = lved_list_projection(provider.list_columns);
+    let search_table = quote_identifier(provider.search_table);
+    let list_table = quote_identifier(provider.list_table);
     let sql = format!(
         "select l.id, l.refid, {}, {}, {}, {} \
-         from search s join list l on l.id = s.rowid where {where_clause} order by l.id limit ? offset ?",
+         from {search_table} s join {list_table} l on l.id = s.rowid where {where_clause} order by l.id limit ? offset ?",
         projection.anchor, projection.title, projection.subtitle, projection.kind
     );
     let mut statement = connection.prepare(&sql)?;
@@ -79,7 +87,7 @@ pub(super) fn search_lved_sqlite_connection(
 
 fn search_lved_sqlite_fts_variants(
     connection: &Connection,
-    list_columns: &[String],
+    provider: LvedSearchProvider<'_>,
     match_queries: &[String],
     offset: usize,
     limit: usize,
@@ -88,10 +96,13 @@ fn search_lved_sqlite_fts_variants(
     if fetch_limit == 0 {
         return Ok(Vec::new());
     }
-    let projection = lved_list_projection(list_columns);
+    let projection = lved_list_projection(provider.list_columns);
+    let search_table = quote_identifier(provider.search_table);
+    let list_table = quote_identifier(provider.list_table);
+    let match_expr = fts_table_match_expr(provider.search_table);
     let sql = format!(
         "select l.id, l.refid, {}, {}, {}, {} \
-         from search join list l on l.id = search.rowid where search match ? order by l.id limit ?",
+         from {search_table} join {list_table} l on l.id = {search_table}.rowid where {match_expr} order by l.id limit ?",
         projection.anchor, projection.title, projection.subtitle, projection.kind
     );
     let mut hits_by_list_id = BTreeMap::new();
@@ -170,12 +181,14 @@ fn lved_search_hit_from_row(row: &Row<'_>) -> rusqlite::Result<LvedSearchHit> {
 fn lved_search_where(
     normalized: &str,
     mode: &SearchMode,
-    search_columns: &[String],
+    provider: LvedSearchProvider<'_>,
     prefer_direct_fts: bool,
 ) -> Option<(String, Vec<String>)> {
+    let search_columns = provider.search_columns;
     match mode {
-        SearchMode::Exact => exact_lved_search_where(normalized, search_columns, prefer_direct_fts),
+        SearchMode::Exact => exact_lved_search_where(normalized, provider, prefer_direct_fts),
         SearchMode::Forward => one_parameter_where(fts_match(
+            provider.search_table,
             "forward",
             normalized,
             search_columns,
@@ -186,6 +199,7 @@ fn lved_search_where(
         SearchMode::Backward => {
             let reversed = normalized.chars().rev().collect::<String>();
             one_parameter_where(fts_match(
+                provider.search_table,
                 "back",
                 &reversed,
                 search_columns,
@@ -195,6 +209,7 @@ fn lved_search_where(
             ))
         }
         SearchMode::Partial => one_parameter_where(fts_match(
+            provider.search_table,
             "part",
             normalized,
             search_columns,
@@ -203,6 +218,7 @@ fn lved_search_where(
             prefer_direct_fts,
         )),
         SearchMode::FullText => one_parameter_where(fts_match(
+            provider.search_table,
             "fts",
             normalized,
             search_columns,
@@ -211,6 +227,7 @@ fn lved_search_where(
             prefer_direct_fts,
         )),
         SearchMode::Advanced(column) => one_parameter_where(fts_match(
+            provider.search_table,
             column,
             normalized,
             search_columns,
@@ -265,19 +282,26 @@ fn lved_fts_match_query(
 
 fn exact_lved_search_where(
     normalized: &str,
-    search_columns: &[String],
+    provider: LvedSearchProvider<'_>,
     prefer_direct_fts: bool,
 ) -> Option<(String, Vec<String>)> {
+    let search_columns = provider.search_columns;
     if has_column(search_columns, "filter") {
         let like_parameter = format!("%∥{}∥%", escape_sql_like(normalized));
         if let Some(match_query) = exact_lved_filter_prefilter_query(normalized, search_columns) {
             let where_clause = if prefer_direct_fts {
-                "search match ? and s.filter like ? escape '\\'"
+                format!(
+                    "{} and s.filter like ? escape '\\'",
+                    fts_table_match_expr(provider.search_table)
+                )
             } else {
-                "s.rowid in (select rowid from search where search match ?) \
-                 and s.filter like ? escape '\\'"
+                let search_table = quote_identifier(provider.search_table);
+                format!(
+                    "s.rowid in (select rowid from {search_table} where {search_table} match ?) \
+                     and s.filter like ? escape '\\'"
+                )
             };
-            return Some((where_clause.to_owned(), vec![match_query, like_parameter]));
+            return Some((where_clause, vec![match_query, like_parameter]));
         }
         return Some((
             "s.filter like ? escape '\\'".to_owned(),
@@ -309,41 +333,124 @@ fn exact_lved_filter_prefilter_query(
 }
 
 pub(super) fn lved_available_search_modes(schema: &LvedSqliteSchema) -> Vec<SearchMode> {
-    if !schema.table_exists("search") || !schema.table_exists("list") {
-        return Vec::new();
-    }
-    let search_columns = schema.columns("search");
-    let list_columns = schema.columns("list");
-    if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
-        return Vec::new();
-    }
     let mut modes = Vec::new();
-    if has_column(search_columns, "filter") || has_column(search_columns, "forward") {
-        modes.push(SearchMode::Exact);
+    if let Some(provider) = lved_primary_search_provider(schema) {
+        extend_lved_search_modes(&mut modes, provider.search_columns, true);
     }
-    if has_column(search_columns, "forward") {
-        modes.push(SearchMode::Forward);
+    if let Some(provider) = lved_secondary_search_provider(schema) {
+        extend_lved_search_modes(&mut modes, provider.search_columns, false);
     }
-    if has_column(search_columns, "back") {
-        modes.push(SearchMode::Backward);
-    }
-    if has_column(search_columns, "part") {
-        modes.push(SearchMode::Partial);
-    }
-    if has_column(search_columns, "fts") {
-        modes.push(SearchMode::FullText);
-    }
-    modes.extend(
-        search_columns
-            .iter()
-            .filter(|column| column.starts_with("advanced"))
-            .cloned()
-            .map(SearchMode::Advanced),
-    );
     modes
 }
 
+fn lved_search_provider_for_mode<'a>(
+    schema: &'a LvedSqliteSchema,
+    mode: &SearchMode,
+) -> Option<LvedSearchProvider<'a>> {
+    if let Some(provider) = lved_primary_search_provider(schema)
+        && lved_search_mode_supported_by_columns(mode, provider.search_columns)
+    {
+        return Some(provider);
+    }
+    if let Some(provider) = lved_secondary_search_provider(schema)
+        && matches!(mode, SearchMode::Advanced(_))
+        && lved_search_mode_supported_by_columns(mode, provider.search_columns)
+    {
+        return Some(provider);
+    }
+    None
+}
+
+fn lved_primary_search_provider(schema: &LvedSqliteSchema) -> Option<LvedSearchProvider<'_>> {
+    lved_search_provider(schema, "search", "list")
+}
+
+fn lved_secondary_search_provider(schema: &LvedSqliteSchema) -> Option<LvedSearchProvider<'_>> {
+    lved_search_provider(schema, "searchsub", "listsub")
+}
+
+fn lved_search_provider<'a>(
+    schema: &'a LvedSqliteSchema,
+    search_table: &'static str,
+    list_table: &'static str,
+) -> Option<LvedSearchProvider<'a>> {
+    if !schema.table_exists(search_table) || !schema.table_exists(list_table) {
+        return None;
+    }
+    let search_columns = schema.columns(search_table);
+    let list_columns = schema.columns(list_table);
+    if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
+        return None;
+    }
+    Some(LvedSearchProvider {
+        search_table,
+        list_table,
+        search_columns,
+        list_columns,
+    })
+}
+
+fn lved_search_mode_supported_by_columns(mode: &SearchMode, search_columns: &[String]) -> bool {
+    match mode {
+        SearchMode::Exact => {
+            has_column(search_columns, "filter") || has_column(search_columns, "forward")
+        }
+        SearchMode::Forward => has_column(search_columns, "forward"),
+        SearchMode::Backward => has_column(search_columns, "back"),
+        SearchMode::Partial => has_column(search_columns, "part"),
+        SearchMode::FullText => has_column(search_columns, "fts"),
+        SearchMode::Advanced(column) => has_column(search_columns, column),
+    }
+}
+
+fn extend_lved_search_modes(
+    modes: &mut Vec<SearchMode>,
+    search_columns: &[String],
+    include_standard: bool,
+) {
+    if include_standard {
+        push_unique_mode_if(
+            modes,
+            SearchMode::Exact,
+            has_column(search_columns, "filter") || has_column(search_columns, "forward"),
+        );
+        push_unique_mode_if(
+            modes,
+            SearchMode::Forward,
+            has_column(search_columns, "forward"),
+        );
+        push_unique_mode_if(
+            modes,
+            SearchMode::Backward,
+            has_column(search_columns, "back"),
+        );
+        push_unique_mode_if(
+            modes,
+            SearchMode::Partial,
+            has_column(search_columns, "part"),
+        );
+        push_unique_mode_if(
+            modes,
+            SearchMode::FullText,
+            has_column(search_columns, "fts"),
+        );
+    }
+    for column in search_columns
+        .iter()
+        .filter(|column| column.starts_with("advanced"))
+    {
+        push_unique_mode_if(modes, SearchMode::Advanced(column.clone()), true);
+    }
+}
+
+fn push_unique_mode_if(modes: &mut Vec<SearchMode>, mode: SearchMode, condition: bool) {
+    if condition && !modes.contains(&mode) {
+        modes.push(mode);
+    }
+}
+
 fn fts_match(
+    search_table: &str,
     column: &str,
     normalized: &str,
     search_columns: &[String],
@@ -353,11 +460,17 @@ fn fts_match(
 ) -> Option<(String, String)> {
     let query = fts_query(column, normalized, search_columns, prefix_last, split_chars)?;
     let where_clause = if prefer_direct_fts {
-        "search match ?"
+        fts_table_match_expr(search_table)
     } else {
-        "s.rowid in (select rowid from search where search match ?)"
+        let search_table = quote_identifier(search_table);
+        format!("s.rowid in (select rowid from {search_table} where {search_table} match ?)")
     };
-    Some((where_clause.to_owned(), query))
+    Some((where_clause, query))
+}
+
+fn fts_table_match_expr(search_table: &str) -> String {
+    let search_table = quote_identifier(search_table);
+    format!("{search_table} match ?")
 }
 
 fn fts_query(
@@ -518,14 +631,25 @@ mod tests {
         columns.iter().map(|column| (*column).to_owned()).collect()
     }
 
+    fn primary_provider<'a>(columns: &'a [String]) -> LvedSearchProvider<'a> {
+        const LIST_COLUMNS: &[String] = &[];
+        LvedSearchProvider {
+            search_table: "search",
+            list_table: "list",
+            search_columns: columns,
+            list_columns: LIST_COLUMNS,
+        }
+    }
+
     #[test]
     fn exact_filter_search_prefilters_ascii_terms_with_fts() {
         let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
 
         let (where_clause, parameters) =
-            exact_lved_search_where("abacus", &columns, true).expect("exact filter search");
+            exact_lved_search_where("abacus", primary_provider(&columns), true)
+                .expect("exact filter search");
 
-        assert!(where_clause.contains("search match ?"));
+        assert!(where_clause.contains("\"search\" match ?"));
         assert!(where_clause.contains("s.filter like ?"));
         assert_eq!(parameters, vec!["part:abacus", "%∥abacus∥%"]);
     }
@@ -535,9 +659,10 @@ mod tests {
         let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
 
         let (where_clause, parameters) =
-            exact_lved_search_where("あいう", &columns, true).expect("exact filter search");
+            exact_lved_search_where("あいう", primary_provider(&columns), true)
+                .expect("exact filter search");
 
-        assert!(!where_clause.contains("search match ?"));
+        assert!(!where_clause.contains("\"search\" match ?"));
         assert_eq!(where_clause, "s.filter like ? escape '\\'");
         assert_eq!(parameters, vec!["%∥あいう∥%"]);
     }
@@ -547,9 +672,10 @@ mod tests {
         let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
 
         let (where_clause, parameters) =
-            exact_lved_search_where("131i", &columns, false).expect("exact filter search");
+            exact_lved_search_where("131i", primary_provider(&columns), false)
+                .expect("exact filter search");
 
-        assert!(where_clause.contains("select rowid from search where search match ?"));
+        assert!(where_clause.contains("select rowid from \"search\" where \"search\" match ?"));
         assert_eq!(parameters, vec!["part:131i", "%∥131i∥%"]);
     }
 }

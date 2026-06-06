@@ -350,6 +350,66 @@ fn lved_advanced_search_mode_uses_named_search_column() {
 }
 
 #[test]
+fn lved_secondary_searchsub_provider_uses_listsub_rows_for_advanced_modes() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute_batch(
+                "
+                insert into content values (300, 1, '<article><h1>Secondary</h1><p>body</p></article>', '');
+                create table listsub(id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                insert into listsub values (7, 300, 1, '', '<b>secondary</b>', 'phrase subtitle');
+                create virtual table searchsub using fts4(advanced3);
+                insert into searchsub(rowid, advanced3) values (7, 'secondary phrase');
+                ",
+            )
+            .unwrap();
+    }
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    assert!(
+        package
+            .metadata()
+            .search_modes
+            .contains(&SearchMode::Advanced("advanced3".to_owned()))
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Advanced("advanced3".to_owned()),
+            query: "phrase".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "secondary");
+    assert_eq!(
+        page.hits[0].snippet_html.as_deref(),
+        Some("phrase subtitle")
+    );
+    let view = package
+        .render_target(&page.hits[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        view.display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("<h1>Secondary</h1>"))
+    );
+}
+
+#[test]
 fn lved_tree_idx_opens_as_navigation_tree_and_targets_content_rows() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());

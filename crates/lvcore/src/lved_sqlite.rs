@@ -1300,7 +1300,7 @@ fn validate_sqlite_connection(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn quote_identifier(value: &str) -> String {
+pub(super) fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
