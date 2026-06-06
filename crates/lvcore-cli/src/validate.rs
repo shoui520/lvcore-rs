@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -170,8 +170,9 @@ fn exercise_reader_paths(
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
     let resource_scan_limit = resource_scan_limit_for(format_family);
+    let mut probed_surface_kinds = BTreeSet::new();
     for surface in surfaces {
-        if surface.status != NavigationStatus::Available || surface.surface_id == "search" {
+        if !should_probe_home_surface(&mut probed_surface_kinds, surface) {
             continue;
         }
         let started = Instant::now();
@@ -305,6 +306,35 @@ fn exercise_reader_paths(
         include_expensive_search,
     ));
     rows
+}
+
+fn should_probe_home_surface(
+    probed_surface_kinds: &mut BTreeSet<&'static str>,
+    surface: &HomeSurface,
+) -> bool {
+    if surface.status != NavigationStatus::Available || surface.surface_id == "search" {
+        return false;
+    }
+    probed_surface_kinds.insert(home_surface_probe_kind_key(surface))
+}
+
+fn home_surface_probe_kind_key(surface: &HomeSurface) -> &'static str {
+    match surface.kind {
+        NavigationSurfaceKind::Menu => "menu",
+        NavigationSurfaceKind::ScreenMenu => "screen_menu",
+        NavigationSurfaceKind::EncyclopediaIndex => "encyclopedia_index",
+        NavigationSurfaceKind::AuxiliaryIndex => "auxiliary_index",
+        NavigationSurfaceKind::Toc => "toc",
+        NavigationSurfaceKind::TitleIndexBrowse => "title_index_browse",
+        NavigationSurfaceKind::MultiSelector => "multi_selector",
+        NavigationSurfaceKind::Panel => "panel",
+        NavigationSurfaceKind::Hanrei => "hanrei",
+        NavigationSurfaceKind::Info => "info",
+        NavigationSurfaceKind::SearchFallback => "search_fallback",
+        NavigationSurfaceKind::LvedTree => "lved_tree",
+        NavigationSurfaceKind::LawTree => "law_tree",
+        NavigationSurfaceKind::MultiviewTree => "multiview_tree",
+    }
 }
 
 #[derive(Debug)]
@@ -1716,6 +1746,45 @@ mod tests {
 
     use rusqlite::Connection;
     use tempfile::tempdir;
+
+    #[test]
+    fn validate_deep_surface_probe_samples_one_surface_per_kind() {
+        let mut probed = BTreeSet::new();
+        let first_aux = HomeSurface {
+            surface_id: "aux-index:0".to_owned(),
+            kind: NavigationSurfaceKind::AuxiliaryIndex,
+            status: NavigationStatus::Available,
+            title_html: "1991".to_owned(),
+            title_text: "1991".to_owned(),
+            target: None,
+            href: None,
+            diagnostics: Vec::new(),
+        };
+        let second_aux = HomeSurface {
+            surface_id: "aux-index:1".to_owned(),
+            kind: NavigationSurfaceKind::AuxiliaryIndex,
+            status: NavigationStatus::Available,
+            title_html: "1992".to_owned(),
+            title_text: "1992".to_owned(),
+            target: None,
+            href: None,
+            diagnostics: Vec::new(),
+        };
+        let hanrei = HomeSurface {
+            surface_id: "hanrei".to_owned(),
+            kind: NavigationSurfaceKind::Hanrei,
+            status: NavigationStatus::Available,
+            title_html: "凡例".to_owned(),
+            title_text: "凡例".to_owned(),
+            target: None,
+            href: None,
+            diagnostics: Vec::new(),
+        };
+
+        assert!(should_probe_home_surface(&mut probed, &first_aux));
+        assert!(!should_probe_home_surface(&mut probed, &second_aux));
+        assert!(should_probe_home_surface(&mut probed, &hanrei));
+    }
 
     #[test]
     fn diagnostic_fields_include_counts_and_bounded_samples() {
