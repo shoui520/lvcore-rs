@@ -99,8 +99,10 @@ fn library_metadata_serializes_empty_search_modes_for_frontend_cache_shape() {
         .unwrap();
 
     assert!(metadata.search_modes.is_empty());
+    assert!(metadata.diagnostics.is_empty());
     let json = serde_json::to_value(&metadata).unwrap();
     assert_eq!(json["search_modes"].as_array().unwrap().len(), 0);
+    assert_eq!(json["diagnostics"].as_array().unwrap().len(), 0);
 }
 
 #[test]

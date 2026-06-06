@@ -100,7 +100,7 @@ pub struct BookMetadata {
     pub capabilities: Vec<Capability>,
     #[serde(default)]
     pub search_modes: Vec<SearchMode>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub diagnostics: Vec<Diagnostic>,
 }
 
