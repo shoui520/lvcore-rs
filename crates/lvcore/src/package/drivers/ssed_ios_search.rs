@@ -36,6 +36,15 @@ struct SsedIosAddressOnlySearchPage {
     decoded_candidate_rows: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SsedIosAddressOnlyCandidate {
+    raw_block: u32,
+    raw_offset: u32,
+    component_filename: String,
+    component_offset: u64,
+    window_len: usize,
+}
+
 impl SsedIosSearchResolverSource {
     fn sort_key(self) -> u8 {
         match self {
@@ -392,32 +401,16 @@ fn search_ios_address_only_resolver(
         });
     }
     let connection = open_ios_search_connection(&resolver.path)?;
-    let sql = format!(
-        "select {}, {} from {} order by rowid",
-        quote_sql_identifier(&resolver.block_column),
-        quote_sql_identifier(&resolver.offset_column),
-        quote_sql_identifier(&resolver.table),
-    );
-    let mut statement = connection.prepare(&sql)?;
-    let mut rows = statement.query([])?;
+    let candidates = ios_address_only_candidates(package, catalog, resolver, &connection)?;
     let mut readers: BTreeMap<String, SsedDataFile> = BTreeMap::new();
     let mut out = Vec::new();
     let mut matched = 0usize;
     let mut checked_rows = 0usize;
     let mut byte_candidate_rows = 0usize;
     let mut decoded_candidate_rows = 0usize;
-    while let Some(row) = rows.next()? {
+    for candidate in candidates {
         checked_rows = checked_rows.saturating_add(1);
-        let raw_block = sqlite_value_to_u32(row.get_ref(0)?)?;
-        let raw_offset = sqlite_value_to_u32(row.get_ref(1)?)?;
-        let (block, offset) = package.convert_ios_ssed_address(raw_block, raw_offset)?;
-        let Some(component) = catalog.component_for_address(block) else {
-            continue;
-        };
-        if component.role != SsedComponentRole::Honmon {
-            continue;
-        }
-        let Some(component_offset) = component.relative_offset(block, offset) else {
+        let Some(component) = catalog.component_named(&candidate.component_filename) else {
             continue;
         };
         let reader = if readers.contains_key(&component.filename) {
@@ -438,9 +431,9 @@ fn search_ios_address_only_resolver(
             })?
         };
         let body_data = reader.read_range(
-            usize::try_from(component_offset)
+            usize::try_from(candidate.component_offset)
                 .map_err(|_| Error::Driver("SSED body offset does not fit in usize".to_owned()))?,
-            SSED_FULLTEXT_BODY_WINDOW_BYTES,
+            candidate.window_len,
         )?;
         if !ssed_body_window_may_contain_query(&body_data, byte_candidates) {
             continue;
@@ -456,9 +449,9 @@ fn search_ios_address_only_resolver(
             continue;
         }
         out.push(SsedIosSearchRow {
-            block: raw_block,
-            offset: raw_offset,
-            label: ios_address_only_label(&body_text, raw_block, raw_offset),
+            block: candidate.raw_block,
+            offset: candidate.raw_offset,
+            label: ios_address_only_label(&body_text, candidate.raw_block, candidate.raw_offset),
             snippet: body_text,
         });
         matched = matched.saturating_add(1);
@@ -472,6 +465,93 @@ fn search_ios_address_only_resolver(
         byte_candidate_rows,
         decoded_candidate_rows,
     })
+}
+
+fn ios_address_only_candidates(
+    package: &ReaderBookPackage,
+    catalog: &SsedCatalog,
+    resolver: &SsedIosSearchResolver,
+    connection: &Connection,
+) -> Result<Vec<SsedIosAddressOnlyCandidate>> {
+    let sql = format!(
+        "select {}, {} from {} order by rowid",
+        quote_sql_identifier(&resolver.block_column),
+        quote_sql_identifier(&resolver.offset_column),
+        quote_sql_identifier(&resolver.table),
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            sqlite_value_to_u32(row.get_ref(0)?)?,
+            sqlite_value_to_u32(row.get_ref(1)?)?,
+        ))
+    })?;
+    let mut candidates = Vec::new();
+    for row in rows {
+        let (raw_block, raw_offset) = row?;
+        let (block, offset) = package.convert_ios_ssed_address(raw_block, raw_offset)?;
+        let Some(component) = catalog.component_for_address(block) else {
+            continue;
+        };
+        if component.role != SsedComponentRole::Honmon {
+            continue;
+        }
+        let Some(component_offset) = component.relative_offset(block, offset) else {
+            continue;
+        };
+        candidates.push(SsedIosAddressOnlyCandidate {
+            raw_block,
+            raw_offset,
+            component_filename: component.filename.clone(),
+            component_offset,
+            window_len: SSED_FULLTEXT_BODY_WINDOW_BYTES,
+        });
+    }
+
+    let mut sorted = candidates.clone();
+    sorted.sort_by(|left, right| {
+        (
+            &left.component_filename,
+            left.component_offset,
+            left.raw_block,
+            left.raw_offset,
+        )
+            .cmp(&(
+                &right.component_filename,
+                right.component_offset,
+                right.raw_block,
+                right.raw_offset,
+            ))
+    });
+    let mut window_lengths = BTreeMap::new();
+    for (index, candidate) in sorted.iter().enumerate() {
+        let window_len = sorted[index + 1..]
+            .iter()
+            .find(|next| {
+                next.component_filename == candidate.component_filename
+                    && next.component_offset > candidate.component_offset
+            })
+            .and_then(|next| {
+                usize::try_from(
+                    next.component_offset
+                        .saturating_sub(candidate.component_offset),
+                )
+                .ok()
+            })
+            .map(|len| len.min(SSED_FULLTEXT_BODY_WINDOW_BYTES))
+            .unwrap_or(SSED_FULLTEXT_BODY_WINDOW_BYTES);
+        window_lengths.insert(
+            (candidate.raw_block, candidate.raw_offset),
+            window_len.max(1),
+        );
+    }
+
+    for candidate in &mut candidates {
+        if let Some(window_len) = window_lengths.get(&(candidate.raw_block, candidate.raw_offset)) {
+            candidate.window_len = *window_len;
+        }
+    }
+    Ok(candidates)
 }
 
 fn ios_search_row_from_sqlite_row(

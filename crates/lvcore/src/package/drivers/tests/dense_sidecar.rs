@@ -1044,6 +1044,106 @@ fn ios_dictsearchdb_address_only_phrase_search_scans_body_windows() {
 }
 
 #[test]
+fn ios_dictsearchdb_address_only_phrase_search_uses_address_bounded_windows() {
+    let dir = tempdir().unwrap();
+    let mut body = Vec::new();
+    body.extend_from_slice(&body_jis("alpha phrase body"));
+    let loan_offset = body.len() as u32;
+    body.extend_from_slice(&body_jis("loan phrase body"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&body], 100, 100),
+    )
+    .unwrap();
+    let search_db = dir.path().join("DICT_Search.sql");
+    let connection = Connection::open(&search_db).unwrap();
+    connection
+        .execute_batch(&format!(
+            "
+            create table DICT_seiku (
+              Block integer,
+              Offset integer
+            );
+            insert into DICT_seiku values (100, 0);
+            insert into DICT_seiku values (100, {loan_offset});
+            "
+        ))
+        .unwrap();
+    let catalog = SsedCatalog {
+        title: "iOS phrase addresses".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 100,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("iOS phrase addresses".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            retained_ios_dictlist: Some(crate::ios_dictlist::IosDictListInfo {
+                fts_payloads: Vec::new(),
+                full_db_payloads: Vec::new(),
+                search_payloads: vec![crate::ios_dictlist::IosDictSearchPayload {
+                    relative_path: "DICT/DICT_Search.sql".to_owned(),
+                    absolute_path: search_db,
+                    dict_code: "DICT".to_owned(),
+                    dictionary_name: Some("iOS SearchDB".to_owned()),
+                }],
+                convert_addr_payloads: Vec::new(),
+                search_modes: vec![SearchMode::Advanced("phrase".to_owned())],
+            }),
+            search_modes: vec![SearchMode::Advanced("phrase".to_owned())],
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Advanced("phrase".to_owned()),
+            query: "loan".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert!(page.hits[0].title_text.contains("loan phrase body"));
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 100,
+            offset,
+        } if component == "HONMON.DIC" && offset == loan_offset
+    ));
+}
+
+#[test]
 fn ios_dictsearchdb_hits_return_direct_ssed_address_targets() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
