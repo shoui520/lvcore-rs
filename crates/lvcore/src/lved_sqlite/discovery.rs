@@ -114,10 +114,9 @@ pub fn infer_lved_dict_code(payload_path: &Path) -> Option<String> {
             .file_stem()
             .map(|name| normalize_lved_dict_code(&name.to_string_lossy()));
     }
-    if payload_path
-        .file_name()
-        .is_some_and(|name| name.eq_ignore_ascii_case("main.data"))
-    {
+    if payload_path.file_name().is_some_and(|name| {
+        name.eq_ignore_ascii_case("main.data") || name.eq_ignore_ascii_case("main.dbc")
+    }) {
         return payload_path
             .parent()
             .and_then(|parent| parent.file_name())

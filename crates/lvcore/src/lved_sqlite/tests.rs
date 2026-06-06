@@ -30,6 +30,22 @@ fn discovers_dict_code_key_file_for_main_data() {
 }
 
 #[test]
+fn generic_main_dbc_uses_package_folder_as_dict_code() {
+    let dir = tempdir().unwrap();
+    let package = dir.path().join("_DCT_OXFPEU4");
+    fs::create_dir(&package).unwrap();
+    fs::write(package.join("main.dbc"), b"encrypted").unwrap();
+    fs::write(package.join("OXFPEU4.key"), b"secret").unwrap();
+    let payload = package.join("main.dbc");
+
+    assert_eq!(infer_lved_dict_code(&payload).as_deref(), Some("OXFPEU4"));
+    let key = discover_lved_key_file(&payload).unwrap().unwrap();
+
+    assert_eq!(key.path.file_name().unwrap(), "OXFPEU4.key");
+    assert_eq!(read_lved_key_file(&key.path).unwrap(), "secret");
+}
+
+#[test]
 fn discovers_android_lved_payload_and_uses_dictinfo_key() {
     let dir = tempdir().unwrap();
     let package = dir.path().join("SQLite/.TESTDICT");
