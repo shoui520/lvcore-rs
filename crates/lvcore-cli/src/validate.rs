@@ -1442,6 +1442,12 @@ fn search_probe_prefix(title: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
+    if search_probe_lookup_is_nonword_prefix(trimmed)
+        && let Some(run) = search_probe_first_useful_run(title)
+        && run != trimmed
+    {
+        return Some(run);
+    }
     let mut end = 0usize;
     let mut chars = 0usize;
     for (index, ch) in trimmed.char_indices() {
@@ -1466,6 +1472,12 @@ fn search_probe_suffix(title: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
+    if search_probe_lookup_is_nonword_prefix(trimmed)
+        && let Some(run) = search_probe_first_useful_run(title)
+        && run != trimmed
+    {
+        return Some(run);
+    }
     let chars = trimmed.chars().rev().take(2).collect::<Vec<_>>();
     if chars.is_empty() {
         None
@@ -1475,7 +1487,13 @@ fn search_probe_suffix(title: &str) -> Option<String> {
 }
 
 fn search_probe_partial_text(title: &str) -> Option<String> {
-    let normalized = search_probe_lookup_text(title)?;
+    search_probe_first_useful_run(title)
+        .map(|run| run.chars().take(2).collect())
+        .or_else(|| search_probe_prefix(title))
+}
+
+fn search_probe_first_useful_run(title: &str) -> Option<String> {
+    let normalized = search_probe_partial_source_text(title)?;
     let mut current = String::new();
     for ch in normalized.chars().chain(std::iter::once(' ')) {
         if ch.is_alphanumeric() {
@@ -1483,15 +1501,29 @@ fn search_probe_partial_text(title: &str) -> Option<String> {
             continue;
         }
         if search_probe_run_is_useful(&current) {
-            return Some(current.chars().take(2).collect());
+            return Some(current);
         }
         current.clear();
     }
-    search_probe_prefix(title)
+    None
+}
+
+fn search_probe_partial_source_text(title: &str) -> Option<String> {
+    let title = title.trim();
+    if let Some((inside, after)) = split_leading_search_probe_bracket(title) {
+        if let Some(after_lookup) = search_probe_partial_source_text(after) {
+            return Some(after_lookup);
+        }
+        return search_probe_partial_source_text(inside);
+    }
+    let trimmed = title
+        .trim_start_matches(|ch| is_search_probe_leading_decoration(ch) || ch.is_whitespace())
+        .trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 fn search_probe_run_is_useful(value: &str) -> bool {
-    value.chars().count() >= 2 && !value.chars().all(|ch| ch.is_numeric())
+    value.chars().count() >= 2 && value.chars().any(char::is_alphabetic)
 }
 
 fn search_probe_lookup_text(title: &str) -> Option<String> {
@@ -1619,19 +1651,28 @@ fn is_search_probe_label_boundary(ch: char) -> bool {
 
 fn search_probe_query(title: &str, mode: &SearchMode) -> String {
     match mode {
-        SearchMode::Exact => {
-            if let Some(trimmed) = search_probe_lookup_text(title) {
-                trimmed
-            } else {
-                "a".to_owned()
-            }
-        }
+        SearchMode::Exact => search_probe_exact_text(title).unwrap_or_else(|| "a".to_owned()),
         SearchMode::Backward => search_probe_suffix(title).unwrap_or_else(|| "a".to_owned()),
         SearchMode::Forward => search_probe_prefix(title).unwrap_or_else(|| "a".to_owned()),
         SearchMode::Partial | SearchMode::FullText | SearchMode::Advanced(_) => {
             search_probe_partial_text(title).unwrap_or_else(|| "a".to_owned())
         }
     }
+}
+
+fn search_probe_exact_text(title: &str) -> Option<String> {
+    let lookup = search_probe_lookup_text(title)?;
+    if search_probe_lookup_is_nonword_prefix(&lookup)
+        && let Some(run) = search_probe_first_useful_run(title)
+        && run != lookup
+    {
+        return Some(run);
+    }
+    Some(lookup)
+}
+
+fn search_probe_lookup_is_nonword_prefix(value: &str) -> bool {
+    value.chars().count() > 1 && !value.chars().any(char::is_alphabetic)
 }
 
 fn search_mode_key(mode: &SearchMode) -> String {
@@ -1714,6 +1755,10 @@ mod tests {
             ),
             "0歳平均余命"
         );
+        assert_eq!(
+            search_probe_query("0゜ 人工歯 ＜zero degree teeth＞", &SearchMode::Exact),
+            "人工歯"
+        );
         assert_eq!(search_probe_lookup_text("【】"), None);
         assert_eq!(search_probe_query("【角】", &SearchMode::Exact), "角");
         assert_eq!(search_probe_query("《凡例》", &SearchMode::Exact), "凡例");
@@ -1730,10 +1775,18 @@ mod tests {
             "日本"
         );
         assert_eq!(search_probe_query("ºO1, ºo", &SearchMode::Forward), "O");
+        assert_eq!(
+            search_probe_query("0゜ 人工歯 ＜zero degree teeth＞", &SearchMode::Forward),
+            "人工歯"
+        );
         assert_eq!(search_probe_query("【角】", &SearchMode::Forward), "角");
         assert_eq!(
             search_probe_query("◎日本国憲法", &SearchMode::Backward),
             "憲法"
+        );
+        assert_eq!(
+            search_probe_query("0゜ 人工歯 ＜zero degree teeth＞", &SearchMode::Backward),
+            "人工歯"
         );
         assert_eq!(
             search_probe_query("関係 関係がある 〖0001.01〗", &SearchMode::Partial),
@@ -1744,10 +1797,14 @@ mod tests {
             "人工"
         );
         assert_eq!(
+            search_probe_query("0゜ 人工歯 ＜zero degree teeth＞", &SearchMode::Partial),
+            "人工"
+        );
+        assert_eq!(
             search_probe_query("０°人工歯(zero degree teeth)", &SearchMode::FullText),
             "人工"
         );
-        assert_eq!(search_probe_query("ºO1, ºo", &SearchMode::FullText), "O");
+        assert_eq!(search_probe_query("ºO1, ºo", &SearchMode::FullText), "O1");
     }
 
     #[test]
