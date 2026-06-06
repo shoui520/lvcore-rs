@@ -97,7 +97,7 @@ pub struct BookMetadata {
     pub title: Option<String>,
     pub root_fingerprint: String,
     pub capabilities: Vec<Capability>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub search_modes: Vec<SearchMode>,
 }
 

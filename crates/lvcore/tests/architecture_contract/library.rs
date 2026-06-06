@@ -85,6 +85,25 @@ fn library_metadata_exposes_format_badges_but_not_frontend_icons() {
 }
 
 #[test]
+fn library_metadata_serializes_empty_search_modes_for_frontend_cache_shape() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let book_id = library.open_path(dir.path(), &registry).unwrap();
+    let metadata = library
+        .metadata_snapshot()
+        .into_iter()
+        .find(|metadata| metadata.book_id == book_id)
+        .unwrap();
+
+    assert!(metadata.search_modes.is_empty());
+    let json = serde_json::to_value(&metadata).unwrap();
+    assert_eq!(json["search_modes"].as_array().unwrap().len(), 0);
+}
+
+#[test]
 fn library_import_deduplicates_identical_book_ids() {
     let root = tempdir().unwrap();
     let first = root.path().join("FirstCopy");
