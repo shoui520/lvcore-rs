@@ -242,6 +242,10 @@ provider slices:
 - SSED loose KOJIEN6-style media: `_PCM_U/WaveFile.map` can back `PCMDATA.DIC`
   address resources with decrypted MP3 bytes, and `_MOVIE` entries are exposed
   as typed video resources;
+- SSED HC/sidecar `lved.ziptomedia:*` sound references resolve to sibling loose
+  `Sound_Files`/`*_Sound_Files` resources. Extensionless on-disk files are
+  matched from `.wav` references, decrypted through LogoFontCipher, and exposed
+  as normal typed audio resource tokens;
 - SSED `PCMDATA.DIC` start/end range resources can be read as portable WAVE or
   MP3 audio without expanding the whole component;
 - SSED loose `Sound/SoundData` stores are exposed as typed sound resources
@@ -260,9 +264,10 @@ provider slices:
   `HTMLDLL`, lvcore reports that declaration as a weaker profile source. HC
   inputs also perform a bounded stream scan for understood media controls and
   carry typed resource refs for observed `COLSCR.DIC`, `PCMDATA.DIC`,
-  `MONOSCR.DIC`, and `FIGURE.DIC` targets. This gives the future HC/profile
-  renderer the resource tokens and binary-family identity it needs without
-  claiming HC rendering parity yet;
+  `MONOSCR.DIC`, and `FIGURE.DIC` targets. Preserved sidecar HTML normalization
+  separately rewrites ziptomedia sound links to typed audio resources. This
+  gives the future HC/profile renderer the resource tokens and binary-family
+  identity it needs without claiming HC rendering parity yet;
 - SSED Mac HC03E9-style PDFSpread sidecars are exposed as PDF resource refs
   from fullwidth HONMON page anchors, with the original PDF bytes available
   through the normal resource API;

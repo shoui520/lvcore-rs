@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::crypto::decrypt_logofont_cipher_bytes;
 use crate::error::{Error, Result};
 use crate::storage::{
     path_stays_inside_root, regular_directory_inside_root, regular_file_inside_root,
@@ -90,6 +91,14 @@ pub struct BritannicaTopDat {
 pub struct BritannicaLooseResourcePath {
     pub root_name: String,
     pub relative_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZipToMediaFile {
+    pub reference: String,
+    pub root: PathBuf,
+    pub path: PathBuf,
+    pub encrypted_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,6 +399,46 @@ pub fn resolve_loose_media_file(
     Ok(Some(current))
 }
 
+pub fn resolve_ziptomedia_file(
+    package_root: &Path,
+    reference: &str,
+) -> Result<Option<ZipToMediaFile>> {
+    let Some(reference) = normalize_ziptomedia_reference(reference) else {
+        return Ok(None);
+    };
+    let Some(sound_dir) = find_ziptomedia_dir(package_root)? else {
+        return Ok(None);
+    };
+    for candidate in ziptomedia_reference_candidates(&reference) {
+        let Some(path) = resolve_file_under_casefolded_root(&sound_dir, &candidate)? else {
+            continue;
+        };
+        if !regular_file_inside_root(&sound_dir, &path)? {
+            continue;
+        }
+        return Ok(Some(ZipToMediaFile {
+            reference,
+            root: sound_dir,
+            encrypted_bytes: path.metadata()?.len(),
+            path,
+        }));
+    }
+    Ok(None)
+}
+
+pub fn read_ziptomedia_file(package_root: &Path, reference: &str) -> Result<Option<Vec<u8>>> {
+    let Some(record) = resolve_ziptomedia_file(package_root, reference)? else {
+        return Ok(None);
+    };
+    if !path_stays_inside_root(&record.root, &record.path)? {
+        return Err(Error::Driver(format!(
+            "ziptomedia resource path is outside its sound root: {}",
+            record.path.display()
+        )));
+    }
+    decrypt_logofont_cipher_bytes(&fs::read(&record.path)?).map(Some)
+}
+
 pub fn discover_britannica_whatday_files(
     package_root: &Path,
 ) -> Result<Vec<BritannicaWhatdayFile>> {
@@ -631,6 +680,52 @@ pub(super) fn find_child_casefolded(directory: &Path, name: &str) -> Result<Opti
         }
     }
     Ok(None)
+}
+
+fn find_ziptomedia_dir(package_root: &Path) -> Result<Option<PathBuf>> {
+    for name in ["Sound_Files", "sound", "sounds"] {
+        if let Some(path) = find_child_casefolded(package_root, name)?
+            && regular_directory_inside_root(package_root, &path)?
+        {
+            return Ok(Some(path));
+        }
+    }
+    find_loose_media_dir(package_root, "_Sound_Files", false)
+}
+
+fn normalize_ziptomedia_reference(reference: &str) -> Option<String> {
+    let value = reference
+        .split_once('?')
+        .map_or(reference, |(head, _)| head)
+        .split_once('#')
+        .map_or(reference, |(head, _)| head)
+        .trim();
+    normalize_relative_path(value)
+}
+
+fn ziptomedia_reference_candidates(reference: &str) -> Vec<String> {
+    let mut candidates = vec![reference.to_owned()];
+    if reference.to_ascii_lowercase().ends_with(".wav")
+        && let Some(stem) = reference.get(..reference.len().saturating_sub(4))
+        && !stem.is_empty()
+    {
+        candidates.push(stem.to_owned());
+    }
+    candidates
+}
+
+fn resolve_file_under_casefolded_root(root: &Path, relative: &str) -> Result<Option<PathBuf>> {
+    let Some(normalized) = normalize_relative_path(relative) else {
+        return Ok(None);
+    };
+    let mut current = root.to_path_buf();
+    for part in normalized.split('/') {
+        let Some(next) = find_child_casefolded(&current, part)? else {
+            return Ok(None);
+        };
+        current = next;
+    }
+    Ok(Some(current))
 }
 
 fn britannica_media_candidate_names(package_root: &Path) -> Vec<String> {

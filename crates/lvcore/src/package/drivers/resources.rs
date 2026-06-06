@@ -12,6 +12,9 @@ impl ResourceProvider for ReaderBookPackage {
                 path,
                 resource_kind,
             } => self.resolve_ssed_loose_file_resource(token, &root_name, &path, resource_kind),
+            InternalResource::ZipToMedia { reference } => {
+                self.resolve_ziptomedia_resource(token, &reference)
+            }
             InternalResource::SsedComponentAddress {
                 component,
                 block,
@@ -93,6 +96,7 @@ impl ResourceProvider for ReaderBookPackage {
             InternalResource::SsedLooseFile {
                 root_name, path, ..
             } => self.read_ssed_loose_file_resource(&root_name, &path),
+            InternalResource::ZipToMedia { reference } => self.read_ziptomedia_resource(&reference),
             InternalResource::SsedComponentAddress {
                 component,
                 block,

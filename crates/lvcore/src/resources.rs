@@ -73,6 +73,9 @@ pub enum InternalResource {
         label: String,
         resource_kind: ResourceKind,
     },
+    ZipToMedia {
+        reference: String,
+    },
     SoundData {
         sound_id: u32,
     },
@@ -103,6 +106,7 @@ impl InternalResource {
             Self::SsedFigure { .. } | Self::SsedGa16Glyph { .. } => ResourceKind::Image,
             Self::MediaBlob { resource_kind, .. } => *resource_kind,
             Self::SsedSidecarMedia { resource_kind, .. } => *resource_kind,
+            Self::ZipToMedia { .. } => ResourceKind::Audio,
             Self::SoundData { .. } => ResourceKind::SoundData,
             Self::LooseMovie { .. } => ResourceKind::Video,
             Self::SsedPdfSpread { .. } => ResourceKind::Pdf,
@@ -244,6 +248,16 @@ mod tests {
         let token = ResourceToken::new(&resource).unwrap();
         assert_eq!(token.decode().unwrap(), resource);
         assert!(!token.as_str().contains("SS0261"));
+    }
+
+    #[test]
+    fn token_round_trips_ziptomedia_resource() {
+        let resource = InternalResource::ZipToMedia {
+            reference: "000010.wav".to_owned(),
+        };
+        let token = ResourceToken::new(&resource).unwrap();
+        assert_eq!(token.decode().unwrap(), resource);
+        assert!(!token.as_str().contains("000010"));
     }
 
     #[test]

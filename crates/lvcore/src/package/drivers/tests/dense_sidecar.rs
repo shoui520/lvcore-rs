@@ -201,12 +201,18 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
     let package_root = dir.path().join("Book");
     fs::create_dir(&package_root).unwrap();
     fs::create_dir(dir.path().join("img")).unwrap();
+    fs::create_dir(dir.path().join("Book_Sound_Files")).unwrap();
     fs::create_dir_all(package_root.join("OTHER/image")).unwrap();
     fs::create_dir_all(package_root.join("HANREI/img")).unwrap();
     fs::write(package_root.join("OTHER/image/b129.png"), b"png-bytes").unwrap();
     fs::write(package_root.join("HANREI/img/b159_M.png"), b"hanrei-png").unwrap();
     fs::write(dir.path().join("img/KG003173.svg"), b"<svg/>").unwrap();
     fs::write(dir.path().join("img/Furoku0.pdf"), b"%PDF").unwrap();
+    fs::write(
+        dir.path().join("Book_Sound_Files").join("000010"),
+        encrypt_logofont_cipher_for_test(b"RIFF\x24\x00\x00\x00WAVEfmt "),
+    )
+    .unwrap();
     let catalog =
         write_ssed_dense_sidecar_fixture(&package_root, DenseSidecarFixture::BodyRowsWithLvedLinks);
     let package = ReaderBookPackage::new(
@@ -238,13 +244,14 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
 
     assert!(!html.contains("lved.dataid:"));
     assert!(!html.contains("lved.addr="));
+    assert!(!html.contains("lved.ziptomedia:"));
     assert!(!html.contains("src=\"b129.png\""));
     assert!(!html.contains("src=\"furoku01_01.jpg\""));
     assert!(!html.contains("data = \"KG003173.svg\""));
     assert!(html.contains("lvcore://target/"));
     assert!(html.contains("lvcore://resource/"));
     assert_eq!(view.links.len(), 3);
-    assert_eq!(view.resources.len(), 5);
+    assert_eq!(view.resources.len(), 6);
     assert!(view.links.iter().any(|link| matches!(
         link.token.decode().unwrap(),
         InternalTarget::SsedDenseAnchor { anchor, resolver_hint: None } if anchor == "00000001"
@@ -296,6 +303,12 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
             && resource.kind == ResourceKind::Pdf
             && resource.href.is_some()
     }));
+    assert!(view.resources.iter().any(|resource| {
+        resource.label.as_deref() == Some("000010.wav")
+            && resource.kind == ResourceKind::Audio
+            && resource.mime_type.as_deref() == Some("audio/wav")
+            && resource.href.is_some()
+    }));
     let mut resource_bytes = view
         .resources
         .iter()
@@ -307,6 +320,7 @@ fn dense_sidecar_lved_dataid_links_route_to_ssed_dense_targets() {
         vec![
             b"%PDF".to_vec(),
             b"<svg/>".to_vec(),
+            b"RIFF\x24\x00\x00\x00WAVEfmt ".to_vec(),
             b"hanrei-png".to_vec(),
             b"png-bytes".to_vec(),
             b"\xff\xd8\xff\xe0".to_vec(),

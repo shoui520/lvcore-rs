@@ -38,6 +38,48 @@ fn loose_movie_resource_resolves_and_reads_movie_file() {
 }
 
 #[test]
+fn ziptomedia_resource_resolves_sibling_sound_file_and_decrypts_audio() {
+    let dir = tempdir().unwrap();
+    let package_root = dir.path().join("_DCT_PROYAL53");
+    let sound_root = dir.path().join("_DCT_PROYAL53_Sound_Files");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(&sound_root).unwrap();
+    fs::write(
+        sound_root.join("000010"),
+        encrypt_logofont_cipher_for_test(b"RIFF\x24\x00\x00\x00WAVEfmt "),
+    )
+    .unwrap();
+
+    let package = ReaderBookPackage::new(
+        &package_root,
+        DetectedPackage {
+            root: package_root.clone(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Sample".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+    let token = ResourceToken::new(&InternalResource::ZipToMedia {
+        reference: "000010.wav".to_owned(),
+    })
+    .unwrap();
+
+    let resource = package.resolve_resource(&token).unwrap();
+    assert_eq!(resource.kind, ResourceKind::Audio);
+    assert_eq!(resource.label.as_deref(), Some("000010.wav"));
+    assert_eq!(resource.mime_type.as_deref(), Some("audio/wav"));
+    assert!(resource.href.is_some());
+    assert!(resource.diagnostics.is_empty());
+    assert_eq!(
+        package.read_resource(&token).unwrap(),
+        b"RIFF\x24\x00\x00\x00WAVEfmt "
+    );
+}
+
+#[test]
 fn sounddata_resource_resolves_and_reads_wave_record() {
     let dir = tempdir().unwrap();
     let sound_root = dir.path().join("Sound");

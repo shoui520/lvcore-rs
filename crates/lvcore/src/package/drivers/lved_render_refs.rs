@@ -37,6 +37,24 @@ impl ReaderBookPackage {
                         ));
                     }
                 }
+                LvedHtmlRefKind::ZipToMedia => {
+                    if let Some(resource) = lved_ziptomedia_resource(raw_ref) {
+                        let token = ResourceToken::new(&resource)?;
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            let resource_ref = self.resolve_resource(&token)?;
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_ziptomedia_ref_unparsed",
+                            format!("could not parse LVED ziptomedia reference {raw_ref}"),
+                        ));
+                    }
+                }
                 LvedHtmlRefKind::Image => {
                     if let Some(resource) = lved_image_resource(raw_ref) {
                         let token = ResourceToken::new(&resource)?;
@@ -285,6 +303,26 @@ impl ReaderBookPackage {
                         diagnostics.push(Diagnostic::warning(
                             "ssed_sidecar_lved_media_ref_unparsed",
                             format!("could not parse SSED sidecar LVED media reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::ZipToMedia => {
+                    if let Some(resource) = lved_ziptomedia_resource(raw_ref) {
+                        let token = ResourceToken::new(&resource)?;
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            let resource_ref = self.resolve_resource(&token)?;
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_ziptomedia_ref_unparsed",
+                            format!(
+                                "could not parse SSED sidecar LVED ziptomedia reference {raw_ref}"
+                            ),
                         ));
                     }
                 }

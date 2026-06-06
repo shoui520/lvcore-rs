@@ -6,6 +6,7 @@ use crate::target::InternalTarget;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LvedHtmlRefKind {
     Media,
+    ZipToMedia,
     Image,
     Pdf,
     Address,
@@ -21,6 +22,7 @@ pub(super) fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
         ("lved.media.", LvedHtmlRefKind::Media),
         ("lved.media:", LvedHtmlRefKind::Media),
         ("lved.sound:", LvedHtmlRefKind::Media),
+        ("lved.ziptomedia:", LvedHtmlRefKind::ZipToMedia),
         ("lved.image:", LvedHtmlRefKind::Image),
         ("lved.imag:", LvedHtmlRefKind::Image),
         ("lved.pdf:", LvedHtmlRefKind::Pdf),
@@ -117,6 +119,13 @@ pub(super) fn lved_media_resource(raw_ref: &str) -> Option<InternalResource> {
         key,
         resource_kind,
     })
+}
+
+pub(super) fn lved_ziptomedia_resource(raw_ref: &str) -> Option<InternalResource> {
+    let reference = raw_ref
+        .strip_prefix("lved.ziptomedia:")
+        .and_then(lved_resource_key)?;
+    Some(InternalResource::ZipToMedia { reference })
 }
 
 pub(super) fn lved_image_resource(raw_ref: &str) -> Option<InternalResource> {
@@ -300,6 +309,21 @@ mod tests {
         assert_eq!(store, "lved.mediasub");
         assert_eq!(key, "sound/example.mp3");
         assert_eq!(resource_kind, ResourceKind::Audio);
+    }
+
+    #[test]
+    fn classifies_lved_ziptomedia_resource_references() {
+        assert_eq!(
+            next_lved_ref(r#"<a href="lved.ziptomedia:000010.wav">"#),
+            Some((9, LvedHtmlRefKind::ZipToMedia))
+        );
+        let Some(InternalResource::ZipToMedia { reference }) =
+            lved_ziptomedia_resource("lved.ziptomedia:000010.wav")
+        else {
+            panic!("expected ziptomedia resource");
+        };
+
+        assert_eq!(reference, "000010.wav");
     }
 
     #[test]

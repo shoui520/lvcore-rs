@@ -73,7 +73,7 @@ use super::lved_refs::{
     LvedHtmlRefKind, is_lved_ref_terminator, lved_address_target, lved_binran_target,
     lved_cross_book_target, lved_dataid_anchor, lved_dataid_target, lved_image_resource,
     lved_info_target, lved_media_resource, lved_pdf_resource, lved_viewer_hook_target,
-    next_lved_ref,
+    lved_ziptomedia_resource, next_lved_ref,
 };
 use super::navigation_helpers::{
     OrderedSequenceTarget, collect_multiview_menu_ordered_targets,
@@ -187,8 +187,8 @@ use crate::ssed_loose_media::{
     discover_britannica_whatday_paths, find_loose_media_root, find_movie_file,
     has_britannica_top_dat_files, has_britannica_whatday_files,
     lookup_britannica_chronology_record, parse_lved_address, read_pcmu_record,
-    render_britannica_html_fragment, resolve_loose_media_file, resolve_pcmu_record,
-    search_britannica_chronology_records,
+    read_ziptomedia_file, render_britannica_html_fragment, resolve_loose_media_file,
+    resolve_pcmu_record, resolve_ziptomedia_file, search_britannica_chronology_records,
 };
 use crate::ssed_menu::{
     SsedMenuDestination, SsedMenuLink, SsedMenuRecord, parse_menu_stream, parse_menu_stream_page,

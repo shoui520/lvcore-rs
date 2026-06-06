@@ -143,6 +143,45 @@ impl ReaderBookPackage {
         read_path_inside_loose_root(&self.root, root_name, &resolved)
     }
 
+    pub(super) fn resolve_ziptomedia_resource(
+        &self,
+        token: &ResourceToken,
+        reference: &str,
+    ) -> Result<ResourceRef> {
+        let resolved = resolve_ziptomedia_file(&self.root, reference)?;
+        let mut diagnostics = Vec::new();
+        let href = if resolved.is_some() {
+            Some(format!("lvcore://resource/{}", token.as_str()))
+        } else {
+            diagnostics.push(Diagnostic::warning(
+                "resource_missing",
+                format!("ziptomedia resource {reference} was not found next to the package"),
+            ));
+            None
+        };
+        let mime_type = resource_mime_type(ResourceKind::Audio, Some(reference))
+            .or(Some("audio/wav"))
+            .map(str::to_owned);
+        Ok(ResourceRef {
+            token: token.clone(),
+            kind: ResourceKind::Audio,
+            label: Some(reference.to_owned()),
+            href,
+            mime_type,
+            byte_len: resolved.as_ref().map(|record| record.encrypted_bytes),
+            diagnostics,
+        })
+    }
+
+    pub(super) fn read_ziptomedia_resource(&self, reference: &str) -> Result<Vec<u8>> {
+        let Some(bytes) = read_ziptomedia_file(&self.root, reference)? else {
+            return Err(Error::Driver(format!(
+                "ziptomedia resource not found: {reference}"
+            )));
+        };
+        Ok(bytes)
+    }
+
     pub(super) fn resolve_ssed_component_address_resource(
         &self,
         token: &ResourceToken,
