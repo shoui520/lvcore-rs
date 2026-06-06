@@ -541,15 +541,13 @@ fn search_mode_exercises(
     include_expensive_search: bool,
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
-    let probe_label = search_probe_label(library, book_id, surfaces)
-        .or_else(|| metadata.title.clone())
-        .unwrap_or_else(|| "a".to_owned());
+    let probe_labels = search_probe_labels(library, book_id, metadata, surfaces);
     for mode in validate_search_modes_to_probe(metadata) {
         if should_skip_search_mode_probe(metadata, &mode, include_expensive_search) {
             rows.push(skipped_search_mode_exercise(mode));
             continue;
         }
-        let query = search_probe_query(&probe_label, &mode);
+        let query = select_search_probe_query(library, book_id, &mode, &probe_labels);
         let render_hits = mode == SearchMode::Forward;
         rows.push(search_mode_exercise(
             library,
@@ -1143,11 +1141,13 @@ fn navigation_surface_kind_name(surface: &NavigationSurface) -> &'static str {
     }
 }
 
-fn search_probe_label(
+fn search_probe_labels(
     library: &BookLibrary,
     book_id: &BookId,
+    metadata: &BookMetadata,
     surfaces: &[HomeSurface],
-) -> Option<String> {
+) -> Vec<String> {
+    let mut labels = Vec::new();
     let preferred = [
         NavigationSurfaceKind::TitleIndexBrowse,
         NavigationSurfaceKind::Menu,
@@ -1168,20 +1168,77 @@ fn search_probe_label(
             let Ok(opened) = library.open_surface(book_id, &surface.surface_id) else {
                 continue;
             };
-            if let Some(label) = first_actionable_label(&opened) {
-                return Some(label);
-            }
+            collect_actionable_probe_labels(&opened, &mut labels);
         }
     }
-    None
+    if let Some(title) = &metadata.title {
+        push_probe_label(&mut labels, title);
+    }
+    for label in default_search_probe_labels(metadata) {
+        push_probe_label(&mut labels, label);
+    }
+    if labels.is_empty() {
+        labels.push("a".to_owned());
+    }
+    labels
 }
 
-fn first_actionable_label(surface: &NavigationSurface) -> Option<String> {
-    surface
-        .actionable_targets()
-        .into_iter()
-        .map(|target| target.label_text.trim().to_owned())
-        .find(|label| !label.is_empty() && search_probe_lookup_text(label).is_some())
+fn collect_actionable_probe_labels(surface: &NavigationSurface, out: &mut Vec<String>) {
+    const SEARCH_PROBE_LABEL_LIMIT: usize = 12;
+    for target in surface.actionable_targets() {
+        push_probe_label(out, &target.label_text);
+        if out.len() >= SEARCH_PROBE_LABEL_LIMIT {
+            break;
+        }
+    }
+}
+
+fn push_probe_label(out: &mut Vec<String>, label: &str) {
+    let trimmed = label.trim();
+    if trimmed.is_empty() || search_probe_lookup_text(trimmed).is_none() {
+        return;
+    }
+    if !out.iter().any(|seen| seen == trimmed) {
+        out.push(trimmed.to_owned());
+    }
+}
+
+fn default_search_probe_labels(metadata: &BookMetadata) -> &'static [&'static str] {
+    match metadata.format_family {
+        FormatFamily::LvlMultiView
+            if metadata.capabilities.contains(&Capability::LawNavigation) =>
+        {
+            &["民法", "憲法", "刑法", "a", "あ"]
+        }
+        FormatFamily::LvlMultiView => &["a", "la", "あ"],
+        _ => &["a", "あ"],
+    }
+}
+
+fn select_search_probe_query(
+    library: &BookLibrary,
+    book_id: &BookId,
+    mode: &SearchMode,
+    labels: &[String],
+) -> String {
+    let mut fallback = None;
+    for label in labels {
+        let query = search_probe_query(label, mode);
+        if fallback.is_none() {
+            fallback = Some(query.clone());
+        }
+        if query == "a" && search_probe_lookup_text(label).is_none() {
+            continue;
+        }
+        let Ok((page, _)) = search_with_empty_cursor_follow(library, book_id, mode, &query, 1)
+        else {
+            continue;
+        };
+        if !page.hits.is_empty() {
+            return query;
+        }
+    }
+    fallback.unwrap_or_else(|| "a".to_owned())
 }
 
 fn search_probe_prefix(title: &str) -> Option<String> {
@@ -1243,9 +1300,16 @@ fn search_probe_run_is_useful(value: &str) -> bool {
 }
 
 fn search_probe_lookup_text(title: &str) -> Option<String> {
+    let title = title.trim();
+    if let Some((inside, after)) = split_leading_search_probe_bracket(title) {
+        if let Some(after_lookup) = search_probe_lookup_text(after) {
+            return Some(after_lookup);
+        }
+        return search_probe_lookup_text(inside);
+    }
     let mut started = false;
     let mut out = String::new();
-    for ch in title.trim().chars() {
+    for ch in title.chars() {
         if !started {
             if is_search_probe_leading_decoration(ch) || ch.is_whitespace() {
                 continue;
@@ -1263,6 +1327,28 @@ fn search_probe_lookup_text(title: &str) -> Option<String> {
     }
     let out = out.trim().to_owned();
     (!out.is_empty()).then_some(out)
+}
+
+fn split_leading_search_probe_bracket(title: &str) -> Option<(&str, &str)> {
+    let (open, close) = match title.chars().next()? {
+        '【' => ('【', '】'),
+        '［' => ('［', '］'),
+        '[' => ('[', ']'),
+        '〖' => ('〖', '〗'),
+        '〘' => ('〘', '〙'),
+        '《' => ('《', '》'),
+        '〈' => ('〈', '〉'),
+        '(' => ('(', ')'),
+        '（' => ('（', '）'),
+        _ => return None,
+    };
+    let open_len = open.len_utf8();
+    let close_index = title[open_len..].find(close)? + open_len;
+    let close_len = close.len_utf8();
+    Some((
+        &title[open_len..close_index],
+        &title[close_index + close_len..],
+    ))
 }
 
 fn is_search_probe_leading_decoration(ch: char) -> bool {
@@ -1420,6 +1506,10 @@ mod tests {
         assert_eq!(search_probe_lookup_text("【】"), None);
         assert_eq!(search_probe_query("【角】", &SearchMode::Exact), "角");
         assert_eq!(search_probe_query("《凡例》", &SearchMode::Exact), "凡例");
+        assert_eq!(
+            search_probe_query("【巻頭キーパーソン】大谷翔平", &SearchMode::Exact),
+            "大谷翔平"
+        );
     }
 
     #[test]
