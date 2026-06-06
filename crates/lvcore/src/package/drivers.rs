@@ -178,9 +178,9 @@ use crate::ssed_hc::{
 };
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_title_text,
-    decode_title_text_with_gaiji_filter, is_leaf_page, is_simple_leaf_index_type,
-    is_supported_index_type, parse_internal_page, parse_supported_leaf_page,
-    parse_supported_leaf_page_body_pointers,
+    decode_title_text_with_gaiji_filter, is_body_only_simple_leaf_index_type, is_leaf_page,
+    is_simple_leaf_index_type, is_supported_index_type, parse_internal_page,
+    parse_supported_leaf_page, parse_supported_leaf_page_body_pointers,
 };
 use crate::ssed_loose_media::{
     BRITANNICA_CHRONOLOGY_SOURCE_ID, discover_britannica_top_dat_files,
@@ -229,7 +229,7 @@ use crate::storage::{
 use crate::target::{InternalTarget, TargetLink, TargetToken};
 
 use self::hourei_labels::hourei_law_node_label;
-use self::ssed_index::ssed_index_bound_is_plausible;
+use self::ssed_index::{ssed_index_bound_is_plausible, ssed_index_page_prefilter_is_safe};
 use self::ssed_ios_addr_convert::SsedIosAddressConverter;
 use self::ssed_ios_plist_surfaces::SsedIosPlistFile;
 use self::ssed_ios_search::SsedIosSearchResolver;

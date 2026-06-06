@@ -595,7 +595,9 @@ impl ReaderBookPackage {
                 } else {
                     &forward_candidates
                 };
-                if ssed_body_window_may_contain_query(page, page_candidates) {
+                if !ssed_index_page_prefilter_is_safe(component.component_type)
+                    || ssed_body_window_may_contain_query(page, page_candidates)
+                {
                     let logical_block = component.start_block + page_index as u32;
                     let (page_rows, unknown) = parse_supported_leaf_page(
                         &component.filename,
@@ -743,7 +745,9 @@ impl ReaderBookPackage {
                     continue;
                 }
                 scanned_leaf_pages = scanned_leaf_pages.saturating_add(1);
-                if ssed_body_window_may_contain_query(page, &candidates) {
+                if !ssed_index_page_prefilter_is_safe(component.component_type)
+                    || ssed_body_window_may_contain_query(page, &candidates)
+                {
                     let logical_block = component.start_block + page_index as u32;
                     let (page_rows, unknown) = parse_supported_leaf_page(
                         &component.filename,
@@ -1441,6 +1445,10 @@ fn next_ssed_partial_index_scan_cursor(
             component_index: component.index,
             page_index: 0,
         })
+}
+
+pub(super) fn ssed_index_page_prefilter_is_safe(component_type: u8) -> bool {
+    is_simple_leaf_index_type(component_type) || is_body_only_simple_leaf_index_type(component_type)
 }
 
 fn next_ssed_prefiltered_index_scan_cursor(

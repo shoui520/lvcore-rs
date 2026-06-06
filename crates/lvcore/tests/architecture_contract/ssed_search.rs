@@ -1044,6 +1044,88 @@ fn ssed_partial_search_prefers_forward_rows_when_bidirectional_indexes_exist() {
 }
 
 #[test]
+fn ssed_partial_search_pages_prefix_hits_before_nonprefix_contains_hits() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0aalpine\x1f\x0apal\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("alpha", 1, 2, 13, 0),
+            ("alpine", 1, 4, 13, 7),
+            ("pal", 1, 6, 13, 15),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let first = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "al".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(first.hits[0].title_text, "alpha");
+    assert!(
+        first
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("ssed-partial-prefix:"))
+    );
+
+    let second = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "al".to_owned(),
+            cursor: first.next_cursor,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(second.hits[0].title_text, "alpine");
+    assert!(
+        second
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("ssed-partial-nonprefix-index:"))
+    );
+
+    let third = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "al".to_owned(),
+            cursor: second.next_cursor,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(
+        third
+            .hits
+            .iter()
+            .map(|hit| hit.title_text.as_str())
+            .collect::<Vec<_>>(),
+        ["pal"]
+    );
+}
+
+#[test]
 fn ssed_tagged_index_search_supports_grouped_rows_across_pages() {
     let dir = tempdir().unwrap();
     fs::write(
@@ -1089,6 +1171,49 @@ fn ssed_tagged_index_search_supports_grouped_rows_across_pages() {
             .iter()
             .all(|diagnostic| diagnostic.code != "ssed_index_variant_deferred")
     );
+}
+
+#[test]
+fn ssed_partial_search_parses_stateful_index_pages_without_byte_prefilter() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_index_type(0x90),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"child title\x1f\x0a"),
+    )
+    .unwrap();
+    let index = [
+        leaf_page_fixture(&[tagged_group_record("parent", 2)]),
+        leaf_page_fixture(&[tagged_target_record("child", 1, 2, 13, 0)]),
+    ]
+    .concat();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&index),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let page = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "parent".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "child title");
+    assert_ssed_address_target(&page.hits[0].target, "HONMON.DIC", 1, 2);
 }
 
 #[test]
@@ -1370,7 +1495,12 @@ fn ssed_simple_index_search_uses_cursor_pagination() {
             .collect::<Vec<_>>(),
         ["alpha", "beta"]
     );
-    assert_eq!(first.next_cursor.as_deref(), Some("2"));
+    assert!(
+        first
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("ssed-partial-nonprefix-offset:"))
+    );
 
     let second = package
         .search(&SearchQuery {
@@ -1384,7 +1514,14 @@ fn ssed_simple_index_search_uses_cursor_pagination() {
             gaiji_policy: None,
         })
         .unwrap();
-    assert_eq!(second.hits[0].title_text, "gamma");
+    assert_eq!(
+        second
+            .hits
+            .iter()
+            .map(|hit| hit.title_text.as_str())
+            .collect::<Vec<_>>(),
+        ["gamma"]
+    );
     assert!(second.next_cursor.is_none());
 }
 
@@ -1449,7 +1586,7 @@ fn ssed_partial_search_uses_physical_scan_cursor_for_sparse_indexes() {
                 book_id: package.metadata().book_id.clone(),
             },
             mode: SearchMode::Partial,
-            query: "needle".to_owned(),
+            query: "eedle".to_owned(),
             cursor: None,
             limit: 10,
             gaiji_policy: None,
@@ -1467,7 +1604,7 @@ fn ssed_partial_search_uses_physical_scan_cursor_for_sparse_indexes() {
         .next_cursor
         .as_deref()
         .expect("sparse scan should return a physical continuation cursor");
-    assert!(next_cursor.starts_with("ssed-partial-index:"));
+    assert!(next_cursor.starts_with("ssed-partial-nonprefix-index:"));
 
     let second = package
         .search(&SearchQuery {
@@ -1475,7 +1612,7 @@ fn ssed_partial_search_uses_physical_scan_cursor_for_sparse_indexes() {
                 book_id: package.metadata().book_id.clone(),
             },
             mode: SearchMode::Partial,
-            query: "needle".to_owned(),
+            query: "eedle".to_owned(),
             cursor: Some(next_cursor.to_owned()),
             limit: 10,
             gaiji_policy: None,
