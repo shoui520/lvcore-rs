@@ -1003,7 +1003,9 @@ impl ReaderBookPackage {
         let data = reader
             .read_range(usize::try_from(component_offset).ok()?, 512)
             .ok()?;
-        let title = decode_title_text(&data);
+        let title = decode_title_text_with_gaiji_filter(&data, |identity| {
+            self.gaiji_unicode_map.contains_key(identity)
+        });
         (!title.is_empty()).then_some(title)
     }
 

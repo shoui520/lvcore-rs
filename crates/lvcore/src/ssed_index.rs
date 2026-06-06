@@ -5,7 +5,7 @@ use crate::ssed::BLOCK_SIZE;
 mod text;
 
 pub(crate) use text::decode_jis_pair;
-pub use text::{decode_index_key, decode_title_text};
+pub use text::{decode_index_key, decode_title_text, decode_title_text_with_gaiji_filter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SsedIndexPointer {
@@ -978,6 +978,31 @@ mod tests {
                 0x1f, 0x0e, 0x23, 0x31, 0x1f, 0x0f, 0x1f, 0x05, 0x1f, 0x0a,
             ]),
             "tabli1"
+        );
+    }
+
+    #[test]
+    fn preserves_title_a_plane_gaiji_for_rich_label_resolution() {
+        assert_eq!(
+            decode_title_text(&[
+                0x1f, 0x04, 0xa1, 0x40, 0x23, 0x6e, 0x23, 0x74, 0x23, 0x65, 0x23, 0x72, 0x23, 0x76,
+                0x23, 0x61, 0x23, 0x6c, 0x21, 0x21, 0xa1, 0x75, 0x23, 0x73, 0x23, 0x74, 0x23, 0x69,
+                0x23, 0x6d, 0x23, 0x61, 0x23, 0x74, 0x23, 0x65, 0x1f, 0x05, 0x1f, 0x0a,
+            ]),
+            "<zA140>nterval <zA175>stimate"
+        );
+    }
+
+    #[test]
+    fn title_gaiji_filter_can_suppress_unmapped_a_plane_markers() {
+        assert_eq!(
+            decode_title_text_with_gaiji_filter(
+                &[
+                    0xa1, 0x34, 0x1f, 0x04, 0xa1, 0x40, 0x23, 0x6e, 0x1f, 0x05, 0x1f, 0x0a,
+                ],
+                |identity| identity == "A140",
+            ),
+            "<zA140>n"
         );
     }
 }

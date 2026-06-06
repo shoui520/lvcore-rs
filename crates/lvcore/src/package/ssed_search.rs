@@ -179,9 +179,13 @@ pub(super) fn ssed_index_search_key_candidates(needle: &str) -> Vec<Vec<u8>> {
     for value in values {
         push_unique_search_key(&mut candidates, encode_ssed_index_search_key(&value));
         if value.is_ascii() {
+            let upper = value.to_ascii_uppercase();
+            let lower = value.to_ascii_lowercase();
+            push_unique_search_key(&mut candidates, encode_ssed_index_search_key(&upper));
+            push_unique_search_key(&mut candidates, encode_ssed_index_search_key(&lower));
             push_unique_search_key(&mut candidates, value.as_bytes().to_vec());
-            push_unique_search_key(&mut candidates, value.to_ascii_uppercase().into_bytes());
-            push_unique_search_key(&mut candidates, value.to_ascii_lowercase().into_bytes());
+            push_unique_search_key(&mut candidates, upper.into_bytes());
+            push_unique_search_key(&mut candidates, lower.into_bytes());
         }
     }
     candidates
@@ -410,6 +414,23 @@ mod tests {
         );
         assert!(candidates.iter().any(|candidate| candidate == b".N"));
         assert!(!candidates.is_empty());
+    }
+
+    #[test]
+    fn index_key_candidates_include_uppercase_jis_for_ascii_words() {
+        let candidates = ssed_index_search_key_candidates("dog");
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("dog"))
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("DOG"))
+        );
+        assert!(candidates.iter().any(|candidate| candidate == b"dog"));
+        assert!(candidates.iter().any(|candidate| candidate == b"DOG"));
     }
 
     fn body_jis(value: &str) -> Vec<u8> {

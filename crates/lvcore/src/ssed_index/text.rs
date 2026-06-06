@@ -35,14 +35,21 @@ fn decode_index_key_payload(data: &[u8]) -> String {
 }
 
 pub fn decode_title_text(data: &[u8]) -> String {
+    decode_title_text_with_gaiji_filter(data, |_| true)
+}
+
+pub fn decode_title_text_with_gaiji_filter(
+    data: &[u8],
+    mut keep_gaiji: impl FnMut(&str) -> bool,
+) -> String {
     let filtered = title_payload_bytes(data);
     if looks_like_jis_x0208_title_bytes(&filtered) {
-        return decode_title_payload_text(data);
+        return decode_title_payload_text(data, &mut keep_gaiji);
     }
     if looks_like_plain_ascii_title(&filtered) {
         return String::from_utf8_lossy(&filtered).trim().to_owned();
     }
-    decode_title_payload_text(data)
+    decode_title_payload_text(data, &mut keep_gaiji)
 }
 
 fn title_payload_bytes(data: &[u8]) -> Vec<u8> {
@@ -65,7 +72,7 @@ fn title_payload_bytes(data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn decode_title_payload_text(data: &[u8]) -> String {
+fn decode_title_payload_text(data: &[u8], keep_gaiji: &mut impl FnMut(&str) -> bool) -> String {
     let mut out = String::new();
     let mut index = 0usize;
     let mut halfwidth_depth = 0usize;
@@ -118,9 +125,13 @@ fn decode_title_payload_text(data: &[u8]) -> String {
             }
         }
         if index + 1 < data.len() && (0xa1..=0xfe).contains(&data[index]) {
-            // Raw gaiji/control marker pairs in title streams are not CP932 text.
-            // Dropping them matches the toolkit title extractor's safe default and
-            // avoids leaking marker bytes as mojibake in reader-facing labels.
+            if let Some(identity) = title_gaiji_marker_identity(data[index], data[index + 1])
+                && keep_gaiji(&identity)
+            {
+                out.push_str("<z");
+                out.push_str(&identity);
+                out.push('>');
+            }
             index += 2;
             continue;
         }
@@ -130,6 +141,16 @@ fn decode_title_payload_text(data: &[u8]) -> String {
         index += 1;
     }
     out.trim().to_owned()
+}
+
+fn title_gaiji_marker_identity(first: u8, second: u8) -> Option<String> {
+    // English title streams commonly use A-plane gaiji for accented letters.
+    // Preserve those markers for the reader-side rich-label resolver instead
+    // of dropping user-visible characters before Unicode/GA16 lookup can run.
+    if (0xa1..=0xaf).contains(&first) && (0x21..=0x7e).contains(&second) {
+        return Some(format!("{first:02X}{second:02X}"));
+    }
+    None
 }
 
 fn looks_like_plain_ascii_title(data: &[u8]) -> bool {
