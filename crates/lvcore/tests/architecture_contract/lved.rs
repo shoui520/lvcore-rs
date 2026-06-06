@@ -245,6 +245,42 @@ fn lved_same_book_dataid_links_preserve_scroll_anchor() {
 }
 
 #[test]
+fn lved_named_page_links_preserve_scroll_anchor() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute_batch(
+                "
+                create table binran (id integer primary key, name text, body text);
+                insert into binran values (1, 'usage.html', '<h1>Usage</h1>');
+                ",
+            )
+            .unwrap();
+    }
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::LvedNamedPage {
+        table: "binran".to_owned(),
+        name: "usage.html".to_owned(),
+        anchor: Some("top".to_owned()),
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::InfoPage);
+    assert_eq!(view.scroll_anchor.as_deref(), Some("top"));
+    assert_eq!(view.display_html.as_deref(), Some("<h1>Usage</h1>"));
+}
+
+#[test]
 fn lved_advanced_search_mode_uses_named_search_column() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());

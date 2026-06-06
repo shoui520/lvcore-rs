@@ -1112,6 +1112,17 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     assert!(html.contains(r#"data-gaiji="A35B">n</span>"#));
     assert_eq!(rendered.links.len(), 1);
     assert_eq!(rendered.resources.len(), 1);
+    let anchored_html_target = TargetToken::new(&InternalTarget::SsedIosHtmlPage {
+        source_id: "HTMLList.plist".to_owned(),
+        index: 0,
+        anchor: Some("ipa".to_owned()),
+    })
+    .unwrap();
+    let anchored_rendered = package
+        .render_target(&anchored_html_target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(anchored_rendered.kind, ResolvedTargetKind::InfoPage);
+    assert_eq!(anchored_rendered.scroll_anchor.as_deref(), Some("ipa"));
     assert!(
         !rendered.diagnostics.iter().any(|diagnostic| diagnostic.code
             == "ssed_sidecar_direct_resource_missing"

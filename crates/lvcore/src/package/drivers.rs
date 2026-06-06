@@ -712,8 +712,10 @@ fn scroll_anchor_for_token(target: &TargetToken) -> Result<Option<String>> {
     Ok(match target.decode()? {
         InternalTarget::LvedRow { anchor, .. }
         | InternalTarget::LvedInfoPage { anchor, .. }
+        | InternalTarget::LvedNamedPage { anchor, .. }
         | InternalTarget::LvedAddress { anchor, .. }
         | InternalTarget::SsedAuxRecord { anchor, .. }
+        | InternalTarget::SsedIosHtmlPage { anchor, .. }
         | InternalTarget::HoureiLaw { anchor, .. }
         | InternalTarget::MultiviewHref { anchor, .. }
         | InternalTarget::Resource { anchor, .. } => anchor,
