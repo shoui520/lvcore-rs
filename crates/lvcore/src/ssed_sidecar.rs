@@ -17,6 +17,7 @@ mod text;
 use text::{normalize_sidecar_search_text, strip_html_tags};
 
 const SSED_SIDECAR_TITLE_DECODED_FALLBACK_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const SSED_SIDECAR_TITLE_SQL_TRIM_CHARS: &str = "*＊+＋-‐‑‒–—―━ ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsedSidecarStorage {
@@ -443,16 +444,25 @@ pub fn search_ssed_dense_sidecar_titles_with_resolvers(
             continue;
         };
         let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
-        let Some((sql, uses_prefilter)) =
-            sidecar_title_prefilter_sql_for_resolver(&connection, resolver, title_column, query)?
+        let Some((sql, prefilter_parameters)) = sidecar_title_prefilter_sql_for_resolver(
+            &connection,
+            resolver,
+            title_column,
+            mode,
+            query,
+        )?
         else {
             continue;
         };
         let mut statement = connection.prepare(&sql)?;
-        let mut rows = if uses_prefilter {
-            statement.query([sqlite_like_contains_pattern(query)])?
-        } else {
+        let mut rows = if prefilter_parameters.is_empty() {
             statement.query([])?
+        } else {
+            let parameters = prefilter_parameters
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            statement.query(params_from_iter(parameters))?
         };
         while let Some(row) = rows.next()? {
             let anchor_id = anchor_id_from_search_row(resolver, row)?;
@@ -740,26 +750,67 @@ fn sidecar_title_prefilter_sql_for_resolver(
     connection: &Connection,
     resolver: &SsedSidecarBodyResolver,
     title_column: &str,
+    mode: SsedSidecarTitleSearchMode,
     query: &str,
-) -> Result<Option<(String, bool)>> {
-    let (where_sql, uses_prefilter) =
+) -> Result<Option<(String, Vec<String>)>> {
+    let (where_sql, parameters) =
         if sidecar_title_sql_prefilter_is_available(connection, resolver, title_column, query)? {
-            (
-                Some(format!(
-                    " where {} like ? escape '\\'",
-                    quote_sql_identifier(title_column)
-                )),
-                true,
-            )
+            sidecar_title_prefilter_where_and_parameters(title_column, mode, query)
         } else if sidecar_title_decoded_fallback_is_bounded(resolver) {
-            (None, false)
+            (None, Vec::new())
         } else {
             return Ok(None);
         };
     Ok(Some((
         search_select_sql_for_resolver(resolver, where_sql.as_deref()),
-        uses_prefilter,
+        parameters,
     )))
+}
+
+fn sidecar_title_prefilter_where_and_parameters(
+    title_column: &str,
+    mode: SsedSidecarTitleSearchMode,
+    query: &str,
+) -> (Option<String>, Vec<String>) {
+    let title_sql = quote_sql_identifier(title_column);
+    let pattern = sqlite_like_title_prefilter_pattern(mode, query);
+    if ssed_sidecar_title_prefilter_should_match_sql_trimmed_title(mode, query) {
+        let where_sql = format!(
+            " where ({title_sql} like ? escape '\\' or ltrim({title_sql}, '{SSED_SIDECAR_TITLE_SQL_TRIM_CHARS}') like ? escape '\\')"
+        );
+        return (Some(where_sql), vec![pattern.clone(), pattern]);
+    }
+    (
+        Some(format!(" where {title_sql} like ? escape '\\'")),
+        vec![pattern],
+    )
+}
+
+fn sqlite_like_title_prefilter_pattern(mode: SsedSidecarTitleSearchMode, query: &str) -> String {
+    let query = query.trim();
+    if query.is_ascii() && query.chars().count() == 1 {
+        return match mode {
+            SsedSidecarTitleSearchMode::Exact => sqlite_like_exact_pattern(query),
+            SsedSidecarTitleSearchMode::Forward => sqlite_like_prefix_pattern(query),
+            SsedSidecarTitleSearchMode::Backward => sqlite_like_suffix_pattern(query),
+            SsedSidecarTitleSearchMode::Partial => sqlite_like_contains_pattern(query),
+        };
+    }
+    sqlite_like_contains_pattern(query)
+}
+
+fn ssed_sidecar_title_prefilter_should_match_sql_trimmed_title(
+    mode: SsedSidecarTitleSearchMode,
+    query: &str,
+) -> bool {
+    query.trim().is_ascii()
+        && query.trim().chars().count() == 1
+        && matches!(
+            mode,
+            SsedSidecarTitleSearchMode::Exact
+                | SsedSidecarTitleSearchMode::Forward
+                | SsedSidecarTitleSearchMode::Backward
+        )
 }
 
 fn sidecar_title_sql_prefilter_is_available(
@@ -850,8 +901,26 @@ fn sidecar_search_column_count(resolver: &SsedSidecarBodyResolver) -> usize {
 }
 
 fn sqlite_like_contains_pattern(query: &str) -> String {
+    sqlite_like_pattern(query, true, true)
+}
+
+fn sqlite_like_exact_pattern(query: &str) -> String {
+    sqlite_like_pattern(query, false, false)
+}
+
+fn sqlite_like_prefix_pattern(query: &str) -> String {
+    sqlite_like_pattern(query, false, true)
+}
+
+fn sqlite_like_suffix_pattern(query: &str) -> String {
+    sqlite_like_pattern(query, true, false)
+}
+
+fn sqlite_like_pattern(query: &str, leading_wildcard: bool, trailing_wildcard: bool) -> String {
     let mut out = String::with_capacity(query.len().saturating_add(2));
-    out.push('%');
+    if leading_wildcard {
+        out.push('%');
+    }
     for ch in query.trim().chars() {
         match ch {
             '%' | '_' | '\\' => {
@@ -861,7 +930,9 @@ fn sqlite_like_contains_pattern(query: &str) -> String {
             _ => out.push(ch),
         }
     }
-    out.push('%');
+    if trailing_wildcard {
+        out.push('%');
+    }
     out
 }
 

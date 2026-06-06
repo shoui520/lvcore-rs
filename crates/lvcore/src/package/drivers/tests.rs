@@ -37,6 +37,7 @@ enum DenseSidecarFixture {
     PlainOnlyBodyRows,
     EntityTitleRows,
     CjkTitleRows,
+    AsciiMarkerTitleRows,
     MissingBetaRow,
     OrderedHonbunRows,
 }
@@ -144,6 +145,9 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
         }
         DenseSidecarFixture::CjkTitleRows => {
             write_dense_body_db_with_cjk_titles(root.join("body.db"));
+        }
+        DenseSidecarFixture::AsciiMarkerTitleRows => {
+            write_dense_body_db_with_ascii_marker_titles(root.join("body.db"));
         }
         DenseSidecarFixture::MissingBetaRow => {
             write_dense_body_db(root.join("body.db"), true, false, false);
@@ -381,6 +385,17 @@ fn write_dense_body_db_with_cjk_titles(path: PathBuf) {
             "create table t_contents (f_DataId integer primary key, f_Title text, f_Html text, f_Plane text);
              insert into t_contents values (1, '丂', '<div>丂 html</div>', '丂 body');
              insert into t_contents values (2, '新', '<div>新 html</div>', '新 body');",
+        )
+        .unwrap();
+}
+
+fn write_dense_body_db_with_ascii_marker_titles(path: PathBuf) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "create table t_contents (f_DataId integer primary key, f_Title text, f_Html text, f_Plane text);
+             insert into t_contents values (1, 'Alpha', '<div>Alpha html</div>', 'Alpha body');
+             insert into t_contents values (2, '-a', '<div>-a html</div>', '-a body');",
         )
         .unwrap();
 }
