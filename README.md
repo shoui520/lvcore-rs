@@ -40,6 +40,8 @@ Frontend code should treat `lvcore` as the only component that understands
 LogoVista internals. The frontend receives:
 
 - book metadata and format labels for library UI badges;
+- cheap package candidates for library cache refresh, before encrypted/database
+  payloads are opened;
 - explicitly available search modes, including LVED advanced search columns when
   present;
 - home/navigation/search surfaces;
@@ -62,6 +64,30 @@ LogoVista internals. The frontend receives:
 
 The frontend should not parse HONMON, `lved.*` links, Panel rows, law references,
 or gaiji codes directly.
+
+### Library Manager Flow
+
+The intended frontend library flow is two-phase:
+
+1. `DriverRegistry::discover_package_candidates` finds packages under one root
+   without opening/decrypting body stores. Candidate fingerprints are based on
+   package-root metadata, not full payload hashing, so this is suitable for a
+   quick library refresh and UI cache reconciliation.
+2. `BookLibrary::open_discovered_paths` or `try_open_discovered_paths` opens the
+   selected packages and returns full `BookMetadata`, search modes, surfaces,
+   resource providers, and target routing.
+
+For progressive UI updates, the developer CLI mirrors this split:
+
+- `library-discover` emits cheap candidate rows for cache comparison.
+- `library-import --jsonl` streams one opened/skipped/error row per package and
+  a final summary, so the frontend does not need to wait for an entire corpus
+  import before showing usable books.
+
+The frontend cache may store candidate fingerprints, book metadata, app-supplied
+icon state, recently rendered snippets, and bookmark/history tokens. It should
+still pass stored `TargetToken`/`ResourceToken` values back to lvcore for
+resolution rather than decoding or trusting them itself.
 
 ### Integration Safety Contract
 
@@ -96,11 +122,14 @@ provider slices:
 - library-owned package-root discovery for corpus/library directories, so the
   reader can find nested books without duplicating LogoVista package heuristics
   in frontend code;
+- cheap `PackageCandidate` discovery for library-cache refresh, with package
+  format labels, optional title hints, and root metadata fingerprints;
 - library-owned multi-root import through `BookLibrary::open_discovered_paths`
   and tolerant `try_open_discovered_paths` import reports, plus developer
-  `library-import` and `library-search` CLI commands that exercise
-  frontend-cacheable book metadata, all-book 串刺し検索, and routed first-hit
-  rendering across opened books;
+  `library-discover`, `library-import`, `library-import --jsonl`, and
+  `library-search` CLI commands that exercise frontend-cacheable book metadata,
+  progressive import, all-book 串刺し検索, and routed first-hit rendering across
+  opened books;
 - library search pages expose an opaque search-result sequence for continuous
   view. The frontend does not need to reconstruct search-result order from
   target internals; it can pass the returned value back to lvcore when opening a
