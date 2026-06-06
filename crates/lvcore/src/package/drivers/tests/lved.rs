@@ -99,6 +99,72 @@ fn explicit_ios_dbc_payload_detects_as_lved_even_with_retained_ssed_idx() {
     );
 }
 
+#[test]
+fn retained_ssed_components_are_capabilities_not_family_gated() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::LvedSqlite3,
+            confidence: 98,
+            title: Some("Mixed package".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "title-index"
+            && surface.kind == NavigationSurfaceKind::TitleIndexBrowse
+            && surface.status == NavigationStatus::Available
+    }));
+
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("expected retained SSED title/index surface");
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].label_text, "alpha");
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "あ".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+
+    let window = package
+        .resolve_target_window(
+            &items[0].target,
+            Some(&SequenceHint::TitleIndexOrder {
+                value: "title-index".to_owned(),
+                cursor: None,
+            }),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.center.title.as_deref(), Some("alpha"));
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].title.as_deref(), Some("beta"));
+}
+
 #[cfg(unix)]
 #[test]
 fn lved_detection_ignores_symlinked_payload_escape() {

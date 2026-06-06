@@ -16,7 +16,9 @@ impl SequenceProvider for ReaderBookPackage {
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::Ssed
+        let has_ssed_components =
+            self.ssed_catalog.is_some() || self.metadata.format_family == FormatFamily::Ssed;
+        if has_ssed_components
             && sequence_hint.is_none_or(|hint| {
                 matches!(
                     hint,
@@ -28,14 +30,14 @@ impl SequenceProvider for ReaderBookPackage {
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::Ssed
+        if has_ssed_components
             && matches!(sequence_hint, Some(SequenceHint::MenuOrder { .. }))
             && let Some(window) =
                 self.resolve_ssed_menu_window(target, sequence_hint, before, after, options)?
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::Ssed
+        if has_ssed_components
             && matches!(sequence_hint, Some(SequenceHint::PanelOrder { .. }))
             && let Some(window) =
                 self.resolve_ssed_panel_window(target, sequence_hint, before, after, options)?
@@ -54,7 +56,11 @@ impl SequenceProvider for ReaderBookPackage {
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::LvlMultiView
+        let has_multiview_provider = self.multiview_store.is_some()
+            || self.metadata.format_family == FormatFamily::LvlMultiView;
+        let has_hourei_provider =
+            self.hourei_store.is_some() || self.metadata.format_family == FormatFamily::Hourei;
+        if has_multiview_provider
             && matches!(
                 sequence_hint,
                 Some(SequenceHint::TitleIndexOrder { value, .. }) if value.starts_with("multiview:")
@@ -64,7 +70,7 @@ impl SequenceProvider for ReaderBookPackage {
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::LvlMultiView
+        if has_multiview_provider
             && sequence_hint.is_none_or(|hint| {
                 matches!(
                     hint,
@@ -76,13 +82,13 @@ impl SequenceProvider for ReaderBookPackage {
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::Hourei
+        if has_hourei_provider
             && sequence_hint.is_some_and(is_hourei_kana_list_sequence_hint)
             && let Some(window) = self.resolve_hourei_law_window(target, before, after, options)?
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::Hourei
+        if has_hourei_provider
             && sequence_hint.is_none_or(|hint| {
                 matches!(
                     hint,
@@ -93,7 +99,7 @@ impl SequenceProvider for ReaderBookPackage {
         {
             return Ok(window);
         }
-        if self.metadata.format_family == FormatFamily::Hourei
+        if has_hourei_provider
             && matches!(
                 sequence_hint,
                 Some(SequenceHint::PanelOrder { value }) if value == hourei_kana_panel_surface_id()
