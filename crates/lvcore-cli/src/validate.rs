@@ -1181,7 +1181,7 @@ fn first_actionable_label(surface: &NavigationSurface) -> Option<String> {
         .actionable_targets()
         .into_iter()
         .map(|target| target.label_text.trim().to_owned())
-        .find(|label| !label.is_empty())
+        .find(|label| !label.is_empty() && search_probe_lookup_text(label).is_some())
 }
 
 fn search_probe_prefix(title: &str) -> Option<String> {
@@ -1282,6 +1282,19 @@ fn is_search_probe_leading_decoration(ch: char) -> bool {
             | '→'
             | '⇒'
             | '※'
+            | '*'
+            | '＊'
+            | '★'
+            | '☆'
+            | '【'
+            | '［'
+            | '['
+            | '〖'
+            | '〘'
+            | '《'
+            | '〈'
+            | '('
+            | '（'
     )
 }
 
@@ -1289,11 +1302,22 @@ fn is_search_probe_label_boundary(ch: char) -> bool {
     matches!(
         ch,
         '【' | '（'
+            | '】'
             | '('
+            | '）'
+            | ')'
             | '［'
+            | '］'
             | '['
+            | ']'
             | '〖'
+            | '〗'
             | '〘'
+            | '〙'
+            | '《'
+            | '》'
+            | '〈'
+            | '〉'
             | '<'
             | '＜'
             | ':'
@@ -1391,6 +1415,11 @@ mod tests {
         assert_eq!(search_probe_query("3D", &SearchMode::Exact), "3D");
         assert_eq!(search_probe_query("a, A", &SearchMode::Exact), "a");
         assert_eq!(search_probe_query("А, а1", &SearchMode::Exact), "А");
+        assert_eq!(search_probe_query("***a", &SearchMode::Exact), "a");
+        assert_eq!(search_probe_query("★重要", &SearchMode::Exact), "重要");
+        assert_eq!(search_probe_lookup_text("【】"), None);
+        assert_eq!(search_probe_query("【角】", &SearchMode::Exact), "角");
+        assert_eq!(search_probe_query("《凡例》", &SearchMode::Exact), "凡例");
     }
 
     #[test]
@@ -1399,6 +1428,7 @@ mod tests {
             search_probe_query("◎日本国憲法", &SearchMode::Forward),
             "日本"
         );
+        assert_eq!(search_probe_query("【角】", &SearchMode::Forward), "角");
         assert_eq!(
             search_probe_query("◎日本国憲法", &SearchMode::Backward),
             "憲法"
