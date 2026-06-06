@@ -7,6 +7,7 @@ const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 20_480;
 const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 2;
 const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 128;
 const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
+const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 
@@ -259,13 +260,17 @@ impl ReaderBookPackage {
         if page.next_cursor.is_none() {
             let remaining = query.limit.saturating_sub(page.hits.len());
             if remaining > 0 {
-                let mut nonprefix_query = query.clone();
-                nonprefix_query.limit = remaining;
-                let mut nonprefix_page =
-                    self.search_ssed_partial_nonprefix_page(&nonprefix_query, needle, None)?;
-                page.hits.append(&mut nonprefix_page.hits);
-                page.diagnostics.extend(nonprefix_page.diagnostics);
-                page.next_cursor = nonprefix_page.next_cursor;
+                if !page.hits.is_empty() && self.ssed_partial_nonprefix_fill_should_defer() {
+                    page.next_cursor = Some(encode_ssed_partial_nonprefix_cursor(None));
+                } else {
+                    let mut nonprefix_query = query.clone();
+                    nonprefix_query.limit = remaining;
+                    let mut nonprefix_page =
+                        self.search_ssed_partial_nonprefix_page(&nonprefix_query, needle, None)?;
+                    page.hits.append(&mut nonprefix_page.hits);
+                    page.diagnostics.extend(nonprefix_page.diagnostics);
+                    page.next_cursor = nonprefix_page.next_cursor;
+                }
             } else {
                 page.next_cursor = Some(encode_ssed_partial_nonprefix_cursor(None));
             }
@@ -278,6 +283,27 @@ impl ReaderBookPackage {
             ),
         );
         Ok(Some(page))
+    }
+
+    fn ssed_partial_nonprefix_fill_should_defer(&self) -> bool {
+        let Some(catalog) = &self.ssed_catalog else {
+            return false;
+        };
+        let skip_backward_rows = self.ssed_has_forward_browse_index();
+        let mut block_count = 0u32;
+        for component in catalog.components_by_role(SsedComponentRole::Index) {
+            if skip_backward_rows && ssed_index_component_name_is_backward(&component.filename) {
+                continue;
+            }
+            if !is_supported_index_type(component.component_type) {
+                continue;
+            }
+            block_count = block_count.saturating_add(component.block_count());
+            if block_count > SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS {
+                return true;
+            }
+        }
+        false
     }
 
     fn search_ssed_partial_nonprefix_page(
