@@ -1376,6 +1376,57 @@ fn dense_honmon_fulltext_searches_sidecar_body() {
 }
 
 #[test]
+fn dense_honmon_fulltext_searches_sidecar_titles_before_bodies() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "beta".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "beta");
+    assert_eq!(page.next_cursor.as_deref(), Some("body:0"));
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "ssed_fulltext_sidecar_title_prepass" })
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_sidecar_scan")
+    );
+}
+
+#[test]
 fn dense_honmon_fulltext_decodes_entity_title_labels() {
     let dir = tempdir().unwrap();
     let catalog =

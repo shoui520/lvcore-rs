@@ -373,10 +373,23 @@ impl ReaderBookPackage {
         let row_cursor = decode_ssed_fulltext_row_cursor(query.cursor.as_deref());
         let offset = decode_ssed_fulltext_body_cursor(query.cursor.as_deref());
         let mut diagnostics = Vec::new();
+        if query.cursor.is_none()
+            && ssed_fulltext_sidecar_title_prepass_is_bounded(&query.query)
+            && let Some(page) = self.ssed_fulltext_sidecar_title_prepass(query)?
+        {
+            return Ok(page);
+        }
         let honmon_body_window_scan_needed =
             self.ssed_honmon_body_window_scan_is_needed(catalog, &mut diagnostics)?;
         if honmon_body_window_scan_needed
-            && (query.cursor.is_none() || title_cursor.is_some())
+            && query.cursor.is_none()
+            && let Some(page) =
+                self.ssed_fulltext_initial_title_index_prepass(query, &needle, page_limit)?
+        {
+            return Ok(page);
+        }
+        if honmon_body_window_scan_needed
+            && title_cursor.is_some()
             && let Some(page) = self.ssed_fulltext_title_index_prepass(
                 query,
                 &needle,
@@ -1189,6 +1202,77 @@ impl ReaderBookPackage {
         Ok(ranges_by_component)
     }
 
+    fn ssed_fulltext_initial_title_index_prepass(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        page_limit: usize,
+    ) -> Result<Option<SearchPage>> {
+        let mut collector = SsedIndexSearchCollector::new(
+            self,
+            &SearchMode::Forward,
+            needle,
+            0,
+            page_limit,
+            query.label_gaiji_policy(),
+        )
+        .with_display_label_matching();
+        let candidate_has_hits = Cell::new(false);
+        let scan_result = self.scan_ssed_simple_leaf_index_rows_near_key(
+            &SearchMode::Forward,
+            needle,
+            |row| {
+                let keep_scanning = collector.push_row(row)?;
+                if collector.has_hits() {
+                    candidate_has_hits.set(true);
+                }
+                Ok(keep_scanning)
+            },
+            || candidate_has_hits.get(),
+        )?;
+        collector.extend_diagnostics(scan_result.diagnostics);
+        if !collector.has_hits() {
+            return Ok(None);
+        }
+        let mut page = collector.into_search_page(query.limit);
+        page.next_cursor = Some("body:0".to_owned());
+        page.diagnostics.insert(
+            0,
+            Diagnostic::info(
+                "ssed_fulltext_title_index_prepass",
+                "SSED full-text search returned native title/index matches before scanning HONMON bodies",
+            ),
+        );
+        Ok(Some(page))
+    }
+
+    fn ssed_fulltext_sidecar_title_prepass(
+        &self,
+        query: &SearchQuery,
+    ) -> Result<Option<SearchPage>> {
+        let mut title_query = query.clone();
+        title_query.mode = SearchMode::Forward;
+        let mut page = SearchPage {
+            hits: Vec::new(),
+            next_cursor: None,
+            result_sequence: None,
+            diagnostics: Vec::new(),
+        };
+        self.append_ssed_sidecar_title_hits(&title_query, &mut page, 0)?;
+        if page.hits.is_empty() {
+            return Ok(None);
+        }
+        page.next_cursor = Some("body:0".to_owned());
+        page.diagnostics.insert(
+            0,
+            Diagnostic::info(
+                "ssed_fulltext_sidecar_title_prepass",
+                "SSED full-text search returned dense sidecar title matches before scanning sidecar bodies",
+            ),
+        );
+        Ok(Some(page))
+    }
+
     fn ssed_fulltext_title_index_prepass(
         &self,
         query: &SearchQuery,
@@ -1360,9 +1444,19 @@ fn ssed_sidecar_title_auto_append_is_bounded(query: &str) -> bool {
     !query.is_empty() && query.is_ascii()
 }
 
+fn ssed_fulltext_sidecar_title_prepass_is_bounded(query: &str) -> bool {
+    let query = query.trim();
+    query.len() >= 2
+        && query.is_ascii()
+        && !query.chars().any(char::is_whitespace)
+        && query.bytes().any(|byte| byte.is_ascii_alphabetic())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ssed_sidecar_title_auto_append_is_bounded;
+    use super::{
+        ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_sidecar_title_auto_append_is_bounded,
+    };
 
     #[test]
     fn sidecar_title_auto_append_is_limited_to_bounded_ascii_queries() {
@@ -1372,5 +1466,15 @@ mod tests {
         assert!(!ssed_sidecar_title_auto_append_is_bounded("◯に"));
         assert!(!ssed_sidecar_title_auto_append_is_bounded("白水"));
         assert!(!ssed_sidecar_title_auto_append_is_bounded("ａｂｃ"));
+    }
+
+    #[test]
+    fn fulltext_sidecar_title_prepass_is_limited_to_bounded_ascii_word_queries() {
+        assert!(ssed_fulltext_sidecar_title_prepass_is_bounded("In"));
+        assert!(ssed_fulltext_sidecar_title_prepass_is_bounded("read"));
+        assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("a"));
+        assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("two words"));
+        assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("犬"));
+        assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("ｉｎ"));
     }
 }
