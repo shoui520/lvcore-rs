@@ -24,6 +24,7 @@ const VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT: usize = 8;
 const VALIDATE_SURFACE_TARGET_PAGE_LIMIT: usize = 16;
 const VALIDATE_SURFACE_PROBE_PAGE_LIMIT: usize = 16;
 const VALIDATE_EMPTY_SEARCH_CURSOR_FOLLOW_LIMIT: usize = 4;
+const VALIDATE_SEARCH_PROBE_LABEL_LIMIT: usize = 12;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValidateOptions {
@@ -1281,20 +1282,11 @@ fn search_probe_labels(
             push_probe_label(&mut labels, label);
         }
     }
-    let preferred = [
-        NavigationSurfaceKind::TitleIndexBrowse,
-        NavigationSurfaceKind::Menu,
-        NavigationSurfaceKind::MultiSelector,
-        NavigationSurfaceKind::LvedTree,
-        NavigationSurfaceKind::LawTree,
-        NavigationSurfaceKind::MultiviewTree,
-        NavigationSurfaceKind::Panel,
-    ];
-    for kind in preferred {
+    for kind in search_probe_surface_kinds(metadata.format_family) {
         for surface in surfaces {
             if surface.status != NavigationStatus::Available
                 || surface.surface_id == "search"
-                || surface.kind != kind
+                || surface.kind != *kind
             {
                 continue;
             }
@@ -1319,6 +1311,26 @@ fn search_probe_labels(
     labels
 }
 
+fn search_probe_surface_kinds(format_family: FormatFamily) -> &'static [NavigationSurfaceKind] {
+    match format_family {
+        FormatFamily::Ssed => &[NavigationSurfaceKind::TitleIndexBrowse],
+        FormatFamily::LvedSqlite3 => &[
+            NavigationSurfaceKind::TitleIndexBrowse,
+            NavigationSurfaceKind::LvedTree,
+        ],
+        FormatFamily::LvlMultiView => &[
+            NavigationSurfaceKind::TitleIndexBrowse,
+            NavigationSurfaceKind::LawTree,
+            NavigationSurfaceKind::MultiviewTree,
+        ],
+        FormatFamily::Hourei => &[
+            NavigationSurfaceKind::LawTree,
+            NavigationSurfaceKind::TitleIndexBrowse,
+        ],
+        FormatFamily::Unknown => &[NavigationSurfaceKind::TitleIndexBrowse],
+    }
+}
+
 fn open_surface_probe_page(
     library: &BookLibrary,
     book_id: &BookId,
@@ -1334,16 +1346,18 @@ fn open_surface_probe_page(
 }
 
 fn collect_actionable_probe_labels(surface: &NavigationSurface, out: &mut Vec<String>) {
-    const SEARCH_PROBE_LABEL_LIMIT: usize = 12;
     for target in surface.actionable_targets() {
-        push_probe_label(out, &target.label_text);
-        if out.len() >= SEARCH_PROBE_LABEL_LIMIT {
+        if out.len() >= VALIDATE_SEARCH_PROBE_LABEL_LIMIT {
             break;
         }
+        push_probe_label(out, &target.label_text);
     }
 }
 
 fn push_probe_label(out: &mut Vec<String>, label: &str) {
+    if out.len() >= VALIDATE_SEARCH_PROBE_LABEL_LIMIT {
+        return;
+    }
     let trimmed = label.trim();
     if trimmed.is_empty() || search_probe_lookup_text(trimmed).is_none() {
         return;
@@ -1567,6 +1581,8 @@ fn is_search_probe_leading_decoration(ch: char) -> bool {
             | '＊'
             | '★'
             | '☆'
+            | 'º'
+            | 'ª'
             | '【'
             | '［'
             | '['
@@ -1696,6 +1712,7 @@ mod tests {
             "ああ"
         );
         assert_eq!(search_probe_query("read1小", &SearchMode::Exact), "read");
+        assert_eq!(search_probe_query("ºO1, ºo", &SearchMode::Exact), "O");
         assert_eq!(search_probe_query("0＜sze zro＞", &SearchMode::Exact), "0");
         assert_eq!(search_probe_query("3D", &SearchMode::Exact), "3D");
         assert_eq!(search_probe_query("a, A", &SearchMode::Exact), "a");
@@ -1717,6 +1734,7 @@ mod tests {
             search_probe_query("◎日本国憲法", &SearchMode::Forward),
             "日本"
         );
+        assert_eq!(search_probe_query("ºO1, ºo", &SearchMode::Forward), "O");
         assert_eq!(search_probe_query("【角】", &SearchMode::Forward), "角");
         assert_eq!(
             search_probe_query("◎日本国憲法", &SearchMode::Backward),
@@ -1734,6 +1752,7 @@ mod tests {
             search_probe_query("０°人工歯(zero degree teeth)", &SearchMode::FullText),
             "人工"
         );
+        assert_eq!(search_probe_query("ºO1, ºo", &SearchMode::FullText), "O");
     }
 
     #[test]
@@ -1755,6 +1774,33 @@ mod tests {
         assert!(search_probe_prefers_real_labels(&SearchMode::Advanced(
             "advanced1".to_owned()
         )));
+    }
+
+    #[test]
+    fn validation_search_probe_surfaces_skip_navigation_chrome_for_ssed() {
+        let ssed_kinds = search_probe_surface_kinds(FormatFamily::Ssed);
+        assert_eq!(ssed_kinds, &[NavigationSurfaceKind::TitleIndexBrowse]);
+        assert!(!ssed_kinds.contains(&NavigationSurfaceKind::Panel));
+        assert!(!ssed_kinds.contains(&NavigationSurfaceKind::Menu));
+        assert!(!ssed_kinds.contains(&NavigationSurfaceKind::MultiSelector));
+
+        let lved_kinds = search_probe_surface_kinds(FormatFamily::LvedSqlite3);
+        assert!(lved_kinds.contains(&NavigationSurfaceKind::TitleIndexBrowse));
+        assert!(lved_kinds.contains(&NavigationSurfaceKind::LvedTree));
+
+        let law_kinds = search_probe_surface_kinds(FormatFamily::Hourei);
+        assert!(law_kinds.contains(&NavigationSurfaceKind::LawTree));
+        assert!(!law_kinds.contains(&NavigationSurfaceKind::Panel));
+    }
+
+    #[test]
+    fn validation_search_probe_labels_are_hard_bounded() {
+        let mut labels = Vec::new();
+        for index in 0..(VALIDATE_SEARCH_PROBE_LABEL_LIMIT + 4) {
+            push_probe_label(&mut labels, &format!("probe{index}"));
+        }
+        assert_eq!(labels.len(), VALIDATE_SEARCH_PROBE_LABEL_LIMIT);
+        assert_eq!(labels.last().map(String::as_str), Some("probe11"));
     }
 
     #[test]
