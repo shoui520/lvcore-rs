@@ -1285,7 +1285,7 @@ fn select_search_probe_query(
     labels: &[String],
 ) -> String {
     let mut fallback = None;
-    let mut exact_non_default_labels = labels
+    let mut prioritized_labels = labels
         .iter()
         .filter(|label| !is_default_search_probe_label(label))
         .chain(
@@ -1294,8 +1294,8 @@ fn select_search_probe_query(
                 .filter(|label| is_default_search_probe_label(label)),
         );
     let mut normal_labels = labels.iter();
-    let label_iter: &mut dyn Iterator<Item = &String> = if *mode == SearchMode::Exact {
-        &mut exact_non_default_labels
+    let label_iter: &mut dyn Iterator<Item = &String> = if search_probe_prefers_real_labels(mode) {
+        &mut prioritized_labels
     } else {
         &mut normal_labels
     };
@@ -1327,6 +1327,10 @@ fn select_search_probe_query(
         }
     }
     fallback.unwrap_or_else(|| "a".to_owned())
+}
+
+fn search_probe_prefers_real_labels(mode: &SearchMode) -> bool {
+    matches!(mode, SearchMode::Exact | SearchMode::FullText)
 }
 
 fn is_default_search_probe_label(label: &str) -> bool {
@@ -1644,6 +1648,14 @@ mod tests {
         assert!(search_probe_query_is_useful("007"));
         assert!(search_probe_query_is_useful("ａｌｐｈａ"));
         assert!(search_probe_query_is_useful("重要"));
+    }
+
+    #[test]
+    fn fulltext_validation_probe_prefers_real_labels_before_defaults() {
+        assert!(search_probe_prefers_real_labels(&SearchMode::Exact));
+        assert!(search_probe_prefers_real_labels(&SearchMode::FullText));
+        assert!(!search_probe_prefers_real_labels(&SearchMode::Forward));
+        assert!(!search_probe_prefers_real_labels(&SearchMode::Partial));
     }
 
     #[test]
