@@ -275,7 +275,6 @@ pub struct ReaderBookPackage {
     retained_ios_full_db_payloads: Vec<IosDictFullDbPayload>,
     retained_ios_search_payloads: Vec<IosDictSearchPayload>,
     retained_ios_convert_addr_payloads: Vec<IosDictConvertAddrPayload>,
-    retained_ssed_components: Vec<RetainedSsedComponent>,
     gaiji_unicode_map: BTreeMap<String, String>,
     ssed_sidecar_body_resolvers:
         OnceLock<std::result::Result<Vec<SsedSidecarBodyResolver>, String>>,
@@ -344,6 +343,7 @@ impl ReaderBookPackage {
             .get(..12)
             .unwrap_or(root_fingerprint.as_str());
         let identity_hint = package_identity_hint(root, &detected, &stores);
+        let metadata_diagnostics = package_metadata_diagnostics(&stores);
         let book_id = BookId(format!(
             "{}:{}:{}",
             format_label, identity_hint, fingerprint_short,
@@ -361,6 +361,7 @@ impl ReaderBookPackage {
             } else {
                 stores.search_modes.clone()
             },
+            diagnostics: metadata_diagnostics,
         };
         let routing_aliases = routing_aliases_for_package(detected.format_family, &stores);
         let retained_ios_fts_payloads = stores
@@ -397,7 +398,6 @@ impl ReaderBookPackage {
             retained_ios_full_db_payloads,
             retained_ios_search_payloads,
             retained_ios_convert_addr_payloads,
-            retained_ssed_components: stores.retained_ssed_components,
             gaiji_unicode_map: stores.gaiji_unicode_map,
             ssed_sidecar_body_resolvers: OnceLock::new(),
             ssed_sidecar_media_resolvers: OnceLock::new(),
@@ -449,28 +449,30 @@ impl ReaderBookPackage {
             })
             .collect()
     }
+}
 
-    pub(super) fn retained_ssed_component_diagnostics(&self) -> Vec<Diagnostic> {
-        self.retained_ssed_components
-            .iter()
-            .map(|component| {
-                let mut diagnostic = Diagnostic::info(
-                    "retained_ssed_component_deferred",
-                    "Retained SSEDDATA component is present, but lvcore is not exposing it as a reader-facing surface until its target mapping is fully understood",
-                )
-                .with_context("filename", component.filename.clone())
-                .with_context("role", format!("{:?}", component.role))
-                .with_context("start_block", component.start_block.to_string())
-                .with_context("end_block", component.end_block.to_string())
-                .with_context("chunk_count", component.chunk_count.to_string());
-                if let Some(component_type) = component.component_type {
-                    diagnostic =
-                        diagnostic.with_context("component_type", format!("0x{component_type:02x}"));
-                }
-                diagnostic
-            })
-            .collect()
+fn package_metadata_diagnostics(stores: &PackageStores) -> Vec<Diagnostic> {
+    stores
+        .retained_ssed_components
+        .iter()
+        .map(retained_ssed_component_diagnostic)
+        .collect()
+}
+
+fn retained_ssed_component_diagnostic(component: &RetainedSsedComponent) -> Diagnostic {
+    let mut diagnostic = Diagnostic::info(
+        "retained_ssed_component_deferred",
+        "Retained SSEDDATA component is present, but lvcore is not exposing it as a reader-facing feature until its search keys and target mapping are fully understood",
+    )
+    .with_context("filename", component.filename.clone())
+    .with_context("role", format!("{:?}", component.role))
+    .with_context("start_block", component.start_block.to_string())
+    .with_context("end_block", component.end_block.to_string())
+    .with_context("chunk_count", component.chunk_count.to_string());
+    if let Some(component_type) = component.component_type {
+        diagnostic = diagnostic.with_context("component_type", format!("0x{component_type:02x}"));
     }
+    diagnostic
 }
 
 fn package_identity_hint(

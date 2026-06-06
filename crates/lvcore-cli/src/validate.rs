@@ -1548,6 +1548,7 @@ mod tests {
             root_fingerprint: "test".to_owned(),
             capabilities: vec![Capability::PreservedHtml],
             search_modes: vec![SearchMode::Exact, SearchMode::Partial, SearchMode::FullText],
+            diagnostics: Vec::new(),
         };
 
         assert!(should_skip_search_mode_probe(

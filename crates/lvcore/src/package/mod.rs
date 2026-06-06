@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::diagnostics::Diagnostic;
 use crate::lved_sqlite::is_lved_payload_name;
 use crate::search::SearchMode;
 
@@ -99,6 +100,8 @@ pub struct BookMetadata {
     pub capabilities: Vec<Capability>,
     #[serde(default)]
     pub search_modes: Vec<SearchMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
