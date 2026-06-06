@@ -79,7 +79,8 @@ The intended frontend library flow is two-phase:
 
 For progressive UI updates, the developer CLI mirrors this split:
 
-- `library-discover` emits cheap candidate rows for cache comparison.
+- `library-discover --jsonl` streams cheap candidate rows for cache comparison
+  and ends with a summary row.
 - `library-import --jsonl` streams one opened/skipped/error row per package and
   a final summary, so the frontend does not need to wait for an entire corpus
   import before showing usable books.
@@ -126,10 +127,10 @@ provider slices:
   format labels, optional title hints, and root metadata fingerprints;
 - library-owned multi-root import through `BookLibrary::open_discovered_paths`
   and tolerant `try_open_discovered_paths` import reports, plus developer
-  `library-discover`, `library-import`, `library-import --jsonl`, and
-  `library-search` CLI commands that exercise frontend-cacheable book metadata,
-  progressive import, all-book 串刺し検索, and routed first-hit rendering across
-  opened books;
+  `library-discover`, `library-discover --jsonl`, `library-import`,
+  `library-import --jsonl`, and `library-search` CLI commands that exercise
+  frontend-cacheable book metadata, progressive discovery/import, all-book
+  串刺し検索, and routed first-hit rendering across opened books;
 - library search pages expose an opaque search-result sequence for continuous
   view. The frontend does not need to reconstruct search-result order from
   target internals; it can pass the returned value back to lvcore when opening a
