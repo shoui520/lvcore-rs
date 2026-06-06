@@ -336,13 +336,21 @@ impl ReaderBookPackage {
         };
         let mut collector = SsedMenuSequenceWindowCollector::new(request.before, request.after);
         let mut diagnostics = Vec::new();
-        let mut cursor = ssed_menu_sequence_start_cursor(request.cursor_hint, request.before);
+        let mut cursor = if request.cursor_hint.is_some() {
+            ssed_menu_sequence_start_cursor(request.cursor_hint, request.before)
+        } else {
+            self.ssed_multi_sequence_cursor_for_target(
+                request.surface_id,
+                request.target,
+                request.before,
+            )?
+        };
         let mut reached_page_limit = false;
         let context_limit = request
             .before
             .saturating_add(request.after)
             .saturating_add(1);
-        let page_limit = if request.cursor_hint.is_some() {
+        let page_limit = if cursor.is_some() {
             SSED_SEQUENCE_CURSOR_PAGE_MIN.max(context_limit)
         } else {
             SSED_SEQUENCE_SURFACE_PAGE_LIMIT.max(context_limit)
@@ -449,6 +457,49 @@ impl ReaderBookPackage {
         };
         window.diagnostics.extend(diagnostics);
         Ok(Some(window))
+    }
+
+    fn ssed_multi_sequence_cursor_for_target(
+        &self,
+        surface_id: &str,
+        target: &TargetToken,
+        before: usize,
+    ) -> Result<Option<String>> {
+        let Some(root_surface) = parse_ssed_multi_surface_id(surface_id) else {
+            return Ok(None);
+        };
+        if root_surface.record_index.is_some() || root_surface.filter.is_some() {
+            return Ok(None);
+        }
+        let target_surface_id = match target.decode()? {
+            InternalTarget::MenuItem { surface_id, .. }
+            | InternalTarget::TitleIndexItem { surface_id, .. } => surface_id,
+            _ => return Ok(None),
+        };
+        let Some(target_surface) = parse_ssed_multi_surface_id(&target_surface_id) else {
+            return Ok(None);
+        };
+        if target_surface.descriptor != root_surface.descriptor || target_surface.filter.is_some() {
+            return Ok(None);
+        }
+        let Some(record_index) = target_surface.record_index else {
+            return Ok(None);
+        };
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(None);
+        };
+        let Some(component) = catalog.component_named(&root_surface.descriptor) else {
+            return Ok(None);
+        };
+        let descriptor = self.read_ssed_multi_descriptor(component)?;
+        let Some(ordinal) = descriptor
+            .records
+            .iter()
+            .position(|record| record.index == record_index)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(ordinal.saturating_sub(before).to_string()))
     }
 
     pub(super) fn resolve_ssed_panel_window(

@@ -1519,6 +1519,74 @@ fn ssed_multi_descriptor_exposes_selector_navigation_without_fake_menu() {
 }
 
 #[test]
+fn ssed_multi_root_surface_is_cursor_paged() {
+    fn label_only_multi_descriptor(labels: &[&str]) -> Vec<u8> {
+        let mut data = vec![0u8; 0x10];
+        data[0..2].copy_from_slice(&(labels.len() as u16).to_be_bytes());
+        for label in labels {
+            let pos = data.len();
+            data.resize(pos + 0x20, 0);
+            let bytes = label.as_bytes();
+            let len = bytes.len().min(0x1e);
+            data[pos + 2..pos + 2 + len].copy_from_slice(&bytes[..len]);
+        }
+        data
+    }
+
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_multi_selector(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"body"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("MULTI1.DIC"),
+        sseddata_literal_fixture(&label_only_multi_descriptor(&["ONE", "TWO", "THREE"])),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = package
+        .open_surface_page("multi:MULTI1.DIC", None, 2)
+        .unwrap()
+    else {
+        panic!("MULTI root should open as selector tree");
+    };
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.label_text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ONE", "TWO"]
+    );
+    assert_eq!(next_cursor.as_deref(), Some("2"));
+
+    let NavigationSurface::HierarchicalTree {
+        nodes, next_cursor, ..
+    } = package
+        .open_surface_page("multi:MULTI1.DIC", next_cursor.as_deref(), 2)
+        .unwrap()
+    else {
+        panic!("MULTI root cursor should open the next selector tree page");
+    };
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.label_text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["THREE"]
+    );
+    assert!(next_cursor.is_none());
+}
+
+#[test]
 fn ssed_multi_descriptor_resolves_embedded_selector_components() {
     let dir = tempdir().unwrap();
     let record_start = 0x80;

@@ -11,6 +11,43 @@ struct SsedMultiRecordBrowseRequest<'a> {
     options: &'a LabelOptions,
 }
 
+struct SsedMultiDescriptorNodesPageRequest<'a> {
+    descriptor_name: &'a str,
+    descriptor_component: &'a SsedComponent,
+    descriptor: &'a SsedMultiDescriptor,
+    offset: usize,
+    limit: usize,
+    options: &'a LabelOptions,
+}
+
+struct SsedMultiTitlePageCache {
+    component: SsedComponent,
+    segments: Vec<SsedMultiTitlePageCacheSegment>,
+}
+
+struct SsedMultiTitlePageCacheSegment {
+    base_offset: usize,
+    data: Vec<u8>,
+}
+
+impl SsedMultiTitlePageCache {
+    fn title_text(&self, pointer: SsedIndexPointer) -> Option<String> {
+        let component_offset = usize::try_from(
+            self.component
+                .relative_offset(pointer.block, pointer.offset)?,
+        )
+        .ok()?;
+        let segment = self.segments.iter().find(|segment| {
+            component_offset >= segment.base_offset
+                && component_offset < segment.base_offset.saturating_add(segment.data.len())
+        })?;
+        let local_offset = component_offset.checked_sub(segment.base_offset)?;
+        let data = segment.data.get(local_offset..)?;
+        let title = decode_title_text(data.get(..512).unwrap_or(data));
+        (!title.is_empty()).then_some(title)
+    }
+}
+
 impl ReaderBookPackage {
     pub(super) fn ssed_multi_home_surfaces(&self) -> Result<Vec<HomeSurface>> {
         let Some(catalog) = &self.ssed_catalog else {
@@ -76,7 +113,10 @@ impl ReaderBookPackage {
         Ok(surfaces)
     }
 
-    fn read_ssed_multi_descriptor(&self, component: &SsedComponent) -> Result<SsedMultiDescriptor> {
+    pub(super) fn read_ssed_multi_descriptor(
+        &self,
+        component: &SsedComponent,
+    ) -> Result<SsedMultiDescriptor> {
         let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
             return Err(Error::Driver(format!(
                 "{} is declared but not present on disk",
@@ -179,15 +219,20 @@ impl ReaderBookPackage {
             return Ok(surface);
         }
 
+        let offset = decode_offset_cursor(cursor);
         let mut diagnostics = Vec::new();
-        let nodes = self.ssed_multi_descriptor_nodes(
-            &parsed_surface.descriptor,
-            component,
-            &descriptor,
+        let (nodes, next_cursor) = self.ssed_multi_descriptor_nodes_page(
+            SsedMultiDescriptorNodesPageRequest {
+                descriptor_name: &parsed_surface.descriptor,
+                descriptor_component: component,
+                descriptor: &descriptor,
+                offset,
+                limit,
+                options,
+            },
             &mut diagnostics,
-            options,
         )?;
-        if nodes.is_empty() {
+        if nodes.is_empty() && offset == 0 {
             return Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
                 diagnostics,
@@ -196,7 +241,7 @@ impl ReaderBookPackage {
         let surface = NavigationSurface::HierarchicalTree {
             surface_id: surface_id.to_owned(),
             nodes,
-            next_cursor: None,
+            next_cursor,
         };
         self.cache_ssed_navigation_surface_page(cache_key, &surface)?;
         Ok(surface)
@@ -278,10 +323,14 @@ impl ReaderBookPackage {
                 diagnostics,
             });
         }
+        let title_page_cache =
+            self.ssed_multi_title_page_cache(descriptor_component, record, &rows);
         let mut items = Vec::new();
         for (index, row) in rows.into_iter().enumerate() {
-            let label = self
-                .ssed_multi_title_text(descriptor_component, record, row.title)
+            let label = title_page_cache
+                .as_ref()
+                .and_then(|cache| cache.title_text(row.title))
+                .or_else(|| self.ssed_multi_title_text(descriptor_component, record, row.title))
                 .or_else(|| self.ssed_title_text(row.title))
                 .unwrap_or_else(|| row.target_key.clone());
             let label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
@@ -308,16 +357,116 @@ impl ReaderBookPackage {
         })
     }
 
-    fn ssed_multi_descriptor_nodes(
+    fn ssed_multi_title_page_cache(
         &self,
-        descriptor_name: &str,
         descriptor_component: &SsedComponent,
-        descriptor: &SsedMultiDescriptor,
+        record: &SsedMultiRecord,
+        rows: &[SsedIndexRow],
+    ) -> Option<SsedMultiTitlePageCache> {
+        for reference in &record.refs {
+            if ssed_multi_ref_component_role(reference.component_type) != SsedComponentRole::Title {
+                continue;
+            }
+            let component = self.ssed_component_for_multi_ref(descriptor_component, reference)?;
+            let mut offsets = rows
+                .iter()
+                .filter_map(|row| component.relative_offset(row.title.block, row.title.offset))
+                .filter_map(|offset| usize::try_from(offset).ok())
+                .collect::<Vec<_>>();
+            if offsets.is_empty() {
+                continue;
+            }
+            offsets.sort_unstable();
+            let segments = self
+                .read_ssed_multi_title_segments(&component, &offsets)
+                .ok()?;
+            if segments.is_empty() {
+                continue;
+            }
+            return Some(SsedMultiTitlePageCache {
+                component,
+                segments,
+            });
+        }
+        None
+    }
+
+    fn read_ssed_multi_title_segments(
+        &self,
+        component: &SsedComponent,
+        offsets: &[usize],
+    ) -> Result<Vec<SsedMultiTitlePageCacheSegment>> {
+        const TITLE_READ_LEN: usize = 512;
+        const TITLE_SEGMENT_GAP_LIMIT: usize = 2048;
+
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Ok(Vec::new());
+        };
+        let mut reader = SsedDataFile::open(path)?;
+        let component_file_offset = if component.start_block >= reader.header().start_block
+            && component.end_block <= reader.header().end_block
+        {
+            usize::try_from(component.start_block - reader.header().start_block)
+                .unwrap_or(usize::MAX)
+                .saturating_mul(BLOCK_SIZE as usize)
+        } else {
+            0
+        };
+        let component_size = usize::try_from(component.block_count())
+            .unwrap_or(usize::MAX)
+            .saturating_mul(BLOCK_SIZE as usize);
+
+        let mut ranges = Vec::<(usize, usize)>::new();
+        let mut start = offsets[0];
+        let mut end = start.saturating_add(TITLE_READ_LEN);
+        for offset in offsets.iter().copied().skip(1) {
+            if offset <= end.saturating_add(TITLE_SEGMENT_GAP_LIMIT) {
+                end = end.max(offset.saturating_add(TITLE_READ_LEN));
+            } else {
+                ranges.push((start, end));
+                start = offset;
+                end = offset.saturating_add(TITLE_READ_LEN);
+            }
+        }
+        ranges.push((start, end));
+
+        let mut segments = Vec::new();
+        for (start, end) in ranges {
+            if start >= component_size {
+                continue;
+            }
+            let read_len = end.saturating_sub(start).min(component_size - start);
+            let data = reader.read_range(component_file_offset.saturating_add(start), read_len)?;
+            if data.is_empty() {
+                continue;
+            }
+            segments.push(SsedMultiTitlePageCacheSegment {
+                base_offset: start,
+                data,
+            });
+        }
+        Ok(segments)
+    }
+
+    fn ssed_multi_descriptor_nodes_page(
+        &self,
+        request: SsedMultiDescriptorNodesPageRequest<'_>,
         diagnostics: &mut Vec<Diagnostic>,
-        options: &LabelOptions,
-    ) -> Result<Vec<NavigationNode>> {
+    ) -> Result<(Vec<NavigationNode>, Option<String>)> {
+        let SsedMultiDescriptorNodesPageRequest {
+            descriptor_name,
+            descriptor_component,
+            descriptor,
+            offset,
+            limit,
+            options,
+        } = request;
+        if limit == 0 {
+            let next_cursor = (offset < descriptor.records.len()).then(|| offset.to_string());
+            return Ok((Vec::new(), next_cursor));
+        }
         let mut nodes = Vec::new();
-        for record in &descriptor.records {
+        for record in descriptor.records.iter().skip(offset).take(limit) {
             let label = if record.label.is_empty() {
                 format!("Record {}", record.index)
             } else {
@@ -350,7 +499,9 @@ impl ReaderBookPackage {
                 children,
             });
         }
-        Ok(nodes)
+        let next_offset = offset.saturating_add(limit);
+        let next_cursor = (next_offset < descriptor.records.len()).then(|| next_offset.to_string());
+        Ok((nodes, next_cursor))
     }
 
     fn ssed_multi_record_selector_nodes(
