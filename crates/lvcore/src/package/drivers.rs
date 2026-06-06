@@ -117,7 +117,7 @@ use super::ssed_search_runtime::{
     decode_ssed_partial_index_scan_cursor, decode_ssed_prefiltered_index_scan_cursor,
     encode_ssed_partial_index_scan_cursor, encode_ssed_prefiltered_index_scan_cursor,
     ssed_fulltext_body_window_len, ssed_index_component_name_is_backward,
-    ssed_index_row_match_text,
+    ssed_index_component_name_is_cross_reference, ssed_index_row_match_text,
 };
 use super::ssed_zip::{
     copy_zip_member_with_size_limit, looks_like_zip_file, ssed_component_filename_aliases,

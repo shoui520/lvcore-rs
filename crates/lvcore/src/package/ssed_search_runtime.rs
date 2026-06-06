@@ -177,27 +177,57 @@ impl<'a> SsedIndexSearchCollector<'a> {
     fn row_matches(&self, row: &SsedIndexRow) -> bool {
         let key = ssed_index_row_match_text(row);
         if search_match_satisfied(self.mode, &key, self.needle) {
+            if self.mode == &SearchMode::Exact
+                && self.match_display_label
+                && ssed_index_component_name_is_cross_reference(&row.component)
+            {
+                return self.exact_display_label_matches(row);
+            }
             return true;
         }
         if !self.match_display_label {
             return false;
         }
         let display = self.package.ssed_display_text_for_index_row(row);
-        if display == row.key {
-            return false;
-        }
-        let mut display_keys = ssed_display_label_match_texts(&display);
+        let display_keys = self.display_label_match_texts(row, &display);
         if display_keys.is_empty() {
             return false;
         }
+        display_keys
+            .iter()
+            .any(|display_key| search_match_satisfied(self.mode, display_key, self.needle))
+    }
+
+    fn exact_display_label_matches(&self, row: &SsedIndexRow) -> bool {
+        if matches!(
+            self.package
+                .ssed_index_row_points_to_dense_sidecar_anchor(row),
+            Ok(true)
+        ) {
+            return true;
+        }
+        let display = self.package.ssed_display_text_for_index_row(row);
+        if display == row.key {
+            return true;
+        }
+        let display_keys = self.display_label_match_texts(row, &display);
+        !display_keys.is_empty()
+            && display_keys
+                .iter()
+                .any(|display_key| search_match_satisfied(self.mode, display_key, self.needle))
+    }
+
+    fn display_label_match_texts(&self, row: &SsedIndexRow, display: &str) -> Vec<String> {
+        if display == row.key {
+            return Vec::new();
+        }
+        let mut display_keys = ssed_display_label_match_texts(display);
         if ssed_index_component_name_is_backward(&row.component) {
             for display_key in &mut display_keys {
                 *display_key = reverse_search_match_text(display_key);
             }
         }
         display_keys
-            .iter()
-            .any(|display_key| search_match_satisfied(self.mode, display_key, self.needle))
     }
 
     fn emit_hit(&mut self, row: SsedIndexRow) -> Result<()> {
@@ -292,6 +322,10 @@ fn ssed_index_body_key(pointer: SsedIndexPointer) -> String {
 
 pub(super) fn ssed_index_component_name_is_backward(component: &str) -> bool {
     component.to_ascii_uppercase().starts_with('B')
+}
+
+pub(super) fn ssed_index_component_name_is_cross_reference(component: &str) -> bool {
+    component.to_ascii_uppercase().starts_with("CR")
 }
 
 pub(super) fn ssed_index_row_match_text(row: &SsedIndexRow) -> String {

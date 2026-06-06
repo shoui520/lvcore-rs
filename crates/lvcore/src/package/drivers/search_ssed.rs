@@ -1804,24 +1804,48 @@ fn ssed_title_label_fallback_row_matches(
 ) -> bool {
     let key = ssed_index_row_match_text(row);
     if ssed_search_mode_matches(mode, &key, needle) {
+        if mode == &SearchMode::Exact
+            && ssed_index_component_name_is_cross_reference(&row.component)
+        {
+            if matches!(
+                package.ssed_index_row_points_to_dense_sidecar_anchor(row),
+                Ok(true)
+            ) {
+                return true;
+            }
+            let display = package.ssed_display_text_for_index_row(row);
+            if display == row.key {
+                return true;
+            }
+            let display_keys = ssed_display_label_match_keys_for_row(row, &display);
+            return !display_keys.is_empty()
+                && display_keys
+                    .iter()
+                    .any(|display_key| ssed_search_mode_matches(mode, display_key, needle));
+        }
         return true;
     }
     let display = package.ssed_display_text_for_index_row(row);
-    if display == row.key {
-        return false;
-    }
-    let mut display_keys = ssed_display_label_match_texts(&display);
+    let display_keys = ssed_display_label_match_keys_for_row(row, &display);
     if display_keys.is_empty() {
         return false;
     }
+    display_keys
+        .iter()
+        .any(|display_key| ssed_search_mode_matches(mode, display_key, needle))
+}
+
+fn ssed_display_label_match_keys_for_row(row: &SsedIndexRow, display: &str) -> Vec<String> {
+    if display == row.key {
+        return Vec::new();
+    }
+    let mut display_keys = ssed_display_label_match_texts(display);
     if ssed_index_component_name_is_backward(&row.component) {
         for display_key in &mut display_keys {
             *display_key = reverse_search_match_text(display_key);
         }
     }
     display_keys
-        .iter()
-        .any(|display_key| ssed_search_mode_matches(mode, display_key, needle))
 }
 
 fn ssed_search_mode_matches(mode: &SearchMode, key: &str, needle: &str) -> bool {

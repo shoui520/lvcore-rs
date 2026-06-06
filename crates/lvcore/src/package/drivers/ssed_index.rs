@@ -1135,6 +1135,34 @@ impl ReaderBookPackage {
         row.body.block < min_start || row.body.block > max_end
     }
 
+    pub(in crate::package) fn ssed_index_row_points_to_dense_sidecar_anchor(
+        &self,
+        row: &SsedIndexRow,
+    ) -> Result<bool> {
+        if self.ssed_sidecar_body_resolvers()?.is_empty() {
+            return Ok(false);
+        }
+        let Some(catalog) = &self.ssed_catalog else {
+            return Ok(false);
+        };
+        let Some(component) = catalog.component_for_address(row.body.block) else {
+            return Ok(false);
+        };
+        if component.role != SsedComponentRole::Honmon {
+            return Ok(false);
+        }
+        let Some(component_offset) = component.relative_offset(row.body.block, row.body.offset)
+        else {
+            return Ok(false);
+        };
+        Ok(self
+            .ssed_dense_anchor_at_component_offset(
+                component,
+                usize::try_from(component_offset).unwrap_or(usize::MAX),
+            )?
+            .is_some())
+    }
+
     pub(in crate::package) fn ssed_next_index_body_pointer_after_in_index_component(
         &self,
         pointer: SsedIndexPointer,

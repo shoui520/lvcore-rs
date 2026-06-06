@@ -113,6 +113,91 @@ fn ssed_search_falls_back_to_visible_title_label_when_index_key_differs() {
 }
 
 #[test]
+fn ssed_exact_search_rejects_hidden_key_match_when_visible_title_is_broader() {
+    let dir = tempdir().unwrap();
+    let record_start = 0x80;
+    let mut catalog = vec![0u8; record_start + 3 * 0x30];
+    catalog[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Cross Reference Exact";
+    catalog[0x0c] = title.len() as u8;
+    catalog[0x0d..0x0d + title.len()].copy_from_slice(title);
+    catalog[0x4d] = 3;
+    write_record(
+        &mut catalog[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x30..record_start + 0x60],
+        0x05,
+        13,
+        13,
+        "FHTITLE.DIC",
+    );
+    write_record(
+        &mut catalog[record_start + 0x60..record_start + 0x90],
+        0x81,
+        14,
+        14,
+        "CRINDEX.DIC",
+    );
+    fs::write(dir.path().join("DICT.IDX"), catalog).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"doghook\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"0123456789"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("CRINDEX.DIC"),
+        sseddata_literal_fixture(&leaf_page_fixture(&[
+            title_group_record("dog", 13, 0, 1),
+            compact_body_target_record(0xc0, 1, 2),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let exact = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "dog".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert!(
+        exact.hits.is_empty(),
+        "exact search must not show a broader visible title from a hidden/native index key"
+    );
+
+    let visible_exact = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "doghook".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(visible_exact.hits.len(), 1);
+    assert_eq!(visible_exact.hits[0].title_text, "doghook");
+}
+
+#[test]
 fn ssed_exact_visible_title_fallback_matches_headword_segment_before_reading() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
