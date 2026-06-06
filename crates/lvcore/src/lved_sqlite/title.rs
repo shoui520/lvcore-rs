@@ -438,6 +438,17 @@ pub(crate) fn normalize_title_candidate(value: &str) -> Option<String> {
         .unwrap_or(value)
         .trim_matches(|ch: char| ch.is_whitespace() || "　:：-－【】『』《》".contains(ch))
         .to_owned();
+    value = remove_inline_book_quote_marks(&value);
+    for prefix in ["書名", "書籍名", "辞書名", "辞典名"] {
+        if let Some(stripped) = value.strip_prefix(prefix)
+            && stripped.chars().count() >= 2
+        {
+            value = stripped
+                .trim_matches(|ch: char| ch.is_whitespace() || "　:：-－【】『』《》".contains(ch))
+                .to_owned();
+            break;
+        }
+    }
     for marker in ["&copy;", "©", "Copyright", "copyright", "(C)", "（C）"] {
         if let Some((head, _tail)) = value.split_once(marker) {
             value = head.trim().to_owned();
@@ -508,6 +519,23 @@ pub(crate) fn normalize_title_candidate(value: &str) -> Option<String> {
         return None;
     }
     Some(value)
+}
+
+fn remove_inline_book_quote_marks(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '『' | '《' => {}
+            '』' | '》' => {
+                if chars.peek().is_some_and(|next| !next.is_whitespace()) {
+                    out.push(' ');
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+    out.trim().to_owned()
 }
 
 pub(crate) fn title_score(value: &str) -> i32 {
