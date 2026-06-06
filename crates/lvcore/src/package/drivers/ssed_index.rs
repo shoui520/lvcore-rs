@@ -487,6 +487,21 @@ impl ReaderBookPackage {
         cursor: Option<SsedPartialIndexScanCursor>,
         mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
     ) -> Result<SsedPartialIndexScanResult> {
+        self.scan_ssed_partial_index_rows_paged_with_leaf_budget(
+            needle,
+            cursor,
+            SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET,
+            &mut on_row,
+        )
+    }
+
+    pub(super) fn scan_ssed_partial_index_rows_paged_with_leaf_budget(
+        &self,
+        needle: &str,
+        cursor: Option<SsedPartialIndexScanCursor>,
+        leaf_page_budget: usize,
+        mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<SsedPartialIndexScanResult> {
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(SsedPartialIndexScanResult {
                 diagnostics: vec![Diagnostic::error(
@@ -608,7 +623,7 @@ impl ReaderBookPackage {
                         }
                     }
                 }
-                if scanned_leaf_pages >= SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET {
+                if scanned_leaf_pages >= leaf_page_budget {
                     let next_cursor = next_ssed_partial_index_scan_cursor(
                         catalog,
                         component.index,
@@ -633,6 +648,25 @@ impl ReaderBookPackage {
         needle: &str,
         include_simple_indexes: bool,
         cursor: Option<SsedPrefilteredIndexScanCursor>,
+        mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+    ) -> Result<SsedPrefilteredIndexScanResult> {
+        self.scan_ssed_prefiltered_index_rows_paged_with_leaf_budget(
+            mode,
+            needle,
+            include_simple_indexes,
+            cursor,
+            SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET,
+            &mut on_row,
+        )
+    }
+
+    pub(super) fn scan_ssed_prefiltered_index_rows_paged_with_leaf_budget(
+        &self,
+        mode: &SearchMode,
+        needle: &str,
+        include_simple_indexes: bool,
+        cursor: Option<SsedPrefilteredIndexScanCursor>,
+        leaf_page_budget: usize,
         mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
     ) -> Result<SsedPrefilteredIndexScanResult> {
         let Some(catalog) = &self.ssed_catalog else {
@@ -737,7 +771,7 @@ impl ReaderBookPackage {
                         }
                     }
                 }
-                if scanned_leaf_pages >= SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET {
+                if scanned_leaf_pages >= leaf_page_budget {
                     let next_cursor = next_ssed_prefiltered_index_scan_cursor(
                         catalog,
                         mode,

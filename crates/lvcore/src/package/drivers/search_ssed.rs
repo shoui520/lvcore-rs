@@ -3,8 +3,9 @@ use std::{cell::Cell, collections::HashSet};
 use super::*;
 
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
-const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 4096;
-const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 256;
+const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 20_480;
+const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 16;
+const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 2048;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 
@@ -203,11 +204,20 @@ impl ReaderBookPackage {
     ) -> Result<Option<String>> {
         let mut current_cursor = cursor;
         let mut advanced_empty_pages = 0usize;
+        let mut use_empty_scan_budget = false;
         loop {
-            let scan_result =
+            let scan_result = if use_empty_scan_budget {
+                self.scan_ssed_partial_index_rows_paged_with_leaf_budget(
+                    needle,
+                    current_cursor,
+                    SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET,
+                    |row| collector.push_row(row),
+                )?
+            } else {
                 self.scan_ssed_partial_index_rows_paged(needle, current_cursor, |row| {
                     collector.push_row(row)
-                })?;
+                })?
+            };
             let next_cursor = scan_result.next_cursor;
             collector.extend_diagnostics(scan_result.diagnostics);
             if collector.has_hits() || next_cursor.is_none() {
@@ -229,6 +239,7 @@ impl ReaderBookPackage {
                 return Ok(next_cursor);
             }
             advanced_empty_pages = advanced_empty_pages.saturating_add(1);
+            use_empty_scan_budget = true;
             let decoded = decode_ssed_partial_index_scan_cursor(next_cursor.as_deref());
             if decoded.is_none() {
                 collector.extend_diagnostics(vec![
@@ -254,14 +265,26 @@ impl ReaderBookPackage {
     ) -> Result<Option<String>> {
         let mut current_cursor = cursor;
         let mut advanced_empty_pages = 0usize;
+        let mut use_empty_scan_budget = false;
         loop {
-            let scan_result = self.scan_ssed_prefiltered_index_rows_paged(
-                mode,
-                needle,
-                include_simple_indexes,
-                current_cursor,
-                |row| collector.push_row(row),
-            )?;
+            let scan_result = if use_empty_scan_budget {
+                self.scan_ssed_prefiltered_index_rows_paged_with_leaf_budget(
+                    mode,
+                    needle,
+                    include_simple_indexes,
+                    current_cursor,
+                    SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET,
+                    |row| collector.push_row(row),
+                )?
+            } else {
+                self.scan_ssed_prefiltered_index_rows_paged(
+                    mode,
+                    needle,
+                    include_simple_indexes,
+                    current_cursor,
+                    |row| collector.push_row(row),
+                )?
+            };
             let next_cursor = scan_result.next_cursor;
             collector.extend_diagnostics(scan_result.diagnostics);
             if collector.has_hits() || next_cursor.is_none() {
@@ -283,6 +306,7 @@ impl ReaderBookPackage {
                 return Ok(next_cursor);
             }
             advanced_empty_pages = advanced_empty_pages.saturating_add(1);
+            use_empty_scan_budget = true;
             let decoded = decode_ssed_prefiltered_index_scan_cursor(next_cursor.as_deref());
             if decoded.is_none() {
                 collector.extend_diagnostics(vec![
@@ -408,20 +432,29 @@ impl ReaderBookPackage {
         diagnostics.extend(fallback_diagnostics);
         let next_cursor = match stopped {
             SsedTitleLabelFallbackStop::Exhausted => None,
+            SsedTitleLabelFallbackStop::Budget if hits.is_empty() => None,
             SsedTitleLabelFallbackStop::Budget | SsedTitleLabelFallbackStop::PageFull => {
                 Some(encode_ssed_title_label_cursor(checked_rows))
             }
         };
         if matches!(stopped, SsedTitleLabelFallbackStop::Budget) {
-            diagnostics.push(
+            let mut diagnostic = if hits.is_empty() {
+                Diagnostic::info(
+                    "ssed_title_label_search_fallback_no_hit_limited",
+                    "SSED title-label fallback search reached its bounded no-hit row budget",
+                )
+            } else {
                 Diagnostic::info(
                     "ssed_title_label_search_fallback_limited",
                     "SSED title-label fallback search reached its bounded row budget before exhausting all title/index rows",
                 )
-                .with_context("checked_rows", checked_rows.to_string())
-                .with_context("scanned_rows", scanned_rows.to_string())
-                .with_context("next_cursor", encode_ssed_title_label_cursor(checked_rows)),
-            );
+            }
+            .with_context("checked_rows", checked_rows.to_string())
+            .with_context("scanned_rows", scanned_rows.to_string());
+            if let Some(next_cursor) = &next_cursor {
+                diagnostic = diagnostic.with_context("next_cursor", next_cursor.clone());
+            }
+            diagnostics.push(diagnostic);
         }
         Ok(SearchPage {
             hits,
