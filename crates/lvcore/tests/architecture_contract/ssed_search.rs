@@ -113,6 +113,51 @@ fn ssed_search_falls_back_to_visible_title_label_when_index_key_differs() {
 }
 
 #[test]
+fn ssed_exact_search_ignores_observed_index_disambiguation_suffixes() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_raw_key_fixture_rows(&[
+            (&[0x44, 0x39, 0x26, 0x24], 1, 2, 1, 2), // 長 + JIS Greek delta
+            (&[0x3f, 0x37, 0x21, 0x29], 1, 4, 1, 4), // 新 + JIS fullwidth question mark
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let long = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "長".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(long.hits.len(), 1);
+    assert_eq!(long.hits[0].title_text, "長");
+
+    let shin = package
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "新".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(shin.hits.len(), 1);
+    assert_eq!(shin.hits[0].title_text, "新");
+}
+
+#[test]
 fn ssed_visible_title_label_fallback_avoids_empty_first_page_for_deep_matches() {
     let dir = tempdir().unwrap();
     fs::write(
@@ -166,9 +211,9 @@ fn ssed_visible_title_label_fallback_avoids_empty_first_page_for_deep_matches() 
     assert_eq!(first.hits[0].title_text, "target");
     assert!(
         first
-            .next_cursor
-            .as_deref()
-            .is_some_and(|cursor| cursor.starts_with("ssed-title-label:"))
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_title_label_search_fallback_no_hit_limited")
     );
 }
 

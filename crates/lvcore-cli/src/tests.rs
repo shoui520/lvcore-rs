@@ -760,11 +760,9 @@ fn validate_deep_does_not_need_empty_cursor_pages_for_deep_visible_title_hits() 
     assert_eq!(cursor_pages_followed, 0);
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "ｔａｒｇｅｔ");
-    assert!(
-        page.next_cursor
-            .as_deref()
-            .is_some_and(|cursor| cursor.starts_with("ssed-title-label:"))
-    );
+    assert!(page.diagnostics.iter().all(|diagnostic| {
+        diagnostic.code != "ssed_title_label_search_fallback_no_hit_limited"
+    }));
 }
 
 #[test]

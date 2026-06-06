@@ -1356,7 +1356,7 @@ impl ReaderBookPackage {
     }
 
     pub(in crate::package) fn ssed_display_text_for_index_row(&self, row: &SsedIndexRow) -> String {
-        self.ssed_display_text_for_index_title_or_key(row.title, &row.key)
+        self.ssed_display_text_for_index_title_or_key(row.title, &ssed_visible_index_key(row))
     }
 
     pub(in crate::package) fn ssed_display_text_for_index_title_or_key(
@@ -1456,6 +1456,49 @@ fn next_ssed_prefiltered_index_scan_cursor(
             component_index: component.index,
             page_index: 0,
         })
+}
+
+fn ssed_visible_index_key(row: &SsedIndexRow) -> String {
+    let stripped = strip_ssed_index_disambiguation_marker(&row.key);
+    if stripped == row.key {
+        row.key.clone()
+    } else {
+        stripped.to_owned()
+    }
+}
+
+fn strip_ssed_index_disambiguation_marker(value: &str) -> &str {
+    let value = value.trim();
+    if value.chars().count() < 2 {
+        return value;
+    }
+    if let Some(rest) = value.strip_prefix(is_ssed_index_disambiguation_marker)
+        && contains_japanese_label_char(rest)
+    {
+        return rest.trim();
+    }
+    if let Some(rest) = value.strip_suffix(is_ssed_index_disambiguation_marker)
+        && contains_japanese_label_char(rest)
+    {
+        return rest.trim();
+    }
+    value
+}
+
+fn is_ssed_index_disambiguation_marker(value: char) -> bool {
+    matches!(value, '?' | '？' | 'Δ')
+}
+
+fn contains_japanese_label_char(value: &str) -> bool {
+    value.chars().any(|ch| {
+        matches!(
+            ch,
+            '\u{3040}'..='\u{30ff}'
+                | '\u{3400}'..='\u{9fff}'
+                | '\u{f900}'..='\u{faff}'
+                | '\u{ff66}'..='\u{ff9f}'
+        )
+    })
 }
 
 fn ssed_prefiltered_index_component_may_match(

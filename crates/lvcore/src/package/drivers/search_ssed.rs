@@ -77,7 +77,8 @@ impl ReaderBookPackage {
             offset,
             page_limit,
             gaiji_policy,
-        );
+        )
+        .with_display_label_matching();
         let mut optimized_scan_components = 0usize;
         let mut scan_needs_prefilter_fallback = false;
         let mut optimized_diagnostics = Vec::new();
@@ -150,7 +151,8 @@ impl ReaderBookPackage {
                 offset,
                 page_limit,
                 query.label_gaiji_policy(),
-            );
+            )
+            .with_display_label_matching();
             fallback_collector.extend_diagnostics(optimized_diagnostics);
             physical_next_cursor = self.scan_ssed_prefiltered_index_rows_paged_until_visible(
                 &query.mode,

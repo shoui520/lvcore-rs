@@ -712,6 +712,27 @@ pub(crate) fn simple_index_raw_ascii_fixture_rows(rows: &[(&str, u32, u16, u32, 
     page
 }
 
+pub(crate) fn simple_index_raw_key_fixture_rows(
+    rows: &[(&[u8], u32, u16, u32, u16)],
+) -> Vec<u8> {
+    let mut page = vec![0u8; 2048];
+    page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    page[2..4].copy_from_slice(&(rows.len() as u16).to_be_bytes());
+    let mut pos = 4usize;
+    for (key, body_block, body_offset, title_block, title_offset) in rows {
+        page[pos] = key.len() as u8;
+        pos += 1;
+        page[pos..pos + key.len()].copy_from_slice(key);
+        pos += key.len();
+        page[pos..pos + 4].copy_from_slice(&body_block.to_be_bytes());
+        page[pos + 4..pos + 6].copy_from_slice(&body_offset.to_be_bytes());
+        page[pos + 6..pos + 10].copy_from_slice(&title_block.to_be_bytes());
+        page[pos + 10..pos + 12].copy_from_slice(&title_offset.to_be_bytes());
+        pos += 12;
+    }
+    page
+}
+
 pub(crate) fn leaf_page_fixture(records: &[Vec<u8>]) -> Vec<u8> {
     let mut page = vec![0u8; 2048];
     page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
