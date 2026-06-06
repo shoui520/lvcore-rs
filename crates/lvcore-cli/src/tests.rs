@@ -1,7 +1,7 @@
 use super::*;
 use crate::validate::{
-    ValidateOptions, targetless_surface_probe, validate_detected_package_json,
-    validate_package_json,
+    ValidateOptions, search_with_empty_cursor_follow, targetless_surface_probe,
+    validate_detected_package_json, validate_package_json,
 };
 use lvcore::lved_sqlite::apply_sqlcipher_key;
 use rusqlite::Connection;
@@ -713,6 +713,24 @@ fn validate_deep_exercises_ssed_advertised_search_modes() {
 }
 
 #[test]
+fn validate_deep_follows_empty_search_cursor_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    write_ssed_visible_title_cursor_cli_fixture(dir.path());
+
+    let registry = DriverRegistry::default();
+    let mut library = lvcore::BookLibrary::new();
+    let book_id = library.open_path(dir.path(), &registry).unwrap();
+    let (page, cursor_pages_followed) =
+        search_with_empty_cursor_follow(&library, &book_id, &SearchMode::Exact, "target", 10)
+            .unwrap();
+
+    assert_eq!(cursor_pages_followed, 1);
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "ｔａｒｇｅｔ");
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
 fn validate_deep_can_explicitly_exercise_expensive_ssed_search_modes() {
     let dir = tempfile::tempdir().unwrap();
     write_ssed_cli_fixture(dir.path());
@@ -1185,7 +1203,48 @@ fn write_ssed_cli_fixture(root: &Path) {
     .unwrap();
 }
 
+fn write_ssed_visible_title_cursor_cli_fixture(root: &Path) {
+    fs::write(
+        root.join("DICT.IDX"),
+        ssedinfo_cli_fixture_with_index_blocks(4),
+    )
+    .unwrap();
+    fs::write(
+        root.join("HONMON.DIC"),
+        sseddata_literal_fixture(&body_jis("body")),
+    )
+    .unwrap();
+    let mut titles = body_jis("alpha");
+    titles.extend_from_slice(&[0x1f, 0x0a]);
+    let target_title_offset = titles.len() as u16;
+    titles.extend_from_slice(&body_jis("target"));
+    titles.extend_from_slice(&[0x1f, 0x0a]);
+    fs::write(root.join("FHTITLE.DIC"), sseddata_literal_fixture(&titles)).unwrap();
+
+    let mut index = Vec::new();
+    index.extend_from_slice(&internal_index_page(&[("a", 16), ("b", 17), ("c", 18)]));
+    let mut body_offset = 1u16;
+    for page_index in 0..3 {
+        let mut rows = Vec::new();
+        for row_index in 0..100 {
+            let title_offset = if page_index == 2 && row_index == 70 {
+                target_title_offset
+            } else {
+                0
+            };
+            rows.push(("x", 1, body_offset, 13, title_offset));
+            body_offset = body_offset.saturating_add(1);
+        }
+        index.extend_from_slice(&simple_index_rows_page(&rows));
+    }
+    fs::write(root.join("FHINDEX.DIC"), sseddata_literal_fixture(&index)).unwrap();
+}
+
 fn ssedinfo_cli_fixture() -> Vec<u8> {
+    ssedinfo_cli_fixture_with_index_blocks(1)
+}
+
+fn ssedinfo_cli_fixture_with_index_blocks(index_blocks: u32) -> Vec<u8> {
     let record_start = 0x80;
     let mut data = vec![0u8; record_start + 4 * 0x30];
     data[..8].copy_from_slice(lvcore::SSEDINFO_MAGIC);
@@ -1211,14 +1270,14 @@ fn ssedinfo_cli_fixture() -> Vec<u8> {
         &mut data[record_start + 0x60..record_start + 0x90],
         0x91,
         15,
-        15,
+        15 + index_blocks.saturating_sub(1),
         "FHINDEX.DIC",
     );
     write_ssedinfo_record(
         &mut data[record_start + 0x90..record_start + 0xc0],
         0xf2,
-        17,
-        18,
+        15 + index_blocks.saturating_add(1),
+        15 + index_blocks.saturating_add(2),
         "GA16HALF",
     );
     data
@@ -1250,6 +1309,41 @@ fn simple_index_page(
     page[pos + 4..pos + 6].copy_from_slice(&body_offset.to_be_bytes());
     page[pos + 6..pos + 10].copy_from_slice(&title_block.to_be_bytes());
     page[pos + 10..pos + 12].copy_from_slice(&title_offset.to_be_bytes());
+    page
+}
+
+fn simple_index_rows_page(rows: &[(&str, u32, u16, u32, u16)]) -> Vec<u8> {
+    let mut page = vec![0u8; 2048];
+    page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    page[2..4].copy_from_slice(&(rows.len() as u16).to_be_bytes());
+    let mut pos = 4usize;
+    for (key, body_block, body_offset, title_block, title_offset) in rows {
+        let key = jis_fullwidth_ascii_key(key);
+        page[pos] = key.len() as u8;
+        pos += 1;
+        page[pos..pos + key.len()].copy_from_slice(&key);
+        pos += key.len();
+        page[pos..pos + 4].copy_from_slice(&body_block.to_be_bytes());
+        page[pos + 4..pos + 6].copy_from_slice(&body_offset.to_be_bytes());
+        page[pos + 6..pos + 10].copy_from_slice(&title_block.to_be_bytes());
+        page[pos + 10..pos + 12].copy_from_slice(&title_offset.to_be_bytes());
+        pos += 12;
+    }
+    page
+}
+
+fn internal_index_page(rows: &[(&str, u32)]) -> Vec<u8> {
+    let mut page = vec![0u8; 2048];
+    page[0..2].copy_from_slice(&2u16.to_be_bytes());
+    page[2..4].copy_from_slice(&(rows.len() as u16).to_be_bytes());
+    let mut pos = 4usize;
+    for (key, child_block) in rows {
+        let key = jis_fullwidth_ascii_key(key);
+        page[pos..pos + 2].copy_from_slice(&key[..2]);
+        pos += 2;
+        page[pos..pos + 4].copy_from_slice(&child_block.to_be_bytes());
+        pos += 4;
+    }
     page
 }
 

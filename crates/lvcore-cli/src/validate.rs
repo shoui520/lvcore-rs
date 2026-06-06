@@ -22,6 +22,7 @@ const VALIDATE_SEARCH_HIT_RENDER_LIMIT: usize = 3;
 const VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT: usize = 8;
 const VALIDATE_SURFACE_TARGET_PAGE_LIMIT: usize = 16;
 const VALIDATE_SURFACE_PAGE_LIMIT: usize = 100;
+const VALIDATE_EMPTY_SEARCH_CURSOR_FOLLOW_LIMIT: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValidateOptions {
@@ -601,23 +602,16 @@ fn search_mode_exercise(
     let kind = format!("search_{}", search_mode_key(&mode));
     let limit = if render_hits { 3 } else { 1 };
     let started = Instant::now();
-    let mut row = match library.search(&SearchQuery {
-        scope: SearchScope::CurrentBook {
-            book_id: book_id.clone(),
-        },
-        mode: mode.clone(),
-        query: query.clone(),
-        cursor: None,
-        limit,
-        gaiji_policy: None,
-    }) {
-        Ok(page) => {
+    let mut row = match search_with_empty_cursor_follow(library, book_id, &mode, &query, limit) {
+        Ok((page, cursor_pages_followed)) => {
             let mut row = json!({
                 "kind": kind,
                 "status": "ok",
                 "mode": mode,
                 "query": query,
                 "hit_count": page.hits.len(),
+                "cursor_pages_followed": cursor_pages_followed,
+                "remaining_cursor": page.next_cursor,
             });
             insert_diagnostic_fields(&mut row, &page.diagnostics);
             if render_hits {
@@ -649,6 +643,48 @@ fn search_mode_exercise(
     };
     insert_elapsed_ms(&mut row, started);
     row
+}
+
+pub(crate) fn search_with_empty_cursor_follow(
+    library: &BookLibrary,
+    book_id: &BookId,
+    mode: &SearchMode,
+    query: &str,
+    limit: usize,
+) -> lvcore::Result<(lvcore::SearchPage, usize)> {
+    let mut page = library.search(&SearchQuery {
+        scope: SearchScope::CurrentBook {
+            book_id: book_id.clone(),
+        },
+        mode: mode.clone(),
+        query: query.to_owned(),
+        cursor: None,
+        limit,
+        gaiji_policy: None,
+    })?;
+    let mut cursor_pages_followed = 0usize;
+    while page.hits.is_empty()
+        && page.next_cursor.is_some()
+        && cursor_pages_followed < VALIDATE_EMPTY_SEARCH_CURSOR_FOLLOW_LIMIT
+    {
+        let cursor = page.next_cursor.clone();
+        let mut next_page = library.search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: book_id.clone(),
+            },
+            mode: mode.clone(),
+            query: query.to_owned(),
+            cursor,
+            limit,
+            gaiji_policy: None,
+        })?;
+        let mut diagnostics = page.diagnostics;
+        diagnostics.extend(next_page.diagnostics);
+        next_page.diagnostics = diagnostics;
+        page = next_page;
+        cursor_pages_followed = cursor_pages_followed.saturating_add(1);
+    }
+    Ok((page, cursor_pages_followed))
 }
 
 fn insert_elapsed_ms(row: &mut serde_json::Value, started: Instant) {
