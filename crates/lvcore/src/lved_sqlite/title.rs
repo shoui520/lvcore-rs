@@ -198,6 +198,30 @@ pub(crate) fn html_text_lines(fragment: &str) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn lved_content_title_from_body(fragment: &str) -> Option<String> {
+    for tag in ["title", "h1", "h2", "h3"] {
+        if let Some(body) = first_html_element_body(fragment, tag, |_| true)
+            && let Some(line) = first_lved_content_title_line(body)
+        {
+            return Some(line);
+        }
+    }
+    if let Some(body) = first_html_element_body(fragment, "div", |tag| {
+        html_element_has_class(tag, "midashi")
+    }) && let Some(line) = first_lved_content_title_line(body)
+    {
+        return Some(line);
+    }
+    first_lved_content_title_line(fragment)
+}
+
+fn first_lved_content_title_line(fragment: &str) -> Option<String> {
+    html_text_lines(fragment)
+        .into_iter()
+        .map(|line| line.trim().to_owned())
+        .find(|line| !line.is_empty())
+}
+
 fn decode_basic_html_entities(value: &str) -> String {
     let mut decoded = value.to_owned();
     for _ in 0..2 {
@@ -416,6 +440,33 @@ where
         cursor = next_cursor;
     }
     None
+}
+
+fn html_element_has_class(tag: &str, class_name: &str) -> bool {
+    let lower = tag.to_ascii_lowercase();
+    let Some(class_pos) = lower.find("class") else {
+        return false;
+    };
+    let Some(eq_pos) = lower[class_pos + "class".len()..].find('=') else {
+        return false;
+    };
+    let mut value_start = class_pos + "class".len() + eq_pos + 1;
+    while value_start < tag.len() && tag.as_bytes()[value_start].is_ascii_whitespace() {
+        value_start += 1;
+    }
+    let Some(quote) = tag[value_start..].chars().next() else {
+        return false;
+    };
+    if quote != '"' && quote != '\'' {
+        return false;
+    }
+    value_start += quote.len_utf8();
+    let Some(value_end) = tag[value_start..].find(quote) else {
+        return false;
+    };
+    tag[value_start..value_start + value_end]
+        .split_whitespace()
+        .any(|value| value.eq_ignore_ascii_case(class_name))
 }
 
 fn find_ascii_case_insensitive_from(haystack: &str, needle: &str, start: usize) -> Option<usize> {

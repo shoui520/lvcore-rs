@@ -27,7 +27,7 @@ use sql_search::{
     lved_available_search_modes, lved_list_hits_by_id_clause, lved_list_hits_by_id_clause_offset,
     search_lved_sqlite_connection,
 };
-use title::{html_text_lines, lved_sqlite_title_from_connection};
+use title::{html_text_lines, lved_content_title_from_body, lved_sqlite_title_from_connection};
 #[cfg(test)]
 use title::{normalize_title_candidate, title_score};
 use tree::{
@@ -410,6 +410,18 @@ impl LvedSqliteStore {
     pub fn content_title_text(&self, content_id: i64) -> Result<Option<String>> {
         self.with_connection(|connection| {
             let schema = self.schema(connection)?;
+            if schema.table_has_columns("content", &["id", "body"])
+                && let Some(body_prefix) = connection
+                    .query_row(
+                        "select substr(body, 1, ?) from content where id = ? limit 1",
+                        (LVED_INFO_TITLE_PREFIX_CHARS, content_id),
+                        |row| sqlite_value_to_string(row.get_ref(0)?),
+                    )
+                    .optional()?
+                && let Some(title) = lved_content_title_from_body(&body_prefix)
+            {
+                return Ok(Some(title));
+            }
             let list_columns = schema.columns("list");
             if !has_column(list_columns, "id") || !has_column(list_columns, "refid") {
                 return Ok(None);

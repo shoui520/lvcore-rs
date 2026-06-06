@@ -332,11 +332,13 @@ fn searches_lved_list_rows_and_preserves_content_html() {
                     insert into content values (101, 1, '<article><h1>Beta</h1></article>', '');
                     insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
                     insert into content values (103, 1, '<article><h1>Alpha Beta</h1></article>', '');
+                    insert into content values (104, 1, '<div class=\"midashi\"><span>Body Midashi</span></div><p>body</p>', '');
                     insert into mediasub values (1, '00010033', 5, X'49443303');
                     insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
                     insert into list values (2, 101, 1, '', '<b>beta</b>', '');
                     insert into list values (3, 102, 1, '', '<b>gamma</b>', '');
                     insert into list values (4, 103, 1, '', '<b>alpha beta</b>', '');
+                    insert into list values (5, 104, 1, '', '<b>slow list fallback</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', 'topic marker', '', '∥alpha∥');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
@@ -395,6 +397,10 @@ fn searches_lved_list_rows_and_preserves_content_html() {
     assert_eq!(
         store.content_html(100).unwrap().as_deref(),
         Some("<article><h1>Alpha</h1><p>body</p></article>")
+    );
+    assert_eq!(
+        store.content_title_text(104).unwrap().as_deref(),
+        Some("Body Midashi")
     );
     assert_eq!(
         store.info_html(1).unwrap().as_deref(),
