@@ -379,6 +379,52 @@ fn validate_deep_exercises_first_rendered_resource() {
 }
 
 #[test]
+fn validate_deep_exercises_reader_render_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: false,
+        },
+    );
+    let exercises = output["exercises"].as_array().unwrap();
+    let rendered = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "surface_first_target")
+        .expect("deep validation should render a surface target");
+    let modes = &rendered["render_modes"];
+
+    assert_eq!(modes["generic_html"]["status"], "ok");
+    assert_eq!(modes["generic_html"]["has_router_refs"], false);
+    assert!(
+        modes["generic_html"]["diagnostic_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "generic_html_resources_inlined")
+    );
+    assert!(
+        modes["generic_html"]["diagnostic_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "generic_html_targets_fragmentized")
+    );
+    assert_eq!(modes["basic_text"]["status"], "ok");
+    assert_eq!(modes["basic_text"]["display_html_len"].as_u64(), Some(0));
+    assert!(
+        modes["basic_text"]["basic_text_len"]
+            .as_u64()
+            .is_some_and(|len| len > 0)
+    );
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
 fn validate_deep_exercises_continuous_windows() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());

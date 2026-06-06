@@ -7,8 +7,9 @@ use std::time::Instant;
 use lvcore::{
     BookId, BookLibrary, BookMetadata, Capability, DetectedPackage, Diagnostic, DiagnosticSeverity,
     DriverRegistry, FormatFamily, HomeSurface, NavigationStatus, NavigationSurface,
-    NavigationSurfaceKind, NavigationTarget, RenderOptions, ResolvedTargetView, ResourceKind,
-    SearchHit, SearchMode, SearchQuery, SearchResultSequence, SearchScope, SequenceHint,
+    NavigationSurfaceKind, NavigationTarget, RenderMode, RenderOptions, ResolvedTargetKind,
+    ResolvedTargetView, ResourceKind, SearchHit, SearchMode, SearchQuery, SearchResultSequence,
+    SearchScope, SequenceHint,
 };
 use serde_json::json;
 
@@ -748,8 +749,87 @@ fn rendered_view_probe(
         "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
         "resource_count": view.resources.len(),
         "first_resource": resource_probe,
+        "render_modes": render_mode_contract_probe(library, book_id, view),
     })
     .with_diagnostics(&view.diagnostics)
+}
+
+fn render_mode_contract_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    native_view: &ResolvedTargetView,
+) -> serde_json::Value {
+    json!({
+        "generic_html": render_mode_probe(library, book_id, native_view, RenderMode::GenericHtml),
+        "basic_text": render_mode_probe(library, book_id, native_view, RenderMode::BasicText),
+    })
+}
+
+fn render_mode_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    native_view: &ResolvedTargetView,
+    mode: RenderMode,
+) -> serde_json::Value {
+    match library.render_target(
+        book_id,
+        &native_view.target,
+        &RenderOptions {
+            mode,
+            ..RenderOptions::default()
+        },
+    ) {
+        Ok(view) => {
+            let has_router_refs = view.display_html.as_deref().is_some_and(|html| {
+                html.contains("lvcore://target/") || html.contains("lvcore://resource/")
+            });
+            let status = match mode {
+                RenderMode::GenericHtml if has_router_refs => "router_reference_remaining",
+                RenderMode::BasicText if view.display_html.is_some() => "basic_text_html_error",
+                RenderMode::BasicText
+                    if basic_text_expected(view.kind) && view.basic_text.is_none() =>
+                {
+                    "basic_text_empty_error"
+                }
+                _ => "ok",
+            };
+            let mut row = json!({
+                "status": status,
+                "view_kind": view.kind,
+                "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+                "basic_text_len": view.basic_text.as_ref().map(|value| value.len()).unwrap_or(0),
+                "resource_count": view.resources.len(),
+                "link_count": view.links.len(),
+                "has_router_refs": has_router_refs,
+            });
+            insert_diagnostic_fields(&mut row, &view.diagnostics);
+            row
+        }
+        Err(error) => json!({
+            "status": format!("{}_error", render_mode_probe_key(mode)),
+            "error": error.to_string(),
+        }),
+    }
+}
+
+fn basic_text_expected(kind: ResolvedTargetKind) -> bool {
+    matches!(
+        kind,
+        ResolvedTargetKind::EntryBody
+            | ResolvedTargetKind::HanreiPage
+            | ResolvedTargetKind::InfoPage
+            | ResolvedTargetKind::LawArticle
+            | ResolvedTargetKind::SearchResults
+    )
+}
+
+fn render_mode_probe_key(mode: RenderMode) -> &'static str {
+    match mode {
+        RenderMode::Native => "native",
+        RenderMode::GenericHtml => "generic_html",
+        RenderMode::BasicText => "basic_text",
+        RenderMode::Debug => "debug",
+    }
 }
 
 fn insert_named_value(row: &mut serde_json::Value, name: &str, value: serde_json::Value) {
