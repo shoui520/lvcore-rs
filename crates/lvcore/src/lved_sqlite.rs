@@ -451,6 +451,13 @@ impl LvedSqliteStore {
         })
     }
 
+    pub fn info_title_text_by_name(&self, name: &str) -> Result<Option<String>> {
+        Ok(self
+            .info_html_by_name(name)?
+            .and_then(|html| html_text_lines(&html).into_iter().next())
+            .or_else(|| nonempty_string(name.to_owned())))
+    }
+
     pub fn named_html_by_name(&self, table: &str, name: &str) -> Result<Option<String>> {
         self.with_connection(|connection| {
             let schema = self.schema(connection)?;
@@ -470,6 +477,13 @@ impl LvedSqliteStore {
             };
             Ok(Some(sqlite_value_to_string(row.get_ref(0)?)?))
         })
+    }
+
+    pub fn named_title_text_by_name(&self, table: &str, name: &str) -> Result<Option<String>> {
+        Ok(self
+            .named_html_by_name(table, name)?
+            .and_then(|html| html_text_lines(&html).into_iter().next())
+            .or_else(|| nonempty_string(name.to_owned())))
     }
 
     pub fn info_pages(&self, limit: usize) -> Result<Vec<LvedInfoPage>> {

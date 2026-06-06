@@ -276,8 +276,28 @@ fn lved_named_page_links_preserve_scroll_anchor() {
         .render_target(&target, &RenderOptions::default())
         .unwrap();
     assert_eq!(view.kind, ResolvedTargetKind::InfoPage);
+    assert_eq!(view.title.as_deref(), Some("Usage"));
     assert_eq!(view.scroll_anchor.as_deref(), Some("top"));
     assert_eq!(view.display_html.as_deref(), Some("<h1>Usage</h1>"));
+}
+
+#[test]
+fn lved_info_pages_expose_derived_titles_when_rendered_directly() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::LvedInfoPage {
+        name: "about.html".to_owned(),
+        anchor: Some("summary".to_owned()),
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::InfoPage);
+    assert_eq!(view.title.as_deref(), Some("Example Dictionary 第2版"));
+    assert_eq!(view.scroll_anchor.as_deref(), Some("summary"));
 }
 
 #[test]

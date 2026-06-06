@@ -69,6 +69,18 @@ impl ReaderBookPackage {
                 };
                 store.content_title_text(row_id)
             }
+            InternalTarget::LvedInfoPage { name, .. } => {
+                let Some(store) = &self.lved_store else {
+                    return Ok(None);
+                };
+                store.info_title_text_by_name(&name)
+            }
+            InternalTarget::LvedNamedPage { table, name, .. } => {
+                let Some(store) = &self.lved_store else {
+                    return Ok(None);
+                };
+                store.named_title_text_by_name(&table, &name)
+            }
             InternalTarget::MultiviewHref { href, anchor: _ } => {
                 let Some(store) = &self.multiview_store else {
                     return Ok(None);
