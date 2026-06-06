@@ -8,6 +8,7 @@ repository.workspace = true
 [[bin]]
 name = "lvcore"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 clap.workspace = true
