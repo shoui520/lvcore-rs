@@ -276,6 +276,57 @@ fn ios_ssed_shell_with_unknown_retained_fts_dbc_reports_deferred_search_payload(
 }
 
 #[test]
+fn ios_dictsearch_modes_extend_native_ssed_modes_without_duplicates() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 10, 2, 13, 0)),
+    )
+    .unwrap();
+    fs::write(package_root.join("DICT_Search.sql"), b"SQLite format 3\0").unwrap();
+    fs::write(
+        root.path().join("DictList.plist"),
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>ItemArray</key><array><dict>
+    <key>DictFolder</key><string>DICT</string>
+    <key>DictName</key><string>iOS Search Mode Merge Fixture</string>
+    <key>DictSearchDB</key><string>DICT/DICT_Search.sql</string>
+  </dict></array>
+  <key>StatusArray</key><array><dict>
+    <key>SearchMethod</key><array>
+      <dict><key>key</key><string>Example</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>Example</string><key>use</key><true/></dict>
+      <dict><key>key</key><string>Forward</string><key>use</key><true/></dict>
+    </array>
+  </dict></array>
+</dict></plist>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+
+    assert_eq!(
+        package.metadata().search_modes,
+        vec![
+            SearchMode::Exact,
+            SearchMode::Forward,
+            SearchMode::Backward,
+            SearchMode::Partial,
+            SearchMode::Advanced("example".to_owned()),
+        ]
+    );
+}
+
+#[test]
 fn ssed_home_surfaces_are_capability_based() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
