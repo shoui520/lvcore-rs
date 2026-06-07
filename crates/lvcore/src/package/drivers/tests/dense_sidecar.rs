@@ -1838,6 +1838,99 @@ fn dense_honmon_exact_search_dedupes_native_and_sidecar_title_labels() {
 }
 
 #[test]
+fn ssed_native_hits_do_not_trigger_non_dense_sidecar_fill() {
+    let dir = tempdir().unwrap();
+    let catalog = write_non_dense_native_with_sidecar_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Native".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "alpha".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha");
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_sidecar_title_search")
+    );
+}
+
+#[test]
+fn ssed_sidecar_titles_still_fill_empty_non_dense_native_page() {
+    let dir = tempdir().unwrap();
+    let catalog = write_non_dense_native_with_sidecar_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Native".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "sidecar".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha sidecar");
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "1"
+    ));
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_sidecar_title_search")
+    );
+}
+
+#[test]
 fn title_only_sidecar_does_not_block_dense_body_sidecar() {
     let dir = tempdir().unwrap();
     let catalog =
@@ -1983,6 +2076,108 @@ fn dense_sidecar_missing_row_is_unsupported_without_anchor_leak() {
     assert!(matches!(body, VisualBody::Unsupported { .. }));
     assert!(!json.contains("00000002"));
     assert!(json.contains("ssed_dense_sidecar_row_missing"));
+}
+
+fn write_non_dense_native_with_sidecar_fixture(root: &std::path::Path) -> SsedCatalog {
+    let mut body = Vec::new();
+    body.extend_from_slice(&SSED_ENTRY_MARKER);
+    body.extend_from_slice(&body_jis("alpha native body"));
+    body.extend_from_slice(&[0x1f, 0x0a]);
+    fs::write(
+        root.join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&body], 100, 100),
+    )
+    .unwrap();
+
+    let mut titles = Vec::new();
+    titles.extend_from_slice(b"alpha\x1f\x0a");
+    fs::write(
+        root.join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[&titles], 300, 300),
+    )
+    .unwrap();
+
+    let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    index_page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    let mut pos = 4usize;
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        &body_jis("alpha"),
+        100,
+        0,
+        300,
+        0,
+    );
+    fs::write(
+        root.join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+    )
+    .unwrap();
+
+    let connection = Connection::open(root.join("body.db")).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table t_contents (
+              f_DataId integer primary key,
+              f_Title text,
+              f_Html text,
+              f_Plane text
+            );
+            insert into t_contents values (
+              1,
+              'alpha sidecar',
+              '<div>alpha sidecar html</div>',
+              'alpha sidecar body'
+            );
+            ",
+        )
+        .unwrap();
+
+    SsedCatalog {
+        title: "Native".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x91,
+                start_block: 200,
+                end_block: 200,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    }
 }
 
 #[cfg(unix)]

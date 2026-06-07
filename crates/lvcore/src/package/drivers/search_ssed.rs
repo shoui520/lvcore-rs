@@ -51,13 +51,19 @@ impl ReaderBookPackage {
                 title_label_row_offset,
             );
         }
+        let mut dense_sidecar_titles_preferred = None;
+        let mut sidecar_title_prepass_exhausted_empty = false;
         if query.cursor.is_none() && ssed_sidecar_title_auto_append_is_bounded(&query.query) {
             let mut diagnostics = Vec::new();
-            if self.ssed_simple_search_should_prefer_dense_sidecar_titles(&mut diagnostics)? {
+            let prefers_dense_sidecar_titles =
+                self.ssed_simple_search_should_prefer_dense_sidecar_titles(&mut diagnostics)?;
+            dense_sidecar_titles_preferred = Some(prefers_dense_sidecar_titles);
+            if prefers_dense_sidecar_titles {
                 let page = self.search_ssed_sidecar_title_page(query, 0, diagnostics)?;
                 if !page.hits.is_empty() || page.next_cursor.is_some() {
                     return Ok(page);
                 }
+                sidecar_title_prepass_exhausted_empty = true;
             }
         }
 
@@ -215,6 +221,11 @@ impl ReaderBookPackage {
                     if fallback_page.next_cursor.is_none()
                         && fallback_page.hits.len() < query.limit
                         && ssed_sidecar_title_auto_append_is_bounded(&query.query)
+                        && !sidecar_title_prepass_exhausted_empty
+                        && self.ssed_should_append_sidecar_titles_after_native_page(
+                            &fallback_page,
+                            dense_sidecar_titles_preferred,
+                        )?
                     {
                         self.append_ssed_sidecar_title_hits(query, &mut fallback_page, 0)?;
                     }
@@ -235,6 +246,11 @@ impl ReaderBookPackage {
             && query.cursor.is_none()
             && page.hits.len() < query.limit
             && ssed_sidecar_title_auto_append_is_bounded(&query.query)
+            && !sidecar_title_prepass_exhausted_empty
+            && self.ssed_should_append_sidecar_titles_after_native_page(
+                &page,
+                dense_sidecar_titles_preferred,
+            )?
         {
             self.append_ssed_sidecar_title_hits(query, &mut page, 0)?;
         }
@@ -806,6 +822,21 @@ impl ReaderBookPackage {
             page.next_cursor = Some(encode_ssed_sidecar_title_cursor(sidecar_page.matched_count));
         }
         Ok(())
+    }
+
+    fn ssed_should_append_sidecar_titles_after_native_page(
+        &self,
+        page: &SearchPage,
+        dense_sidecar_titles_preferred: Option<bool>,
+    ) -> Result<bool> {
+        if page.hits.is_empty() {
+            return Ok(true);
+        }
+        if let Some(preferred) = dense_sidecar_titles_preferred {
+            return Ok(preferred);
+        }
+        let mut diagnostics = Vec::new();
+        self.ssed_simple_search_should_prefer_dense_sidecar_titles(&mut diagnostics)
     }
 
     fn scan_ssed_partial_index_rows(
