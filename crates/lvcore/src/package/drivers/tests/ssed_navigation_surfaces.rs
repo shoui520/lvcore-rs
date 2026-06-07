@@ -1540,6 +1540,61 @@ fn ssed_auxiliary_index_defers_honmon_targets_inside_entry_marker_controls() {
     );
 }
 
+#[test]
+fn ssed_panel_cell_target_renders_panel_surface_without_internal_id_title() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("Panels.xml"),
+        r#"<?xml version="1.0"?>
+<panels>
+  <panel index="01000000" paneltype="contents" count_x="1">
+    <title>五十音</title>
+    <data>
+      <cell ref="20100000">あ</cell>
+    </data>
+  </panel>
+  <panel index="20100000" paneltype="contents" count_x="1">
+    <title>あ</title>
+    <data>
+      <cell>亜</cell>
+    </data>
+  </panel>
+</panels>"#,
+    )
+    .unwrap();
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Panels".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores::default(),
+    );
+
+    let root = package.open_surface("panels").unwrap();
+    let NavigationSurface::Panel { cells, .. } = root else {
+        panic!("expected root panel surface");
+    };
+    assert_eq!(cells[0].label_text, "あ");
+    let child_target = cells[0].target.as_ref().unwrap();
+
+    let view = package
+        .render_target(child_target, &RenderOptions::default())
+        .unwrap();
+
+    assert_eq!(view.kind, crate::render::ResolvedTargetKind::PanelSurface);
+    assert_eq!(view.title.as_deref(), Some("Panels"));
+    assert_ne!(view.title.as_deref(), Some("20100000"));
+    let NavigationSurface::Panel { cells, .. } = view.surface.unwrap() else {
+        panic!("expected child panel surface");
+    };
+    assert_eq!(cells[0].label_text, "亜");
+}
+
 #[cfg(unix)]
 #[test]
 fn ssed_adjacent_panel_symlink_escape_is_not_advertised() {

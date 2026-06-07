@@ -37,11 +37,12 @@ impl ReaderBookPackage {
         {
             diagnostics.extend(surface_diagnostics.clone());
         }
+        let view_title = navigation_surface_view_title(title, surface_id, &surface);
         Ok(ResolvedTargetView {
             href: String::new(),
             kind,
             target,
-            title: title.or_else(|| Some(surface_id.to_owned())),
+            title: Some(view_title),
             display_html: None,
             basic_text: None,
             scroll_anchor,
@@ -778,7 +779,7 @@ impl RendererProvider for ReaderBookPackage {
                 self.view_for_navigation_surface_target(
                     token.clone(),
                     &surface_id,
-                    Some(panel_id),
+                    None,
                     None,
                     options,
                 )
@@ -835,6 +836,25 @@ impl RendererProvider for ReaderBookPackage {
         }?;
         self.finalize_resolved_view(view, options)
     }
+}
+
+fn navigation_surface_view_title(
+    explicit: Option<String>,
+    surface_id: &str,
+    surface: &NavigationSurface,
+) -> String {
+    if let Some(title) = explicit.filter(|title| !is_internal_panel_title(title, surface)) {
+        return title;
+    }
+    match surface {
+        NavigationSurface::Panel { .. } => "Panels".to_owned(),
+        _ => surface_id.to_owned(),
+    }
+}
+
+fn is_internal_panel_title(title: &str, surface: &NavigationSurface) -> bool {
+    matches!(surface, NavigationSurface::Panel { .. })
+        && title.chars().all(|ch| ch.is_ascii_digit())
 }
 
 #[cfg(test)]
