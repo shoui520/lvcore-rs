@@ -269,6 +269,25 @@ pub(super) fn lved_viewer_hook_target(raw_ref: &str) -> InternalTarget {
     }
 }
 
+pub(super) fn lved_relative_viewer_hook_target(raw_ref: &str) -> Option<InternalTarget> {
+    let value = html_unescape_minimal(raw_ref);
+    let value = value.trim();
+    let path = value.split(['#', '?']).next().unwrap_or("").trim();
+    let (head, tail) = path.split_once('/')?;
+    if tail.contains('/')
+        || !(head.len() == 6 || head.len() == 8)
+        || tail.len() != 4
+        || !head.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !tail.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(InternalTarget::LvedViewerHook {
+        hook: "relative-appendix".to_owned(),
+        value: value.to_owned(),
+    })
+}
+
 pub(super) fn is_lved_ref_terminator(ch: char) -> bool {
     ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>' | ')' | ']')
 }
@@ -374,5 +393,15 @@ mod tests {
         };
         assert_eq!(hook, "plugin");
         assert_eq!(value, "lved.plugin:sample");
+
+        let InternalTarget::LvedViewerHook { hook, value } =
+            lved_relative_viewer_hook_target("050000/0000#taxon").expect("relative appendix hook")
+        else {
+            panic!("expected relative viewer hook target");
+        };
+        assert_eq!(hook, "relative-appendix");
+        assert_eq!(value, "050000/0000#taxon");
+        assert!(lved_relative_viewer_hook_target("10000000/ffff").is_some());
+        assert!(lved_relative_viewer_hook_target("manual/0000").is_none());
     }
 }

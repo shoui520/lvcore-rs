@@ -1025,6 +1025,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
                     <a href="lved.binran:usage.html#top">binran</a>
                     <a href="lved.addr=00029154:0042">addr</a>
                     <a href="lved.bookmark:C001">bookmark</a>
+                    <a href="050000/0000">relative appendix</a>
                     <img src="lved.image:fig01.png">
                     <a href="lved.pdf:manual.pdf">pdf</a>
                     <script src="./MathJax/MathJax.js"></script>
@@ -1064,6 +1065,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
         "lved.binran:",
         "lved.addr=",
         "lved.bookmark:",
+        "050000/0000",
         "lved.image:",
         "lved.pdf:",
     ] {
@@ -1085,6 +1087,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
             TargetKind::LvedCrossBook,
             TargetKind::LvedNamedPage,
             TargetKind::LvedAddress,
+            TargetKind::LvedViewerHook,
             TargetKind::LvedViewerHook,
         ]
     );
@@ -1138,5 +1141,32 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "lved_address_deferred")
+    );
+
+    let relative = view
+        .links
+        .iter()
+        .find(|link| link.label == "050000/0000")
+        .unwrap();
+    assert!(matches!(
+        relative.token.decode().unwrap(),
+        InternalTarget::LvedViewerHook { hook, value }
+            if hook == "relative-appendix" && value == "050000/0000"
+    ));
+    assert!(
+        relative
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "lved_relative_viewer_hook_deferred" })
+    );
+    let relative_view = package
+        .render_target(&relative.token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(relative_view.kind, ResolvedTargetKind::Unsupported);
+    assert!(
+        relative_view
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lved_viewer_hook_deferred")
     );
 }

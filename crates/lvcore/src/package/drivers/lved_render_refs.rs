@@ -202,8 +202,10 @@ impl ReaderBookPackage {
         let html = self.normalize_lved_direct_resource_attrs(
             &output,
             &mut resources,
+            &mut links,
             &mut diagnostics,
             &mut seen_resource_tokens,
+            &mut seen_target_tokens,
         )?;
         Ok(NormalizedHtmlRefs {
             html,
@@ -461,8 +463,10 @@ impl ReaderBookPackage {
         &self,
         html: &str,
         resources: &mut Vec<ResourceRef>,
+        links: &mut Vec<TargetLink>,
         diagnostics: &mut Vec<Diagnostic>,
         seen_resource_tokens: &mut BTreeSet<String>,
+        seen_target_tokens: &mut BTreeSet<String>,
     ) -> Result<String> {
         let mut output = String::with_capacity(html.len());
         let mut cursor = 0usize;
@@ -470,7 +474,22 @@ impl ReaderBookPackage {
         while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
             output.push_str(&html[cursor..attr.value_start]);
             let raw_value = &html[attr.value_start..attr.value_end];
-            if matches!(attr.name, HtmlAttrName::Src | HtmlAttrName::Data)
+            if attr.name == HtmlAttrName::Href
+                && !raw_value.starts_with("lvcore://")
+                && let Some(target) = lved_relative_viewer_hook_target(raw_value)
+            {
+                let token = TargetToken::new(&target)?;
+                let href = format!("lvcore://target/{}", token.as_str());
+                if seen_target_tokens.insert(token.as_str().to_owned()) {
+                    let mut link = TargetLink::new(raw_value, &target)?;
+                    link.diagnostics.push(Diagnostic::info(
+                        "lved_relative_viewer_hook_deferred",
+                        "LVED relative appendix hook is preserved as a non-executed target",
+                    ));
+                    links.push(link);
+                }
+                output.push_str(&href);
+            } else if matches!(attr.name, HtmlAttrName::Src | HtmlAttrName::Data)
                 && !raw_value.starts_with("lvcore://")
                 && let Some(resource) = self.lved_direct_resource(raw_value)?
             {
