@@ -228,8 +228,10 @@ provider slices:
   surfaces when rows resolve to SSED component addresses;
 - SSED Panel metadata from fixed XML/plist names, EXINFO-declared panel XML/plist
   names (`PANELXML` and XML/plist-valued `ROSQLNAME`), and mobile menu layouts is
-  exposed as Panel surfaces; large BIN-backed panels are cursor-paged and
-  continuous view can resolve targets beyond the first page; observed
+  exposed as Panel surfaces; home and rendered Panel surface titles come from the
+  Panel metadata when available, while internal numeric Panel ids remain routing
+  details instead of user-visible titles; large BIN-backed panels are cursor-paged
+  and continuous view can resolve targets beyond the first page; observed
   little-endian headered Panel BIN rows and headerless big-endian UTF-8 mobile
   rows are both decoded; external Panel HTML payloads are exposed as package-file
   resource targets, while other non-BIN external payloads remain explicit

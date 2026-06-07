@@ -225,10 +225,15 @@ fn ssed_missing_declared_menu_does_not_hide_panel_home_surface() {
             .any(|surface| surface.kind == NavigationSurfaceKind::Menu),
         "missing MENU.DIC should not be exposed as an actionable home surface"
     );
-    assert!(surfaces.iter().any(|surface| {
-        surface.kind == NavigationSurfaceKind::Panel
-            && surface.status == NavigationStatus::Available
-    }));
+    let panel_surface = surfaces
+        .iter()
+        .find(|surface| {
+            surface.kind == NavigationSurfaceKind::Panel
+                && surface.status == NavigationStatus::Available
+        })
+        .expect("panel surface should be advertised");
+    assert_eq!(panel_surface.title_text, "五十音");
+    assert_eq!(panel_surface.title_html, "五十音");
     let panel_index = surfaces
         .iter()
         .position(|surface| surface.surface_id == "panels")
@@ -241,6 +246,28 @@ fn ssed_missing_declared_menu_does_not_hide_panel_home_surface() {
         panel_index < aux_index,
         "Panels are a native book-home surface and should sort before auxiliary indexes"
     );
+    let root_view = package
+        .render_target(
+            panel_surface.target.as_ref().unwrap(),
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(root_view.kind, ResolvedTargetKind::PanelSurface);
+    assert_eq!(root_view.title.as_deref(), Some("五十音"));
+    let NavigationSurface::Panel {
+        cells: root_cells, ..
+    } = root_view.surface.as_ref().unwrap()
+    else {
+        panic!("rendering the panel home target should return a root panel surface");
+    };
+    let child_view = package
+        .render_target(
+            root_cells[0].target.as_ref().unwrap(),
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(child_view.kind, ResolvedTargetKind::PanelSurface);
+    assert_eq!(child_view.title.as_deref(), Some("あ"));
     let child_panel = package.open_surface("panels:01010000").unwrap();
     let lvcore::NavigationSurface::Panel { cells, .. } = child_panel else {
         panic!("Panels remain the native navigation surface when MENU.DIC is absent");
