@@ -841,10 +841,7 @@ fn decode_hc_numeric_character_references(
     (output, decoded)
 }
 
-fn parse_ascii_numeric_character_reference(
-    chars: &[char],
-    index: usize,
-) -> Option<(char, usize)> {
+fn parse_ascii_numeric_character_reference(chars: &[char], index: usize) -> Option<(char, usize)> {
     if chars.get(index) != Some(&'&') || chars.get(index + 1) != Some(&'#') {
         return None;
     }
@@ -1243,12 +1240,12 @@ mod tests {
     use encoding_rs::SHIFT_JIS;
 
     use super::{
-        HcBasicTextGaiji, HcCommonHtmlGaiji, decode_hc_stream_basic_text,
-        decode_hc_stream_basic_text_with_gaiji, decode_hc_stream_basic_text_with_gaiji_policy,
-        decode_hc_stream_common_html, decode_hc_stream_common_html_with_gaiji,
+        HcBasicTextGaiji, HcCommonHtmlGaiji, decode_hc_html_numeric_character_references,
+        decode_hc_stream_basic_text, decode_hc_stream_basic_text_with_gaiji,
+        decode_hc_stream_basic_text_with_gaiji_policy, decode_hc_stream_common_html,
+        decode_hc_stream_common_html_with_gaiji,
         decode_hc_stream_common_html_with_gaiji_render_policy,
-        decode_hc_text_numeric_character_references, decode_hc_html_numeric_character_references,
-        hc_marker_profile_for_renderer,
+        decode_hc_text_numeric_character_references, hc_marker_profile_for_renderer,
     };
 
     #[test]

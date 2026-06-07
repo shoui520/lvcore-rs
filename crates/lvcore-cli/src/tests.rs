@@ -253,9 +253,10 @@ fn library_import_jsonl_reports_duplicates_as_diagnostics_not_book_rows() {
         .filter(|row| row["event"] == "book")
         .collect::<Vec<_>>();
     assert_eq!(book_rows.len(), 1);
-    assert!(rows.iter().any(|row| {
-        row["event"] == "diagnostic" && row["status"] == "skipped_duplicate"
-    }));
+    assert!(
+        rows.iter()
+            .any(|row| { row["event"] == "diagnostic" && row["status"] == "skipped_duplicate" })
+    );
     assert_eq!(rows.last().unwrap()["event"], "summary");
     assert_eq!(rows.last().unwrap()["book_count"], 1);
 }
