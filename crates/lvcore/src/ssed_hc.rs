@@ -61,6 +61,7 @@ pub struct HcTextStats {
     pub resolved_gaiji_pairs: usize,
     pub placeholder_gaiji_pairs: usize,
     pub suppressed_gaiji_pairs: usize,
+    pub numeric_character_references: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -517,6 +518,12 @@ pub fn decode_hc_stream_common_html_with_gaiji_render_policy(
         html.push('>');
     }
 
+    let (decoded_html, html_refs) = decode_hc_html_numeric_character_references(&html);
+    let (decoded_text, text_refs) = decode_hc_text_numeric_character_references(&text);
+    html = decoded_html;
+    text = decoded_text;
+    stats.numeric_character_references = html_refs.max(text_refs);
+
     let mut diagnostics = hc_text_diagnostics(&stats, &unknown_ops);
     if closed_unbalanced_state {
         diagnostics.push(Diagnostic::warning(
@@ -715,6 +722,10 @@ pub fn decode_hc_stream_basic_text_with_gaiji_policy(
         offset += 1;
     }
 
+    let (decoded_text, numeric_refs) = decode_hc_text_numeric_character_references(&text);
+    text = decoded_text;
+    stats.numeric_character_references = numeric_refs;
+
     let diagnostics = hc_text_diagnostics(&stats, &unknown_ops);
 
     HcTextRender {
@@ -767,8 +778,165 @@ fn hc_text_diagnostics(stats: &HcTextStats, unknown_ops: &BTreeSet<u8>) -> Vec<D
             ),
         ));
     }
+    if stats.numeric_character_references > 0 {
+        diagnostics.push(Diagnostic::info(
+            "hc_numeric_character_references_decoded",
+            format!(
+                "{} embedded numeric character reference(s) were decoded to Unicode",
+                stats.numeric_character_references
+            ),
+        ));
+    }
 
     diagnostics
+}
+
+fn decode_hc_text_numeric_character_references(value: &str) -> (String, usize) {
+    decode_hc_numeric_character_references(value, true, true, false)
+}
+
+fn decode_hc_html_numeric_character_references(value: &str) -> (String, usize) {
+    decode_hc_numeric_character_references(value, false, true, true)
+}
+
+fn decode_hc_numeric_character_references(
+    value: &str,
+    allow_ascii: bool,
+    allow_fullwidth: bool,
+    allow_escaped_ascii: bool,
+) -> (String, usize) {
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(value.len());
+    let mut decoded = 0usize;
+    let mut index = 0usize;
+    while index < chars.len() {
+        let parsed = if allow_fullwidth {
+            parse_fullwidth_numeric_character_reference(&chars, index)
+        } else {
+            None
+        }
+        .or_else(|| {
+            if allow_ascii {
+                parse_ascii_numeric_character_reference(&chars, index)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            if allow_escaped_ascii {
+                parse_escaped_ascii_numeric_character_reference(&chars, index)
+            } else {
+                None
+            }
+        });
+        if let Some((ch, next_index)) = parsed {
+            output.push(ch);
+            decoded = decoded.saturating_add(1);
+            index = next_index;
+            continue;
+        }
+        output.push(chars[index]);
+        index = index.saturating_add(1);
+    }
+    (output, decoded)
+}
+
+fn parse_ascii_numeric_character_reference(
+    chars: &[char],
+    index: usize,
+) -> Option<(char, usize)> {
+    if chars.get(index) != Some(&'&') || chars.get(index + 1) != Some(&'#') {
+        return None;
+    }
+    parse_numeric_character_reference_body(chars, index + 2, is_ascii_semicolon)
+}
+
+fn parse_fullwidth_numeric_character_reference(
+    chars: &[char],
+    index: usize,
+) -> Option<(char, usize)> {
+    if chars.get(index) != Some(&'＆') || chars.get(index + 1) != Some(&'＃') {
+        return None;
+    }
+    parse_numeric_character_reference_body(chars, index + 2, is_fullwidth_or_ascii_semicolon)
+}
+
+fn parse_escaped_ascii_numeric_character_reference(
+    chars: &[char],
+    index: usize,
+) -> Option<(char, usize)> {
+    let prefix = ['&', 'a', 'm', 'p', ';', '#'];
+    if chars.get(index..index + prefix.len())? != prefix {
+        return None;
+    }
+    parse_numeric_character_reference_body(chars, index + prefix.len(), is_ascii_semicolon)
+}
+
+fn parse_numeric_character_reference_body(
+    chars: &[char],
+    mut index: usize,
+    semicolon: fn(char) -> bool,
+) -> Option<(char, usize)> {
+    let radix = if chars
+        .get(index)
+        .is_some_and(|ch| matches!(*ch, 'x' | 'X' | 'ｘ' | 'Ｘ'))
+    {
+        index = index.saturating_add(1);
+        16
+    } else {
+        10
+    };
+    let digits_start = index;
+    let mut value = 0u32;
+    while let Some(ch) = chars.get(index).copied() {
+        if semicolon(ch) {
+            if index == digits_start {
+                return None;
+            }
+            return char::from_u32(value)
+                .filter(|decoded| *decoded != '\0')
+                .map(|decoded| (decoded, index + 1));
+        }
+        let digit = if radix == 16 {
+            numeric_hex_digit_value(ch)?
+        } else {
+            numeric_decimal_digit_value(ch)?
+        };
+        value = value.checked_mul(radix)?.checked_add(digit)?;
+        if value > 0x10ffff {
+            return None;
+        }
+        index = index.saturating_add(1);
+    }
+    None
+}
+
+fn numeric_decimal_digit_value(ch: char) -> Option<u32> {
+    match ch {
+        '0'..='9' => Some(ch as u32 - '0' as u32),
+        '０'..='９' => Some(ch as u32 - '０' as u32),
+        _ => None,
+    }
+}
+
+fn numeric_hex_digit_value(ch: char) -> Option<u32> {
+    match ch {
+        '0'..='9' => Some(ch as u32 - '0' as u32),
+        '０'..='９' => Some(ch as u32 - '０' as u32),
+        'a'..='f' => Some(10 + ch as u32 - 'a' as u32),
+        'A'..='F' => Some(10 + ch as u32 - 'A' as u32),
+        'ａ'..='ｆ' => Some(10 + ch as u32 - 'ａ' as u32),
+        'Ａ'..='Ｆ' => Some(10 + ch as u32 - 'Ａ' as u32),
+        _ => None,
+    }
+}
+
+fn is_ascii_semicolon(ch: char) -> bool {
+    ch == ';'
+}
+
+fn is_fullwidth_or_ascii_semicolon(ch: char) -> bool {
+    matches!(ch, '；' | ';')
 }
 
 fn normalize_renderer_code(renderer_code: Option<&str>) -> Option<String> {
@@ -1078,7 +1246,9 @@ mod tests {
         HcBasicTextGaiji, HcCommonHtmlGaiji, decode_hc_stream_basic_text,
         decode_hc_stream_basic_text_with_gaiji, decode_hc_stream_basic_text_with_gaiji_policy,
         decode_hc_stream_common_html, decode_hc_stream_common_html_with_gaiji,
-        decode_hc_stream_common_html_with_gaiji_render_policy, hc_marker_profile_for_renderer,
+        decode_hc_stream_common_html_with_gaiji_render_policy,
+        decode_hc_text_numeric_character_references, decode_hc_html_numeric_character_references,
+        hc_marker_profile_for_renderer,
     };
 
     #[test]
@@ -1289,6 +1459,51 @@ mod tests {
 
         assert_eq!(rendered.text, "前╱ˈ後");
         assert_eq!(rendered.stats.style_controls, 2);
+    }
+
+    #[test]
+    fn basic_text_decodes_numeric_character_references_stored_as_body_text() {
+        let mut data = body_jis("前＆＃ｘ９５７８；");
+        data.extend_from_slice(&body_jis("&#38263;後"));
+
+        let rendered = decode_hc_stream_basic_text(&data);
+
+        assert_eq!(rendered.text, "前镸長後");
+        assert_eq!(rendered.stats.numeric_character_references, 2);
+        assert!(
+            rendered
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "hc_numeric_character_references_decoded")
+        );
+    }
+
+    #[test]
+    fn common_html_decodes_numeric_character_references_without_decoding_own_escapes() {
+        let mut data = body_jis("前＆＃ｘ９５７８；");
+        data.extend_from_slice(&body_jis("＆＃３８２６３；"));
+        data.push(b'\'');
+
+        let rendered = decode_hc_stream_common_html(&data);
+
+        assert_eq!(rendered.text, "前镸長'");
+        assert_eq!(rendered.stats.numeric_character_references, 2);
+        assert!(rendered.html.contains("前镸長&#39;"));
+        assert!(!rendered.html.contains("＆＃ｘ９５７８；"));
+        assert!(rendered.html.contains("&#39;"));
+    }
+
+    #[test]
+    fn numeric_character_reference_decoder_accepts_observed_ascii_variants() {
+        let (text, text_refs) =
+            decode_hc_text_numeric_character_references("&#x9578;&#38263;＆＃ｘ９５７７；");
+        let (html, html_refs) =
+            decode_hc_html_numeric_character_references("&amp;#x9578;&amp;#38263;＆＃ｘ９５７７；");
+
+        assert_eq!(text, "镸長長");
+        assert_eq!(text_refs, 3);
+        assert_eq!(html, "镸長長");
+        assert_eq!(html_refs, 3);
     }
 
     #[test]
