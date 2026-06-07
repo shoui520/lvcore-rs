@@ -788,7 +788,9 @@ fn sidecar_title_prefilter_where_and_parameters(
 
 fn sqlite_like_title_prefilter_pattern(mode: SsedSidecarTitleSearchMode, query: &str) -> String {
     let query = query.trim();
-    if query.is_ascii() && query.chars().count() == 1 {
+    if (query.is_ascii() && query.chars().count() == 1)
+        || sidecar_sql_prefilter_is_authoritative(query)
+    {
         return match mode {
             SsedSidecarTitleSearchMode::Exact => sqlite_like_exact_pattern(query),
             SsedSidecarTitleSearchMode::Forward => sqlite_like_prefix_pattern(query),
@@ -803,8 +805,9 @@ fn ssed_sidecar_title_prefilter_should_match_sql_trimmed_title(
     mode: SsedSidecarTitleSearchMode,
     query: &str,
 ) -> bool {
-    query.trim().is_ascii()
-        && query.trim().chars().count() == 1
+    let query = query.trim();
+    (query.is_ascii() && query.chars().count() == 1
+        || sidecar_sql_prefilter_is_authoritative(query))
         && matches!(
             mode,
             SsedSidecarTitleSearchMode::Exact
@@ -2170,5 +2173,43 @@ mod tests {
         assert!(!sidecar_sql_prefilter_is_authoritative("ＦＵＬＬＴＥＸＴ"));
         assert!(!sidecar_sql_prefilter_is_authoritative("白 水"));
         assert!(!sidecar_sql_prefilter_is_authoritative("　"));
+    }
+
+    #[test]
+    fn sidecar_title_prefilter_uses_mode_patterns_for_authoritative_cjk_terms() {
+        assert_eq!(
+            sqlite_like_title_prefilter_pattern(SsedSidecarTitleSearchMode::Exact, "0歳"),
+            "0歳"
+        );
+        assert_eq!(
+            sqlite_like_title_prefilter_pattern(SsedSidecarTitleSearchMode::Forward, "0歳"),
+            "0歳%"
+        );
+        assert_eq!(
+            sqlite_like_title_prefilter_pattern(SsedSidecarTitleSearchMode::Backward, "余命"),
+            "%余命"
+        );
+        assert_eq!(
+            sqlite_like_title_prefilter_pattern(SsedSidecarTitleSearchMode::Partial, "0歳"),
+            "%0歳%"
+        );
+        assert!(ssed_sidecar_title_prefilter_should_match_sql_trimmed_title(
+            SsedSidecarTitleSearchMode::Forward,
+            "0歳",
+        ));
+    }
+
+    #[test]
+    fn sidecar_title_prefilter_keeps_contains_for_ascii_words() {
+        assert_eq!(
+            sqlite_like_title_prefilter_pattern(SsedSidecarTitleSearchMode::Forward, "abaisser"),
+            "%abaisser%"
+        );
+        assert!(
+            !ssed_sidecar_title_prefilter_should_match_sql_trimmed_title(
+                SsedSidecarTitleSearchMode::Forward,
+                "abaisser",
+            )
+        );
     }
 }

@@ -266,6 +266,20 @@ type SsedNavigationDataCache = BTreeMap<String, std::result::Result<Arc<Vec<u8>>
 type SsedNavigationSurfaceCache = BTreeMap<String, Arc<NavigationSurface>>;
 type SsedTitleTextCache = BTreeMap<(u32, u32), Option<Arc<str>>>;
 type SsedTitleReaderCache = BTreeMap<String, std::result::Result<SsedDataFile, String>>;
+type SsedHonmonBodyScanPlanCache = std::result::Result<SsedHonmonBodyScanPlan, String>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SsedHonmonBodyScanPlan {
+    decision: SsedHonmonBodyScanDecision,
+    diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SsedHonmonBodyScanDecision {
+    ScanNativeHonmon,
+    OrderedHonbunRendererBody,
+    SampledDenseSidecarBacked { checked_targets: usize },
+}
 
 pub struct ReaderBookPackage {
     root: PathBuf,
@@ -294,6 +308,7 @@ pub struct ReaderBookPackage {
     ssed_ios_search_resolvers: OnceLock<std::result::Result<Vec<SsedIosSearchResolver>, String>>,
     ssed_ios_plist_files: OnceLock<std::result::Result<Vec<SsedIosPlistFile>, String>>,
     ssed_index_component_body_boundaries: Mutex<SsedIndexComponentBoundaryCache>,
+    ssed_honmon_body_scan_plan: OnceLock<SsedHonmonBodyScanPlanCache>,
     ssed_title_text_cache: Mutex<SsedTitleTextCache>,
     ssed_title_reader_cache: Mutex<SsedTitleReaderCache>,
     ssed_navigation_component_data: Mutex<SsedNavigationDataCache>,
@@ -415,6 +430,7 @@ impl ReaderBookPackage {
             ssed_ios_search_resolvers: OnceLock::new(),
             ssed_ios_plist_files: OnceLock::new(),
             ssed_index_component_body_boundaries: Mutex::new(BTreeMap::new()),
+            ssed_honmon_body_scan_plan: OnceLock::new(),
             ssed_title_text_cache: Mutex::new(BTreeMap::new()),
             ssed_title_reader_cache: Mutex::new(BTreeMap::new()),
             ssed_navigation_component_data: Mutex::new(BTreeMap::new()),

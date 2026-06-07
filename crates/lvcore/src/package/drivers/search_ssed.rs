@@ -1410,22 +1410,60 @@ impl ReaderBookPackage {
         ordered_message: &'static str,
         sampled_message: &'static str,
     ) -> Result<bool> {
+        let plan = self.ssed_honmon_body_scan_plan(catalog)?;
+        diagnostics.extend(plan.diagnostics);
+        match plan.decision {
+            SsedHonmonBodyScanDecision::ScanNativeHonmon => Ok(true),
+            SsedHonmonBodyScanDecision::OrderedHonbunRendererBody => {
+                diagnostics.push(Diagnostic::info(skipped_code, ordered_message));
+                Ok(false)
+            }
+            SsedHonmonBodyScanDecision::SampledDenseSidecarBacked { checked_targets } => {
+                diagnostics.push(
+                    Diagnostic::info(skipped_code, sampled_message)
+                        .with_context("checked_targets", checked_targets.to_string()),
+                );
+                Ok(false)
+            }
+        }
+    }
+
+    fn ssed_honmon_body_scan_plan(&self, catalog: &SsedCatalog) -> Result<SsedHonmonBodyScanPlan> {
+        let cached = self.ssed_honmon_body_scan_plan.get_or_init(|| {
+            self.compute_ssed_honmon_body_scan_plan(catalog)
+                .map_err(|error| error.to_string())
+        });
+        match cached {
+            Ok(plan) => Ok(plan.clone()),
+            Err(error) => Err(Error::Driver(error.clone())),
+        }
+    }
+
+    fn compute_ssed_honmon_body_scan_plan(
+        &self,
+        catalog: &SsedCatalog,
+    ) -> Result<SsedHonmonBodyScanPlan> {
         let resolvers = self.ssed_sidecar_body_resolvers()?;
         if resolvers.is_empty() {
-            return Ok(true);
+            return Ok(SsedHonmonBodyScanPlan {
+                decision: SsedHonmonBodyScanDecision::ScanNativeHonmon,
+                diagnostics: Vec::new(),
+            });
         }
         if resolvers
             .iter()
             .any(SsedSidecarBodyResolver::is_ordered_honbun_renderer_body)
         {
-            diagnostics.push(Diagnostic::info(skipped_code, ordered_message));
-            return Ok(false);
+            return Ok(SsedHonmonBodyScanPlan {
+                decision: SsedHonmonBodyScanDecision::OrderedHonbunRendererBody,
+                diagnostics: Vec::new(),
+            });
         }
 
         const SIDECAR_BACKED_SAMPLE_TARGETS: usize = 16;
         let mut checked_targets = 0usize;
         let mut sidecar_backed_targets = 0usize;
-        let mut sample_diagnostics = self.scan_ssed_simple_index_rows_with_filters(
+        let diagnostics = self.scan_ssed_simple_index_rows_with_filters(
             None,
             |component| !ssed_index_component_name_is_backward(&component.filename),
             |_, _| true,
@@ -1460,15 +1498,16 @@ impl ReaderBookPackage {
                 Ok(true)
             },
         )?;
-        diagnostics.append(&mut sample_diagnostics);
         if checked_targets > 0 && checked_targets == sidecar_backed_targets {
-            diagnostics.push(
-                Diagnostic::info(skipped_code, sampled_message)
-                    .with_context("checked_targets", checked_targets.to_string()),
-            );
-            return Ok(false);
+            return Ok(SsedHonmonBodyScanPlan {
+                decision: SsedHonmonBodyScanDecision::SampledDenseSidecarBacked { checked_targets },
+                diagnostics,
+            });
         }
-        Ok(true)
+        Ok(SsedHonmonBodyScanPlan {
+            decision: SsedHonmonBodyScanDecision::ScanNativeHonmon,
+            diagnostics,
+        })
     }
 
     fn ssed_fulltext_row_driven_body_page(
