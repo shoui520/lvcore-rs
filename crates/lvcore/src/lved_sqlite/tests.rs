@@ -333,12 +333,16 @@ fn searches_lved_list_rows_and_preserves_content_html() {
                     insert into content values (102, 1, '<article><h1>Gamma</h1></article>', '');
                     insert into content values (103, 1, '<article><h1>Alpha Beta</h1></article>', '');
                     insert into content values (104, 1, '<div class=\"midashi\"><span>Body Midashi</span></div><p>body</p>', '');
+                    insert into content values (105, 1, '<article><h1>Japanese headword</h1></article>', '');
+                    insert into content values (106, 1, '<article><h1>Unrelated headword</h1></article>', '');
                     insert into mediasub values (1, '00010033', 5, X'49443303');
                     insert into list values (1, 100, 1, 'body-anchor', '<b>alpha</b>', '<span>subtitle</span>');
                     insert into list values (2, 101, 1, '', '<b>beta</b>', '');
                     insert into list values (3, 102, 1, '', '<b>gamma</b>', '');
                     insert into list values (4, 103, 1, '', '<b>alpha beta</b>', '');
                     insert into list values (5, 104, 1, '', '<b>slow list fallback</b>', '');
+                    insert into list values (6, 105, 1, '', '<b>法務</b>', '');
+                    insert into list values (7, 106, 1, '', '<b>abbreviation</b>', '');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (1, 'alpha', 'ahpla', 'alpha', 'alpha body', 'topic marker', '', '∥alpha∥');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
@@ -347,6 +351,10 @@ fn searches_lved_list_rows_and_preserves_content_html() {
                       values (3, '(gamma)', ')ammag(', '(gamma)', 'gamma article', '', '', '∥(gamma)∥');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (4, 'alpha beta', 'ateb ahpla', 'alpha beta', 'alpha beta article', '', '', '∥alpha beta∥');
+                    insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                      values (6, '法務', '務法', '法務', '法務 body', '', '', '∥法務∥');
+                    insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
+                      values (7, 'abbreviation', 'noitaiverbba', 'abbreviation', '法 body', '', '', '∥abbreviation∥');
                     ",
                 )
                 .unwrap();
@@ -379,6 +387,10 @@ fn searches_lved_list_rows_and_preserves_content_html() {
     let fallback_exact_hits = store.search("(gamma)", &SearchMode::Exact, 10).unwrap();
     assert_eq!(fallback_exact_hits.len(), 1);
     assert_eq!(fallback_exact_hits[0].content_id, 102);
+    let guarded_cjk_forward_hits = store.search("法", &SearchMode::Forward, 10).unwrap();
+    assert_eq!(guarded_cjk_forward_hits.len(), 1);
+    assert_eq!(guarded_cjk_forward_hits[0].content_id, 105);
+    assert_eq!(guarded_cjk_forward_hits[0].title_text, "法務");
     let advanced_hits = store
         .search("topic", &SearchMode::Advanced("advanced1".to_owned()), 10)
         .unwrap();

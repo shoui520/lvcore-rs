@@ -34,6 +34,9 @@ pub(super) fn search_lved_sqlite_connection(
         return Ok(Vec::new());
     };
     if normalized_variants.len() > 1
+        && !normalized_variants
+            .iter()
+            .any(|variant| lved_fts_query_needs_value_guard(variant))
         && let Some(match_queries) =
             lved_fts_match_queries(&normalized_variants, mode, provider.search_columns)
     {
@@ -187,54 +190,59 @@ fn lved_search_where(
     let search_columns = provider.search_columns;
     match mode {
         SearchMode::Exact => exact_lved_search_where(normalized, provider, prefer_direct_fts),
-        SearchMode::Forward => one_parameter_where(fts_match(
-            provider.search_table,
-            "forward",
+        SearchMode::Forward => fts_where_with_optional_value_guard(FtsWhereRequest {
+            search_table: provider.search_table,
+            column: "forward",
             normalized,
             search_columns,
-            true,
-            false,
+            prefix_last: true,
+            split_chars: false,
             prefer_direct_fts,
-        )),
+            guard_kind: SearchValueGuardKind::Prefix(normalized),
+        }),
         SearchMode::Backward => {
             let reversed = normalized.chars().rev().collect::<String>();
-            one_parameter_where(fts_match(
-                provider.search_table,
-                "back",
-                &reversed,
+            fts_where_with_optional_value_guard(FtsWhereRequest {
+                search_table: provider.search_table,
+                column: "back",
+                normalized: &reversed,
                 search_columns,
-                true,
-                false,
+                prefix_last: true,
+                split_chars: false,
                 prefer_direct_fts,
-            ))
+                guard_kind: SearchValueGuardKind::Prefix(&reversed),
+            })
         }
-        SearchMode::Partial => one_parameter_where(fts_match(
-            provider.search_table,
-            "part",
+        SearchMode::Partial => fts_where_with_optional_value_guard(FtsWhereRequest {
+            search_table: provider.search_table,
+            column: "part",
             normalized,
             search_columns,
-            false,
-            true,
+            prefix_last: false,
+            split_chars: true,
             prefer_direct_fts,
-        )),
-        SearchMode::FullText => one_parameter_where(fts_match(
-            provider.search_table,
-            "fts",
+            guard_kind: SearchValueGuardKind::ContainsSplitChars(normalized),
+        }),
+        SearchMode::FullText => fts_where_with_optional_value_guard(FtsWhereRequest {
+            search_table: provider.search_table,
+            column: "fts",
             normalized,
             search_columns,
-            false,
-            should_split_chars(normalized),
+            prefix_last: false,
+            split_chars: should_split_chars(normalized),
             prefer_direct_fts,
-        )),
-        SearchMode::Advanced(column) => one_parameter_where(fts_match(
-            provider.search_table,
+            guard_kind: SearchValueGuardKind::ContainsSplitChars(normalized),
+        }),
+        SearchMode::Advanced(column) => fts_where_with_optional_value_guard(FtsWhereRequest {
+            search_table: provider.search_table,
             column,
             normalized,
             search_columns,
-            false,
-            should_split_chars(normalized),
+            prefix_last: false,
+            split_chars: should_split_chars(normalized),
             prefer_direct_fts,
-        )),
+            guard_kind: SearchValueGuardKind::ContainsSplitChars(normalized),
+        }),
     }
 }
 
@@ -476,6 +484,49 @@ fn fts_match(
     Some((where_clause, query))
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SearchValueGuardKind<'a> {
+    Prefix(&'a str),
+    ContainsSplitChars(&'a str),
+}
+
+struct FtsWhereRequest<'a> {
+    search_table: &'a str,
+    column: &'a str,
+    normalized: &'a str,
+    search_columns: &'a [String],
+    prefix_last: bool,
+    split_chars: bool,
+    prefer_direct_fts: bool,
+    guard_kind: SearchValueGuardKind<'a>,
+}
+
+fn fts_where_with_optional_value_guard(
+    request: FtsWhereRequest<'_>,
+) -> Option<(String, Vec<String>)> {
+    let (mut where_clause, match_query) = fts_match(
+        request.search_table,
+        request.column,
+        request.normalized,
+        request.search_columns,
+        request.prefix_last,
+        request.split_chars,
+        request.prefer_direct_fts,
+    )?;
+    let mut parameters = vec![match_query];
+    if lved_fts_query_needs_value_guard(request.normalized) {
+        let guard_patterns = lved_search_value_guard_patterns(request.guard_kind);
+        if !guard_patterns.is_empty() {
+            let column = quote_identifier(request.column);
+            for _ in &guard_patterns {
+                where_clause.push_str(&format!(" and s.{column} like ? escape '\\'"));
+            }
+            parameters.extend(guard_patterns);
+        }
+    }
+    Some((where_clause, parameters))
+}
+
 fn fts_table_match_expr(search_table: &str) -> String {
     let search_table = quote_identifier(search_table);
     format!("{search_table} match ?")
@@ -501,10 +552,6 @@ fn fts_query(
         })
         .collect::<Vec<_>>();
     (!terms.is_empty()).then(|| terms.join(" "))
-}
-
-fn one_parameter_where(value: Option<(String, String)>) -> Option<(String, Vec<String>)> {
-    value.map(|(where_clause, parameter)| (where_clause, vec![parameter]))
 }
 
 fn normalize_lved_query(query: &str) -> String {
@@ -579,6 +626,35 @@ fn fts_term(term: &str, prefix: bool) -> String {
 
 fn should_split_chars(query: &str) -> bool {
     !query.chars().any(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn lved_fts_query_needs_value_guard(query: &str) -> bool {
+    !query.chars().any(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn lved_search_value_guard_patterns(kind: SearchValueGuardKind<'_>) -> Vec<String> {
+    match kind {
+        SearchValueGuardKind::Prefix(value) => {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![format!("{}%", escape_sql_like(value))]
+            }
+        }
+        SearchValueGuardKind::ContainsSplitChars(value) => {
+            if should_split_chars(value) {
+                value
+                    .chars()
+                    .filter(|ch| !ch.is_whitespace())
+                    .map(|ch| format!("%{}%", escape_sql_like(&ch.to_string())))
+                    .collect()
+            } else if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![format!("%{}%", escape_sql_like(value))]
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -737,5 +813,52 @@ mod tests {
 
         assert!(where_clause.contains("select rowid from \"search\" where \"search\" match ?"));
         assert_eq!(parameters, vec!["part:131i", "%∥131i∥%"]);
+    }
+
+    #[test]
+    fn forward_search_guards_non_ascii_fts_terms_by_column_value() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+
+        let (where_clause, parameters) =
+            lved_search_where("法", &SearchMode::Forward, primary_provider(&columns), true)
+                .expect("forward search");
+
+        assert!(where_clause.contains("\"search\" match ?"));
+        assert!(where_clause.contains("s.\"forward\" like ? escape '\\'"));
+        assert_eq!(parameters, vec!["forward:法*", "法%"]);
+    }
+
+    #[test]
+    fn fulltext_search_guards_split_cjk_terms_by_character() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+
+        let (where_clause, parameters) = lved_search_where(
+            "法律",
+            &SearchMode::FullText,
+            primary_provider(&columns),
+            false,
+        )
+        .expect("fulltext search");
+
+        assert!(where_clause.contains("select rowid from \"search\" where \"search\" match ?"));
+        assert!(where_clause.contains("s.\"fts\" like ? escape '\\'"));
+        assert_eq!(parameters, vec!["fts:法 fts:律", "%法%", "%律%"]);
+    }
+
+    #[test]
+    fn ascii_forward_search_does_not_add_value_guard() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+
+        let (where_clause, parameters) = lved_search_where(
+            "law",
+            &SearchMode::Forward,
+            primary_provider(&columns),
+            true,
+        )
+        .expect("forward search");
+
+        assert!(where_clause.contains("\"search\" match ?"));
+        assert!(!where_clause.contains("like ?"));
+        assert_eq!(parameters, vec!["forward:law*"]);
     }
 }
