@@ -291,13 +291,16 @@ impl NavigationProvider for ReaderBookPackage {
                 });
             }
             if self.has_ssed_panel_metadata()? {
+                let title = self
+                    .ssed_panel_home_title()?
+                    .unwrap_or_else(|| "Panels".to_owned());
                 surfaces.push(HomeSurface {
                     href: None,
                     surface_id: "panels".to_owned(),
                     kind: NavigationSurfaceKind::Panel,
                     status: NavigationStatus::Available,
-                    title_html: "Panels".to_owned(),
-                    title_text: "Panels".to_owned(),
+                    title_html: escape_plain_label_html(&title),
+                    title_text: title,
                     target: Some(TargetToken::new(&InternalTarget::MenuItem {
                         surface_id: "panels".to_owned(),
                         item_id: "root".to_owned(),

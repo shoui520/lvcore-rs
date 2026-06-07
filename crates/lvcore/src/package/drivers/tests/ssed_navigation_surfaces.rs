@@ -1575,6 +1575,15 @@ fn ssed_panel_cell_target_renders_panel_surface_without_internal_id_title() {
         PackageStores::default(),
     );
 
+    let home = package.home_surfaces().unwrap();
+    let panels_home = home
+        .iter()
+        .find(|surface| surface.surface_id == "panels")
+        .expect("panel home surface");
+    assert_eq!(panels_home.kind, NavigationSurfaceKind::Panel);
+    assert_eq!(panels_home.title_text, "五十音");
+    assert_eq!(panels_home.title_html, "五十音");
+
     let root = package.open_surface("panels").unwrap();
     let NavigationSurface::Panel { cells, .. } = root else {
         panic!("expected root panel surface");

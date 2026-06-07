@@ -387,6 +387,16 @@ impl ReaderBookPackage {
             .map(|metadata| metadata.is_some())
     }
 
+    pub(super) fn ssed_panel_home_title(&self) -> Result<Option<String>> {
+        let Some(metadata) = self.read_ssed_panel_metadata_for_surface("panels")? else {
+            return Ok(None);
+        };
+        let Ok(parsed) = metadata.parse(self, None) else {
+            return Ok(None);
+        };
+        Ok(first_ssed_panel_title(&parsed))
+    }
+
     fn read_ssed_panel_metadata_for_surface(
         &self,
         base_surface_id: &str,
@@ -732,6 +742,21 @@ fn nearest_higher_panel_record<'a>(
     sorted_targets
         .get(index)
         .and_then(|(_, _, record_index)| records.get(*record_index))
+}
+
+fn first_ssed_panel_title(parsed: &crate::ssed_panel::SsedPanelXml) -> Option<String> {
+    parsed
+        .inline_cells
+        .iter()
+        .map(|cell| cell.title.trim())
+        .chain(
+            parsed
+                .data_refs
+                .iter()
+                .map(|data_ref| data_ref.title.trim()),
+        )
+        .find(|title| !title.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 struct SsedPanelMetadata {
