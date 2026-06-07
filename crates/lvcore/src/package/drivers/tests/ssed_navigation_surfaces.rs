@@ -1584,6 +1584,14 @@ fn ssed_panel_cell_target_renders_panel_surface_without_internal_id_title() {
     assert_eq!(panels_home.title_text, "五十音");
     assert_eq!(panels_home.title_html, "五十音");
 
+    let root_view = package
+        .render_target(
+            panels_home.target.as_ref().unwrap(),
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(root_view.title.as_deref(), Some("五十音"));
+
     let root = package.open_surface("panels").unwrap();
     let NavigationSurface::Panel { cells, .. } = root else {
         panic!("expected root panel surface");
@@ -1596,7 +1604,7 @@ fn ssed_panel_cell_target_renders_panel_surface_without_internal_id_title() {
         .unwrap();
 
     assert_eq!(view.kind, crate::render::ResolvedTargetKind::PanelSurface);
-    assert_eq!(view.title.as_deref(), Some("Panels"));
+    assert_eq!(view.title.as_deref(), Some("あ"));
     assert_ne!(view.title.as_deref(), Some("20100000"));
     let NavigationSurface::Panel { cells, .. } = view.surface.unwrap() else {
         panic!("expected child panel surface");

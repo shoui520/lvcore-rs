@@ -388,13 +388,24 @@ impl ReaderBookPackage {
     }
 
     pub(super) fn ssed_panel_home_title(&self) -> Result<Option<String>> {
-        let Some(metadata) = self.read_ssed_panel_metadata_for_surface("panels")? else {
+        self.ssed_panel_surface_title("panels")
+    }
+
+    pub(super) fn ssed_panel_surface_title(&self, surface_id: &str) -> Result<Option<String>> {
+        let Some(request) = ssed_panel_surface_request(surface_id) else {
             return Ok(None);
         };
-        let Ok(parsed) = metadata.parse(self, None) else {
+        let Some(metadata) = self.read_ssed_panel_metadata_for_surface(&request.base_surface_id)?
+        else {
             return Ok(None);
         };
-        Ok(first_ssed_panel_title(&parsed))
+        let Ok(parsed) = metadata.parse(self, request.requested_panel_id.as_deref()) else {
+            return Ok(None);
+        };
+        Ok(first_ssed_panel_title(
+            &parsed,
+            request.requested_panel_id.as_deref(),
+        ))
     }
 
     fn read_ssed_panel_metadata_for_surface(
@@ -744,15 +755,22 @@ fn nearest_higher_panel_record<'a>(
         .and_then(|(_, _, record_index)| records.get(*record_index))
 }
 
-fn first_ssed_panel_title(parsed: &crate::ssed_panel::SsedPanelXml) -> Option<String> {
+fn first_ssed_panel_title(
+    parsed: &crate::ssed_panel::SsedPanelXml,
+    requested_panel_id: Option<&str>,
+) -> Option<String> {
     parsed
         .inline_cells
         .iter()
+        .filter(|cell| requested_panel_id.is_none_or(|panel_id| cell.panel_id == panel_id))
         .map(|cell| cell.title.trim())
         .chain(
             parsed
                 .data_refs
                 .iter()
+                .filter(|data_ref| {
+                    requested_panel_id.is_none_or(|panel_id| data_ref.panel_id == panel_id)
+                })
                 .map(|data_ref| data_ref.title.trim()),
         )
         .find(|title| !title.is_empty())

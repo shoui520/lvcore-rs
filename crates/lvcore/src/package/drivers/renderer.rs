@@ -37,7 +37,18 @@ impl ReaderBookPackage {
         {
             diagnostics.extend(surface_diagnostics.clone());
         }
-        let view_title = navigation_surface_view_title(title, surface_id, &surface);
+        let mut resolved_title = title;
+        if resolved_title.is_none() && matches!(surface, NavigationSurface::Panel { .. }) {
+            resolved_title = self.ssed_panel_surface_title(surface_id)?;
+            if resolved_title.is_none() {
+                resolved_title = self
+                    .home_surfaces()?
+                    .into_iter()
+                    .find(|surface| surface.surface_id == surface_id)
+                    .map(|surface| surface.title_text);
+            }
+        }
+        let view_title = navigation_surface_view_title(resolved_title, surface_id, &surface);
         Ok(ResolvedTargetView {
             href: String::new(),
             kind,
