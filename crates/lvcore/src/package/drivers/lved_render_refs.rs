@@ -73,6 +73,27 @@ impl ReaderBookPackage {
                         ));
                     }
                 }
+                LvedHtmlRefKind::ImageAddressHook => {
+                    if let Some(target) = lved_image_address_viewer_hook_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            link.diagnostics.push(Diagnostic::info(
+                                "lved_image_address_hook_deferred",
+                                "LVED address-style image hook is preserved as a non-executed target",
+                            ));
+                            links.push(link);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_image_address_hook_unparsed",
+                            format!("could not parse LVED address-style image hook {raw_ref}"),
+                        ));
+                    }
+                }
                 LvedHtmlRefKind::Pdf => {
                     if let Some(resource) = lved_pdf_resource(raw_ref) {
                         let token = ResourceToken::new(&resource)?;
@@ -343,6 +364,29 @@ impl ReaderBookPackage {
                         diagnostics.push(Diagnostic::warning(
                             "ssed_sidecar_lved_image_ref_unparsed",
                             format!("could not parse SSED sidecar LVED image reference {raw_ref}"),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::ImageAddressHook => {
+                    if let Some(target) = lved_image_address_viewer_hook_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            link.diagnostics.push(Diagnostic::info(
+                                "ssed_sidecar_lved_image_address_hook_deferred",
+                                "SSED sidecar address-style LVED image hook is preserved as a non-executed target",
+                            ));
+                            links.push(link);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_image_address_hook_unparsed",
+                            format!(
+                                "could not parse SSED sidecar address-style LVED image hook {raw_ref}"
+                            ),
                         ));
                     }
                 }

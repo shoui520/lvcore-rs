@@ -1026,6 +1026,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
                     <a href="lved.addr=00029154:0042">addr</a>
                     <a href="lved.bookmark:C001">bookmark</a>
                     <a href="050000/0000">relative appendix</a>
+                    <a href="lved.imag00001234:0567:0000002c">image address</a>
                     <img src="lved.image:fig01.png">
                     <a href="lved.pdf:manual.pdf">pdf</a>
                     <script src="./MathJax/MathJax.js"></script>
@@ -1066,6 +1067,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
         "lved.addr=",
         "lved.bookmark:",
         "050000/0000",
+        "lved.imag00001234:0567:0000002c",
         "lved.image:",
         "lved.pdf:",
     ] {
@@ -1087,6 +1089,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
             TargetKind::LvedCrossBook,
             TargetKind::LvedNamedPage,
             TargetKind::LvedAddress,
+            TargetKind::LvedViewerHook,
             TargetKind::LvedViewerHook,
             TargetKind::LvedViewerHook,
         ]
@@ -1168,5 +1171,22 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "lved_viewer_hook_deferred")
+    );
+
+    let image_address = view
+        .links
+        .iter()
+        .find(|link| link.label == "lved.imag00001234:0567:0000002c")
+        .unwrap();
+    assert!(matches!(
+        image_address.token.decode().unwrap(),
+        InternalTarget::LvedViewerHook { hook, value }
+            if hook == "image-address" && value == "lved.imag00001234:0567:0000002c"
+    ));
+    assert!(
+        image_address
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "lved_image_address_hook_deferred" })
     );
 }

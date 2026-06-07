@@ -305,6 +305,60 @@ fn lved_relative_appendix_hooks_are_exposed_as_deferred_targets() {
 }
 
 #[test]
+fn lved_address_style_image_hooks_are_exposed_as_deferred_targets() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><a href=\"lved.imag00001234:0567:0000002c\">image</a></article>' where id = 100",
+                [],
+            )
+            .unwrap();
+    }
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let source = TargetToken::new(&InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id: 100,
+        anchor: None,
+        query: None,
+    })
+    .unwrap();
+    let view = package
+        .render_target(&source, &RenderOptions::default())
+        .unwrap();
+
+    assert!(
+        !view
+            .display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("lved.imag00001234:0567:0000002c"))
+    );
+    let link = view
+        .links
+        .iter()
+        .find(|link| link.label == "lved.imag00001234:0567:0000002c")
+        .expect("address-style image href should be a typed deferred target");
+    assert_eq!(link.kind, TargetKind::LvedViewerHook);
+    assert!(matches!(
+        link.token.decode().unwrap(),
+        InternalTarget::LvedViewerHook { hook, value }
+            if hook == "image-address" && value == "lved.imag00001234:0567:0000002c"
+    ));
+    assert!(
+        link.diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "lved_image_address_hook_deferred" })
+    );
+}
+
+#[test]
 fn lved_named_page_links_preserve_scroll_anchor() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());

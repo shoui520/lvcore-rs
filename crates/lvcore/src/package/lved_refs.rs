@@ -8,6 +8,7 @@ pub(super) enum LvedHtmlRefKind {
     Media,
     ZipToMedia,
     Image,
+    ImageAddressHook,
     Pdf,
     Address,
     DataId,
@@ -25,6 +26,8 @@ pub(super) fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
         ("lved.ziptomedia:", LvedHtmlRefKind::ZipToMedia),
         ("lved.image:", LvedHtmlRefKind::Image),
         ("lved.imag:", LvedHtmlRefKind::Image),
+        ("lved.image", LvedHtmlRefKind::ImageAddressHook),
+        ("lved.imag", LvedHtmlRefKind::ImageAddressHook),
         ("lved.pdf:", LvedHtmlRefKind::Pdf),
         ("lved.addr", LvedHtmlRefKind::Address),
         ("lved.dataid.dict.", LvedHtmlRefKind::CrossBook),
@@ -288,6 +291,36 @@ pub(super) fn lved_relative_viewer_hook_target(raw_ref: &str) -> Option<Internal
     })
 }
 
+pub(super) fn lved_image_address_viewer_hook_target(raw_ref: &str) -> Option<InternalTarget> {
+    let value = html_unescape_minimal(raw_ref);
+    let value = value.trim();
+    let rest = value
+        .strip_prefix("lved.image")
+        .or_else(|| value.strip_prefix("lved.imag"))?;
+    if rest.starts_with(':') {
+        return None;
+    }
+    let payload = rest.split(['#', '?']).next().unwrap_or("").trim();
+    let mut parts = payload.split(':');
+    let block = parts.next()?;
+    let offset = parts.next()?;
+    let length = parts.next()?;
+    if parts.next().is_some()
+        || block.len() != 8
+        || offset.len() != 4
+        || length.len() != 8
+        || !block.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !offset.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !length.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(InternalTarget::LvedViewerHook {
+        hook: "image-address".to_owned(),
+        value: value.to_owned(),
+    })
+}
+
 pub(super) fn is_lved_ref_terminator(ch: char) -> bool {
     ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>' | ')' | ']')
 }
@@ -403,5 +436,22 @@ mod tests {
         assert_eq!(value, "050000/0000#taxon");
         assert!(lved_relative_viewer_hook_target("10000000/ffff").is_some());
         assert!(lved_relative_viewer_hook_target("manual/0000").is_none());
+
+        assert_eq!(
+            next_lved_ref(r#"<a href="lved.imag00001234:0567:0000002c">"#),
+            Some((9, LvedHtmlRefKind::ImageAddressHook))
+        );
+        let InternalTarget::LvedViewerHook { hook, value } =
+            lved_image_address_viewer_hook_target("lved.imag00001234:0567:0000002c")
+                .expect("image address hook")
+        else {
+            panic!("expected image address viewer hook target");
+        };
+        assert_eq!(hook, "image-address");
+        assert_eq!(value, "lved.imag00001234:0567:0000002c");
+        assert!(lved_image_address_viewer_hook_target("lved.imag:fig01.png").is_none());
+        assert!(
+            lved_image_address_viewer_hook_target("lved.image00001234:0567:0000002c").is_some()
+        );
     }
 }
