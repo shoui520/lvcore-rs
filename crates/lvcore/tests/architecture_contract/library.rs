@@ -644,6 +644,139 @@ fn library_search_results_include_sequence_for_continuous_view() {
 }
 
 #[test]
+fn frontend_cached_search_hit_json_round_trips_to_renderable_target() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        connection.pragma_update(None, "key", "test-key").unwrap();
+        connection
+            .pragma_update(None, "cipher_compatibility", 4)
+            .unwrap();
+        connection
+            .execute(
+                "update list set title = 'cached alpha' where refid = 100",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><p>cached body</p></article>' where id = 100",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "update search set forward = 'cached alpha' where rowid = 1",
+                [],
+            )
+            .unwrap();
+    }
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let book_id = library.open_path(dir.path(), &registry).unwrap();
+    let page = library
+        .search(&SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "cached".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    let hit = page.hits.first().expect("expected cached search hit");
+
+    let public_json = serde_json::to_value(hit).unwrap();
+    assert_eq!(public_json["book_id"], book_id.0);
+    assert!(
+        public_json["target"].as_str().is_some(),
+        "frontend JSON should contain an opaque target token string"
+    );
+    assert!(
+        !public_json
+            .as_object()
+            .unwrap()
+            .contains_key("internal_target"),
+        "public JSON must not expose decoded target internals as top-level fields"
+    );
+    assert!(
+        !public_json.to_string().contains("content"),
+        "opaque target token should not leak LVED table names into public JSON"
+    );
+
+    let restored_hit: lvcore::SearchHit = serde_json::from_value(public_json).unwrap();
+    let view = library
+        .render_target(
+            &restored_hit.book_id,
+            &restored_hit.target,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        view.display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("cached body"))
+    );
+}
+
+#[test]
+fn frontend_cached_home_surface_json_round_trips_to_openable_navigation_target() {
+    let dir = tempdir().unwrap();
+    write_minimal_lved_sqlite_fixture(dir.path());
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let book_id = library.open_path(dir.path(), &registry).unwrap();
+    let surfaces = library.home_surfaces(&book_id).unwrap();
+    let surface = surfaces
+        .iter()
+        .find(|surface| surface.surface_id == "lved-list")
+        .expect("expected LVED list home surface");
+
+    let public_json = serde_json::to_value(surface).unwrap();
+    assert_eq!(public_json["kind"], "title_index_browse");
+    assert!(
+        public_json["target"].as_str().is_some(),
+        "home surface JSON should contain an opaque target token string"
+    );
+    assert!(
+        !public_json
+            .as_object()
+            .unwrap()
+            .contains_key("internal_target"),
+        "home surface JSON must not expose decoded target internals"
+    );
+    assert!(
+        !public_json["target"]
+            .as_str()
+            .unwrap()
+            .contains("lved-list"),
+        "decoded target internals should stay inside the opaque token"
+    );
+
+    let restored_surface: lvcore::HomeSurface = serde_json::from_value(public_json).unwrap();
+    let target = restored_surface
+        .target
+        .as_ref()
+        .expect("restored surface should keep target token");
+    let view = library
+        .render_target(&book_id, target, &RenderOptions::default())
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::NavigationSurface);
+    assert!(matches!(
+        view.surface,
+        Some(NavigationSurface::TitleIndexBrowse { .. })
+    ));
+}
+
+#[test]
 fn selected_book_search_sequence_uses_frontend_scope_order() {
     let first = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(first.path());
