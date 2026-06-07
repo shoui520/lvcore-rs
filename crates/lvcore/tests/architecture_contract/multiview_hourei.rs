@@ -102,6 +102,65 @@ fn multiview_title_uses_longer_retained_title_when_compatible_with_menu() {
 }
 
 #[test]
+fn multiview_records_retained_ssed_components_without_exposing_ssed_surfaces() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("menuData.xml"),
+        r#"<list><item label="MultiView Book" href="000001" /></list>"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("blvdat"), b"payload").unwrap();
+
+    let record_start = 0x80;
+    let mut facade = vec![0u8; record_start + 0x30];
+    facade[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"MultiView Book";
+    facade[0x0c] = title.len() as u8;
+    facade[0x0d..0x0d + title.len()].copy_from_slice(title);
+    facade[0x4d] = 1;
+    write_record(
+        &mut facade[record_start..record_start + 0x30],
+        0x03,
+        13,
+        13,
+        "FHTITLE.DIC",
+    );
+    fs::write(dir.path().join("MOROKU16.IDX"), facade).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture_at(13, b"retained title"),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let metadata = package.metadata();
+
+    assert_eq!(metadata.format_family, FormatFamily::LvlMultiView);
+    assert!(
+        metadata
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "retained_ssed_component_deferred"),
+        "catalog-backed retained SSED components are evidence, not user-visible deferred noise"
+    );
+    assert!(
+        !metadata.capabilities.contains(&Capability::HcRenderInput),
+        "MultiView retained SSED facades must not make the package look like an SSED body renderer"
+    );
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "menuData" && surface.kind == NavigationSurfaceKind::MultiviewTree
+    }));
+    assert!(
+        surfaces.iter().all(|surface| {
+            surface.surface_id != "title-index"
+                && surface.kind != NavigationSurfaceKind::TitleIndexBrowse
+        }),
+        "retained SSED component evidence must not become a synthetic SSED title-index surface"
+    );
+}
+
+#[test]
 fn legacy_multiview_menu_xml_detects_as_multiview_and_exposes_all_menus() {
     let dir = tempdir().unwrap();
     let package_root = dir.path().join("_MOROKU15");

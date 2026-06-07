@@ -402,12 +402,16 @@ impl PackageDriver for LvlMultiViewDriver {
             .map(MultiviewStore::has_law_navigation)
             .transpose()?
             .unwrap_or(false);
+        let retained_ssed_component_catalog = ssed_catalog_for_root(&package_root).ok();
+        let retained_ssed_components = discover_retained_sseddata_components(&package_root)?;
         Ok(Box::new(ReaderBookPackage::new(
             &package_root,
             detection,
             multiview_capabilities(has_law_navigation),
             PackageStores {
                 multiview_store: store,
+                retained_ssed_component_catalog,
+                retained_ssed_components,
                 search_modes: standard_search_modes(),
                 ..Default::default()
             },
