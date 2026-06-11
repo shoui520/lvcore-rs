@@ -166,7 +166,7 @@ fn retained_ssed_components_are_capabilities_not_family_gated() {
 }
 
 #[test]
-fn lved_retained_loose_sseddata_indexes_are_supplemental_search() {
+fn lved_retained_loose_sseddata_index_matches_are_deferred_block_offsets() {
     let dir = tempdir().unwrap();
     write_lved_search_fixture(dir.path());
     let index_page =
@@ -237,24 +237,15 @@ fn lved_retained_loose_sseddata_indexes_are_supplemental_search() {
             gaiji_policy: None,
         })
         .unwrap();
-    assert_eq!(retained_page.hits.len(), 1);
-    assert_eq!(retained_page.hits[0].title_text, "beta");
-    assert!(matches!(
-        retained_page.hits[0].target.decode().unwrap(),
-        InternalTarget::LvedRow {
-            table,
-            row_id: 101,
-            anchor: None,
-            query: None
-        } if table == "content"
-    ));
-    let view = package
-        .render_target(&retained_page.hits[0].target, &RenderOptions::default())
-        .unwrap();
-    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(retained_page.hits.is_empty());
+    let deferred = retained_page
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lved_retained_ssed_index_match_deferred")
+        .expect("retained SSED index matches should preserve block/offset evidence as deferred");
     assert_eq!(
-        view.display_html.as_deref(),
-        Some("<article><h1>Beta</h1></article>")
+        deferred.context.get("body_address").map(String::as_str),
+        Some("00000002:0000")
     );
 }
 

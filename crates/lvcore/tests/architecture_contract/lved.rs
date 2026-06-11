@@ -700,7 +700,7 @@ fn lved_tree_surface_is_not_advertised_when_no_tree_index_exists() {
 }
 
 #[test]
-fn lved_retained_ssed_components_are_supplemental_search_not_navigation() {
+fn lved_retained_ssed_block_offset_matches_do_not_bridge_to_sqlite_rows() {
     let dir = tempdir().unwrap();
     write_minimal_lved_sqlite_fixture(dir.path());
     {
@@ -772,23 +772,15 @@ fn lved_retained_ssed_components_are_supplemental_search_not_navigation() {
             gaiji_policy: None,
         })
         .unwrap();
-    assert_eq!(page.hits.len(), 1);
-    assert_eq!(page.hits[0].title_text, "gamma");
-    assert!(matches!(
-        page.hits[0].target.decode().unwrap(),
-        InternalTarget::LvedRow {
-            table,
-            row_id: 110,
-            anchor: None,
-            query: None,
-        } if table == "content"
-    ));
-    let view = package
-        .render_target(&page.hits[0].target, &RenderOptions::default())
-        .unwrap();
+    assert!(page.hits.is_empty());
+    let deferred = page
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lved_retained_ssed_index_match_deferred")
+        .expect("matching retained SSED block/offset rows should be reported as deferred");
     assert_eq!(
-        view.display_html.as_deref(),
-        Some("<article><h1>Gamma</h1></article>")
+        deferred.context.get("body_address").map(String::as_str),
+        Some("00000003:0000")
     );
 }
 

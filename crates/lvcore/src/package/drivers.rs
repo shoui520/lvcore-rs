@@ -145,7 +145,7 @@ use crate::ios_dictlist::{
     IosDictConvertAddrPayload, IosDictFtsPayload, IosDictFullDbPayload, IosDictListInfo,
     IosDictSearchPayload,
 };
-use crate::lved_sqlite::{LvedSearchHit, LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
+use crate::lved_sqlite::{LvedSqliteStore, LvedSqliteSummary, infer_lved_dict_code};
 use crate::multiview::{MultiviewStore, parse_menu_data};
 use crate::navigation::{
     HomeSurface, LabelOptions, NavigationItem, NavigationNode, NavigationProvider,

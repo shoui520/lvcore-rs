@@ -12,16 +12,14 @@ impl ReaderBookPackage {
     pub(super) fn search_lved_retained_ssed_indexes(
         &self,
         query: &SearchQuery,
-        existing_hits: &[SearchHit],
+        _existing_hits: &[SearchHit],
         page_limit: usize,
         matched_offset: usize,
     ) -> Result<SearchPage> {
-        let mut hits = Vec::new();
+        let hits = Vec::new();
         let mut diagnostics = Vec::new();
-        let mut seen_targets = existing_hits
-            .iter()
-            .map(|hit| hit.target.as_str().to_owned())
-            .collect::<HashSet<_>>();
+        let mut deferred_match_count = 0usize;
+        let mut deferred_match_diagnostic = None::<Diagnostic>;
         let mut retained_matches_seen = 0usize;
         let needle = normalize_search_match_text(&query.query);
         if needle.is_empty() || page_limit == 0 {
@@ -33,10 +31,7 @@ impl ReaderBookPackage {
             });
         }
 
-        let mut stopped_with_more = false;
-        'components: for (component_ordinal, retained) in
-            self.retained_ssed_components.iter().enumerate()
-        {
+        for (component_ordinal, retained) in self.retained_ssed_components.iter().enumerate() {
             let Some(component) = retained_lved_index_component(component_ordinal, retained) else {
                 continue;
             };
@@ -111,35 +106,28 @@ impl ReaderBookPackage {
                     if !retained_lved_row_matches(&query.mode, &key, &needle) {
                         continue;
                     }
-                    let Some(hit) = self.lved_hit_for_retained_index_row(&row)? else {
-                        continue;
-                    };
                     if retained_matches_seen < matched_offset {
                         retained_matches_seen = retained_matches_seen.saturating_add(1);
                         continue;
                     }
                     retained_matches_seen = retained_matches_seen.saturating_add(1);
-                    let search_hit = self.lved_search_hit_from_sql_hit(hit)?;
-                    if !seen_targets.insert(search_hit.target.as_str().to_owned()) {
-                        continue;
-                    }
-                    hits.push(search_hit);
-                    if hits.len() >= page_limit {
-                        stopped_with_more = true;
-                        break 'components;
+                    deferred_match_count = deferred_match_count.saturating_add(1);
+                    if deferred_match_diagnostic.is_none() {
+                        deferred_match_diagnostic =
+                            Some(retained_lved_index_match_deferred_diagnostic(&row));
                     }
                 }
             }
         }
+        if let Some(diagnostic) = deferred_match_diagnostic {
+            diagnostics.push(
+                diagnostic.with_context("deferred_match_count", deferred_match_count.to_string()),
+            );
+        }
 
-        let next_cursor = stopped_with_more.then(|| {
-            encode_lved_retained_index_cursor(LvedRetainedIndexCursor {
-                matched_offset: retained_matches_seen,
-            })
-        });
         Ok(SearchPage {
             hits,
-            next_cursor,
+            next_cursor: None,
             result_sequence: None,
             diagnostics,
         })
@@ -148,39 +136,28 @@ impl ReaderBookPackage {
     pub(super) fn decode_lved_retained_index_cursor(&self, cursor: Option<&str>) -> Option<usize> {
         decode_lved_retained_index_cursor(cursor).map(|cursor| cursor.matched_offset)
     }
+}
 
-    fn lved_hit_for_retained_index_row(&self, row: &SsedIndexRow) -> Result<Option<LvedSearchHit>> {
-        let Some(store) = &self.lved_store else {
-            return Ok(None);
-        };
-        store.list_hit_by_list_id(i64::from(row.body.block))
-    }
-
-    fn lved_search_hit_from_sql_hit(&self, hit: LvedSearchHit) -> Result<SearchHit> {
-        let target = TargetToken::new(&InternalTarget::LvedRow {
-            table: "content".to_owned(),
-            row_id: hit.content_id,
-            anchor: hit.anchor,
-            query: None,
-        })?;
-        let href = target.href();
-        let title_html = self.normalize_lved_label_html(&hit.title_html)?;
-        let snippet_html = if hit.subtitle_html.is_empty() {
-            None
-        } else {
-            Some(self.normalize_lved_label_html(&hit.subtitle_html)?)
-        };
-        Ok(SearchHit {
-            href,
-            book_id: self.book_id_for_hit(),
-            target,
-            title_html,
-            title_text: hit.title_text,
-            snippet_html,
-            sequence_hint: None,
-            diagnostics: Vec::new(),
-        })
-    }
+fn retained_lved_index_match_deferred_diagnostic(row: &SsedIndexRow) -> Diagnostic {
+    Diagnostic::info(
+        "lved_retained_ssed_index_match_deferred",
+        "retained LVED SSED index match was not emitted because its block/offset target has no proven SQLite bridge",
+    )
+    .with_context("component", &row.component)
+    .with_context("key", &row.key)
+    .with_context("body_block", row.body.block.to_string())
+    .with_context("body_offset", row.body.offset.to_string())
+    .with_context(
+        "body_address",
+        format!("{:08x}:{:04x}", row.body.block, row.body.offset),
+    )
+    .with_context("title_block", row.title.block.to_string())
+    .with_context("title_offset", row.title.offset.to_string())
+    .with_context(
+        "title_address",
+        format!("{:08x}:{:04x}", row.title.block, row.title.offset),
+    )
+    .with_context("page_index", row.page_index.to_string())
 }
 
 fn retained_lved_index_component(
@@ -234,11 +211,4 @@ fn decode_lved_retained_index_cursor(cursor: Option<&str>) -> Option<LvedRetaine
     Some(LvedRetainedIndexCursor {
         matched_offset: cursor.parse().ok()?,
     })
-}
-
-fn encode_lved_retained_index_cursor(cursor: LvedRetainedIndexCursor) -> String {
-    format!(
-        "{LVED_RETAINED_INDEX_CURSOR_PREFIX}{}",
-        cursor.matched_offset
-    )
 }
