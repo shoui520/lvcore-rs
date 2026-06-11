@@ -13,6 +13,7 @@ pub(super) enum LvedHtmlRefKind {
     Address,
     DataId,
     CrossBook,
+    DictInfo,
     Info,
     Binran,
     ViewerHook,
@@ -32,6 +33,7 @@ pub(super) fn next_lved_ref(value: &str) -> Option<(usize, LvedHtmlRefKind)> {
         ("lved.addr", LvedHtmlRefKind::Address),
         ("lved.dataid.dict.", LvedHtmlRefKind::CrossBook),
         ("lved.contentlink:", LvedHtmlRefKind::CrossBook),
+        ("lved.dict.", LvedHtmlRefKind::DictInfo),
         ("lved.dataid.result:", LvedHtmlRefKind::DataId),
         ("lved.dataid:", LvedHtmlRefKind::DataId),
         ("lved.dataid", LvedHtmlRefKind::DataId),
@@ -214,6 +216,25 @@ pub(super) fn lved_cross_book_target(raw_ref: &str) -> Option<InternalTarget> {
     None
 }
 
+pub(super) fn lved_dict_info_target(raw_ref: &str) -> Option<InternalTarget> {
+    let value = raw_ref.strip_prefix("lved.dict.")?;
+    let raw_target = value
+        .split_once(':')
+        .map(|(_, target)| target)
+        .unwrap_or(value)
+        .trim();
+    let (name, anchor) = split_lved_target_anchor(raw_target);
+    let name = name.trim();
+    let name = strip_ascii_prefix(name, "pictlink.").unwrap_or(name);
+    if name.is_empty() {
+        return None;
+    }
+    Some(InternalTarget::LvedInfoPage {
+        name: collapse_repeated_html_suffix(name),
+        anchor: (!anchor.is_empty()).then(|| html_unescape_minimal(anchor)),
+    })
+}
+
 pub(super) fn lved_address_target(raw_ref: &str) -> Option<InternalTarget> {
     let address = parse_lved_address(raw_ref)?;
     let suffix = raw_ref
@@ -340,6 +361,21 @@ fn split_lved_target_anchor(value: &str) -> (&str, &str) {
     value.split_once('#').unwrap_or((value, ""))
 }
 
+fn strip_ascii_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    value
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        .then(|| &value[prefix.len()..])
+}
+
+fn collapse_repeated_html_suffix(value: &str) -> String {
+    let mut value = html_unescape_minimal(value);
+    while value.to_ascii_lowercase().ends_with(".html.html") {
+        value.truncate(value.len() - ".html".len());
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use crate::resources::ResourceKind;
@@ -405,6 +441,21 @@ mod tests {
         };
         assert_eq!(dict_code, "BUREI");
         assert_eq!(content_id, "400");
+
+        let Some(InternalTarget::LvedInfoPage { name, anchor }) =
+            lved_dict_info_target("lved.dict.TEST:pictlink.picture.html#map")
+        else {
+            panic!("expected dict info target");
+        };
+        assert_eq!(name, "picture.html");
+        assert_eq!(anchor.as_deref(), Some("map"));
+        let Some(InternalTarget::LvedInfoPage { name, anchor }) =
+            lved_dict_info_target("lved.dict.TEST:pictlink.picture.html.html?query")
+        else {
+            panic!("expected collapsed dict info target");
+        };
+        assert_eq!(name, "picture.html");
+        assert!(anchor.is_none());
 
         let Some(InternalTarget::LvedAddress {
             block,

@@ -1013,6 +1013,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
                 create table content (id integer primary key, type integer, body text, media text);
                 create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
                 create table media (id integer primary key, name text, type integer, main blob);
+                create table info (id integer primary key, name text, body text);
                 create table binran (id integer primary key, name text, body text);
                 insert into content values (
                   200,
@@ -1023,6 +1024,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
                     <a href="lved.dataid.dict.STEDABBR:300#cross">dict</a>
                     <a href="lved.contentlink:BUREI.400#note">contentlink</a>
                     <a href="lved.binran:usage.html#top">binran</a>
+                    <a href="lved.dict.GENIUSE6:pictlink.picture.html#map">picture dict</a>
                     <a href="lved.addr=00029154:0042">addr</a>
                     <a href="lved.bookmark:C001">bookmark</a>
                     <a href="050000/0000">relative appendix</a>
@@ -1038,6 +1040,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
                 insert into list values (1, 200, 1, '', 'router', '');
                 insert into media values (1, 'fig01', 4, X'89504E470D0A1A0A');
                 insert into media values (2, 'manual', 6, X'255044462D312E37');
+                insert into info values (1, 'picture.html', '<h1>Picture</h1>');
                 insert into binran values (1, 'usage.html', '<h1>Binran</h1>');
                 "#,
             )
@@ -1064,6 +1067,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
         "lved.dataid.dict.",
         "lved.contentlink:",
         "lved.binran:",
+        "lved.dict.",
         "lved.addr=",
         "lved.bookmark:",
         "050000/0000",
@@ -1088,6 +1092,7 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
             TargetKind::LvedCrossBook,
             TargetKind::LvedCrossBook,
             TargetKind::LvedNamedPage,
+            TargetKind::LvedInfoPage,
             TargetKind::LvedAddress,
             TargetKind::LvedViewerHook,
             TargetKind::LvedViewerHook,
@@ -1105,6 +1110,26 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
         .unwrap();
     assert_eq!(binran_view.kind, ResolvedTargetKind::InfoPage);
     assert_eq!(binran_view.display_html.as_deref(), Some("<h1>Binran</h1>"));
+
+    let picture = view
+        .links
+        .iter()
+        .find(|link| link.label == "lved.dict.GENIUSE6:pictlink.picture.html#map")
+        .unwrap();
+    assert!(matches!(
+        picture.token.decode().unwrap(),
+        InternalTarget::LvedInfoPage { name, anchor }
+            if name == "picture.html" && anchor.as_deref() == Some("map")
+    ));
+    let picture_view = package
+        .render_target(&picture.token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(picture_view.kind, ResolvedTargetKind::InfoPage);
+    assert_eq!(picture_view.scroll_anchor.as_deref(), Some("map"));
+    assert_eq!(
+        picture_view.display_html.as_deref(),
+        Some("<h1>Picture</h1>")
+    );
 
     let cross = view
         .links

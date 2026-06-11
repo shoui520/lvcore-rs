@@ -179,6 +179,22 @@ impl ReaderBookPackage {
                         ));
                     }
                 }
+                LvedHtmlRefKind::DictInfo => {
+                    if let Some(target) = lved_dict_info_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            links.push(TargetLink::new(raw_ref, &target)?);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "lved_dict_info_ref_unparsed",
+                            format!("could not parse LVED dict info reference {raw_ref}"),
+                        ));
+                    }
+                }
                 LvedHtmlRefKind::Info => {
                     if let Some(target) = lved_info_target(raw_ref) {
                         let token = TargetToken::new(&target)?;
@@ -460,6 +476,24 @@ impl ReaderBookPackage {
                             "ssed_sidecar_lved_cross_book_ref_unparsed",
                             format!(
                                 "could not parse SSED sidecar cross-dictionary reference {raw_ref}"
+                            ),
+                        ));
+                    }
+                }
+                LvedHtmlRefKind::DictInfo => {
+                    if let Some(target) = lved_dict_info_target(raw_ref) {
+                        let token = TargetToken::new(&target)?;
+                        let href = format!("lvcore://target/{}", token.as_str());
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            links.push(TargetLink::new(raw_ref, &target)?);
+                        }
+                        output.push_str(&href);
+                    } else {
+                        output.push_str(raw_ref);
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_sidecar_lved_dict_info_ref_unparsed",
+                            format!(
+                                "could not parse SSED sidecar LVED dict info reference {raw_ref}"
                             ),
                         ));
                     }
