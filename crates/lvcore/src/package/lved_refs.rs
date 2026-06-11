@@ -260,7 +260,7 @@ pub(super) fn lved_info_target(raw_ref: &str) -> Option<InternalTarget> {
         return None;
     }
     Some(InternalTarget::LvedInfoPage {
-        name: html_unescape_minimal(name),
+        name: collapse_repeated_html_suffix(name),
         anchor: (!anchor.is_empty()).then(|| html_unescape_minimal(anchor)),
     })
 }
@@ -273,7 +273,7 @@ pub(super) fn lved_binran_target(raw_ref: &str) -> Option<InternalTarget> {
     }
     Some(InternalTarget::LvedNamedPage {
         table: "binran".to_owned(),
-        name: html_unescape_minimal(name),
+        name: collapse_repeated_html_suffix(name),
         anchor: (!anchor.is_empty()).then(|| html_unescape_minimal(anchor)),
     })
 }
@@ -456,6 +456,24 @@ mod tests {
         };
         assert_eq!(name, "picture.html");
         assert!(anchor.is_none());
+        let Some(InternalTarget::LvedInfoPage { name, anchor }) =
+            lved_info_target("lved.info:about.html.html#summary")
+        else {
+            panic!("expected collapsed info target");
+        };
+        assert_eq!(name, "about.html");
+        assert_eq!(anchor.as_deref(), Some("summary"));
+        let Some(InternalTarget::LvedNamedPage {
+            table,
+            name,
+            anchor,
+        }) = lved_binran_target("lved.binran:kinen.html.html#era")
+        else {
+            panic!("expected collapsed binran target");
+        };
+        assert_eq!(table, "binran");
+        assert_eq!(name, "kinen.html");
+        assert_eq!(anchor.as_deref(), Some("era"));
 
         let Some(InternalTarget::LvedAddress {
             block,
