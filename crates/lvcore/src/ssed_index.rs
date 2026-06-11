@@ -965,6 +965,15 @@ mod tests {
     }
 
     #[test]
+    fn preserves_index_key_gaiji_placeholders_like_logovista_tools() {
+        assert_eq!(
+            decode_index_key(&[0x23, 0x41, 0xa1, 0x3e, 0x23, 0x42]),
+            "A<hA13E>B"
+        );
+        assert_eq!(decode_index_key(&[0xb1, 0x23]), "<zB123>");
+    }
+
+    #[test]
     fn decodes_jis_minus_as_ascii_hyphen_in_keys_and_halfwidth_titles() {
         let key = [0x23, 0x41, 0x21, 0x5d, 0x23, 0x42];
         assert_eq!(decode_index_key(&key), "A-B");

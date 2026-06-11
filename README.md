@@ -173,6 +173,8 @@ provider slices:
 - SSED index seek/prefilter candidates cover observed small-kana fallback forms
   and LogoVista JIS symbol variants used by `logovista-tools` for title-key
   tree positioning, with JIS minus normalized to ASCII hyphen for matching;
+- SSED index key decoding preserves LogoVista gaiji placeholders such as
+  `<hA13E>` and routes those markers through the shared rich-label resolver;
 - SSED title-label decoding for raw JIS X 0208 title bytes that can otherwise
   look like printable ASCII, while preserving real Latin title labels;
 - initial SSED full-text search over HONMON body windows behind native index

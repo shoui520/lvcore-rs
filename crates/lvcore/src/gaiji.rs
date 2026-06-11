@@ -73,10 +73,14 @@ pub fn normalize_gaiji_identity(identity: &str) -> Option<String> {
     let trimmed = trimmed
         .strip_prefix("<z")
         .or_else(|| trimmed.strip_prefix("<Z"))
+        .or_else(|| trimmed.strip_prefix("<h"))
+        .or_else(|| trimmed.strip_prefix("<H"))
         .unwrap_or(trimmed);
     let trimmed = trimmed
         .strip_prefix('z')
         .or_else(|| trimmed.strip_prefix('Z'))
+        .or_else(|| trimmed.strip_prefix('h'))
+        .or_else(|| trimmed.strip_prefix('H'))
         .unwrap_or(trimmed)
         .trim_end_matches('>');
     if trimmed.len() != 4 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
@@ -250,15 +254,15 @@ fn next_gaiji_marker(value: &str, cursor: usize) -> Option<GaijiMarker<'_>> {
 }
 
 fn angle_gaiji_marker_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let z_end = start + 7;
-    if matches!(bytes.get(start + 1), Some(b'z' | b'Z'))
+    let prefixed_end = start + 7;
+    if matches!(bytes.get(start + 1), Some(b'z' | b'Z' | b'h' | b'H'))
         && bytes.get(start + 6) == Some(&b'>')
         && bytes
             .get(start + 2..start + 6)?
             .iter()
             .all(u8::is_ascii_hexdigit)
     {
-        return Some(z_end);
+        return Some(prefixed_end);
     }
     let plain_end = start + 6;
     if bytes.get(start + 5) == Some(&b'>')
@@ -507,5 +511,34 @@ mod tests {
     fn normalizes_uppercase_z_gaiji_markers() {
         assert_eq!(normalize_gaiji_identity("Z8f42").as_deref(), Some("8F42"));
         assert_eq!(normalize_gaiji_identity("<Z8f42>").as_deref(), Some("8F42"));
+    }
+
+    #[test]
+    fn normalizes_halfwidth_gaiji_markers_from_logovista_tools() {
+        assert_eq!(normalize_gaiji_identity("<hA13e>").as_deref(), Some("A13E"));
+        assert_eq!(normalize_gaiji_identity("HA13e").as_deref(), Some("A13E"));
+    }
+
+    #[test]
+    fn rich_label_resolves_halfwidth_angle_gaiji_markers() {
+        struct Provider;
+
+        impl GaijiProvider for Provider {
+            fn resolve_gaiji(&self, identity: &str, _policy: &GaijiPolicy) -> GaijiResolution {
+                assert_eq!(identity, "<hA13E>");
+                GaijiResolution {
+                    identity: "A13E".to_owned(),
+                    preferred_source: Some(GaijiSourcePreference::Unicode),
+                    unicode: Some("ó".to_owned()),
+                    resource: None,
+                    nonliteral_marker: false,
+                    diagnostics: Vec::new(),
+                }
+            }
+        }
+
+        let label = resolve_rich_label(&Provider, "AR<hA13E>UMENTACION", &GaijiPolicy::default());
+        assert_eq!(label.text, "ARóUMENTACION");
+        assert_eq!(label.html, "ARóUMENTACION");
     }
 }

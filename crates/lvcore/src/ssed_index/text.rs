@@ -26,6 +26,11 @@ fn decode_index_key_payload(data: &[u8]) -> String {
             index += 2;
             continue;
         }
+        if index + 1 < data.len() && (0xa1..=0xfe).contains(&byte) {
+            out.push_str(&gaiji_placeholder(byte, data[index + 1]));
+            index += 2;
+            continue;
+        }
         if (0x20..=0x7e).contains(&byte) {
             out.push(byte as char);
         }
@@ -240,6 +245,11 @@ fn narrow_fullwidth_ascii(text: &str) -> String {
             _ => ch,
         })
         .collect()
+}
+
+fn gaiji_placeholder(first: u8, second: u8) -> String {
+    let prefix = if first < 0xb0 { 'h' } else { 'z' };
+    format!("<{prefix}{first:02X}{second:02X}>")
 }
 
 fn skip_control(data: &[u8], index: usize, end: usize) -> usize {
