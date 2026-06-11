@@ -866,7 +866,7 @@ fn validate_deep_exercises_ssed_advertised_search_modes() {
         .iter()
         .find(|exercise| exercise["kind"] == "search_full_text")
         .expect("missing fulltext validation row");
-    assert_eq!(fulltext["status"], "skipped_expensive");
+    assert_eq!(fulltext["status"], "ok");
     assert!(!validate_row_has_failure(&output));
 }
 

@@ -706,17 +706,11 @@ fn validate_search_modes_to_probe(metadata: &BookMetadata) -> Vec<SearchMode> {
 }
 
 fn should_skip_search_mode_probe(
-    metadata: &BookMetadata,
-    mode: &SearchMode,
-    include_expensive_search: bool,
+    _metadata: &BookMetadata,
+    _mode: &SearchMode,
+    _include_expensive_search: bool,
 ) -> bool {
-    if include_expensive_search || metadata.format_family != FormatFamily::Ssed {
-        return false;
-    }
-    match mode {
-        SearchMode::FullText => !metadata.capabilities.contains(&Capability::PreservedHtml),
-        _ => false,
-    }
+    false
 }
 
 fn skipped_search_mode_exercise(mode: SearchMode) -> serde_json::Value {
@@ -2492,7 +2486,7 @@ mod tests {
     }
 
     #[test]
-    fn ssed_preserved_html_fulltext_is_not_skipped_by_default() {
+    fn ssed_search_modes_are_probed_by_default() {
         let mut metadata = BookMetadata {
             book_id: BookId("SSED:TEST".to_owned()),
             format_family: FormatFamily::Ssed,
@@ -2517,7 +2511,7 @@ mod tests {
         ));
 
         metadata.capabilities.clear();
-        assert!(should_skip_search_mode_probe(
+        assert!(!should_skip_search_mode_probe(
             &metadata,
             &SearchMode::FullText,
             false
