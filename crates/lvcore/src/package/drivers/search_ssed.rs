@@ -1550,6 +1550,7 @@ impl ReaderBookPackage {
         let mut byte_candidate_rows = 0usize;
         let mut decoded_candidate_rows = 0usize;
         let mut stopped_early = false;
+        let mut stopped_for_page_limit = false;
         let scan_diagnostics = self.scan_ssed_simple_index_rows(None, |row| {
             if max_checked_rows.is_some_and(|limit| checked_rows >= limit) {
                 stopped_early = true;
@@ -1699,6 +1700,7 @@ impl ReaderBookPackage {
             });
             if hits.len() >= page_limit {
                 stopped_early = true;
+                stopped_for_page_limit = true;
                 return Ok(false);
             }
             Ok(true)
@@ -1716,7 +1718,11 @@ impl ReaderBookPackage {
         Ok(SsedRowDrivenFulltextPage {
             hits,
             exhausted: !stopped_early,
-            next_row_offset: offset.saturating_add(checked_rows),
+            next_row_offset: if stopped_for_page_limit {
+                offset.saturating_add(checked_rows.saturating_sub(1))
+            } else {
+                offset.saturating_add(checked_rows)
+            },
             diagnostics,
         })
     }

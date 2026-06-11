@@ -81,6 +81,58 @@ fn ssed_fulltext_prefetches_initial_honmon_body_rows() {
 }
 
 #[test]
+fn ssed_fulltext_row_cursor_keeps_lookahead_hit() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_multi_body_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic fulltext".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+    let query_page = |cursor: Option<String>| {
+        package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
+                mode: SearchMode::FullText,
+                query: "shared row needle".to_owned(),
+                cursor,
+                limit: 1,
+                gaiji_policy: None,
+            })
+            .unwrap()
+    };
+
+    let first = query_page(None);
+    assert_eq!(first.hits.len(), 1);
+    assert_eq!(first.hits[0].title_text, "row one");
+    assert_eq!(first.next_cursor.as_deref(), Some("row:1"));
+
+    let second = query_page(first.next_cursor.clone());
+    assert_eq!(second.hits.len(), 1);
+    assert_eq!(second.hits[0].title_text, "row two");
+    assert_eq!(second.next_cursor.as_deref(), Some("row:2"));
+
+    let third = query_page(second.next_cursor.clone());
+    assert_eq!(third.hits.len(), 1);
+    assert_eq!(third.hits[0].title_text, "row three");
+    assert_eq!(third.next_cursor, None);
+}
+
+#[test]
 fn ssed_fulltext_searches_native_title_labels_before_body_rows() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
@@ -639,6 +691,107 @@ fn write_ssed_fulltext_fixture(root: &Path) -> SsedCatalog {
         300,
         0,
     );
+    fs::write(
+        root.join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+    )
+    .unwrap();
+
+    SsedCatalog {
+        title: "Synthetic fulltext".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x71,
+                start_block: 200,
+                end_block: 200,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    }
+}
+
+fn write_ssed_fulltext_multi_body_fixture(root: &Path) -> SsedCatalog {
+    let mut body = Vec::new();
+    let mut body_offsets = Vec::new();
+    for text in [
+        "first shared row needle body",
+        "second shared row needle body",
+        "third shared row needle body",
+    ] {
+        body_offsets.push(u16::try_from(body.len()).unwrap());
+        body.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01, 0x1f, 0x41]);
+        body.extend_from_slice(&body_jis(text));
+        body.extend_from_slice(&[0x1f, 0x61, 0x1f, 0x0a]);
+    }
+    fs::write(
+        root.join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&body], 100, 100),
+    )
+    .unwrap();
+
+    let mut titles = Vec::new();
+    let mut title_offsets = Vec::new();
+    for title in ["row one", "row two", "row three"] {
+        title_offsets.push(u16::try_from(titles.len()).unwrap());
+        titles.extend_from_slice(&cp932(title));
+        titles.extend_from_slice(&[0x1f, 0x0a]);
+    }
+    fs::write(
+        root.join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[&titles], 300, 300),
+    )
+    .unwrap();
+
+    let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    index_page[2..4].copy_from_slice(&3u16.to_be_bytes());
+    let mut pos = 4usize;
+    for ((key, body_offset), title_offset) in ["row one", "row two", "row three"]
+        .into_iter()
+        .zip(body_offsets)
+        .zip(title_offsets)
+    {
+        write_simple_index_row(
+            &mut index_page,
+            &mut pos,
+            &body_jis(key),
+            100,
+            body_offset,
+            300,
+            title_offset,
+        );
+    }
     fs::write(
         root.join("FHINDEX.DIC"),
         fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
