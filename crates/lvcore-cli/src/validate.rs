@@ -24,6 +24,7 @@ const VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT: usize = 8;
 const VALIDATE_SURFACE_TARGET_PAGE_LIMIT: usize = 16;
 const VALIDATE_SURFACE_PROBE_PAGE_LIMIT: usize = 16;
 const VALIDATE_EMPTY_SEARCH_CURSOR_FOLLOW_LIMIT: usize = 4;
+const VALIDATE_SEARCH_CURSOR_PROBE_LIMIT: usize = 1;
 const VALIDATE_SEARCH_PROBE_LABEL_LIMIT: usize = 12;
 
 #[derive(Debug, Clone, Copy)]
@@ -746,6 +747,34 @@ fn search_mode_exercise(
                     object.insert("window".to_owned(), window_probe);
                 }
             }
+            if let Some(cursor) = page.next_cursor.as_deref() {
+                let cursor_probe = if should_probe_search_cursor(&mode, cursor) {
+                    search_cursor_probe(
+                        library,
+                        book_id,
+                        &mode,
+                        &query,
+                        cursor,
+                        VALIDATE_SEARCH_CURSOR_PROBE_LIMIT,
+                    )
+                } else {
+                    json!({
+                        "status": "not_probed",
+                        "cursor": cursor,
+                        "reason": "body full-text continuation cursors may rescan large SSED body windows",
+                    })
+                };
+                if let Some(object) = row.as_object_mut() {
+                    if cursor_probe
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|status| status.ends_with("_error"))
+                    {
+                        object.insert("status".to_owned(), json!("search_cursor_error"));
+                    }
+                    object.insert("cursor_probe".to_owned(), cursor_probe);
+                }
+            }
             row
         }
         Err(error) => json!({
@@ -753,6 +782,49 @@ fn search_mode_exercise(
             "status": "search_error",
             "mode": mode,
             "query": query,
+            "error": error.to_string(),
+        }),
+    };
+    insert_elapsed_ms(&mut row, started);
+    row
+}
+
+fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
+    !(matches!(mode, SearchMode::FullText) && cursor.starts_with("body:"))
+}
+
+fn search_cursor_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    mode: &SearchMode,
+    query: &str,
+    cursor: &str,
+    limit: usize,
+) -> serde_json::Value {
+    let started = Instant::now();
+    let mut row = match library.search(&SearchQuery {
+        scope: SearchScope::CurrentBook {
+            book_id: book_id.clone(),
+        },
+        mode: mode.clone(),
+        query: query.to_owned(),
+        cursor: Some(cursor.to_owned()),
+        limit,
+        gaiji_policy: None,
+    }) {
+        Ok(page) => {
+            let mut row = json!({
+                "status": "ok",
+                "cursor": cursor,
+                "hit_count": page.hits.len(),
+                "remaining_cursor": page.next_cursor,
+            });
+            insert_diagnostic_fields(&mut row, &page.diagnostics);
+            row
+        }
+        Err(error) => json!({
+            "status": "search_error",
+            "cursor": cursor,
             "error": error.to_string(),
         }),
     };
@@ -2304,6 +2376,43 @@ mod tests {
         assert_eq!(lved_list["status"], "ok");
         assert_eq!(lved_list["pages_scanned"], 1);
         assert_eq!(lved_list["remaining_cursor"], "16");
+    }
+
+    #[test]
+    fn validate_deep_search_probe_checks_remaining_cursor() {
+        let dir = tempdir().unwrap();
+        write_many_row_lved_fixture(dir.path(), 20);
+
+        let row = validate_package_json(
+            &DriverRegistry::default(),
+            dir.path(),
+            ValidateOptions { deep: true },
+        );
+        let search_forward = row["exercises"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|exercise| exercise["kind"] == "search_forward")
+            .expect("expected forward search validation row");
+
+        assert_eq!(search_forward["status"], "ok");
+        assert_eq!(search_forward["remaining_cursor"], "3");
+        assert_eq!(search_forward["cursor_probe"]["status"], "ok");
+        assert_eq!(search_forward["cursor_probe"]["cursor"], "3");
+        assert_eq!(search_forward["cursor_probe"]["hit_count"], 1);
+    }
+
+    #[test]
+    fn validate_search_cursor_probe_skips_expensive_fulltext_body_cursors() {
+        assert!(!should_probe_search_cursor(&SearchMode::FullText, "body:0"));
+        assert!(should_probe_search_cursor(
+            &SearchMode::FullText,
+            "title:ssed-partial-index:2:126"
+        ));
+        assert!(should_probe_search_cursor(
+            &SearchMode::Partial,
+            "ssed-partial-nonprefix-index:0:0"
+        ));
     }
 
     #[test]
