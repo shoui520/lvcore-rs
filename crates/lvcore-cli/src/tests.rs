@@ -474,7 +474,7 @@ fn validate_targetless_visible_diagnostic_surface_is_ok_without_fake_target() {
                 href: None,
                 child_cursor: None,
                 diagnostics: vec![lvcore::Diagnostic::info(
-                    "ssed_auxiliary_index_body_target_deferred",
+                    "ssed_auxiliary_index_body_target_non_renderable",
                     "auxiliary row is not a renderable entry body",
                 )],
                 children: Vec::new(),
@@ -490,7 +490,7 @@ fn validate_targetless_visible_diagnostic_surface_is_ok_without_fake_target() {
     assert_eq!(probe.diagnostic_count, 1);
     assert_eq!(
         probe.diagnostics[0].code,
-        "ssed_auxiliary_index_body_target_deferred"
+        "ssed_auxiliary_index_body_target_non_renderable"
     );
 }
 

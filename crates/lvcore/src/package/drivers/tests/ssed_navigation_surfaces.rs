@@ -1463,7 +1463,7 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
 }
 
 #[test]
-fn ssed_auxiliary_index_defers_honmon_targets_inside_entry_marker_controls() {
+fn ssed_auxiliary_index_reports_non_renderable_honmon_targets_inside_entry_marker_controls() {
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("EXINFO.INI"),
@@ -1531,18 +1531,12 @@ fn ssed_auxiliary_index_defers_honmon_targets_inside_entry_marker_controls() {
     let payload_child = &nodes[0].children[1];
     assert!(marker_child.target.is_none());
     assert!(payload_child.target.is_none());
-    assert!(
-        marker_child
-            .diagnostics
-            .iter()
-            .any(|diagnostic| { diagnostic.code == "ssed_auxiliary_index_body_target_deferred" })
-    );
-    assert!(
-        payload_child
-            .diagnostics
-            .iter()
-            .any(|diagnostic| { diagnostic.code == "ssed_auxiliary_index_body_target_deferred" })
-    );
+    assert!(marker_child.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_auxiliary_index_body_target_non_renderable"
+    }));
+    assert!(payload_child.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_auxiliary_index_body_target_non_renderable"
+    }));
 }
 
 #[test]

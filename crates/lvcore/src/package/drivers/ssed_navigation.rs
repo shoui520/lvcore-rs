@@ -587,8 +587,12 @@ fn ssed_aux_index_row_target(
     if let Some(catalog) = &package.ssed_catalog
         && let Some(component) = catalog.component_for_address(row.block)
         && component.role == SsedComponentRole::Honmon
-        && let Some(diagnostic) =
-            ssed_aux_honmon_target_deferred_diagnostic(package, component, row, next_target_row)?
+        && let Some(diagnostic) = ssed_aux_honmon_target_non_renderable_diagnostic(
+            package,
+            component,
+            row,
+            next_target_row,
+        )?
     {
         diagnostics.push(diagnostic);
         return Ok(None);
@@ -602,7 +606,7 @@ fn ssed_aux_index_row_target(
     }
 }
 
-fn ssed_aux_honmon_target_deferred_diagnostic(
+fn ssed_aux_honmon_target_non_renderable_diagnostic(
     package: &ReaderBookPackage,
     component: &SsedComponent,
     row: &SsedAuxIndexRow,
@@ -620,7 +624,7 @@ fn ssed_aux_honmon_target_deferred_diagnostic(
     let Ok(component_offset_usize) = usize::try_from(component_offset) else {
         return Ok(Some(
             Diagnostic::info(
-                "ssed_auxiliary_index_body_target_deferred",
+                "ssed_auxiliary_index_body_target_non_renderable",
                 format!(
                     "auxiliary index row {} points to a HONMON offset too large to validate",
                     row.line_number
@@ -647,7 +651,7 @@ fn ssed_aux_honmon_target_deferred_diagnostic(
             if range_len < MIN_AUX_HONMON_RANGE_BYTES {
                 return Ok(Some(
                     Diagnostic::info(
-                        "ssed_auxiliary_index_body_target_deferred",
+                        "ssed_auxiliary_index_body_target_non_renderable",
                         format!(
                             "auxiliary index row {} points into a {range_len} byte HONMON range, which is not a renderable entry body",
                             row.line_number
@@ -664,7 +668,7 @@ fn ssed_aux_honmon_target_deferred_diagnostic(
     if ssed_aux_honmon_offset_is_inside_entry_marker(&mut reader, component_offset_usize)? {
         return Ok(Some(
             Diagnostic::info(
-                "ssed_auxiliary_index_body_target_deferred",
+                "ssed_auxiliary_index_body_target_non_renderable",
                 format!(
                     "auxiliary index row {} points inside an SSED entry marker/control header",
                     row.line_number
