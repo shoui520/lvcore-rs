@@ -89,6 +89,13 @@ pub fn normalize_gaiji_identity(identity: &str) -> Option<String> {
     Some(trimmed.to_ascii_uppercase())
 }
 
+pub fn logovista_gaiji_placeholder(identity: &str) -> Option<String> {
+    let code = normalize_gaiji_identity(identity)?;
+    let high = u8::from_str_radix(&code[..2], 16).ok()?;
+    let prefix = if high < 0xb0 { 'h' } else { 'z' };
+    Some(format!("<{prefix}{code}>"))
+}
+
 pub fn resolve_rich_label(
     provider: &(impl GaijiProvider + ?Sized),
     value: &str,
@@ -517,6 +524,19 @@ mod tests {
     fn normalizes_halfwidth_gaiji_markers_from_logovista_tools() {
         assert_eq!(normalize_gaiji_identity("<hA13e>").as_deref(), Some("A13E"));
         assert_eq!(normalize_gaiji_identity("HA13e").as_deref(), Some("A13E"));
+    }
+
+    #[test]
+    fn logovista_gaiji_placeholders_use_source_marker_family() {
+        assert_eq!(
+            logovista_gaiji_placeholder("A13e").as_deref(),
+            Some("<hA13E>")
+        );
+        assert_eq!(
+            logovista_gaiji_placeholder("<zB123>").as_deref(),
+            Some("<zB123>")
+        );
+        assert_eq!(logovista_gaiji_placeholder("not-gaiji"), None);
     }
 
     #[test]

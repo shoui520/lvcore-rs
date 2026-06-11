@@ -293,10 +293,11 @@ provider slices:
   return a bounded common-HC HTML fallback instead of an empty deferred view.
   The fallback handles shared controls such as line breaks, common style spans,
   private spans, address links, URL spans, media placeholders, gaiji Unicode
-  placeholders, and balanced tag closure. The output keeps `HcRenderInput`
-  capability metadata and emits an explicit `hc_render_common_html_fallback`
-  diagnostic, so reader apps get something displayable without mistaking it for
-  product HC visual parity;
+  mappings/resources with LogoVista `<hXXXX>`/`<zXXXX>` placeholders when text
+  remains unresolved, and balanced tag closure. The output keeps
+  `HcRenderInput` capability metadata and emits an explicit
+  `hc_render_common_html_fallback` diagnostic, so reader apps get something
+  displayable without mistaking it for product HC visual parity;
 - SSED KOJIEN6-style `COLSMPL.DIC` records are parsed as typed color-sample
   metadata preserving exact Munsell notation and JIS labels, plus an explicitly
   estimated RGB swatch value for reader display when the Munsell notation parses;

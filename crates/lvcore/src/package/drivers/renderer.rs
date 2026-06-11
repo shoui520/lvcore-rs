@@ -187,7 +187,7 @@ impl ReaderBookPackage {
                             let text = resolution
                                 .unicode
                                 .clone()
-                                .unwrap_or_else(|| "〓".to_owned());
+                                .unwrap_or_else(|| hc_gaiji_fallback_text(code, &resolution));
                             diagnostics.extend(resolution.diagnostics);
                             Some(HcBasicTextGaiji { text, resolved })
                         },
@@ -275,7 +275,7 @@ impl ReaderBookPackage {
                             let text = resolution
                                 .unicode
                                 .clone()
-                                .unwrap_or_else(|| "〓".to_owned());
+                                .unwrap_or_else(|| hc_gaiji_fallback_text(code, &resolution));
                             let html = gaiji_resource_html(&resolution, &text);
                             let resolved = resolution.unicode.is_some() || html.is_some();
                             if html.is_some()
@@ -670,6 +670,15 @@ fn gaiji_resource_html(
         escape_html_attr_minimal(fallback_text),
         escape_html_attr_minimal(&resolution.identity)
     ))
+}
+
+fn hc_gaiji_fallback_text(code: &str, resolution: &crate::gaiji::GaijiResolution) -> String {
+    let fallback_identity = if resolution.resource.is_some() {
+        resolution.identity.as_str()
+    } else {
+        code
+    };
+    logovista_gaiji_placeholder(fallback_identity).unwrap_or_else(|| "〓".to_owned())
 }
 
 fn escape_html_attr_minimal(value: &str) -> String {

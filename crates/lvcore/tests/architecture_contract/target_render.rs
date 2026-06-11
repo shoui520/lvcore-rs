@@ -220,7 +220,7 @@ fn basic_text_mode_decodes_hc_ssed_stream_instead_of_returning_empty_deferred_vi
 
     assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
     assert_eq!(view.display_html, None);
-    assert_eq!(view.basic_text.as_deref(), Some("見出し\nABC一〓本文"));
+    assert_eq!(view.basic_text.as_deref(), Some("見出し\nABC一<zB999>本文"));
     assert!(
         view.capabilities
             .contains(&lvcore::RenderCapability::HcRenderInput)
@@ -372,7 +372,7 @@ fn hc00a3_profile_aliases_b261_to_available_b167_ga16_glyph() {
         .unwrap();
 
     assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
-    assert_eq!(view.basic_text.as_deref(), Some("前〓後"));
+    assert_eq!(view.basic_text.as_deref(), Some("前<zB167>後"));
     assert!(
         view.display_html
             .as_deref()
@@ -418,7 +418,7 @@ fn native_hc_common_html_fallback_embeds_resource_backed_template_gaiji() {
         .unwrap();
 
     assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
-    assert_eq!(view.basic_text.as_deref(), Some("前〓後"));
+    assert_eq!(view.basic_text.as_deref(), Some("前<zB123>後"));
     assert_eq!(view.resources.len(), 1);
     assert_eq!(view.resources[0].kind, ResourceKind::Template);
     assert!(view.display_html.as_deref().is_some_and(|html| {

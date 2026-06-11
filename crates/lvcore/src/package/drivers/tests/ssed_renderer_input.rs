@@ -140,6 +140,79 @@ fn ssed_hc_renderer_input_carries_stream_resource_refs() {
 }
 
 #[test]
+fn ssed_basic_text_uses_logovista_gaiji_placeholders_for_unresolved_stream_pairs() {
+    let dir = tempdir().unwrap();
+    let mut honmon = Vec::new();
+    honmon.extend_from_slice(&SSED_ENTRY_MARKER);
+    honmon.extend_from_slice(&body_jis("前"));
+    honmon.extend_from_slice(&[0xa1, 0x40, 0xb1, 0x23]);
+    honmon.extend_from_slice(&body_jis("後"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+    )
+    .unwrap();
+    let catalog = SsedCatalog {
+        title: "Renderer gaiji placeholders".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 100,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Renderer gaiji placeholders".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 0,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(
+            &token,
+            &RenderOptions {
+                mode: RenderMode::BasicText,
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(view.basic_text.as_deref(), Some("前<hA140><zB123>後"));
+    assert!(
+        view.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "hc_basic_text_gaiji_placeholders")
+    );
+}
+
+#[test]
 fn ssed_hc03e9_pdfspread_resource_is_exposed_from_page_anchor() {
     let dir = tempdir().unwrap();
     let page_anchor = [

@@ -137,7 +137,7 @@ use crate::diagnostics::{Diagnostic, DiagnosticSeverity};
 use crate::error::{Error, Result};
 use crate::gaiji::{
     GaijiPolicy, GaijiProvider, GaijiResolution, GaijiSourcePreference, RichLabel,
-    normalize_gaiji_identity, resolve_rich_label,
+    logovista_gaiji_placeholder, normalize_gaiji_identity, resolve_rich_label,
 };
 use crate::hourei::{HoureiStore, escape_plain_label_html as escape_hourei_label_html};
 use crate::image::encode_png_rgba;
