@@ -283,6 +283,7 @@ pub fn decode_hc_stream_common_html_with_gaiji_render_policy_and_color_samples(
     let mut style_stack: Vec<HcHtmlStyle> = Vec::new();
     let mut inline_stack: Vec<HcHtmlInline> = Vec::new();
     let mut halfwidth_depth = 0usize;
+    let mut private_depth = 0usize;
     let mut offset = 0usize;
 
     while offset < data.len() {
@@ -306,6 +307,26 @@ pub fn decode_hc_stream_common_html_with_gaiji_render_policy_and_color_samples(
                 break;
             }
             let payload = &data[offset + 2..next];
+
+            if op == 0xe2 {
+                stats.private_controls += 1;
+                private_depth = private_depth.saturating_add(1);
+                offset = next;
+                continue;
+            }
+
+            if op == 0xe3 {
+                stats.private_controls += 1;
+                private_depth = private_depth.saturating_sub(1);
+                offset = next;
+                continue;
+            }
+
+            if private_depth > 0 {
+                stats.private_controls += 1;
+                offset = next;
+                continue;
+            }
 
             if op == 0x0a {
                 push_html_line_break(&mut html, &mut text);
@@ -467,6 +488,11 @@ pub fn decode_hc_stream_common_html_with_gaiji_render_policy_and_color_samples(
             continue;
         }
 
+        if private_depth > 0 {
+            offset = skip_private_hc_payload(data, offset, &mut stats);
+            continue;
+        }
+
         if let Some(reference) = parse_sounddata_marker_at(data, offset) {
             stats.media_controls += 1;
             let media_index = media.len();
@@ -621,6 +647,7 @@ pub fn decode_hc_stream_basic_text_with_gaiji_policy(
     let mut stats = HcTextStats::default();
     let mut unknown_ops = BTreeSet::new();
     let mut halfwidth_depth = 0usize;
+    let mut private_depth = 0usize;
     let mut offset = 0usize;
 
     while offset < data.len() {
@@ -642,6 +669,26 @@ pub fn decode_hc_stream_basic_text_with_gaiji_policy(
             if next > data.len() {
                 stats.truncated_controls += 1;
                 break;
+            }
+
+            if op == 0xe2 {
+                stats.private_controls += 1;
+                private_depth = private_depth.saturating_add(1);
+                offset = next;
+                continue;
+            }
+
+            if op == 0xe3 {
+                stats.private_controls += 1;
+                private_depth = private_depth.saturating_sub(1);
+                offset = next;
+                continue;
+            }
+
+            if private_depth > 0 {
+                stats.private_controls += 1;
+                offset = next;
+                continue;
             }
 
             if op == 0x0a {
@@ -710,6 +757,11 @@ pub fn decode_hc_stream_basic_text_with_gaiji_policy(
             stats.unknown_controls += 1;
             unknown_ops.insert(op);
             offset = next;
+            continue;
+        }
+
+        if private_depth > 0 {
+            offset = skip_private_hc_payload(data, offset, &mut stats);
             continue;
         }
 
@@ -796,6 +848,39 @@ pub fn decode_hc_stream_basic_text_with_gaiji_policy(
         stats,
         diagnostics,
     }
+}
+
+fn skip_private_hc_payload(data: &[u8], offset: usize, stats: &mut HcTextStats) -> usize {
+    let byte = data[offset];
+    if let Some(reference) = parse_sounddata_marker_at(data, offset) {
+        stats.media_controls += 1;
+        return reference.end;
+    }
+    if byte < 0x20 {
+        if byte == b'\n' {
+            stats.line_breaks += 1;
+        }
+        return offset + 1;
+    }
+    if offset + 1 < data.len()
+        && (0x21..=0x7e).contains(&byte)
+        && (0x21..=0x7e).contains(&data[offset + 1])
+    {
+        stats.jis_pairs += 1;
+        return offset + 2;
+    }
+    if offset + 1 < data.len() && ((0x81..=0x9f).contains(&byte) || (0xe0..=0xfc).contains(&byte)) {
+        stats.cp932_pairs += 1;
+        return offset + 2;
+    }
+    if offset + 1 < data.len() && (0xa1..=0xfe).contains(&byte) {
+        stats.suppressed_gaiji_pairs += 1;
+        return offset + 2;
+    }
+    if byte <= 0x7e {
+        stats.ascii_bytes += 1;
+    }
+    offset + 1
 }
 
 fn hc_text_diagnostics(stats: &HcTextStats, unknown_ops: &BTreeSet<u8>) -> Vec<Diagnostic> {
@@ -1464,6 +1549,24 @@ mod tests {
     }
 
     #[test]
+    fn basic_text_suppresses_private_spans_like_logovista_tools() {
+        let mut data = body_jis("前");
+        data.extend_from_slice(&[0x1f, 0xe2, 0x00, 0x00]);
+        data.extend_from_slice(&body_jis("隠"));
+        data.extend_from_slice(&[0xb1, 0x23]);
+        data.extend_from_slice(&[0x1f, 0xe3]);
+        data.extend_from_slice(&body_jis("後"));
+
+        let rendered = decode_hc_stream_basic_text_with_gaiji(&data, |_code| {
+            panic!("private gaiji should not be resolved into visible text")
+        });
+
+        assert_eq!(rendered.text, "前後");
+        assert_eq!(rendered.stats.private_controls, 2);
+        assert_eq!(rendered.stats.suppressed_gaiji_pairs, 1);
+    }
+
+    #[test]
     fn marker_profiles_capture_known_renderer_gaiji_controls_and_aliases() {
         let hc013c = hc_marker_profile_for_renderer(Some("HC013C.dll"));
         assert!(hc013c.suppresses_gaiji_code("B121"));
@@ -1526,6 +1629,32 @@ mod tests {
             )
         );
         assert!(rendered.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn common_html_suppresses_private_spans_like_logovista_tools() {
+        let mut data = body_jis("前");
+        data.extend_from_slice(&[0x1f, 0xe2, 0x00, 0x00]);
+        data.extend_from_slice(&[
+            0x1f, 0x44, 0xaa, 0xbb, 0xcc, 0xdd, 0x00, 0x00, 0x00, 0x03, 0x12, 0x34,
+        ]);
+        data.extend_from_slice(&body_jis("隠"));
+        data.extend_from_slice(&sounddata_marker("00007F93"));
+        data.extend_from_slice(&[0x1f, 0x64, 0, 0, 0, 0, 0, 0]);
+        data.extend_from_slice(&[0x1f, 0xe3]);
+        data.extend_from_slice(&body_jis("後"));
+
+        let rendered = decode_hc_stream_common_html(&data);
+
+        assert_eq!(rendered.text, "前後");
+        assert_eq!(
+            rendered.html,
+            "<div class=\"lv-hc-common-html-fallback\">前後</div>"
+        );
+        assert!(rendered.links.is_empty());
+        assert!(rendered.media.is_empty());
+        assert_eq!(rendered.stats.private_controls, 4);
+        assert_eq!(rendered.stats.media_controls, 1);
     }
 
     #[test]
