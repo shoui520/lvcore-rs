@@ -195,11 +195,14 @@ provider slices:
   stale wrapper addresses do not leak to user-facing targets;
 - iOS SSED plist navigation sidecars are exposed as first-class reader
   surfaces: panel-style plist indexes such as `indexSearch.plist`, preserved
-  `HTMLList.plist` info pages, and `tableList.plist` title/index rows. Preserved
-  HTML pages rewrite `lved.addrXXXXXXXX:YYYY` links to normal target tokens,
-  resolve package resources from observed iOS locations such as `OTHER/_images`,
-  and fall back through iOS `Gaiji.plist` Unicode mappings when an HTML page
-  references a gaiji PNG that is not present on disk;
+  `HTMLList.plist` info pages, and `tableList.plist` title/index rows when the
+  row address namespace resolves through retained SSED/sidecar targets.
+  Unresolved `tableList.plist` namespaces remain diagnostic-only surfaces rather
+  than guessed routes. Preserved HTML pages rewrite `lved.addrXXXXXXXX:YYYY`
+  links to normal target tokens, resolve package resources from observed iOS
+  locations such as `OTHER/_images`, and fall back through iOS `Gaiji.plist`
+  Unicode mappings when an HTML page references a gaiji PNG that is not present
+  on disk;
 - frontend-visible search-mode metadata, with SSED modes derived from available
   title indexes/HONMON payloads and LVED advanced modes derived from actual
   `search` table columns;
