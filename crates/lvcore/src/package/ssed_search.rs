@@ -175,9 +175,10 @@ pub(super) fn ssed_index_page_prefilter_candidates(query: &str) -> Vec<Vec<u8>> 
 
 pub(super) fn ssed_body_window_may_contain_query(data: &[u8], candidates: &[Vec<u8>]) -> bool {
     candidates.is_empty()
-        || candidates
-            .iter()
-            .any(|candidate| contains_subslice(data, candidate))
+        || candidates.iter().any(|candidate| {
+            contains_subslice(data, candidate)
+                || contains_jis_pair_sequence_with_title_separators(data, candidate)
+        })
 }
 
 pub(super) fn ssed_fulltext_snippet_html(body_text: &str, query: &str) -> Option<String> {
@@ -327,6 +328,40 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty()
         && needle.len() <= haystack.len()
         && memchr::memmem::find(haystack, needle).is_some()
+}
+
+fn contains_jis_pair_sequence_with_title_separators(haystack: &[u8], needle: &[u8]) -> bool {
+    if !is_jis_pair_sequence(needle) {
+        return false;
+    }
+    for start in 0..haystack.len() {
+        let mut offset = start;
+        let mut matched_pairs = 0usize;
+        for pair in needle.chunks_exact(2) {
+            if matched_pairs > 0 {
+                while is_ssed_title_separator(haystack, offset) {
+                    offset += 2;
+                }
+            }
+            if haystack.get(offset..offset.saturating_add(2)) != Some(pair) {
+                break;
+            }
+            offset += 2;
+            matched_pairs += 1;
+        }
+        if matched_pairs * 2 == needle.len() {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_jis_pair_sequence(value: &[u8]) -> bool {
+    value.len() >= 4
+        && value.len().is_multiple_of(2)
+        && value
+            .chunks_exact(2)
+            .all(|pair| (0x21..=0x7e).contains(&pair[0]) && (0x21..=0x7e).contains(&pair[1]))
 }
 
 pub(super) fn ssed_index_row_order_key(row: &SsedIndexRow) -> Vec<u8> {
@@ -689,6 +724,26 @@ mod tests {
         ));
         assert!(!ssed_body_window_may_contain_query(
             &body_jis("これは別の語です"),
+            &candidates
+        ));
+    }
+
+    #[test]
+    fn body_byte_prefilter_allows_title_separator_between_jis_pairs() {
+        let candidates = ssed_body_search_byte_candidates("前後");
+        let mut separated = body_jis("前");
+        separated.extend_from_slice(&[0x11, 0x03]);
+        separated.extend_from_slice(&body_jis("後"));
+
+        assert!(ssed_body_window_may_contain_query(&separated, &candidates));
+
+        let contiguous = body_jis("前後");
+        let mut split_inside_pair = vec![contiguous[0]];
+        split_inside_pair.extend_from_slice(&[0x11, 0x03]);
+        split_inside_pair.extend_from_slice(&contiguous[1..]);
+
+        assert!(!ssed_body_window_may_contain_query(
+            &split_inside_pair,
             &candidates
         ));
     }
