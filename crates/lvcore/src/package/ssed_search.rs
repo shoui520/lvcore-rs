@@ -240,13 +240,28 @@ pub(super) fn ssed_index_search_key_candidates(needle: &str) -> Vec<Vec<u8>> {
     let mut values = vec![needle.to_owned()];
     push_unique_search_value(&mut values, katakana_to_hiragana_text(needle));
     push_unique_search_value(&mut values, hiragana_to_katakana_text(needle));
+    for value in values.clone() {
+        push_unique_search_value(&mut values, small_kana_index_seek_text(&value));
+    }
     for value in values {
         push_unique_search_key(&mut candidates, encode_ssed_index_search_key(&value));
+        push_unique_search_key(
+            &mut candidates,
+            encode_ssed_jis_symbol_index_search_key(&value),
+        );
         if value.is_ascii() {
             let upper = value.to_ascii_uppercase();
             let lower = value.to_ascii_lowercase();
             push_unique_search_key(&mut candidates, encode_ssed_index_search_key(&upper));
+            push_unique_search_key(
+                &mut candidates,
+                encode_ssed_jis_symbol_index_search_key(&upper),
+            );
             push_unique_search_key(&mut candidates, encode_ssed_index_search_key(&lower));
+            push_unique_search_key(
+                &mut candidates,
+                encode_ssed_jis_symbol_index_search_key(&lower),
+            );
             push_unique_search_key(&mut candidates, value.as_bytes().to_vec());
             push_unique_search_key(&mut candidates, upper.into_bytes());
             push_unique_search_key(&mut candidates, lower.into_bytes());
@@ -286,6 +301,47 @@ pub(super) fn encode_ssed_index_search_key(value: &str) -> Vec<u8> {
     for ch in value.chars() {
         let ch = match ch {
             ' ' => '\u{3000}',
+            ch if (0x21..=0x7e).contains(&(ch as u32)) => {
+                char::from_u32(ch as u32 + 0xfee0).unwrap_or(ch)
+            }
+            ch => ch,
+        };
+        let mut text = [0_u8; 4];
+        let text = ch.encode_utf8(&mut text);
+        let (encoded, _encoding, had_errors) = SHIFT_JIS.encode(text);
+        if had_errors {
+            continue;
+        }
+        match encoded.as_ref() {
+            [single] => out.push(*single),
+            [lead, trail] => {
+                if let Some((first, second)) = shift_jis_pair_to_jis_key_pair(*lead, *trail) {
+                    out.push(first);
+                    out.push(second);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn encode_ssed_jis_symbol_index_search_key(value: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for ch in value.chars() {
+        let ch = match ch {
+            ' ' => '\u{3000}',
+            '-' => '−',
+            '~' => '￣',
+            '/' => '／',
+            '+' => '＋',
+            '&' => '＆',
+            '.' => '．',
+            ',' => '，',
+            ':' => '：',
+            ';' => '；',
+            '(' => '（',
+            ')' => '）',
             ch if (0x21..=0x7e).contains(&(ch as u32)) => {
                 char::from_u32(ch as u32 + 0xfee0).unwrap_or(ch)
             }
@@ -445,6 +501,35 @@ fn hiragana_to_katakana_text(value: &str) -> String {
         .collect()
 }
 
+fn small_kana_index_seek_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            'ぁ' => 'あ',
+            'ぃ' => 'い',
+            'ぅ' => 'う',
+            'ぇ' => 'え',
+            'ぉ' => 'お',
+            'っ' => 'つ',
+            'ゃ' => 'や',
+            'ゅ' => 'ゆ',
+            'ょ' => 'よ',
+            'ゎ' => 'わ',
+            'ァ' => 'ア',
+            'ィ' => 'イ',
+            'ゥ' => 'ウ',
+            'ェ' => 'エ',
+            'ォ' => 'オ',
+            'ッ' => 'ツ',
+            'ャ' => 'ヤ',
+            'ュ' => 'ユ',
+            'ョ' => 'ヨ',
+            'ヮ' => 'ワ',
+            _ => ch,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +577,15 @@ mod tests {
         let candidates = ssed_index_search_key_candidates("あか");
         assert!(candidates.contains(&encode_ssed_index_search_key("あか")));
         assert!(candidates.contains(&encode_ssed_index_search_key("アカ")));
+    }
+
+    #[test]
+    fn index_search_key_candidates_include_small_kana_seek_forms() {
+        let candidates = ssed_index_search_key_candidates("ぁゃ");
+        assert!(candidates.contains(&encode_ssed_index_search_key("ぁゃ")));
+        assert!(candidates.contains(&encode_ssed_index_search_key("あや")));
+        assert!(candidates.contains(&encode_ssed_index_search_key("ァャ")));
+        assert!(candidates.contains(&encode_ssed_index_search_key("アヤ")));
     }
 
     #[test]
@@ -559,6 +653,33 @@ mod tests {
         );
         assert!(candidates.iter().any(|candidate| candidate == b".N"));
         assert!(!candidates.is_empty());
+    }
+
+    #[test]
+    fn index_search_key_candidates_include_jis_symbol_seek_forms() {
+        let hyphen_candidates = ssed_index_search_key_candidates("-a");
+        assert!(
+            hyphen_candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("－ａ"))
+        );
+        assert!(
+            hyphen_candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("−ａ"))
+        );
+
+        let tilde_candidates = ssed_index_search_key_candidates("~a");
+        assert!(
+            tilde_candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("～ａ"))
+        );
+        assert!(
+            tilde_candidates
+                .iter()
+                .any(|candidate| candidate == &body_jis("￣ａ"))
+        );
     }
 
     #[test]

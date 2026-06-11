@@ -170,6 +170,9 @@ provider slices:
 - SSED internal-page traversal for native exact/forward/backward indexed
   searches, so large title indexes can seek near the requested key instead of
   always scanning from the first leaf page;
+- SSED index seek/prefilter candidates cover observed small-kana fallback forms
+  and LogoVista JIS symbol variants used by `logovista-tools` for title-key
+  tree positioning;
 - SSED title-label decoding for raw JIS X 0208 title bytes that can otherwise
   look like printable ASCII, while preserving real Latin title labels;
 - initial SSED full-text search over HONMON body windows behind native index
