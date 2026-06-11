@@ -714,7 +714,6 @@ fn should_skip_search_mode_probe(
         return false;
     }
     match mode {
-        SearchMode::Partial => true,
         SearchMode::FullText => !metadata.capabilities.contains(&Capability::PreservedHtml),
         _ => false,
     }
@@ -725,7 +724,7 @@ fn skipped_search_mode_exercise(mode: SearchMode) -> serde_json::Value {
         "kind": format!("search_{}", search_mode_key(&mode)),
         "status": "skipped_expensive",
         "mode": mode,
-        "reason": "ssed_linear_index_or_raw_honmon_search_requires_explicit_include_expensive_search",
+        "reason": "ssed_raw_honmon_fulltext_requires_explicit_include_expensive_search",
     })
 }
 
@@ -2506,7 +2505,7 @@ mod tests {
             diagnostics: Vec::new(),
         };
 
-        assert!(should_skip_search_mode_probe(
+        assert!(!should_skip_search_mode_probe(
             &metadata,
             &SearchMode::Partial,
             false

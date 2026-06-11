@@ -861,7 +861,7 @@ fn validate_deep_exercises_ssed_advertised_search_modes() {
         .iter()
         .find(|exercise| exercise["kind"] == "search_partial")
         .expect("missing partial validation row");
-    assert_eq!(partial["status"], "skipped_expensive");
+    assert_eq!(partial["status"], "ok");
     let fulltext = exercises
         .iter()
         .find(|exercise| exercise["kind"] == "search_full_text")
