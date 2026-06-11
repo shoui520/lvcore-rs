@@ -18,6 +18,7 @@ use super::metadata_for;
 use super::open_single_book_library;
 
 const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 8;
+const VALIDATE_LINK_TARGET_SCAN_LIMIT: usize = 8;
 const VALIDATE_GENERIC_HTML_NATIVE_HTML_LIMIT: usize = 128 * 1024;
 const VALIDATE_GENERIC_HTML_RESOURCE_LIMIT: usize = 64;
 const VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT: usize = 8;
@@ -38,6 +39,7 @@ struct SurfaceRenderedProbeContext<'a> {
     opened_kind: &'a str,
     label: String,
     resource_scan: serde_json::Value,
+    link_scan_limit: usize,
 }
 
 #[cfg(test)]
@@ -170,6 +172,7 @@ fn exercise_reader_paths(
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
     let resource_scan_limit = resource_scan_limit_for(format_family);
+    let link_scan_limit = link_scan_limit_for(format_family);
     let mut probed_surface_kinds = BTreeSet::new();
     for surface in surfaces {
         if !should_probe_home_surface(&mut probed_surface_kinds, surface) {
@@ -222,6 +225,7 @@ fn exercise_reader_paths(
                                             opened_kind: navigation_surface_kind_name(&opened),
                                             label: target.label_text.clone(),
                                             resource_scan,
+                                            link_scan_limit,
                                         },
                                     );
                                     insert_surface_page_probe_fields(&mut row, &probe);
@@ -303,6 +307,7 @@ fn exercise_reader_paths(
         &metadata,
         surfaces,
         resource_scan_limit,
+        link_scan_limit,
         include_expensive_search,
     ));
     rows
@@ -610,6 +615,7 @@ fn search_mode_exercises(
     metadata: &BookMetadata,
     surfaces: &[HomeSurface],
     resource_scan_limit: usize,
+    link_scan_limit: usize,
     include_expensive_search: bool,
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
@@ -627,6 +633,7 @@ fn search_mode_exercises(
             mode,
             query,
             resource_scan_limit,
+            link_scan_limit,
             render_hits,
         ));
     }
@@ -667,6 +674,7 @@ fn search_mode_exercise(
     mode: SearchMode,
     query: String,
     resource_scan_limit: usize,
+    link_scan_limit: usize,
     render_hits: bool,
 ) -> serde_json::Value {
     let kind = format!("search_{}", search_mode_key(&mode));
@@ -690,6 +698,7 @@ fn search_mode_exercise(
                     library,
                     book_id,
                     first_rendered_view.as_ref().map(|row| row.as_ref()),
+                    link_scan_limit,
                 );
                 let resource_scan = rendered_search_resource_scan(
                     library,
@@ -845,6 +854,7 @@ fn rendered_view_probe(
     library: &BookLibrary,
     book_id: &BookId,
     view: &ResolvedTargetView,
+    link_scan_limit: usize,
 ) -> serde_json::Value {
     let resource_probe = first_readable_resource_probe(library, book_id, view);
     let status = if resource_probe
@@ -857,7 +867,7 @@ fn rendered_view_probe(
     } else {
         "ok"
     };
-    json!({
+    let mut row = json!({
         "status": status,
         "view_kind": view.kind,
         "display_html_len": view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
@@ -865,7 +875,15 @@ fn rendered_view_probe(
         "first_resource": resource_probe,
         "render_modes": render_mode_contract_probe(library, book_id, view),
     })
-    .with_diagnostics(&view.diagnostics)
+    .with_diagnostics(&view.diagnostics);
+    if link_scan_limit > 0 {
+        insert_named_value(
+            &mut row,
+            "link_scan",
+            rendered_link_scan(library, book_id, view, link_scan_limit),
+        );
+    }
+    row
 }
 
 fn render_mode_contract_probe(
@@ -1086,7 +1104,7 @@ fn surface_rendered_view_probe(
     view: &ResolvedTargetView,
     context: SurfaceRenderedProbeContext<'_>,
 ) -> serde_json::Value {
-    let mut row = rendered_view_probe(library, book_id, view);
+    let mut row = rendered_view_probe(library, book_id, view, context.link_scan_limit);
     if let Some(object) = row.as_object_mut() {
         object.insert("kind".to_owned(), json!("surface_first_target"));
         object.insert("surface_id".to_owned(), json!(context.surface_id));
@@ -1115,14 +1133,111 @@ fn rendered_first_search_hit_probe(
     library: &BookLibrary,
     book_id: &BookId,
     first_rendered_view: Option<std::result::Result<&ResolvedTargetView, &String>>,
+    link_scan_limit: usize,
 ) -> Option<serde_json::Value> {
     first_rendered_view.map(|row| match row {
-        Ok(view) => rendered_view_probe(library, book_id, view),
+        Ok(view) => rendered_view_probe(library, book_id, view, link_scan_limit),
         Err(error) => json!({
             "status": "render_error",
             "error": error,
         }),
     })
+}
+
+fn rendered_link_scan(
+    library: &BookLibrary,
+    book_id: &BookId,
+    view: &ResolvedTargetView,
+    limit: usize,
+) -> serde_json::Value {
+    let started = Instant::now();
+    let mut checked_link_count = 0usize;
+    let mut ok_count = 0usize;
+    let mut unsupported_count = 0usize;
+    let mut deferred_count = 0usize;
+    let mut diagnostics = Vec::new();
+    let mut samples = Vec::new();
+
+    for (index, link) in view.links.iter().take(limit).enumerate() {
+        checked_link_count += 1;
+        diagnostics.extend(link.diagnostics.clone());
+        let target_view =
+            match library.render_target(book_id, &link.token, &RenderOptions::default()) {
+                Ok(target_view) => target_view,
+                Err(error) => {
+                    let mut row = json!({
+                        "status": "render_error",
+                        "link_count": view.links.len(),
+                        "checked_link_count": checked_link_count,
+                        "link_index": index,
+                        "label": link.label,
+                        "target_kind": link.kind,
+                        "error": error.to_string(),
+                        "elapsed_ms": started.elapsed().as_millis(),
+                    });
+                    insert_diagnostic_fields(&mut row, &diagnostics);
+                    return row;
+                }
+            };
+        diagnostics.extend(target_view.diagnostics.clone());
+        let link_status = rendered_link_target_status(&target_view);
+        match link_status {
+            "unsupported" => unsupported_count += 1,
+            "deferred" => deferred_count += 1,
+            _ => ok_count += 1,
+        }
+        if samples.len() < VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT {
+            samples.push(json!({
+                "link_index": index,
+                "status": link_status,
+                "label": link.label,
+                "target_kind": link.kind,
+                "view_kind": target_view.kind,
+                "display_html_len": target_view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
+                "resource_count": target_view.resources.len(),
+                "link_diagnostic_count": link.diagnostics.len(),
+                "target_diagnostic_count": target_view.diagnostics.len(),
+            }));
+        }
+    }
+
+    let status = if checked_link_count == 0 {
+        "no_link"
+    } else if unsupported_count > 0 {
+        "unsupported"
+    } else if deferred_count > 0 {
+        "deferred"
+    } else {
+        "ok"
+    };
+    let mut row = json!({
+        "status": status,
+        "link_count": view.links.len(),
+        "checked_link_count": checked_link_count,
+        "ok_count": ok_count,
+        "unsupported_count": unsupported_count,
+        "deferred_count": deferred_count,
+        "elapsed_ms": started.elapsed().as_millis(),
+        "samples": samples,
+    });
+    insert_diagnostic_fields(&mut row, &diagnostics);
+    row
+}
+
+fn rendered_link_target_status(view: &ResolvedTargetView) -> &'static str {
+    match view.kind {
+        ResolvedTargetKind::Unsupported
+            if view
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code.contains("_deferred")) =>
+        {
+            "deferred"
+        }
+        ResolvedTargetKind::Unsupported => "unsupported",
+        ResolvedTargetKind::Deferred => "deferred",
+        _ => "ok",
+    }
 }
 
 fn rendered_search_resource_scan(
@@ -1286,6 +1401,15 @@ fn resource_scan_limit_for(format_family: FormatFamily) -> usize {
             VALIDATE_RESOURCE_TARGET_SCAN_LIMIT
         }
         FormatFamily::Unknown => 1,
+    }
+}
+
+fn link_scan_limit_for(format_family: FormatFamily) -> usize {
+    match format_family {
+        FormatFamily::LvedSqlite3 | FormatFamily::LvlMultiView | FormatFamily::Hourei => {
+            VALIDATE_LINK_TARGET_SCAN_LIMIT
+        }
+        FormatFamily::Ssed | FormatFamily::Unknown => 0,
     }
 }
 
@@ -2109,6 +2233,24 @@ mod tests {
             VALIDATE_RESOURCE_TARGET_SCAN_LIMIT
         );
         assert_eq!(VALIDATE_RESOURCE_TARGET_SCAN_LIMIT, 8);
+    }
+
+    #[test]
+    fn validate_link_scans_skip_ssed_family() {
+        assert_eq!(link_scan_limit_for(FormatFamily::Ssed), 0);
+        assert_eq!(
+            link_scan_limit_for(FormatFamily::LvedSqlite3),
+            VALIDATE_LINK_TARGET_SCAN_LIMIT
+        );
+        assert_eq!(
+            link_scan_limit_for(FormatFamily::LvlMultiView),
+            VALIDATE_LINK_TARGET_SCAN_LIMIT
+        );
+        assert_eq!(
+            link_scan_limit_for(FormatFamily::Hourei),
+            VALIDATE_LINK_TARGET_SCAN_LIMIT
+        );
+        assert_eq!(link_scan_limit_for(FormatFamily::Unknown), 0);
     }
 
     #[test]

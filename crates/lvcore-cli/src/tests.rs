@@ -646,6 +646,34 @@ fn validate_deep_scans_beyond_first_target_for_rendered_resources() {
 }
 
 #[test]
+fn validate_deep_scans_rendered_link_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: false,
+        },
+    );
+    let exercises = output["exercises"].as_array().unwrap();
+    let link_scan = exercises
+        .iter()
+        .filter_map(|exercise| exercise.get("link_scan"))
+        .find(|scan| scan["status"] == "ok")
+        .expect("deep validation should render a discovered link target");
+
+    assert_eq!(link_scan["link_count"].as_u64(), Some(1));
+    assert_eq!(link_scan["checked_link_count"].as_u64(), Some(1));
+    assert_eq!(link_scan["ok_count"].as_u64(), Some(1));
+    assert_eq!(link_scan["samples"][0]["target_kind"], "lved_row");
+    assert_eq!(link_scan["samples"][0]["view_kind"], "entry_body");
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
 fn validate_deep_exercises_advertised_search_modes() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
