@@ -1051,6 +1051,7 @@ impl ReaderBookPackage {
         {
             let chronology_offset = chronology_cursor.unwrap_or(0);
             let remaining = page_limit.saturating_sub(hits.len());
+            let hits_before_chronology = hits.len();
             let records = search_britannica_chronology_records(
                 &self.root,
                 &query.query,
@@ -1090,12 +1091,13 @@ impl ReaderBookPackage {
                 }
             }
             if hits.len() >= page_limit {
+                let returned_chronology_hits = query.limit.saturating_sub(hits_before_chronology);
                 hits.truncate(query.limit);
                 return Ok(SearchPage {
                     hits,
                     next_cursor: Some(format!(
                         "chronology:{}",
-                        chronology_offset.saturating_add(query.limit)
+                        chronology_offset.saturating_add(returned_chronology_hits)
                     )),
                     result_sequence: None,
                     diagnostics,

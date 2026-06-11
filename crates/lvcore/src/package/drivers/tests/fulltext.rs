@@ -645,6 +645,99 @@ fn ssed_fulltext_searches_britannica_chronology_before_honmon_scan() {
 }
 
 #[test]
+fn ssed_fulltext_chronology_cursor_counts_prior_sidecar_hits() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
+    let connection = rusqlite::Connection::open(dir.path().join("BriSynthetic.db")).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE D_InternationalChronology (
+                INC_Code VARCHAR(20) NOT NULL UNIQUE,
+                INC_Type_Code VARCHAR(100),
+                INC_Type_Name VARCHAR(200),
+                Year INTEGER,
+                Month INTEGER,
+                Day INTEGER,
+                Sub_Disp_Order INTEGER,
+                Jpn_Year VARCHAR(20),
+                Value TEXT,
+                PRIMARY KEY(INC_Code)
+            );
+            INSERT INTO D_InternationalChronology
+                (INC_Code, INC_Type_Code, INC_Type_Name, Year, Month, Day, Sub_Disp_Order, Jpn_Year, Value)
+            VALUES
+                ('166', 'WOR', '世界史', 43, 0, 0, 10, '',
+                 'beta sidecar body chronology first'),
+                ('167', 'WOR', '世界史', 44, 0, 0, 20, '',
+                 'beta sidecar body chronology second');
+            "#,
+        )
+        .unwrap();
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic Britannica".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let first = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "beta sidecar body".to_owned(),
+            cursor: None,
+            limit: 2,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(first.hits.len(), 2);
+    assert!(matches!(
+        first.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "2"
+    ));
+    assert!(matches!(
+        first.hits[1].target.decode().unwrap(),
+        InternalTarget::SsedAuxRecord { key, .. } if key == "166"
+    ));
+    assert_eq!(first.next_cursor.as_deref(), Some("chronology:1"));
+
+    let second = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "beta sidecar body".to_owned(),
+            cursor: first.next_cursor.clone(),
+            limit: 2,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(second.hits.len(), 1);
+    assert!(matches!(
+        second.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAuxRecord { key, .. } if key == "167"
+    ));
+    assert_eq!(second.next_cursor, None);
+}
+
+#[test]
 fn ssed_fulltext_metadata_requires_supported_honmon_payload() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
