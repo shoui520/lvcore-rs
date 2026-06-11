@@ -752,6 +752,91 @@ fn ssed_ios_mobile_menu_plist_opens_nested_child_panel_without_flattening_root()
 }
 
 #[test]
+fn ssed_ios_mobile_menu_file_child_plists_open_as_panel_rows() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(root.path().join("list")).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        root.path().join("menu.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>0</key>
+  <dict>
+    <key>text</key><string>ABC順</string>
+    <key>child</key><array>
+      <dict>
+        <key>text</key><string>A</string>
+        <key>file</key><string>DICT_A</string>
+      </dict>
+    </array>
+  </dict>
+</dict></plist>"#,
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("list/DICT_A.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>item</key><string>A</string>
+  <key>child</key><array>
+    <dict>
+      <key>item</key><string>Alpha</string>
+      <key>block</key><integer>10</integer>
+      <key>offset</key><integer>2</integer>
+    </dict>
+  </array>
+</dict></plist>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let root_panel = package.open_surface("panels").unwrap();
+    let NavigationSurface::Panel { cells, .. } = root_panel else {
+        panic!("mobile root menu should decode to a panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "ABC順");
+    let InternalTarget::PanelCell { panel_id, .. } =
+        cells[0].target.as_ref().unwrap().decode().unwrap()
+    else {
+        panic!("mobile root file menu should point to a child panel");
+    };
+
+    let letter_panel = package.open_surface(&format!("panels:{panel_id}")).unwrap();
+    let NavigationSurface::Panel { cells, .. } = letter_panel else {
+        panic!("mobile file menu parent should decode to a panel surface");
+    };
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "A");
+    let InternalTarget::PanelCell { panel_id, .. } =
+        cells[0].target.as_ref().unwrap().decode().unwrap()
+    else {
+        panic!("file-backed mobile menu item should point to a plist child panel");
+    };
+
+    let child_panel = package.open_surface(&format!("panels:{panel_id}")).unwrap();
+    let NavigationSurface::Panel {
+        cells, next_cursor, ..
+    } = child_panel
+    else {
+        panic!("file-backed mobile plist should decode to panel rows");
+    };
+    assert_eq!(next_cursor, None);
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].label_text, "Alpha");
+    assert!(matches!(
+        cells[0].target.as_ref().unwrap().decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 10,
+            offset: 2,
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn ssed_ios_plist_data_labels_decode_as_title_text() {
     let root = tempdir().unwrap();
     let package_root = root.path().join("DICT");

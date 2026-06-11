@@ -92,7 +92,23 @@ impl ReaderBookPackage {
         let mut missing_data_refs = Vec::new();
         for data_ref in &selected_data_refs {
             if !ssed_panel_data_ref_is_bin(data_ref) {
-                if ssed_panel_data_ref_is_html(data_ref) {
+                if ssed_panel_data_ref_is_plist(data_ref) {
+                    if matches!(
+                        self.append_ssed_panel_plist_cells(
+                            data_ref,
+                            &mut builder,
+                            &mut diagnostics,
+                            &options.gaiji_policy,
+                            &request.base_surface_id,
+                        )?,
+                        SsedPanelPlistLoadStatus::Missing
+                    ) {
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_panel_plist_missing",
+                            format!("Panel plist {} was not found", data_ref.filename),
+                        ));
+                    }
+                } else if ssed_panel_data_ref_is_html(data_ref) {
                     builder.push_cell(|| {
                         self.ssed_panel_external_html_data_cell(
                             data_ref,
@@ -338,6 +354,53 @@ impl ReaderBookPackage {
         Ok(SsedPanelBinLoadStatus::Decoded)
     }
 
+    fn append_ssed_panel_plist_cells(
+        &self,
+        data_ref: &SsedPanelDataRef,
+        builder: &mut PanelCellPageBuilder,
+        diagnostics: &mut Vec<Diagnostic>,
+        gaiji_policy: &GaijiPolicy,
+        base_surface_id: &str,
+    ) -> Result<SsedPanelPlistLoadStatus> {
+        let Some(data) = self.read_ssed_panel_plist_bytes(data_ref)? else {
+            return Ok(SsedPanelPlistLoadStatus::Missing);
+        };
+        let label = format!("Panel plist {}", data_ref.filename);
+        let plist = parse_xml_plist(&data, &label)?;
+        let parsed = parse_panel_plist_value_for_panel(&plist, None)?;
+        let root_panel_id = parsed
+            .inline_cells
+            .first()
+            .map(|cell| cell.panel_id.as_str());
+        let known_panel_ids = ssed_panel_known_panel_ids(&parsed);
+        for cell in parsed
+            .inline_cells
+            .iter()
+            .filter(|cell| root_panel_id.is_none_or(|panel_id| cell.panel_id == panel_id))
+        {
+            builder.push_cell(|| {
+                ssed_panel_inline_cell_to_navigation_cell(
+                    self,
+                    cell,
+                    &known_panel_ids,
+                    base_surface_id,
+                    gaiji_policy,
+                )
+            })?;
+            if builder.is_page_full() {
+                break;
+            }
+        }
+        diagnostics.push(
+            Diagnostic::info(
+                "ssed_panel_plist_child",
+                "iOS mobile menu file reference was resolved from a child plist",
+            )
+            .with_context("filename", &data_ref.filename),
+        );
+        Ok(SsedPanelPlistLoadStatus::Decoded)
+    }
+
     fn read_ssed_panel_bin_bytes(&self, data_ref: &SsedPanelDataRef) -> Result<Option<Vec<u8>>> {
         let names = panel_bin_candidate_names(&data_ref.filename, &data_ref.data_type);
         for name in &names {
@@ -377,6 +440,27 @@ impl ReaderBookPackage {
                 if parent_bin_storage.exists(relative_path)? {
                     return parent_bin_storage.read(relative_path).map(Some);
                 }
+            }
+        }
+        Ok(None)
+    }
+
+    fn read_ssed_panel_plist_bytes(&self, data_ref: &SsedPanelDataRef) -> Result<Option<Vec<u8>>> {
+        let names = panel_plist_candidate_names(&data_ref.filename);
+        for name in &names {
+            let relative_path = Path::new(name.as_str());
+            if self.storage.exists(relative_path)? {
+                return self.storage.read(relative_path).map(Some);
+            }
+        }
+        let Some(parent) = self.root.parent() else {
+            return Ok(None);
+        };
+        let parent_storage = DirectoryStorage::new(parent.to_path_buf());
+        for name in &names {
+            let relative_path = Path::new(name.as_str());
+            if parent_storage.exists(relative_path)? {
+                return parent_storage.read(relative_path).map(Some);
             }
         }
         Ok(None)
@@ -589,6 +673,12 @@ enum SsedPanelBinLoadStatus {
     ParseFailed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SsedPanelPlistLoadStatus {
+    Decoded,
+    Missing,
+}
+
 struct PanelCellPageBuilder {
     offset: usize,
     limit: usize,
@@ -702,6 +792,13 @@ fn ssed_panel_data_ref_is_html(data_ref: &SsedPanelDataRef) -> bool {
         return true;
     }
     path_has_extension(&data_ref.filename, &["html", "htm"])
+}
+
+fn ssed_panel_data_ref_is_plist(data_ref: &SsedPanelDataRef) -> bool {
+    if data_ref.data_type.trim().eq_ignore_ascii_case("plist") {
+        return true;
+    }
+    path_has_extension(&data_ref.filename, &["plist"])
 }
 
 fn display_panel_data_type(data_type: &str) -> String {
@@ -881,6 +978,29 @@ fn panel_bin_candidate_names(filename: &str, data_type: &str) -> Vec<String> {
         push_unique_panel_bin_candidate(&mut names, stripped.to_owned(), data_type);
     }
     names
+}
+
+fn panel_plist_candidate_names(filename: &str) -> Vec<String> {
+    let normalized = filename.replace('\\', "/");
+    let mut names = Vec::new();
+    push_unique_panel_plist_candidate(&mut names, normalized.clone());
+    if let Some(stripped) = normalized.strip_prefix("list/") {
+        push_unique_panel_plist_candidate(&mut names, stripped.to_owned());
+    } else {
+        push_unique_panel_plist_candidate(&mut names, format!("list/{normalized}"));
+    }
+    names
+}
+
+fn push_unique_panel_plist_candidate(names: &mut Vec<String>, name: String) {
+    let name = name.trim_start_matches('/').to_owned();
+    if name.is_empty() {
+        return;
+    }
+    push_unique_panel_bin_name(names, name.clone());
+    if Path::new(&name).extension().is_none() {
+        push_unique_panel_bin_name(names, format!("{name}.plist"));
+    }
 }
 
 fn push_unique_panel_bin_candidate(names: &mut Vec<String>, name: String, data_type: &str) {

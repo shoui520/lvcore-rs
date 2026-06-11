@@ -708,6 +708,16 @@ fn parse_mobile_menu_plist_panel(
         });
         return;
     }
+    if let Some(file) = plist_string_opt(item, &["file"]) {
+        parsed.data_refs.push(SsedPanelDataRef {
+            panel_id: panel_id.to_owned(),
+            panel_type: "contents".to_owned(),
+            title,
+            filename: mobile_panel_plist_filename(&file),
+            data_type: "plist".to_owned(),
+        });
+        return;
+    }
     if let Some(children) = item.get("child").and_then(PlistValue::as_array) {
         let child_items = children.iter().collect::<Vec<_>>();
         parse_mobile_menu_plist_items(parsed, panel_id, "menu", &title, &child_items);
@@ -730,6 +740,7 @@ fn parse_mobile_menu_plist_items(
         if label.trim().is_empty()
             && dict.get("child").and_then(PlistValue::as_array).is_none()
             && plist_string_opt(dict, &["path"]).is_none()
+            && plist_string_opt(dict, &["file"]).is_none()
             && !has_non_zero_address(dict)
         {
             continue;
@@ -740,7 +751,8 @@ fn parse_mobile_menu_plist_items(
             .and_then(PlistValue::as_array)
             .is_some_and(|children| !children.is_empty());
         let path = plist_string_opt(dict, &["path"]);
-        let ref_id = if has_children || path.is_some() {
+        let file = plist_string_opt(dict, &["file"]);
+        let ref_id = if has_children || path.is_some() || file.is_some() {
             child_panel_id.clone()
         } else {
             String::new()
@@ -767,6 +779,15 @@ fn parse_mobile_menu_plist_items(
                 title: plist_string(dict, &["item", "text", "title", "label"]),
                 filename: mobile_panel_bin_filename(&path),
                 data_type: "bin".to_owned(),
+            });
+        }
+        if let Some(file) = file {
+            parsed.data_refs.push(SsedPanelDataRef {
+                panel_id: child_panel_id.clone(),
+                panel_type: "contents".to_owned(),
+                title: plist_string(dict, &["item", "text", "title", "label"]),
+                filename: mobile_panel_plist_filename(&file),
+                data_type: "plist".to_owned(),
             });
         }
     }
@@ -841,6 +862,9 @@ fn plist_root_menu_items(value: &PlistValue) -> Option<Vec<&PlistValue>> {
         return Some(items.iter().collect());
     }
     let dict = value.as_dict()?;
+    if let Some(items) = dict.get("child").and_then(PlistValue::as_array) {
+        return Some(items.iter().collect());
+    }
     if dict.values().all(|value| value.as_dict().is_some()) {
         let mut items = dict
             .iter()
@@ -987,6 +1011,23 @@ fn mobile_panel_bin_filename(path: &str) -> String {
         format!("{normalized}.bin")
     };
     format!("bin/{with_ext}")
+}
+
+fn mobile_panel_plist_filename(path: &str) -> String {
+    let normalized = path.trim().trim_start_matches('/').replace('\\', "/");
+    let with_ext = if normalized.to_ascii_lowercase().ends_with(".plist") {
+        normalized
+    } else {
+        format!("{normalized}.plist")
+    };
+    if with_ext
+        .get(.."list/".len())
+        .is_some_and(|head| head.eq_ignore_ascii_case("list/"))
+    {
+        with_ext
+    } else {
+        format!("list/{with_ext}")
+    }
 }
 
 fn plist_numeric_sort_key(key: &str) -> (u8, u32, &str) {
