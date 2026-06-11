@@ -1376,11 +1376,11 @@ fn rendered_link_scan(
 
     for (index, link) in view.links.iter().take(limit).enumerate() {
         checked_link_count += 1;
-        diagnostics.extend(link.diagnostics.clone());
         let routed_target =
             match library.render_target_routed(book_id, &link.token, &RenderOptions::default()) {
                 Ok(routed_target) => routed_target,
                 Err(error) => {
+                    diagnostics.extend(link.diagnostics.clone());
                     let mut row = json!({
                         "status": "render_error",
                         "link_count": view.links.len(),
@@ -1395,6 +1395,18 @@ fn rendered_link_scan(
                     return row;
                 }
             };
+        let routed_cross_book = routed_target
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lved_cross_book_routed");
+        diagnostics.extend(
+            link.diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    !(routed_cross_book && diagnostic.code == "lved_cross_book_deferred")
+                })
+                .cloned(),
+        );
         diagnostics.extend(routed_target.diagnostics);
         let target_view = routed_target.view;
         diagnostics.extend(target_view.diagnostics.clone());

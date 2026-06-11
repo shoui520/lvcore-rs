@@ -1129,6 +1129,13 @@ fn validate_deep_routes_lved_cross_book_sibling_links() {
             .iter()
             .any(|diagnostic| diagnostic["code"] == "lved_cross_book_routed")
     );
+    assert!(
+        lved_list["link_scan"]["diagnostic_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|diagnostic| diagnostic["code"] != "lved_cross_book_deferred")
+    );
     assert!(!validate_row_has_failure(&output));
 }
 
