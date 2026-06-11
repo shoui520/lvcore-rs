@@ -311,21 +311,30 @@ impl ReaderBookPackage {
                     }
                     output.push_str(&format!("lvcore://target/{}", token.as_str()));
                 } else {
+                    let resource_kind = resource_kind_from_path(&reference.path);
                     let resource = InternalResource::PackageFile {
-                        resource_kind: resource_kind_from_path(&reference.path),
-                        path: reference.path,
+                        resource_kind,
+                        path: reference.path.clone(),
                     };
                     let token = ResourceToken::new(&resource)?;
-                    let href = format!("lvcore://resource/{}", token.as_str());
-                    if seen_resource_tokens.insert(token.as_str().to_owned()) {
-                        let resource_ref = self.resolve_resource(&token)?;
-                        diagnostics.extend(resource_ref.diagnostics.clone());
-                        resources.push(resource_ref);
+                    let resource_ref = self.resolve_resource(&token)?;
+                    if let Some(data_url) = optional_missing_package_font_js_data_url(
+                        &reference.path,
+                        resource_kind,
+                        &resource_ref,
+                    ) {
+                        output.push_str(&data_url);
+                    } else {
+                        let href = format!("lvcore://resource/{}", token.as_str());
+                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                            diagnostics.extend(resource_ref.diagnostics.clone());
+                            resources.push(resource_ref);
+                        }
+                        output.push_str(&href);
                     }
-                    output.push_str(&href);
-                    if let Some(anchor) = reference.anchor {
+                    if let Some(anchor) = reference.anchor.as_deref() {
                         output.push('#');
-                        output.push_str(&anchor);
+                        output.push_str(anchor);
                     }
                 }
             } else {
@@ -414,4 +423,34 @@ impl ReaderBookPackage {
             diagnostics,
         })
     }
+}
+
+fn optional_missing_package_font_js_data_url(
+    path: &str,
+    resource_kind: ResourceKind,
+    resource_ref: &ResourceRef,
+) -> Option<String> {
+    if resource_kind != ResourceKind::Javascript {
+        return None;
+    }
+    if !Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("font.js"))
+    {
+        return None;
+    }
+    if resource_ref.href.is_some()
+        || !resource_ref
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "resource_missing")
+    {
+        return None;
+    }
+    let mime_type = resource_ref
+        .mime_type
+        .as_deref()
+        .unwrap_or("text/javascript; charset=utf-8");
+    Some(generic_html_data_url(mime_type, b""))
 }

@@ -964,7 +964,7 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     fs::write(package_root.join("OTHER/_images/a825.png"), b"png").unwrap();
     fs::write(
         package_root.join("OTHER/contents/about.html"),
-        r#"<html><head><title>About page</title></head><body><h1 id="intro">About page</h1><a href="related.html#next">Related</a><img src="images/icon.png"></body></html>"#,
+        r#"<html><head><title>About page</title><script src="font.js"></script></head><body><h1 id="intro">About page</h1><a href="related.html#next">Related</a><img src="images/icon.png"></body></html>"#,
     )
     .unwrap();
     fs::write(
@@ -1297,8 +1297,16 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     let dictlist_html = dictlist_rendered.display_html.unwrap();
     assert!(dictlist_html.contains("lvcore://target/"));
     assert!(dictlist_html.contains("lvcore://resource/"));
+    assert!(dictlist_html.contains("data:text/javascript"));
     assert_eq!(dictlist_rendered.links.len(), 1);
     assert_eq!(dictlist_rendered.resources.len(), 1);
+    assert!(
+        !dictlist_rendered
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "resource_missing"
+                && diagnostic.message.contains("font.js"))
+    );
 
     let table_surface = package
         .open_surface("ios-table-list:tableList.plist")
