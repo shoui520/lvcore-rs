@@ -289,7 +289,8 @@ provider slices:
   emits an explicit `hc_render_common_html_fallback` diagnostic, so reader apps
   get something displayable without mistaking it for product HC visual parity;
 - SSED KOJIEN6-style `COLSMPL.DIC` records are parsed as typed color-sample
-  metadata preserving exact Munsell notation and JIS labels;
+  metadata preserving exact Munsell notation and JIS labels, plus an explicitly
+  estimated RGB swatch value for reader display when the Munsell notation parses;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
 `logovista-tools` remains the research oracle while `lvcore-rs` ports stable
@@ -312,8 +313,8 @@ known structures.
   after the prefix prepass. More product-specific indexing may be needed for
   consistently low-latency substring search on very large packages.
 - KOJIEN6-specific COLSMPL official RGB/rendering parity remains deferred; the
-  parser preserves exact Munsell/label data but does not fake the proprietary
-  color-map bridge.
+  parser preserves exact Munsell/label data and labels conservative RGB values
+  as estimates rather than faking the proprietary color-map bridge.
 - CHM table-of-contents semantics are supported at the reader-core level:
   lvcore reads `.hhc` Name/Local entries and exposes them as nested HANREI
   navigation trees with target tokens and scroll anchors. Higher-level reader

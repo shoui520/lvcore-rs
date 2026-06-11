@@ -86,7 +86,9 @@ pub use ssed_aux_index::{
     SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,
     parse_aux_index_specs_from_exinfo, parse_aux_index_text_bytes,
 };
-pub use ssed_color_sample::{ColorSampleRecord, ColorSampleTable};
+pub use ssed_color_sample::{
+    ColorSampleRecord, ColorSampleRgbStatus, ColorSampleTable, parse_color_sample_table,
+};
 pub use ssed_encyclopedia::{
     ENCYCLOPEDIA_HEADER, SsedEncyclopediaIndex, SsedEncyclopediaRow, SsedEncyclopediaSection,
     parse_encyclopedia_index, parse_encyclopedia_index_bytes,
