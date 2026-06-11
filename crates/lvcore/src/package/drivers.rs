@@ -101,7 +101,7 @@ use super::ssed_body_helpers::{
 use super::ssed_detection::{
     SSED_NAVIGATION_DETECTION_MAX_BYTES, file_starts_with_ssedinfo_magic, inferred_folder_title,
     multiview_menu_files, read_ssed_navigation_detection_bytes, root_fingerprint,
-    ssed_hanrei_page_label,
+    ssed_catalog_for_root, ssed_hanrei_page_label,
 };
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::ssed_payload::file_starts_with_android_wrapped_sseddata;
@@ -391,7 +391,8 @@ impl ReaderBookPackage {
             },
             diagnostics: metadata_diagnostics,
         };
-        let routing_aliases = routing_aliases_for_package(detected.format_family, &stores);
+        let routing_aliases =
+            routing_aliases_for_package(detected.format_family, &stores, &identity_hint);
         let retained_ios_fts_payloads = stores
             .retained_ios_dictlist
             .as_ref()
@@ -670,22 +671,33 @@ impl BookPackage for ReaderBookPackage {
 }
 
 fn routing_aliases_for_package(
-    _format_family: FormatFamily,
+    format_family: FormatFamily,
     stores: &PackageStores,
+    identity_hint: &str,
 ) -> Vec<BookAlias> {
-    stores
+    let mut aliases = Vec::new();
+    if format_family == FormatFamily::Ssed {
+        let value = identity_hint.trim();
+        if !value.is_empty() {
+            aliases.push(BookAlias {
+                kind: BookAliasKind::SsedDictCode,
+                value: value.to_owned(),
+            });
+        }
+    }
+    if let Some(value) = stores
         .lved_store
         .as_ref()
         .and_then(|store| infer_lved_dict_code(&store.payload_path))
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .map(|value| {
-            vec![BookAlias {
-                kind: BookAliasKind::LvedDictCode,
-                value,
-            }]
-        })
-        .unwrap_or_default()
+    {
+        aliases.push(BookAlias {
+            kind: BookAliasKind::LvedDictCode,
+            value,
+        });
+    }
+    aliases
 }
 
 fn deferred_surface(surface_id: &str, diagnostics: Vec<Diagnostic>) -> NavigationSurface {

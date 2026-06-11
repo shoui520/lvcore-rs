@@ -105,6 +105,17 @@ struct LvedCrossBookRequest<'a> {
     options: &'a RenderOptions,
 }
 
+struct SsedCrossBookRequest<'a> {
+    source_book_id: &'a BookId,
+    source_book: &'a dyn BookPackage,
+    original_target: &'a TargetToken,
+    dict_code: &'a str,
+    component: &'a str,
+    block: u32,
+    offset: u32,
+    options: &'a RenderOptions,
+}
+
 impl BookLibrary {
     pub fn new() -> Self {
         Self::default()
@@ -371,6 +382,21 @@ impl BookLibrary {
                 dict_code: &dict_code,
                 content_id: &content_id,
                 anchor,
+                options,
+            }),
+            InternalTarget::SsedCrossBookAddress {
+                dict_code,
+                component,
+                block,
+                offset,
+            } => self.render_ssed_cross_book_target(SsedCrossBookRequest {
+                source_book_id: book_id,
+                source_book,
+                original_target: target,
+                dict_code: &dict_code,
+                component: &component,
+                block,
+                offset,
                 options,
             }),
             _ => {
@@ -708,6 +734,77 @@ impl BookLibrary {
                 .iter()
                 .any(|alias| {
                     alias.kind == BookAliasKind::LvedDictCode
+                        && alias.value.eq_ignore_ascii_case(dict_code)
+                })
+                .then_some((book_id, book.as_ref()))
+        })
+    }
+
+    fn render_ssed_cross_book_target(
+        &self,
+        request: SsedCrossBookRequest<'_>,
+    ) -> Result<RoutedTargetView> {
+        let Some((destination_book_id, destination_book)) =
+            self.find_ssed_dict_code_alias(request.dict_code)
+        else {
+            let diagnostic = Diagnostic::info(
+                "ssed_cross_book_destination_missing",
+                format!(
+                    "SSED cross-book target destination dictionary {} is not open in the library",
+                    request.dict_code
+                ),
+            )
+            .with_context("dict_code", request.dict_code)
+            .with_context("source_book_id", &request.source_book_id.0)
+            .with_context("component", request.component)
+            .with_context("block", request.block.to_string())
+            .with_context("offset", request.offset.to_string());
+            let mut view = request
+                .source_book
+                .render_target(request.original_target, request.options)?;
+            view.diagnostics.push(diagnostic.clone());
+            scope_view_resource_hrefs(request.source_book_id, &mut view);
+            return Ok(RoutedTargetView {
+                book_id: request.source_book_id.clone(),
+                view,
+                diagnostics: vec![diagnostic],
+            });
+        };
+
+        let destination_target = TargetToken::new(&InternalTarget::SsedAddress {
+            component: request.component.to_owned(),
+            block: request.block,
+            offset: request.offset,
+        })?;
+        let mut view = destination_book.render_target(&destination_target, request.options)?;
+        scope_view_resource_hrefs(destination_book_id, &mut view);
+        Ok(RoutedTargetView {
+            book_id: destination_book_id.clone(),
+            view,
+            diagnostics: vec![
+                Diagnostic::info(
+                    "ssed_cross_book_routed",
+                    format!(
+                        "SSED cross-book target routed to dictionary {}",
+                        request.dict_code
+                    ),
+                )
+                .with_context("dict_code", request.dict_code)
+                .with_context("source_book_id", &request.source_book_id.0)
+                .with_context("destination_book_id", &destination_book_id.0)
+                .with_context("component", request.component)
+                .with_context("block", request.block.to_string())
+                .with_context("offset", request.offset.to_string()),
+            ],
+        })
+    }
+
+    fn find_ssed_dict_code_alias(&self, dict_code: &str) -> Option<(&BookId, &dyn BookPackage)> {
+        self.books.iter().find_map(|(book_id, book)| {
+            book.routing_aliases()
+                .iter()
+                .any(|alias| {
+                    alias.kind == BookAliasKind::SsedDictCode
                         && alias.value.eq_ignore_ascii_case(dict_code)
                 })
                 .then_some((book_id, book.as_ref()))

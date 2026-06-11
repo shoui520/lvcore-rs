@@ -736,6 +736,21 @@ impl RendererProvider for ReaderBookPackage {
                     ),
                 ),
             )),
+            InternalTarget::SsedCrossBookAddress {
+                dict_code,
+                component,
+                block,
+                offset,
+            } => Ok(ResolvedTargetView::unsupported(
+                token.clone(),
+                "Cross-dictionary SSED target",
+                Diagnostic::info(
+                    "ssed_cross_book_deferred",
+                    format!(
+                        "SSED address target {component}:{block}:{offset} in dictionary {dict_code} requires library-wide routing"
+                    ),
+                ),
+            )),
             InternalTarget::LvedAddress {
                 block, offset, raw, ..
             } => Ok(ResolvedTargetView::unsupported(

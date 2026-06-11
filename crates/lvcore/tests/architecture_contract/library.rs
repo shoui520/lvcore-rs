@@ -1296,6 +1296,112 @@ fn library_routes_lved_cross_book_targets_through_loaded_book_aliases() {
 }
 
 #[test]
+fn library_routes_ios_ssed_table_list_cross_book_addresses_through_sibling_aliases() {
+    let root = tempdir().unwrap();
+    let source_wrapper = root.path().join("SRC");
+    let destination_wrapper = root.path().join("DST");
+    let source_root = source_wrapper.join("SRC");
+    let destination_root = destination_wrapper.join("DST");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&destination_root).unwrap();
+
+    let table_list = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>name</key><string>Destination row</string>
+    <key>block</key><integer>100</integer>
+    <key>offset</key><integer>0</integer>
+  </dict>
+</array></plist>"#;
+    fs::write(source_wrapper.join("tableList.plist"), table_list).unwrap();
+    fs::write(destination_wrapper.join("tableList.plist"), table_list).unwrap();
+    fs::write(
+        source_root.join("SRC.IDX"),
+        ssedinfo_with_honmon_range("Source", 1, 10),
+    )
+    .unwrap();
+    fs::write(
+        destination_root.join("DST.IDX"),
+        ssedinfo_with_honmon_range("Destination", 100, 100),
+    )
+    .unwrap();
+    fs::write(
+        destination_root.join("HONMON.DIC"),
+        sseddata_literal_fixture_at(100, &body_jis("本文")),
+    )
+    .unwrap();
+
+    let registry = DriverRegistry::default();
+    let mut library = BookLibrary::new();
+    let source_book_id = library.open_path(&source_root, &registry).unwrap();
+    let destination_book_id = library.open_path(&destination_root, &registry).unwrap();
+    let source_home = library.home_surfaces(&source_book_id).unwrap();
+    assert!(source_home.iter().any(|surface| {
+        surface.surface_id == "ios-table-list:tableList.plist"
+            && surface.status == NavigationStatus::Available
+            && surface
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "ssed_ios_table_list_cross_book")
+    }));
+
+    let source_surface = library
+        .open_surface_page(&source_book_id, "ios-table-list:tableList.plist", None, 10)
+        .unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = &source_surface else {
+        panic!("source tableList should expose cross-book title/index rows");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label_text, "Destination row");
+    assert!(matches!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedCrossBookAddress {
+            dict_code,
+            component,
+            block: 100,
+            offset: 0,
+        } if dict_code == "DST" && component == "HONMON.DIC"
+    ));
+
+    let routed = library
+        .render_target_routed(&source_book_id, &items[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(routed.book_id, destination_book_id);
+    assert_eq!(routed.view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(routed.view.basic_text.as_deref(), Some("本文"));
+    assert!(
+        routed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_cross_book_routed")
+    );
+
+    let target = source_surface
+        .actionable_targets()
+        .into_iter()
+        .next()
+        .expect("tableList item should be actionable");
+    let window = library
+        .resolve_target_window_routed(
+            &source_book_id,
+            &target.target,
+            target.sequence_hint.as_ref(),
+            0,
+            0,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.book_id, destination_book_id);
+    assert_eq!(window.window.center.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        window
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_cross_book_routed")
+    );
+}
+
+#[test]
 fn library_rejects_invalid_scoped_resource_hrefs() {
     let library = BookLibrary::new();
     assert!(matches!(
@@ -1330,6 +1436,24 @@ fn library_rejects_invalid_scoped_resource_hrefs() {
         ),
         Err(lvcore::Error::InvalidTargetHref)
     ));
+}
+
+fn ssedinfo_with_honmon_range(title: &str, start_block: u32, end_block: u32) -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 0x30];
+    data[..SSEDINFO_MAGIC.len()].copy_from_slice(SSEDINFO_MAGIC);
+    let title = title.as_bytes();
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 1;
+    write_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        start_block,
+        end_block,
+        "HONMON.DIC",
+    );
+    data
 }
 
 #[test]

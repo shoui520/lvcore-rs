@@ -12,6 +12,7 @@ use crate::resources::ResourceToken;
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     SsedAddress,
+    SsedCrossBookAddress,
     SsedDenseAnchor,
     SsedAuxRecord,
     SsedIosHtmlPage,
@@ -51,6 +52,12 @@ pub enum InternalTarget {
         block: u32,
         offset: u32,
         index_component: String,
+    },
+    SsedCrossBookAddress {
+        dict_code: String,
+        component: String,
+        block: u32,
+        offset: u32,
     },
     SsedDenseAnchor {
         anchor: String,
@@ -149,6 +156,7 @@ impl InternalTarget {
             Self::SsedAddress { .. }
             | Self::SsedBoundedAddress { .. }
             | Self::SsedIndexAddress { .. } => TargetKind::SsedAddress,
+            Self::SsedCrossBookAddress { .. } => TargetKind::SsedCrossBookAddress,
             Self::SsedDenseAnchor { .. } => TargetKind::SsedDenseAnchor,
             Self::SsedAuxRecord { .. } => TargetKind::SsedAuxRecord,
             Self::SsedIosHtmlPage { .. } => TargetKind::SsedIosHtmlPage,

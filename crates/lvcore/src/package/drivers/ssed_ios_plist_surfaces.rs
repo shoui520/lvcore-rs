@@ -82,6 +82,12 @@ impl SsedIosTableListResolutionStats {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SsedIosTableListCrossBookOwner {
+    dict_code: String,
+    component: String,
+}
+
 impl ReaderBookPackage {
     pub(super) fn ssed_ios_panel_plist_sources(&self) -> Result<Vec<SsedIosPlistSurfaceSource>> {
         let mut sources = Vec::new();
@@ -182,6 +188,19 @@ impl ReaderBookPackage {
                     "ssed_ios_table_list_empty",
                     "iOS tableList.plist did not contain targetable address rows",
                 )],
+            ));
+        }
+        if let Some(owner) = self.ssed_ios_table_list_cross_book_owner(source, rows)? {
+            return Ok((
+                NavigationStatus::Available,
+                vec![
+                    Diagnostic::info(
+                        "ssed_ios_table_list_cross_book",
+                        "iOS tableList.plist rows resolve to a sibling SSED dictionary in the same iOS package set",
+                    )
+                    .with_context("dict_code", owner.dict_code)
+                    .with_context("component", owner.component),
+                ],
             ));
         }
         Ok((
@@ -289,6 +308,7 @@ impl ReaderBookPackage {
         };
         let plist = self.cached_ssed_panel_plist(&source.bytes, &source.label)?;
         let rows = plist.as_array().unwrap_or_default();
+        let cross_book_owner = self.ssed_ios_table_list_cross_book_owner(&source, rows)?;
         let offset = decode_offset_cursor(cursor);
         let mut items = Vec::new();
         let mut has_more = false;
@@ -312,19 +332,47 @@ impl ReaderBookPackage {
             let raw_offset = plist_u32(dict, "offset").unwrap_or(0);
             let (block, offset) = self.convert_ios_ssed_address(raw_block, raw_offset)?;
             let mut row_diagnostics = Vec::new();
-            let target = self.ssed_target_for_loose_address(block, offset, &mut row_diagnostics)?;
-            stats.record(raw_block, raw_offset, block, offset, target.is_some());
-            let Some(target) = target else {
+            let local_target =
+                self.ssed_target_for_loose_address(block, offset, &mut row_diagnostics)?;
+            let target = if let Some(target) = local_target {
+                stats.record(raw_block, raw_offset, block, offset, true);
+                target
+            } else if let Some(owner) = &cross_book_owner {
+                stats.record(raw_block, raw_offset, block, offset, true);
+                TargetToken::new(&InternalTarget::SsedCrossBookAddress {
+                    dict_code: owner.dict_code.clone(),
+                    component: owner.component.clone(),
+                    block: raw_block,
+                    offset: raw_offset,
+                })?
+            } else {
+                stats.record(raw_block, raw_offset, block, offset, false);
                 continue;
             };
             let rich_label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
+            let mut diagnostics = rich_label.diagnostics;
+            if let Some(owner) = &cross_book_owner
+                && matches!(
+                    target.decode()?,
+                    InternalTarget::SsedCrossBookAddress { .. }
+                )
+            {
+                diagnostics.push(
+                    Diagnostic::info(
+                        "ssed_ios_table_list_cross_book_address",
+                        "iOS tableList.plist row was exposed as a cross-book SSED address",
+                    )
+                    .with_context("dict_code", &owner.dict_code)
+                    .with_context("component", &owner.component),
+                );
+            }
             items.push(NavigationItem {
                 item_id: index.to_string(),
                 label_html: rich_label.html,
                 label_text: rich_label.text,
                 target,
                 href: String::new(),
-                diagnostics: rich_label.diagnostics,
+                diagnostics,
             });
         }
         if stats.address_rows > 0 && items.is_empty() {
@@ -400,6 +448,78 @@ impl ReaderBookPackage {
             }
         }
         diagnostic
+    }
+
+    fn ssed_ios_table_list_cross_book_owner(
+        &self,
+        source: &SsedIosPlistSurfaceSource,
+        rows: &[PlistValue],
+    ) -> Result<Option<SsedIosTableListCrossBookOwner>> {
+        let addresses = rows
+            .iter()
+            .filter_map(ssed_ios_table_list_raw_address)
+            .collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Ok(None);
+        }
+        for candidate_root in self.ssed_ios_table_list_sibling_package_roots()? {
+            let Some(candidate_bytes) =
+                ssed_ios_table_list_candidate_bytes(&candidate_root, &source.source_id)
+            else {
+                continue;
+            };
+            if candidate_bytes != source.bytes {
+                continue;
+            }
+            let Ok(catalog) = ssed_catalog_for_root(&candidate_root) else {
+                continue;
+            };
+            let Some(honmon) = catalog.honmon() else {
+                continue;
+            };
+            if !addresses
+                .iter()
+                .all(|(block, offset)| *offset < BLOCK_SIZE && honmon.contains_block(*block))
+            {
+                continue;
+            }
+            let Some(dict_code) = ssed_ios_sibling_dict_code(&candidate_root) else {
+                continue;
+            };
+            return Ok(Some(SsedIosTableListCrossBookOwner {
+                dict_code,
+                component: honmon.filename.clone(),
+            }));
+        }
+        Ok(None)
+    }
+
+    fn ssed_ios_table_list_sibling_package_roots(&self) -> Result<Vec<PathBuf>> {
+        let Some(wrapper_root) = self.root.parent() else {
+            return Ok(Vec::new());
+        };
+        let Some(collection_root) = wrapper_root.parent() else {
+            return Ok(Vec::new());
+        };
+        let mut roots = Vec::new();
+        for entry in fs::read_dir(collection_root)? {
+            let path = entry?.path();
+            if !path.is_dir() || path == wrapper_root {
+                continue;
+            }
+            if path != self.root && path.is_dir() {
+                roots.push(path.clone());
+            }
+            if let Some(name) = path.file_name() {
+                let nested = path.join(name);
+                if nested != self.root && nested.is_dir() {
+                    roots.push(nested);
+                }
+            }
+        }
+        roots.sort();
+        roots.dedup();
+        Ok(roots)
     }
 
     pub(super) fn resolve_ssed_ios_table_list_window(
@@ -901,4 +1021,41 @@ fn plist_u32(dict: &BTreeMap<String, PlistValue>, key: &str) -> Option<u32> {
     dict.get(key)
         .and_then(PlistValue::as_i64)
         .and_then(|value| u32::try_from(value).ok())
+}
+
+fn ssed_ios_table_list_raw_address(row: &PlistValue) -> Option<(u32, u32)> {
+    let dict = row.as_dict()?;
+    let label = plist_string(dict, &["name", "item", "title", "label"]);
+    if label.trim().is_empty() {
+        return None;
+    }
+    let block = plist_u32(dict, "block").filter(|value| *value > 0)?;
+    let offset = plist_u32(dict, "offset").unwrap_or(0);
+    Some((block, offset))
+}
+
+fn ssed_ios_table_list_candidate_bytes(candidate_root: &Path, source_id: &str) -> Option<Vec<u8>> {
+    let direct = candidate_root.join(source_id);
+    if direct.is_file() {
+        return fs::read(direct).ok();
+    }
+    let wrapper = candidate_root.parent()?.join(source_id);
+    if wrapper.is_file() {
+        return fs::read(wrapper).ok();
+    }
+    None
+}
+
+fn ssed_ios_sibling_dict_code(candidate_root: &Path) -> Option<String> {
+    let value = candidate_root.file_name()?.to_string_lossy();
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(
+        trimmed
+            .strip_prefix("_DCT_")
+            .unwrap_or(trimmed)
+            .to_ascii_uppercase(),
+    )
 }
