@@ -38,6 +38,10 @@ pub(super) fn decode_ssed_body_search_text(data: &[u8]) -> String {
             index = skip_private_body_search_payload(data, index);
             continue;
         }
+        if is_ssed_title_separator(data, index) {
+            index += 2;
+            continue;
+        }
         if byte < 0x20 {
             out.push(' ');
             index += 1;
@@ -93,6 +97,10 @@ fn skip_private_body_search_payload(data: &[u8], index: usize) -> usize {
         return index + 2;
     }
     index + 1
+}
+
+fn is_ssed_title_separator(data: &[u8], index: usize) -> bool {
+    data.get(index..index.saturating_add(2)) == Some(&[0x11, 0x03][..])
 }
 
 pub(super) fn ssed_body_search_byte_candidates(query: &str) -> Vec<Vec<u8>> {
@@ -614,6 +622,15 @@ mod tests {
         data.extend_from_slice(&body_jis("後"));
 
         assert_eq!(decode_ssed_body_search_text(&data), "前 後");
+    }
+
+    #[test]
+    fn body_search_text_suppresses_title_separator_like_logovista_tools() {
+        let mut data = body_jis("前");
+        data.extend_from_slice(&[0x11, 0x03]);
+        data.extend_from_slice(&body_jis("後"));
+
+        assert_eq!(decode_ssed_body_search_text(&data), "前後");
     }
 
     #[test]
