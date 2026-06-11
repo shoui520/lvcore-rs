@@ -180,7 +180,9 @@ provider slices:
   look like printable ASCII, while preserving real Latin title labels;
 - initial SSED full-text search over HONMON body windows behind native index
   targets, plus dense HONMON sidecar body text/HTML where renderable sidecar
-  tables are understood, with diagnostics and explicit HC rendering separation;
+  tables are understood, with shared HC control-length skipping and private-span
+  suppression so hidden text and link/media payload bytes are not searched as
+  body text, with diagnostics and explicit HC rendering separation;
 - dense HONMON anchor dereference for supported SQLite sidecars, including
   `t_contents`, `HONBUN`, extensionless main wordlist tables, and conservative
   generic id/body schemas. Android SSED app body databases that store HTML in a

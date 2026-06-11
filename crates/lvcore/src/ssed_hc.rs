@@ -1396,7 +1396,7 @@ fn ascii_hex_digit(ch: char) -> Option<char> {
     Some(ascii.to_ascii_uppercase())
 }
 
-fn hc_control_arg_length(data: &[u8], offset: usize) -> usize {
+pub(crate) fn hc_control_arg_length(data: &[u8], offset: usize) -> usize {
     if offset + 1 >= data.len() || data[offset] != 0x1f {
         return 0;
     }

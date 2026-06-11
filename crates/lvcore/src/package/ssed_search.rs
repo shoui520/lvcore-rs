@@ -1,6 +1,7 @@
 use encoding_rs::SHIFT_JIS;
 
 use super::html::escape_plain_label_html;
+use crate::ssed_hc::hc_control_arg_length;
 use crate::ssed_index::{SsedIndexRow, decode_jis_pair};
 
 const SSED_FULLTEXT_SNIPPET_CHARS: usize = 160;
@@ -8,6 +9,7 @@ const SSED_FULLTEXT_SNIPPET_CHARS: usize = 160;
 pub(super) fn decode_ssed_body_search_text(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len());
     let mut index = 0usize;
+    let mut private_depth = 0usize;
     while index < data.len() {
         let byte = data[index];
         if byte == 0 {
@@ -16,13 +18,24 @@ pub(super) fn decode_ssed_body_search_text(data: &[u8]) -> String {
         }
         if byte == 0x1f {
             out.push(' ');
-            index = index.saturating_add(2);
-            if index < data.len() && data[index] <= 0x10 {
-                index += 1;
+            if index + 1 >= data.len() {
+                break;
             }
-            if index < data.len() && data[index] <= 0x10 {
-                index += 1;
+            let op = data[index + 1];
+            let next = index
+                .saturating_add(2)
+                .saturating_add(hc_control_arg_length(data, index))
+                .min(data.len());
+            match op {
+                0xe2 => private_depth = private_depth.saturating_add(1),
+                0xe3 => private_depth = private_depth.saturating_sub(1),
+                _ => {}
             }
+            index = next;
+            continue;
+        }
+        if private_depth > 0 {
+            index = skip_private_body_search_payload(data, index);
             continue;
         }
         if byte < 0x20 {
@@ -60,6 +73,26 @@ pub(super) fn decode_ssed_body_search_text(data: &[u8]) -> String {
         index += 1;
     }
     collapse_search_whitespace(&narrow_fullwidth_ascii_text(&out))
+}
+
+fn skip_private_body_search_payload(data: &[u8], index: usize) -> usize {
+    let byte = data[index];
+    if byte < 0x20 {
+        return index + 1;
+    }
+    if index + 1 < data.len()
+        && (0x21..=0x7e).contains(&byte)
+        && (0x21..=0x7e).contains(&data[index + 1])
+    {
+        return index + 2;
+    }
+    if index + 1 < data.len() && ((0x81..=0x9f).contains(&byte) || (0xe0..=0xfc).contains(&byte)) {
+        return index + 2;
+    }
+    if index + 1 < data.len() && (0xa1..=0xfe).contains(&byte) {
+        return index + 2;
+    }
+    index + 1
 }
 
 pub(super) fn ssed_body_search_byte_candidates(query: &str) -> Vec<Vec<u8>> {
@@ -558,6 +591,29 @@ mod tests {
     fn search_match_normalization_folds_jis_minus_to_ascii_hyphen() {
         assert_eq!(normalize_search_match_text("Ａ−Ｂ"), "a-b");
         assert_eq!(decode_ssed_body_search_text(&body_jis("Ａ−Ｂ")), "A-B");
+    }
+
+    #[test]
+    fn body_search_text_suppresses_private_spans_like_logovista_tools() {
+        let mut data = body_jis("前");
+        data.extend_from_slice(&[0x1f, 0xe2, 0x00, 0x00]);
+        data.extend_from_slice(&body_jis("隠"));
+        data.extend_from_slice(&[0xb1, 0x23]);
+        data.extend_from_slice(&[0x1f, 0xe3]);
+        data.extend_from_slice(&body_jis("後"));
+
+        assert_eq!(decode_ssed_body_search_text(&data), "前 後");
+    }
+
+    #[test]
+    fn body_search_text_skips_full_control_payloads() {
+        let mut data = body_jis("前");
+        data.extend_from_slice(&[
+            0x1f, 0x44, 0xaa, 0xbb, 0xcc, 0xdd, 0x00, 0x00, 0x00, 0x03, 0x12, 0x34,
+        ]);
+        data.extend_from_slice(&body_jis("後"));
+
+        assert_eq!(decode_ssed_body_search_text(&data), "前 後");
     }
 
     #[test]
