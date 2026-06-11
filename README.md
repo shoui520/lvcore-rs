@@ -167,9 +167,9 @@ provider slices:
 - native indexed search/browse for the observed SSED leaf row families:
   simple, keyless pointer-table, body-only, tagged/grouped, keyword,
   cross-reference, and multi-selector rows;
-- SSED simple-index internal-page traversal for exact/forward searches, so large
-  title indexes can seek near the requested key instead of always scanning from
-  the first leaf page;
+- SSED internal-page traversal for native exact/forward/backward indexed
+  searches, so large title indexes can seek near the requested key instead of
+  always scanning from the first leaf page;
 - SSED title-label decoding for raw JIS X 0208 title bytes that can otherwise
   look like printable ASCII, while preserving real Latin title labels;
 - initial SSED full-text search over HONMON body windows behind native index
@@ -308,10 +308,9 @@ known structures.
   dense HONMON databases plus a bounded, index-anchored HONMON scan for stream
   bodies; it is not a substitute for HC-rendered semantic text and may need more
   product tuning.
-- SSED internal-page traversal is currently implemented for simple
-  exact/forward title-index paths and reversed-key backward indexes. Partial,
-  keyword, cross-reference, and multi-selector performance still need
-  format-specific indexing work.
+- SSED partial/non-prefix search still relies on bounded native index scans
+  after the prefix prepass. More product-specific indexing may be needed for
+  consistently low-latency substring search on very large packages.
 - KOJIEN6-specific COLSMPL official RGB/rendering parity remains deferred; the
   parser preserves exact Munsell/label data but does not fake the proprietary
   color-map bridge.

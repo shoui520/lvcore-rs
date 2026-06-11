@@ -72,106 +72,107 @@ impl ReaderBookPackage {
                 let mut reader = SsedDataFile::open(&path)?;
                 let component_read_base = ssed_component_read_base(component, &reader);
                 let page_count = component.block_count() as usize;
-                let start_page = match self.ssed_simple_index_candidate_leaf_page(
+                let start_pages = self.ssed_simple_index_candidate_leaf_pages(
+                    mode,
                     component,
                     &mut reader,
                     component_read_base,
                     &needle_key,
-                )? {
-                    Some(page_index) => page_index,
-                    None => {
-                        needs_prefilter_fallback = true;
-                        continue;
-                    }
-                };
+                )?;
+                if start_pages.is_empty() {
+                    needs_prefilter_fallback = true;
+                    continue;
+                }
                 scanned_components = scanned_components.saturating_add(1);
-                let mut last_key = None::<Vec<u8>>;
-                let mut scan_state = SsedIndexScanState::default();
-                let mut scanned_leaf_pages = 0usize;
-                'pages: for page_index in start_page..page_count {
-                    let page = read_index_page(&mut reader, component_read_base, page_index)?;
-                    if page.len() < 4 {
-                        break;
-                    }
-                    let word = u16::from_be_bytes([page[0], page[1]]);
-                    if !is_leaf_page(word) {
-                        continue;
-                    }
-                    scanned_leaf_pages = scanned_leaf_pages.saturating_add(1);
-                    let logical_block = component.start_block + page_index as u32;
-                    let (rows, unknown) = parse_supported_leaf_page(
-                        &component.filename,
-                        component.component_type,
-                        page,
-                        page_index as u32,
-                        logical_block,
-                        &mut scan_state,
-                    );
-                    if rows.windows(2).any(|pair| {
-                        ssed_index_row_order_key(&pair[1]) < ssed_index_row_order_key(&pair[0])
-                    }) {
-                        needs_linear_fallback = true;
-                    }
-                    if unknown > 0 {
-                        diagnostics.push(
-                            Diagnostic::warning(
-                                "ssed_index_unknown_leaf_bytes",
-                                format!(
-                                    "{} had {unknown} unknown index leaf row(s)",
-                                    component.filename
-                                ),
-                            )
-                            .with_context("component", &component.filename),
+                for start_page in start_pages {
+                    let mut last_key = None::<Vec<u8>>;
+                    let mut scan_state = SsedIndexScanState::default();
+                    let mut scanned_leaf_pages = 0usize;
+                    'pages: for page_index in start_page..page_count {
+                        let page = read_index_page(&mut reader, component_read_base, page_index)?;
+                        if page.len() < 4 {
+                            break;
+                        }
+                        let word = u16::from_be_bytes([page[0], page[1]]);
+                        if !is_leaf_page(word) {
+                            continue;
+                        }
+                        scanned_leaf_pages = scanned_leaf_pages.saturating_add(1);
+                        let logical_block = component.start_block + page_index as u32;
+                        let (rows, unknown) = parse_supported_leaf_page(
+                            &component.filename,
+                            component.component_type,
+                            page,
+                            page_index as u32,
+                            logical_block,
+                            &mut scan_state,
                         );
-                    }
-                    for row in rows {
-                        let key = ssed_index_row_match_text(&row);
-                        let key_bytes = ssed_index_row_order_key(&row);
-                        let key_has_needle_prefix =
-                            !needle_key.is_empty() && key_bytes.starts_with(&needle_key);
-                        if last_key
-                            .as_ref()
-                            .is_some_and(|last_key| key_bytes.as_slice() < last_key.as_slice())
-                        {
+                        if rows.windows(2).any(|pair| {
+                            ssed_index_row_order_key(&pair[1]) < ssed_index_row_order_key(&pair[0])
+                        }) {
                             needs_linear_fallback = true;
                         }
-                        last_key = Some(key_bytes.clone());
-                        let row_matches = match mode {
-                            SearchMode::Exact => key == needle,
-                            SearchMode::Forward => key.starts_with(needle),
-                            SearchMode::Backward => key.ends_with(needle),
-                            _ => false,
-                        };
-                        let passed_match_region = match mode {
-                            SearchMode::Exact => {
-                                !needs_linear_fallback
-                                    && key_bytes.as_slice() > needle_key.as_slice()
-                            }
-                            SearchMode::Forward => {
-                                !needs_linear_fallback
-                                    && !key_has_needle_prefix
-                                    && key_bytes.as_slice() > needle_key.as_slice()
-                            }
-                            SearchMode::Backward => {
-                                !needs_linear_fallback
-                                    && !key_has_needle_prefix
-                                    && key_bytes.as_slice() > needle_key.as_slice()
-                            }
-                            _ => false,
-                        };
-                        if !on_row(row)? {
-                            break 'candidates;
+                        if unknown > 0 {
+                            diagnostics.push(
+                                Diagnostic::warning(
+                                    "ssed_index_unknown_leaf_bytes",
+                                    format!(
+                                        "{} had {unknown} unknown index leaf row(s)",
+                                        component.filename
+                                    ),
+                                )
+                                .with_context("component", &component.filename),
+                            );
                         }
-                        if !row_matches && passed_match_region {
+                        for row in rows {
+                            let key = ssed_index_row_match_text(&row);
+                            let key_bytes = ssed_index_row_order_key(&row);
+                            let key_has_needle_prefix =
+                                !needle_key.is_empty() && key_bytes.starts_with(&needle_key);
+                            if last_key
+                                .as_ref()
+                                .is_some_and(|last_key| key_bytes.as_slice() < last_key.as_slice())
+                            {
+                                needs_linear_fallback = true;
+                            }
+                            last_key = Some(key_bytes.clone());
+                            let row_matches = match mode {
+                                SearchMode::Exact => key == needle,
+                                SearchMode::Forward => key.starts_with(needle),
+                                SearchMode::Backward => key.ends_with(needle),
+                                _ => false,
+                            };
+                            let passed_match_region = match mode {
+                                SearchMode::Exact => {
+                                    !needs_linear_fallback
+                                        && key_bytes.as_slice() > needle_key.as_slice()
+                                }
+                                SearchMode::Forward => {
+                                    !needs_linear_fallback
+                                        && !key_has_needle_prefix
+                                        && key_bytes.as_slice() > needle_key.as_slice()
+                                }
+                                SearchMode::Backward => {
+                                    !needs_linear_fallback
+                                        && !key_has_needle_prefix
+                                        && key_bytes.as_slice() > needle_key.as_slice()
+                                }
+                                _ => false,
+                            };
+                            if !on_row(row)? {
+                                break 'candidates;
+                            }
+                            if !row_matches && passed_match_region {
+                                break 'pages;
+                            }
+                        }
+                        if scanned_leaf_pages >= SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT {
                             break 'pages;
                         }
                     }
-                    if scanned_leaf_pages >= SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT {
-                        break 'pages;
+                    if candidate_satisfied() {
+                        break 'candidates;
                     }
-                }
-                if candidate_satisfied() {
-                    break 'candidates;
                 }
             }
         }
@@ -182,7 +183,47 @@ impl ReaderBookPackage {
         })
     }
 
-    fn ssed_simple_index_candidate_leaf_page(
+    fn ssed_simple_index_candidate_leaf_pages(
+        &self,
+        mode: &SearchMode,
+        component: &SsedComponent,
+        reader: &mut SsedDataFile,
+        component_read_base: usize,
+        needle_key: &[u8],
+    ) -> Result<Vec<usize>> {
+        let mut pages = Vec::new();
+        let mut push_page = |page: Option<usize>| {
+            if let Some(page) = page
+                && !pages.contains(&page)
+            {
+                pages.push(page);
+            }
+        };
+        if *mode == SearchMode::Exact {
+            push_page(self.ssed_simple_index_candidate_leaf_page_lower_bound(
+                component,
+                reader,
+                component_read_base,
+                needle_key,
+            )?);
+            push_page(self.ssed_simple_index_candidate_leaf_page_upper_bound(
+                component,
+                reader,
+                component_read_base,
+                needle_key,
+            )?);
+        } else if *mode == SearchMode::Forward || *mode == SearchMode::Backward {
+            push_page(self.ssed_simple_index_candidate_leaf_page_upper_bound(
+                component,
+                reader,
+                component_read_base,
+                needle_key,
+            )?);
+        }
+        Ok(pages)
+    }
+
+    fn ssed_simple_index_candidate_leaf_page_upper_bound(
         &self,
         component: &SsedComponent,
         reader: &mut SsedDataFile,
@@ -214,12 +255,63 @@ impl ReaderBookPackage {
             let Some(child_block) = rows
                 .iter()
                 .find(|row| {
-                    row.raw_key.iter().all(|value| *value == 0xff)
+                    ssed_internal_key_is_ff_sentinel(&row.raw_key)
                         || row.raw_key.as_slice() >= needle_key
                 })
                 .or_else(|| rows.last())
                 .map(|row| row.child_block)
             else {
+                return Ok(None);
+            };
+            if child_block < component.start_block {
+                return Ok(None);
+            }
+            page_index = (child_block - component.start_block) as usize;
+        }
+        Ok(None)
+    }
+
+    fn ssed_simple_index_candidate_leaf_page_lower_bound(
+        &self,
+        component: &SsedComponent,
+        reader: &mut SsedDataFile,
+        component_read_base: usize,
+        needle_key: &[u8],
+    ) -> Result<Option<usize>> {
+        let page_count = component.block_count() as usize;
+        if page_count == 0 {
+            return Ok(None);
+        }
+        let mut page_index = 0usize;
+        let mut guard = 0usize;
+        while page_index < page_count && guard <= page_count {
+            guard = guard.saturating_add(1);
+            let page = read_index_page(reader, component_read_base, page_index)?;
+            if page.len() < 4 {
+                return Ok(None);
+            }
+            let word = u16::from_be_bytes([page[0], page[1]]);
+            if is_leaf_page(word) {
+                return Ok(Some(page_index));
+            }
+            let rows = parse_internal_page(
+                &component.filename,
+                page,
+                page_index as u32,
+                component.start_block + page_index as u32,
+            );
+            let mut chosen = rows.first();
+            for row in &rows {
+                if row.raw_key.is_empty()
+                    || (!ssed_internal_key_is_ff_sentinel(&row.raw_key)
+                        && row.raw_key.as_slice() <= needle_key)
+                {
+                    chosen = Some(row);
+                    continue;
+                }
+                break;
+            }
+            let Some(child_block) = chosen.map(|row| row.child_block) else {
                 return Ok(None);
             };
             if child_block < component.start_block {
@@ -1598,6 +1690,10 @@ fn ssed_prefiltered_index_component_may_match(
     }
 }
 
+fn ssed_internal_key_is_ff_sentinel(raw_key: &[u8]) -> bool {
+    !raw_key.is_empty() && raw_key.iter().all(|value| *value == 0xff)
+}
+
 pub(in crate::package::drivers) fn ssed_index_bound_is_plausible(
     start: SsedIndexPointer,
     end: SsedIndexPointer,
@@ -1659,4 +1755,16 @@ pub(super) fn read_index_page(
     }
     let end = start.saturating_add(INDEX_PAGE_SIZE).min(chunk.len());
     Ok(&chunk[start..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_ff_key_is_sentinel_not_lower_bound() {
+        let sentinel = vec![0xff, 0xff];
+        assert!(ssed_internal_key_is_ff_sentinel(&sentinel));
+        assert!(!ssed_internal_key_is_ff_sentinel(&[0x23, b'z']));
+    }
 }
