@@ -292,70 +292,125 @@ impl ReaderBookPackage {
         while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
             output.push_str(&html[cursor..attr.value_start]);
             let raw_value = &html[attr.value_start..attr.value_end];
-            if attr.name == HtmlAttrName::Href
-                && let Some(address) = parse_lved_address(raw_value)
-            {
-                if ssed_loose_address_is_package_html_ui_sentinel(address.block, address.offset) {
-                    output.push_str(raw_value);
-                } else if let Some(target) = self.ssed_target_for_loose_address(
-                    address.block,
-                    address.offset,
-                    &mut diagnostics,
-                )? {
-                    let decoded = target.decode()?;
-                    if seen_target_tokens.insert(target.as_str().to_owned()) {
-                        links.push(TargetLink::new(raw_value, &decoded)?);
+            if attr.name == HtmlAttrName::Href {
+                if let Some((anchor, html_anchor)) = lved_dataid_anchor(raw_value) {
+                    let target = InternalTarget::SsedDenseAnchor {
+                        anchor,
+                        resolver_hint: None,
+                    };
+                    let token = TargetToken::new(&target)?;
+                    if seen_target_tokens.insert(token.as_str().to_owned()) {
+                        let mut link = TargetLink::new(raw_value, &target)?;
+                        if let Some(html_anchor) = html_anchor {
+                            link.attributes
+                                .insert("html_anchor".to_owned(), html_anchor);
+                            link.diagnostics.push(Diagnostic::info(
+                                "ssed_package_html_dataid_anchor_preserved_as_link_attribute",
+                                "SSED dense-anchor targets do not yet carry secondary HTML scroll anchors",
+                            ));
+                        }
+                        links.push(link);
                     }
-                    output.push_str(&format!("lvcore://target/{}", target.as_str()));
+                    output.push_str(&format!("lvcore://target/{}", token.as_str()));
+                } else if let Some(address) = parse_lved_address(raw_value) {
+                    if ssed_loose_address_is_package_html_ui_sentinel(address.block, address.offset)
+                    {
+                        output.push_str(raw_value);
+                    } else if let Some(target) = self.ssed_target_for_loose_address(
+                        address.block,
+                        address.offset,
+                        &mut diagnostics,
+                    )? {
+                        let decoded = target.decode()?;
+                        if seen_target_tokens.insert(target.as_str().to_owned()) {
+                            links.push(TargetLink::new(raw_value, &decoded)?);
+                        }
+                        output.push_str(&format!("lvcore://target/{}", target.as_str()));
+                    } else {
+                        output.push_str(raw_value);
+                    }
+                } else if package_html_attr_value_has_scheme(raw_value) {
+                    output.push_str(raw_value);
+                } else if let Some(reference) =
+                    package_relative_html_reference(&base_dir, raw_value)
+                {
+                    let reference = self.package_file_html_reference_with_templates_fallback(
+                        &base_dir, reference,
+                    )?;
+                    if path_has_extension(&reference.path, &["html", "htm"]) {
+                        let resource = InternalResource::PackageFile {
+                            path: reference.path.clone(),
+                            resource_kind: ResourceKind::Html,
+                        };
+                        let resource = ResourceToken::new(&resource)?;
+                        let target = InternalTarget::Resource {
+                            resource,
+                            anchor: reference.anchor,
+                        };
+                        let token = TargetToken::new(&target)?;
+                        if seen_target_tokens.insert(token.as_str().to_owned()) {
+                            links.push(TargetLink::new(raw_value, &target)?);
+                        }
+                        output.push_str(&format!("lvcore://target/{}", token.as_str()));
+                    } else {
+                        let resource_kind = resource_kind_from_path(&reference.path);
+                        let resource = InternalResource::PackageFile {
+                            resource_kind,
+                            path: reference.path.clone(),
+                        };
+                        let token = ResourceToken::new(&resource)?;
+                        let resource_ref = self.resolve_resource(&token)?;
+                        if let Some(data_url) = optional_missing_package_html_data_url(
+                            &reference.path,
+                            resource_kind,
+                            &resource_ref,
+                        ) {
+                            output.push_str(&data_url);
+                        } else {
+                            let href = format!("lvcore://resource/{}", token.as_str());
+                            if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                                diagnostics.extend(resource_ref.diagnostics.clone());
+                                resources.push(resource_ref);
+                            }
+                            output.push_str(&href);
+                        }
+                        if let Some(anchor) = reference.anchor.as_deref() {
+                            output.push('#');
+                            output.push_str(anchor);
+                        }
+                    }
                 } else {
                     output.push_str(raw_value);
                 }
             } else if package_html_attr_value_has_scheme(raw_value) {
                 output.push_str(raw_value);
             } else if let Some(reference) = package_relative_html_reference(&base_dir, raw_value) {
-                if attr.name == HtmlAttrName::Href
-                    && path_has_extension(&reference.path, &["html", "htm"])
-                {
-                    let resource = InternalResource::PackageFile {
-                        path: reference.path.clone(),
-                        resource_kind: ResourceKind::Html,
-                    };
-                    let resource = ResourceToken::new(&resource)?;
-                    let target = InternalTarget::Resource {
-                        resource,
-                        anchor: reference.anchor,
-                    };
-                    let token = TargetToken::new(&target)?;
-                    if seen_target_tokens.insert(token.as_str().to_owned()) {
-                        links.push(TargetLink::new(raw_value, &target)?);
-                    }
-                    output.push_str(&format!("lvcore://target/{}", token.as_str()));
+                let reference =
+                    self.package_file_html_reference_with_templates_fallback(&base_dir, reference)?;
+                let resource_kind = resource_kind_from_path(&reference.path);
+                let resource = InternalResource::PackageFile {
+                    resource_kind,
+                    path: reference.path.clone(),
+                };
+                let token = ResourceToken::new(&resource)?;
+                let resource_ref = self.resolve_resource(&token)?;
+                if let Some(data_url) = optional_missing_package_html_data_url(
+                    &reference.path,
+                    resource_kind,
+                    &resource_ref,
+                ) {
+                    output.push_str(&data_url);
                 } else {
-                    let resource_kind = resource_kind_from_path(&reference.path);
-                    let resource = InternalResource::PackageFile {
-                        resource_kind,
-                        path: reference.path.clone(),
-                    };
-                    let token = ResourceToken::new(&resource)?;
-                    let resource_ref = self.resolve_resource(&token)?;
-                    if let Some(data_url) = optional_missing_package_font_js_data_url(
-                        &reference.path,
-                        resource_kind,
-                        &resource_ref,
-                    ) {
-                        output.push_str(&data_url);
-                    } else {
-                        let href = format!("lvcore://resource/{}", token.as_str());
-                        if seen_resource_tokens.insert(token.as_str().to_owned()) {
-                            diagnostics.extend(resource_ref.diagnostics.clone());
-                            resources.push(resource_ref);
-                        }
-                        output.push_str(&href);
+                    let href = format!("lvcore://resource/{}", token.as_str());
+                    if seen_resource_tokens.insert(token.as_str().to_owned()) {
+                        diagnostics.extend(resource_ref.diagnostics.clone());
+                        resources.push(resource_ref);
                     }
-                    if let Some(anchor) = reference.anchor.as_deref() {
-                        output.push('#');
-                        output.push_str(anchor);
-                    }
+                    output.push_str(&href);
+                }
+                if let Some(anchor) = reference.anchor.as_deref() {
+                    output.push('#');
+                    output.push_str(anchor);
                 }
             } else {
                 output.push_str(raw_value);
@@ -370,6 +425,27 @@ impl ReaderBookPackage {
             links,
             diagnostics,
         })
+    }
+
+    fn package_file_html_reference_with_templates_fallback(
+        &self,
+        base_dir: &str,
+        reference: PackageHtmlReference,
+    ) -> Result<PackageHtmlReference> {
+        if self.resolve_package_file_path(&reference.path)?.is_some()
+            || !base_dir.is_empty()
+            || reference.path.contains('/')
+        {
+            return Ok(reference);
+        }
+        let candidate = format!("Templates/{}", reference.path);
+        if self.resolve_package_file_path(&candidate)?.is_some() {
+            return Ok(PackageHtmlReference {
+                path: candidate,
+                anchor: reference.anchor,
+            });
+        }
+        Ok(reference)
     }
 
     fn normalize_chm_html_refs(
@@ -468,20 +544,25 @@ fn package_html_attr_value_has_scheme(raw_value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
 }
 
-fn optional_missing_package_font_js_data_url(
+fn optional_missing_package_html_data_url(
     path: &str,
     resource_kind: ResourceKind,
     resource_ref: &ResourceRef,
 ) -> Option<String> {
-    if resource_kind != ResourceKind::Javascript {
-        return None;
-    }
-    if !Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("font.js"))
-    {
-        return None;
+    match resource_kind {
+        ResourceKind::Css => {}
+        ResourceKind::Javascript => {
+            if !Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.eq_ignore_ascii_case("font.js") || name.eq_ignore_ascii_case("MathJax.js")
+                })
+            {
+                return None;
+            }
+        }
+        _ => return None,
     }
     if resource_ref.href.is_some()
         || !resource_ref
@@ -491,9 +572,11 @@ fn optional_missing_package_font_js_data_url(
     {
         return None;
     }
-    let mime_type = resource_ref
-        .mime_type
-        .as_deref()
-        .unwrap_or("text/javascript; charset=utf-8");
+    let fallback_mime = match resource_kind {
+        ResourceKind::Css => "text/css; charset=utf-8",
+        ResourceKind::Javascript => "text/javascript; charset=utf-8",
+        _ => return None,
+    };
+    let mime_type = resource_ref.mime_type.as_deref().unwrap_or(fallback_mime);
     Some(generic_html_data_url(mime_type, b""))
 }

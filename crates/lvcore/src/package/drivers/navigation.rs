@@ -229,38 +229,58 @@ impl NavigationProvider for ReaderBookPackage {
                 });
             }
             let aux_specs = self.ssed_aux_index_specs()?;
+            let aux_html_sources = self.ssed_exinfo_aux_html_sources()?;
             let mut declared_aux_paths = BTreeSet::new();
             for spec in &aux_specs {
                 declared_aux_paths.insert(spec.info.to_ascii_lowercase());
                 let relative = Path::new(&spec.info);
-                if !path_has_extension(&spec.info, &["idx"]) {
-                    continue;
+                if path_has_extension(&spec.info, &["idx"]) {
+                    if !self.storage.exists(relative)? {
+                        continue;
+                    }
+                    let title = if spec.name.is_empty() {
+                        spec.info.clone()
+                    } else {
+                        spec.name.clone()
+                    };
+                    let surface_id = format!("aux-index:{}", spec.index);
+                    surfaces.push(HomeSurface {
+                        href: None,
+                        surface_id: surface_id.clone(),
+                        kind: NavigationSurfaceKind::AuxiliaryIndex,
+                        status: NavigationStatus::Available,
+                        title_html: escape_plain_label_html(&title),
+                        title_text: title,
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id,
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_auxiliary_index",
+                            "EXINFO.INI declares a tab-indented auxiliary navigation index",
+                        )],
+                    });
+                } else if let Some(source) = aux_html_sources
+                    .iter()
+                    .find(|source| source.index == spec.index)
+                {
+                    surfaces.push(HomeSurface {
+                        href: None,
+                        surface_id: source.surface_id.clone(),
+                        kind: NavigationSurfaceKind::Info,
+                        status: NavigationStatus::Available,
+                        title_html: escape_plain_label_html(&source.source.title),
+                        title_text: source.source.title.clone(),
+                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                            surface_id: source.surface_id.clone(),
+                            item_id: "root".to_owned(),
+                        })?),
+                        diagnostics: vec![Diagnostic::info(
+                            "ssed_auxiliary_html",
+                            "EXINFO auxiliary IDXINFO exposes a package HTML page",
+                        )],
+                    });
                 }
-                if !self.storage.exists(relative)? {
-                    continue;
-                }
-                let title = if spec.name.is_empty() {
-                    spec.info.clone()
-                } else {
-                    spec.name.clone()
-                };
-                let surface_id = format!("aux-index:{}", spec.index);
-                surfaces.push(HomeSurface {
-                    href: None,
-                    surface_id: surface_id.clone(),
-                    kind: NavigationSurfaceKind::AuxiliaryIndex,
-                    status: NavigationStatus::Available,
-                    title_html: escape_plain_label_html(&title),
-                    title_text: title,
-                    target: Some(TargetToken::new(&InternalTarget::MenuItem {
-                        surface_id,
-                        item_id: "root".to_owned(),
-                    })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "ssed_auxiliary_index",
-                        "EXINFO.INI declares a tab-indented auxiliary navigation index",
-                    )],
-                });
             }
             for spec in self.ssed_numeric_aux_index_specs(&declared_aux_paths)? {
                 let title = spec.info.clone();
@@ -695,6 +715,11 @@ impl NavigationProvider for ReaderBookPackage {
                 && (id.starts_with("aux-index:") || id.starts_with("numeric-aux:")) =>
             {
                 self.open_ssed_aux_index_surface(surface_id, cursor, limit, options)
+            }
+            id if has_ssed_components
+                && super::ssed_package_html_surfaces::is_ssed_exinfo_aux_html_surface_id(id) =>
+            {
+                self.open_ssed_exinfo_aux_html_surface(surface_id, cursor, limit)
             }
             "hanrei" if has_ssed_components => {
                 self.open_ssed_hanrei_surface(surface_id, cursor, limit)

@@ -388,6 +388,120 @@ fn ssed_exinfo_index_url_placeholder_template_is_not_home_surface() {
 }
 
 #[test]
+fn ssed_exinfo_aux_html_idxinfo_exposes_package_html_surface() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(package_root.join("Templates")).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("HONMON.DIC"),
+        sseddata_literal_fixture_at(1, b"entry body"),
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("EXINFO.INI"),
+        b"[GENERAL]\nIDXCOUNT=2\nIDXTITLE=Index\nIDXINFO0=00000152.idx\nIDXNAME1=Bibliography\nIDXINFO1=select.html\n",
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("00000152.idx"),
+        b"00000000\t00000000\tRoot\n00000001\t00000000\t\tEntry\n",
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("select.html"),
+        br#"<html><head><link rel="stylesheet" href="00000152.css"><script src="./MathJax/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script></head><body><p>Bibliography</p><a href="lved.addr00000001:0000">entry</a><a href="lved.dataid:00000042#spot">dense</a></body></html>"#,
+    )
+    .unwrap();
+    fs::write(package_root.join("Templates/00000152.css"), b"body{}").unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(
+        surfaces
+            .iter()
+            .any(|surface| surface.surface_id == "aux-index:0"
+                && surface.kind == NavigationSurfaceKind::AuxiliaryIndex),
+        "the normal IDX auxiliary surface should still be advertised"
+    );
+    let surface = surfaces
+        .iter()
+        .find(|surface| surface.surface_id == "aux-html:1")
+        .expect("HTML IDXINFO should expose a package HTML info surface");
+
+    assert_eq!(surface.kind, NavigationSurfaceKind::Info);
+    assert_eq!(surface.status, NavigationStatus::Available);
+    assert_eq!(surface.title_text, "Bibliography");
+
+    let NavigationSurface::InfoPages { pages, .. } = package.open_surface("aux-html:1").unwrap()
+    else {
+        panic!("HTML IDXINFO should open as info pages");
+    };
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].label_text, "Bibliography");
+
+    let view = package
+        .render_target(&pages[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::InfoPage);
+    let html = view.display_html.as_deref().unwrap();
+    assert!(!html.contains("00000152.css"));
+    assert!(!html.contains("MathJax.js"));
+    assert!(!html.contains("lved.addr00000001:0000"));
+    assert!(!html.contains("lved.dataid:00000042"));
+    assert_eq!(view.resources.len(), 1);
+    assert_eq!(view.links.len(), 2);
+    assert!(view.links.iter().any(|link| matches!(
+        link.token.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, resolver_hint: None } if anchor == "00000042"
+    )));
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "resource_missing"
+                && diagnostic.code != "ssed_loose_address_unresolved")
+    );
+}
+
+#[test]
+fn ssed_exinfo_aux_html_missing_stylesheet_is_optional() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("EXINFO.INI"),
+        b"[GENERAL]\nIDXCOUNT=1\nIDXNAME0=Optional Style\nIDXINFO0=select.html\n",
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("select.html"),
+        br#"<html><head><link rel="stylesheet" href="missing.css"><script src="./MathJax/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script></head><body>Readable</body></html>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let NavigationSurface::InfoPages { pages, .. } = package.open_surface("aux-html:0").unwrap()
+    else {
+        panic!("HTML IDXINFO should open as info pages");
+    };
+    let view = package
+        .render_target(&pages[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::InfoPage);
+    let html = view.display_html.as_deref().unwrap();
+    assert!(!html.contains("missing.css"));
+    assert!(!html.contains("MathJax.js"));
+    assert!(view.resources.is_empty());
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "resource_missing")
+    );
+}
+
+#[test]
 fn ssed_panels_honor_exinfo_panelxml_metadata_name() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

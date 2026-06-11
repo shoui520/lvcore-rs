@@ -67,9 +67,10 @@ use super::chm_toc::{
 };
 use super::hc_profile::hc_renderer_profile;
 use super::html::{
-    HtmlAttrName, escape_plain_label_html, html_basic_text, html_document_label, html_label_text,
-    html_unescape_minimal, next_html_href_or_src_attr, package_html_base_dir,
-    package_relative_html_reference, path_has_extension, sanitize_rich_label_html,
+    HtmlAttrName, PackageHtmlReference, escape_plain_label_html, html_basic_text,
+    html_document_label, html_label_text, html_unescape_minimal, next_html_href_or_src_attr,
+    package_html_base_dir, package_relative_html_reference, path_has_extension,
+    sanitize_rich_label_html,
 };
 use super::lved_refs::{
     LvedHtmlRefKind, is_lved_ref_terminator, lved_address_target, lved_binran_target,
