@@ -1,15 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use lvcore::{
     BookId, BookLibrary, BookMetadata, Capability, DetectedPackage, Diagnostic, DiagnosticSeverity,
     DriverRegistry, FormatFamily, HomeSurface, NavigationStatus, NavigationSurface,
-    NavigationSurfaceKind, NavigationTarget, RenderMode, RenderOptions, ResolvedTargetKind,
-    ResolvedTargetView, ResourceKind, SearchHit, SearchMode, SearchQuery, SearchResultSequence,
-    SearchScope, SequenceHint,
+    NavigationSurfaceKind, NavigationTarget, PackageDiscoveryOptions, RenderMode, RenderOptions,
+    ResolvedTargetKind, ResolvedTargetView, ResourceKind, SearchHit, SearchMode, SearchQuery,
+    SearchResultSequence, SearchScope, SequenceHint,
 };
 use serde_json::json;
 
@@ -49,7 +48,10 @@ pub(crate) fn validate_package_json(
     options: ValidateOptions,
 ) -> serde_json::Value {
     match open_single_book_library(registry, path) {
-        Ok((library, book_id)) => {
+        Ok((mut library, book_id)) => {
+            if options.deep {
+                open_validation_cross_book_destinations(registry, &mut library, &book_id, path);
+            }
             validate_opened_package_json(path.to_path_buf(), library, book_id, options)
         }
         Err(error) => json!({
@@ -68,13 +70,82 @@ pub(crate) fn validate_detected_package_json(
     let path = detected.root.clone();
     let mut library = BookLibrary::new();
     match library.open_detected_package(detected, registry) {
-        Ok(book_id) => validate_opened_package_json(path, library, book_id, options),
+        Ok(book_id) => {
+            if options.deep {
+                open_validation_cross_book_destinations(registry, &mut library, &book_id, &path);
+            }
+            validate_opened_package_json(path, library, book_id, options)
+        }
         Err(error) => json!({
             "path": path,
             "status": "open_error",
             "error": error.to_string(),
         }),
     }
+}
+
+fn open_validation_cross_book_destinations(
+    registry: &DriverRegistry,
+    library: &mut BookLibrary,
+    source_book_id: &BookId,
+    source_root: &Path,
+) {
+    let Ok(surfaces) = library.home_surfaces(source_book_id) else {
+        return;
+    };
+    let mut dict_codes = BTreeSet::new();
+    for diagnostic in surfaces
+        .iter()
+        .flat_map(|surface| surface.diagnostics.iter())
+        .filter(|diagnostic| diagnostic.code == "ssed_ios_table_list_cross_book")
+    {
+        if let Some(dict_code) = diagnostic.context.get("dict_code") {
+            dict_codes.insert(dict_code.to_owned());
+        }
+    }
+    for dict_code in dict_codes {
+        let Some(root) = validation_sibling_package_root(source_root, &dict_code) else {
+            continue;
+        };
+        let Ok(mut detected) =
+            registry.discover_best_packages(&root, PackageDiscoveryOptions::with_max(1))
+        else {
+            continue;
+        };
+        if let Some(detected) = detected.pop() {
+            let _ = library.open_detected_package(detected, registry);
+        }
+    }
+}
+
+fn validation_sibling_package_root(source_root: &Path, dict_code: &str) -> Option<PathBuf> {
+    let wrapper_root = source_root.parent()?;
+    let collection_root = wrapper_root.parent()?;
+    let wanted = validation_dict_code_key(dict_code);
+    for entry in fs::read_dir(collection_root).ok()? {
+        let path = entry.ok()?.path();
+        if !path.is_dir() || path == wrapper_root {
+            continue;
+        }
+        let name = path.file_name()?.to_string_lossy();
+        if validation_dict_code_key(&name) != wanted {
+            continue;
+        }
+        let nested = path.join(name.as_ref());
+        if nested.is_dir() {
+            return Some(nested);
+        }
+        return Some(path);
+    }
+    None
+}
+
+fn validation_dict_code_key(value: &str) -> String {
+    let trimmed = value.trim();
+    trimmed
+        .strip_prefix("_DCT_")
+        .unwrap_or(trimmed)
+        .to_ascii_uppercase()
 }
 
 fn validate_opened_package_json(
@@ -194,18 +265,22 @@ fn exercise_reader_paths(
                 } else {
                     match surface_probe_targets(library, book_id, &surface.surface_id, &opened) {
                         Ok(probe) => match probe.first_target.as_ref() {
-                            Some(target) => match library.render_target(
+                            Some(target) => match library.render_target_routed(
                                 book_id,
                                 &target.target,
                                 &RenderOptions::default(),
                             ) {
-                                Ok(view) => {
+                                Ok(routed) => {
+                                    let routed_book_id = routed.book_id.clone();
+                                    let routing_diagnostics = routed.diagnostics;
+                                    let view = routed.view;
                                     let resource_scan = rendered_resource_scan_with_first_view(
                                         library,
                                         book_id,
                                         &probe.resource_targets,
                                         resource_scan_limit,
                                         &view,
+                                        &routed_book_id,
                                     );
                                     let window_probe = target.sequence_hint.clone().map(|hint| {
                                         continuous_window_probe(
@@ -217,7 +292,7 @@ fn exercise_reader_paths(
                                     });
                                     let mut row = surface_rendered_view_probe(
                                         library,
-                                        book_id,
+                                        &routed_book_id,
                                         &view,
                                         SurfaceRenderedProbeContext {
                                             surface_id: &surface.surface_id,
@@ -227,6 +302,11 @@ fn exercise_reader_paths(
                                             resource_scan,
                                             link_scan_limit,
                                         },
+                                    );
+                                    insert_routing_probe_fields(
+                                        &mut row,
+                                        &routed_book_id,
+                                        &routing_diagnostics,
                                     );
                                     insert_surface_page_probe_fields(&mut row, &probe);
                                     if let Some(window_probe) = window_probe {
@@ -799,6 +879,38 @@ fn insert_diagnostic_fields(row: &mut serde_json::Value, diagnostics: &[Diagnost
     );
 }
 
+fn insert_routing_probe_fields(
+    row: &mut serde_json::Value,
+    routed_book_id: &BookId,
+    diagnostics: &[Diagnostic],
+) {
+    let Some(object) = row.as_object_mut() else {
+        return;
+    };
+    object.insert("routed_book_id".to_owned(), json!(routed_book_id));
+    object.insert(
+        "routing_diagnostic_count".to_owned(),
+        json!(diagnostics.len()),
+    );
+    if diagnostics.is_empty() {
+        return;
+    }
+    object.insert(
+        "routing_diagnostic_codes".to_owned(),
+        diagnostic_code_counts(diagnostics),
+    );
+    object.insert(
+        "routing_diagnostics".to_owned(),
+        json!(
+            diagnostics
+                .iter()
+                .take(VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT)
+                .cloned()
+                .collect::<Vec<_>>()
+        ),
+    );
+}
+
 fn diagnostic_code_counts(diagnostics: &[Diagnostic]) -> serde_json::Value {
     let mut counts = BTreeMap::<(String, String), usize>::new();
     for diagnostic in diagnostics {
@@ -1257,6 +1369,7 @@ fn rendered_search_resource_scan(
             &targets,
             limit,
             first_rendered_view,
+            book_id,
         )
     } else {
         rendered_resource_scan(library, book_id, &targets, limit)
@@ -1278,8 +1391,15 @@ fn rendered_resource_scan_with_first_view(
     targets: &[NavigationTarget],
     limit: usize,
     first_view: &ResolvedTargetView,
+    first_view_book_id: &BookId,
 ) -> serde_json::Value {
-    rendered_resource_scan_inner(library, book_id, targets, limit, Some(first_view))
+    rendered_resource_scan_inner(
+        library,
+        book_id,
+        targets,
+        limit,
+        Some((first_view, first_view_book_id)),
+    )
 }
 
 fn rendered_resource_scan_inner(
@@ -1287,7 +1407,7 @@ fn rendered_resource_scan_inner(
     book_id: &BookId,
     targets: &[NavigationTarget],
     limit: usize,
-    first_view: Option<&ResolvedTargetView>,
+    first_view: Option<(&ResolvedTargetView, &BookId)>,
 ) -> serde_json::Value {
     let started = Instant::now();
     let mut checked_target_count = 0usize;
@@ -1297,26 +1417,29 @@ fn rendered_resource_scan_inner(
         checked_target_count += 1;
         let target_started = Instant::now();
         let cached_view = (index == 0).then_some(first_view).flatten();
-        let owned_view;
-        let view = if let Some(view) = cached_view {
-            view
+        let owned_routed;
+        let (view, view_book_id) = if let Some((view, book_id)) = cached_view {
+            (view, book_id)
         } else {
-            owned_view =
-                match library.render_target(book_id, &target.target, &RenderOptions::default()) {
-                    Ok(view) => view,
-                    Err(error) => {
-                        return json!({
-                            "status": "render_error",
-                            "target_count": targets.len(),
-                            "checked_target_count": checked_target_count,
-                            "target_index": index,
-                            "source_id": target.source_id,
-                            "label": target.label_text,
-                            "error": error.to_string(),
-                        });
-                    }
-                };
-            &owned_view
+            owned_routed = match library.render_target_routed(
+                book_id,
+                &target.target,
+                &RenderOptions::default(),
+            ) {
+                Ok(routed) => routed,
+                Err(error) => {
+                    return json!({
+                        "status": "render_error",
+                        "target_count": targets.len(),
+                        "checked_target_count": checked_target_count,
+                        "target_index": index,
+                        "source_id": target.source_id,
+                        "label": target.label_text,
+                        "error": error.to_string(),
+                    });
+                }
+            };
+            (&owned_routed.view, &owned_routed.book_id)
         };
         let target_elapsed_ms = if cached_view.is_some() {
             0
@@ -1327,7 +1450,8 @@ fn rendered_resource_scan_inner(
             slowest_target_ms = target_elapsed_ms;
             slowest_target_index = Some(index);
         }
-        let Some(first_resource) = first_readable_resource_probe(library, book_id, view) else {
+        let Some(first_resource) = first_readable_resource_probe(library, view_book_id, view)
+        else {
             continue;
         };
         let status = if first_resource

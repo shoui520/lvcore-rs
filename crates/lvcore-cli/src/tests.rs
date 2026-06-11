@@ -600,6 +600,80 @@ fn validate_deep_exercises_continuous_windows() {
 }
 
 #[test]
+fn validate_deep_routes_ios_table_list_cross_book_sibling() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_wrapper = dir.path().join("SRC");
+    let destination_wrapper = dir.path().join("DST");
+    let source_root = source_wrapper.join("SRC");
+    let destination_root = destination_wrapper.join("DST");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&destination_root).unwrap();
+
+    let table_list = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+  <dict>
+    <key>name</key><string>Destination row</string>
+    <key>block</key><integer>100</integer>
+    <key>offset</key><integer>0</integer>
+  </dict>
+</array></plist>"#;
+    fs::write(source_wrapper.join("tableList.plist"), table_list).unwrap();
+    fs::write(destination_wrapper.join("tableList.plist"), table_list).unwrap();
+    fs::write(
+        source_root.join("SRC.IDX"),
+        ssedinfo_cli_fixture_with_honmon_range("Source", 1, 10),
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("HONMON.DIC"),
+        sseddata_literal_fixture_at(1, &body_jis("source")),
+    )
+    .unwrap();
+    fs::write(
+        destination_root.join("DST.IDX"),
+        ssedinfo_cli_fixture_with_honmon_range("Destination", 100, 100),
+    )
+    .unwrap();
+    fs::write(
+        destination_root.join("HONMON.DIC"),
+        sseddata_literal_fixture_at(100, &body_jis("routed body")),
+    )
+    .unwrap();
+
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        &source_root,
+        ValidateOptions {
+            deep: true,
+            include_expensive_search: false,
+        },
+    );
+    let table_list = output["exercises"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|exercise| exercise["surface_id"] == "ios-table-list:tableList.plist")
+        .expect("deep validation should exercise iOS tableList.plist");
+
+    assert_eq!(table_list["status"], "ok");
+    assert_eq!(table_list["view_kind"], "entry_body");
+    assert!(
+        table_list["routed_book_id"]
+            .as_str()
+            .is_some_and(|book_id| book_id.starts_with("SSED:DST:"))
+    );
+    assert!(
+        table_list["routing_diagnostic_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "ssed_cross_book_routed")
+    );
+    assert_eq!(table_list["window"]["center_kind"], "entry_body");
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
 fn validate_deep_scans_beyond_first_target_for_rendered_resources() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
@@ -1455,6 +1529,28 @@ fn ssedinfo_cli_fixture_with_index_blocks(index_blocks: u32) -> Vec<u8> {
     data
 }
 
+fn ssedinfo_cli_fixture_with_honmon_range(
+    title: &str,
+    start_block: u32,
+    end_block: u32,
+) -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 0x30];
+    data[..8].copy_from_slice(lvcore::SSEDINFO_MAGIC);
+    let title = title.as_bytes();
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 1;
+    write_ssedinfo_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        start_block,
+        end_block,
+        "HONMON.DIC",
+    );
+    data
+}
+
 fn write_ssedinfo_record(rec: &mut [u8], component_type: u8, start: u32, end: u32, filename: &str) {
     rec[3] = component_type;
     rec[4..8].copy_from_slice(&start.to_be_bytes());
@@ -1520,14 +1616,23 @@ fn internal_index_page(rows: &[(&str, u32)]) -> Vec<u8> {
 }
 
 fn sseddata_literal_fixture(literals: &[u8]) -> Vec<u8> {
+    sseddata_literal_fixture_at(1, literals)
+}
+
+fn sseddata_literal_fixture_at(start_block: u32, literals: &[u8]) -> Vec<u8> {
     let chunk_offset = 0x44usize;
     let block_count = literals.len().div_ceil(2048).max(1);
     let mut data = vec![0u8; chunk_offset];
     data[..8].copy_from_slice(lvcore::SSEDDATA_MAGIC);
     data[0x0f] = 1;
     data[0x16..0x18].copy_from_slice(&1u16.to_be_bytes());
-    data[0x18..0x1c].copy_from_slice(&1u32.to_be_bytes());
-    data[0x1c..0x20].copy_from_slice(&(block_count as u32).to_be_bytes());
+    data[0x18..0x1c].copy_from_slice(&start_block.to_be_bytes());
+    data[0x1c..0x20].copy_from_slice(
+        &start_block
+            .saturating_add(block_count as u32)
+            .saturating_sub(1)
+            .to_be_bytes(),
+    );
     data[0x40..0x44].copy_from_slice(&(chunk_offset as u32).to_be_bytes());
     data.extend_from_slice(&[0, 0]);
     data.extend_from_slice(&(literals.len() as u16).to_be_bytes());
