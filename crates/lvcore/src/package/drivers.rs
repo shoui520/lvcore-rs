@@ -42,6 +42,7 @@ mod ssed_hanrei_discovery;
 mod ssed_hanrei_surfaces;
 mod ssed_index;
 mod ssed_ios_addr_convert;
+mod ssed_ios_app_menu_surfaces;
 mod ssed_ios_plist_surfaces;
 mod ssed_ios_search;
 mod ssed_multi_ids;

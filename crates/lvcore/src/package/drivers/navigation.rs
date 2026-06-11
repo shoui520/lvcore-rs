@@ -386,6 +386,24 @@ impl NavigationProvider for ReaderBookPackage {
                     )],
                 });
             }
+            for source in self.ssed_ios_app_menu_xml_sources()? {
+                surfaces.push(HomeSurface {
+                    href: None,
+                    surface_id: source.surface_id.clone(),
+                    kind: NavigationSurfaceKind::Info,
+                    status: NavigationStatus::Available,
+                    title_html: escape_plain_label_html(&source.title),
+                    title_text: source.title,
+                    target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                        surface_id: source.surface_id,
+                        item_id: "root".to_owned(),
+                    })?),
+                    diagnostics: vec![Diagnostic::info(
+                        "ssed_ios_app_menu",
+                        "iOS app-menu XML exposes package HTML info pages",
+                    )],
+                });
+            }
             for source in self.ssed_ios_table_list_sources()? {
                 let (status, diagnostics) = self.ssed_ios_table_list_source_status(&source)?;
                 let target = (status == NavigationStatus::Available)
@@ -682,6 +700,11 @@ impl NavigationProvider for ReaderBookPackage {
                 && super::ssed_ios_plist_surfaces::is_ssed_ios_dictlist_other_surface_id(id) =>
             {
                 self.open_ssed_ios_dictlist_other_surface(surface_id, cursor, limit)
+            }
+            id if has_ssed_components
+                && super::ssed_ios_app_menu_surfaces::is_ssed_ios_app_menu_xml_surface_id(id) =>
+            {
+                self.open_ssed_ios_app_menu_xml_surface(surface_id, cursor, limit)
             }
             id if has_ssed_components
                 && super::ssed_ios_plist_surfaces::is_ssed_ios_table_list_surface_id(id) =>

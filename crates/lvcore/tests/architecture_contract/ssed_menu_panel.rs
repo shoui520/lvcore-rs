@@ -1339,6 +1339,88 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
 }
 
 #[test]
+fn ssed_ios_app_menu_xml_exposes_package_html_info_pages() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir_all(package_root.join("manual/contents/img")).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("DICT_menu.xml"),
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<list>
+  <item>
+    <label>Guide heading</label>
+    <ref></ref>
+    <reftype>title</reftype>
+    <directory></directory>
+  </item>
+  <item>
+    <label>Usage</label>
+    <ref>hanrei.html#intro</ref>
+    <reftype>html</reftype>
+    <directory>manual/contents</directory>
+  </item>
+  <item>
+    <label>Missing</label>
+    <ref>missing.html</ref>
+    <reftype>html</reftype>
+    <directory>manual/contents</directory>
+  </item>
+</list>"#,
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("manual/contents/hanrei.html"),
+        r#"<html><head><title>Usage page</title></head><body><h1 id="intro">Usage</h1><a href="../index.html#toc">Index</a><img src="img/mark.png"></body></html>"#,
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("manual/index.html"),
+        r#"<html><body><h1 id="toc">Index</h1></body></html>"#,
+    )
+    .unwrap();
+    fs::write(package_root.join("manual/contents/img/mark.png"), b"png").unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let home = package.home_surfaces().unwrap();
+    assert!(home.iter().any(|surface| {
+        surface.surface_id == "ios-app-menu:DICT_menu.xml"
+            && surface.kind == NavigationSurfaceKind::Info
+            && surface.status == NavigationStatus::Available
+    }));
+
+    let app_menu_surface = package.open_surface("ios-app-menu:DICT_menu.xml").unwrap();
+    let NavigationSurface::InfoPages { pages, .. } = app_menu_surface else {
+        panic!("iOS app-menu XML should expose info pages");
+    };
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].label_text, "Usage");
+    let InternalTarget::Resource { resource, anchor } = pages[0].target.decode().unwrap() else {
+        panic!("app-menu HTML item should target a package HTML resource");
+    };
+    assert_eq!(anchor.as_deref(), Some("intro"));
+    assert!(matches!(
+        resource.decode().unwrap(),
+        InternalResource::PackageFile {
+            path,
+            resource_kind: ResourceKind::Html,
+        } if path == "manual/contents/hanrei.html"
+    ));
+
+    let rendered = package
+        .render_target(&pages[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(rendered.kind, ResolvedTargetKind::HanreiPage);
+    assert_eq!(rendered.scroll_anchor.as_deref(), Some("intro"));
+    let html = rendered.display_html.unwrap();
+    assert!(html.contains("lvcore://target/"));
+    assert!(html.contains("lvcore://resource/"));
+    assert_eq!(rendered.links.len(), 1);
+    assert_eq!(rendered.resources.len(), 1);
+}
+
+#[test]
 fn ssed_ios_table_list_with_unresolved_addresses_is_deferred() {
     let root = tempdir().unwrap();
     let package_root = root.path().join("DICT");
