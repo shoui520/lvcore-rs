@@ -1096,6 +1096,7 @@ fn decode_jis_pair(first: u8, second: u8) -> Option<char> {
 
 fn narrow_fullwidth_ascii_char(ch: char) -> char {
     match ch {
+        '\u{2212}' => '-',
         '\u{ff01}'..='\u{ff5e}' => char::from_u32(ch as u32 - 0xfee0).unwrap_or(ch),
         '\u{3000}' => ' ',
         _ => ch,

@@ -1266,6 +1266,7 @@ fn narrow_fullwidth_ascii(text: &str) -> String {
     text.chars()
         .map(|ch| match ch {
             '\u{3000}' => ' ',
+            '\u{2212}' => '-',
             '\u{ff01}'..='\u{ff5e}' => char::from_u32(ch as u32 - 0xfee0).unwrap_or(ch),
             _ => ch,
         })

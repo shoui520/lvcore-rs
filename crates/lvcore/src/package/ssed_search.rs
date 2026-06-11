@@ -408,6 +408,7 @@ fn narrow_fullwidth_ascii_text(value: &str) -> String {
     value
         .chars()
         .map(|ch| match ch as u32 {
+            0x2212 => '-',
             0xff01..=0xff5e => char::from_u32(ch as u32 - 0xfee0).unwrap_or(ch),
             0x3000 => ' ',
             _ => ch,
@@ -551,6 +552,12 @@ mod tests {
             normalize_search_match_text("ＡＣＴＡ アクタ"),
             "acta あくた"
         );
+    }
+
+    #[test]
+    fn search_match_normalization_folds_jis_minus_to_ascii_hyphen() {
+        assert_eq!(normalize_search_match_text("Ａ−Ｂ"), "a-b");
+        assert_eq!(decode_ssed_body_search_text(&body_jis("Ａ−Ｂ")), "A-B");
     }
 
     #[test]

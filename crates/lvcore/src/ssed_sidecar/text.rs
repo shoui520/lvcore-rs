@@ -114,6 +114,7 @@ fn narrow_fullwidth_ascii_text(value: &str) -> String {
         .chars()
         .map(|ch| match ch {
             '\u{3000}' => ' ',
+            '\u{2212}' => '-',
             ch if ('\u{ff01}'..='\u{ff5e}').contains(&ch) => {
                 char::from_u32((ch as u32) - 0xfee0).unwrap_or(ch)
             }

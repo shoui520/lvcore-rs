@@ -965,6 +965,18 @@ mod tests {
     }
 
     #[test]
+    fn decodes_jis_minus_as_ascii_hyphen_in_keys_and_halfwidth_titles() {
+        let key = [0x23, 0x41, 0x21, 0x5d, 0x23, 0x42];
+        assert_eq!(decode_index_key(&key), "A-B");
+
+        let mut title = vec![0x1f, 0x04];
+        title.extend_from_slice(&key);
+        title.extend_from_slice(&[0x1f, 0x05]);
+        title.extend_from_slice(&[0x1f, 0x0a]);
+        assert_eq!(decode_title_text(&title), "A-B");
+    }
+
+    #[test]
     fn decodes_title_halfwidth_span_and_drops_binary_gaiji_markers() {
         assert_eq!(
             decode_title_text(&[
