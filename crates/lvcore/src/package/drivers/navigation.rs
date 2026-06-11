@@ -425,6 +425,24 @@ impl NavigationProvider for ReaderBookPackage {
                     diagnostics,
                 });
             }
+            for source in self.ssed_ios_full_db_list_sources()? {
+                surfaces.push(HomeSurface {
+                    href: None,
+                    surface_id: source.surface_id.clone(),
+                    kind: NavigationSurfaceKind::TitleIndexBrowse,
+                    status: NavigationStatus::Available,
+                    title_html: escape_plain_label_html(&source.title),
+                    title_text: source.title,
+                    target: Some(TargetToken::new(&InternalTarget::TitleIndexItem {
+                        surface_id: source.surface_id,
+                        item_id: "root".to_owned(),
+                    })?),
+                    diagnostics: vec![Diagnostic::info(
+                        "ssed_ios_fulldb_list",
+                        "iOS DictFULLDB exposes ordered title/body rows as a browse surface",
+                    )],
+                });
+            }
             if self
                 .ssed_catalog
                 .as_ref()
@@ -710,6 +728,11 @@ impl NavigationProvider for ReaderBookPackage {
                 && super::ssed_ios_plist_surfaces::is_ssed_ios_table_list_surface_id(id) =>
             {
                 self.open_ssed_ios_table_list_surface(surface_id, cursor, limit, options)
+            }
+            id if has_ssed_components
+                && super::ssed_ios_search::is_ssed_ios_full_db_list_surface_id(id) =>
+            {
+                self.open_ssed_ios_full_db_list_surface(surface_id, cursor, limit, options)
             }
             id if has_multiview_provider && (id == "menuData" || id.starts_with("menuData:")) => {
                 self.open_multiview_menu_surface(surface_id, cursor, limit)

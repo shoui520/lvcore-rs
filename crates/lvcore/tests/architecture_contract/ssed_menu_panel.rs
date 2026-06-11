@@ -1150,6 +1150,16 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
             && surface.kind == NavigationSurfaceKind::TitleIndexBrowse
             && surface.status == NavigationStatus::Available
     }));
+    let full_db_surface_id = "ios-fulldb-list:DICT/DICT_Full.sql";
+    assert!(home.iter().any(|surface| {
+        surface.surface_id == full_db_surface_id
+            && surface.kind == NavigationSurfaceKind::TitleIndexBrowse
+            && surface.status == NavigationStatus::Available
+            && surface
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "ssed_ios_fulldb_list")
+    }));
 
     let root_panel = package.open_surface("ios-plist:indexSearch.plist").unwrap();
     let NavigationSurface::Panel { cells, .. } = root_panel else {
@@ -1344,6 +1354,52 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
             .unwrap()
             .contains("Preserved sidecar body")
     );
+
+    let full_db_surface = package
+        .open_surface_page(full_db_surface_id, None, 1)
+        .unwrap();
+    let NavigationSurface::TitleIndexBrowse {
+        items, next_cursor, ..
+    } = full_db_surface
+    else {
+        panic!("DictFULLDB should expose ordered title/body rows");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(next_cursor, None);
+    assert_eq!(items[0].item_id, "0:0");
+    assert_eq!(items[0].label_text, "Sidecar Only");
+    assert!(matches!(
+        items[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 231605,
+            offset: 1770,
+        } if component == "HONMON.DIC"
+    ));
+    let full_db_view = package
+        .render_target(&items[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(full_db_view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        full_db_view
+            .display_html
+            .as_deref()
+            .unwrap()
+            .contains("Preserved sidecar body")
+    );
+    let full_db_window = package
+        .resolve_target_window(
+            &items[0].target,
+            Some(&lvcore::SequenceHint::TitleIndexOrder {
+                value: full_db_surface_id.to_owned(),
+                cursor: Some(items[0].item_id.clone()),
+            }),
+            0,
+            0,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(full_db_window.center.kind, ResolvedTargetKind::EntryBody);
 }
 
 #[test]

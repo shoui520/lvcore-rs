@@ -1,6 +1,10 @@
+use super::sequence::sequence_targets_match;
 use super::*;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, params_from_iter};
+
+pub(super) const IOS_FULL_DB_LIST_PREFIX: &str = "ios-fulldb-list:";
+const IOS_FULL_DB_LIST_BATCH_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SsedIosSearchResolver {
@@ -43,6 +47,18 @@ struct SsedIosAddressOnlyCandidate {
     component_filename: String,
     component_offset: u64,
     window_len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SsedIosFullDbListSource {
+    pub(super) surface_id: String,
+    pub(super) title: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SsedIosFullDbCursor {
+    resolver_index: usize,
+    row_offset: usize,
 }
 
 impl SsedIosSearchResolverSource {
@@ -229,6 +245,206 @@ impl ReaderBookPackage {
             Err(error) => Err(Error::Driver(error.clone())),
         }
     }
+
+    pub(super) fn ssed_ios_full_db_list_sources(&self) -> Result<Vec<SsedIosFullDbListSource>> {
+        let resolvers = self.ssed_ios_search_resolvers()?;
+        let mut sources = Vec::new();
+        for payload in &self.retained_ios_full_db_payloads {
+            if !payload.absolute_path.is_file() {
+                continue;
+            }
+            if !resolvers.iter().any(|resolver| {
+                resolver.source == SsedIosSearchResolverSource::DictFullDb
+                    && resolver.path == payload.absolute_path
+            }) {
+                continue;
+            }
+            let source_id = ios_full_db_source_id(&payload.relative_path);
+            let title = payload
+                .dictionary_name
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| payload.dict_code.clone());
+            sources.push(SsedIosFullDbListSource {
+                surface_id: format!("{IOS_FULL_DB_LIST_PREFIX}{source_id}"),
+                title: format!("iOS DictFULLDB: {title}"),
+            });
+        }
+        Ok(sources)
+    }
+
+    pub(super) fn open_ssed_ios_full_db_list_surface(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+        options: &LabelOptions,
+    ) -> Result<NavigationSurface> {
+        let Some(source_id) = surface_id.strip_prefix(IOS_FULL_DB_LIST_PREFIX) else {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_ios_fulldb_list_deferred",
+                    "requested surface is not an iOS DictFULLDB list surface",
+                )],
+            });
+        };
+        let resolvers = self.ssed_ios_full_db_list_resolvers(source_id)?;
+        if resolvers.is_empty() {
+            return Ok(NavigationSurface::Deferred {
+                surface_id: surface_id.to_owned(),
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_ios_fulldb_list_deferred",
+                    "iOS DictFULLDB list surface has no browsable block/offset tables",
+                )],
+            });
+        }
+        let mut cursor_state = decode_ios_full_db_cursor(cursor);
+        let mut items = Vec::new();
+        let mut diagnostics = Vec::new();
+        while cursor_state.resolver_index < resolvers.len() && items.len() < limit {
+            let resolver = resolvers[cursor_state.resolver_index];
+            let rows = ios_full_db_browse_rows(
+                resolver,
+                cursor_state.row_offset,
+                IOS_FULL_DB_LIST_BATCH_LIMIT,
+            )?;
+            if rows.is_empty() {
+                cursor_state.resolver_index = cursor_state.resolver_index.saturating_add(1);
+                cursor_state.row_offset = 0;
+                continue;
+            }
+            for row in rows {
+                let item_cursor = cursor_state;
+                cursor_state.row_offset = cursor_state.row_offset.saturating_add(1);
+                let (block, offset) = self.convert_ios_ssed_address(row.block, row.offset)?;
+                let Some(target) =
+                    self.ssed_target_for_loose_address(block, offset, &mut diagnostics)?
+                else {
+                    continue;
+                };
+                let label = self.ssed_rich_label_with_policy(&row.label, &options.gaiji_policy);
+                let mut item_diagnostics = label.diagnostics;
+                if (block, offset) != (row.block, row.offset) {
+                    item_diagnostics.push(
+                        Diagnostic::info(
+                            "ssed_ios_fulldb_address_converted",
+                            "iOS DictFULLDB row address was converted before target resolution",
+                        )
+                        .with_context("raw_block", row.block.to_string())
+                        .with_context("raw_offset", row.offset.to_string())
+                        .with_context("block", block.to_string())
+                        .with_context("offset", offset.to_string()),
+                    );
+                }
+                items.push(NavigationItem {
+                    item_id: encode_ios_full_db_cursor(item_cursor),
+                    label_html: label.html,
+                    label_text: label.text,
+                    target,
+                    href: String::new(),
+                    diagnostics: item_diagnostics,
+                });
+                if items.len() >= limit {
+                    break;
+                }
+            }
+        }
+        let has_more = ios_full_db_cursor_has_more(&resolvers, cursor_state)?;
+        let next_cursor = has_more.then(|| encode_ios_full_db_cursor(cursor_state));
+        Ok(NavigationSurface::TitleIndexBrowse {
+            surface_id: surface_id.to_owned(),
+            items,
+            next_cursor,
+        })
+    }
+
+    pub(super) fn resolve_ssed_ios_full_db_list_window(
+        &self,
+        target: &TargetToken,
+        surface_id: &str,
+        cursor_hint: Option<&str>,
+        before: usize,
+        after: usize,
+        options: &RenderOptions,
+    ) -> Result<Option<TargetWindow>> {
+        if !surface_id.starts_with(IOS_FULL_DB_LIST_PREFIX) {
+            return Ok(None);
+        }
+        let Some(cursor) = cursor_hint else {
+            return Ok(None);
+        };
+        let cursor_state = decode_ios_full_db_cursor(Some(cursor));
+        let surface = self.open_ssed_ios_full_db_list_surface(
+            surface_id,
+            Some(&encode_ios_full_db_cursor(SsedIosFullDbCursor {
+                resolver_index: cursor_state.resolver_index,
+                row_offset: cursor_state.row_offset.saturating_sub(before),
+            })),
+            before.saturating_add(1).saturating_add(after),
+            &LabelOptions {
+                gaiji_policy: options.gaiji_policy.clone(),
+            },
+        )?;
+        let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+            return Ok(None);
+        };
+        let Some(center_index) = items
+            .iter()
+            .position(|item| sequence_targets_match(&item.target, target))
+        else {
+            return Ok(None);
+        };
+        let mut diagnostics = Vec::new();
+        let render_item = |item: &NavigationItem| -> Result<ResolvedTargetView> {
+            let mut view = self.render_target(&item.target, options)?;
+            if view.title.is_none() && !item.label_text.trim().is_empty() {
+                view.title = Some(item.label_text.clone());
+            }
+            Ok(view)
+        };
+        let center = render_item(&items[center_index])?;
+        let mut before_views = Vec::new();
+        for item in &items[..center_index] {
+            before_views.push(render_item(item)?);
+        }
+        let mut after_views = Vec::new();
+        for item in &items[center_index + 1..items.len().min(center_index + 1 + after)] {
+            after_views.push(render_item(item)?);
+        }
+        if center_index == 0 && before > 0 {
+            diagnostics.push(Diagnostic::info(
+                "sequence_window_boundary",
+                "iOS DictFULLDB cursor window did not include all requested previous items",
+            ));
+        }
+        Ok(Some(TargetWindow {
+            center,
+            before: before_views,
+            after: after_views,
+            diagnostics,
+        }))
+    }
+
+    fn ssed_ios_full_db_list_resolvers(
+        &self,
+        source_id: &str,
+    ) -> Result<Vec<&SsedIosSearchResolver>> {
+        let Some(payload) = self.retained_ios_full_db_payloads.iter().find(|payload| {
+            ios_full_db_source_id(&payload.relative_path).eq_ignore_ascii_case(source_id)
+        }) else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .ssed_ios_search_resolvers()?
+            .iter()
+            .filter(|resolver| {
+                resolver.source == SsedIosSearchResolverSource::DictFullDb
+                    && resolver.path == payload.absolute_path
+            })
+            .collect())
+    }
 }
 
 fn discover_ios_search_resolvers(
@@ -381,6 +597,85 @@ fn search_ios_resolver(
         out.push(row?);
     }
     Ok(out)
+}
+
+pub(super) fn is_ssed_ios_full_db_list_surface_id(surface_id: &str) -> bool {
+    surface_id.starts_with(IOS_FULL_DB_LIST_PREFIX)
+}
+
+fn ios_full_db_browse_rows(
+    resolver: &SsedIosSearchResolver,
+    row_offset: usize,
+    row_limit: usize,
+) -> Result<Vec<SsedIosSearchRow>> {
+    if row_limit == 0 {
+        return Ok(Vec::new());
+    }
+    let connection = open_ios_search_connection(&resolver.path)?;
+    let mut select_columns = vec![
+        resolver.block_column.clone(),
+        resolver.offset_column.clone(),
+    ];
+    for column in resolver
+        .label_columns
+        .iter()
+        .chain(resolver.search_columns.iter())
+    {
+        if !select_columns.iter().any(|existing| existing == column) {
+            select_columns.push(column.clone());
+        }
+    }
+    let select_sql = select_columns
+        .iter()
+        .map(|column| quote_sql_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "select {select_sql} from {} order by rowid limit ? offset ?",
+        quote_sql_identifier(&resolver.table),
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(
+        [
+            i64::try_from(row_limit).unwrap_or(i64::MAX),
+            i64::try_from(row_offset).unwrap_or(i64::MAX),
+        ],
+        |row| ios_search_row_from_sqlite_row(resolver, &select_columns, row),
+    )?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn ios_full_db_cursor_has_more(
+    resolvers: &[&SsedIosSearchResolver],
+    cursor: SsedIosFullDbCursor,
+) -> Result<bool> {
+    if cursor.resolver_index >= resolvers.len() {
+        return Ok(false);
+    }
+    if ios_full_db_has_row(resolvers[cursor.resolver_index], cursor.row_offset)? {
+        return Ok(true);
+    }
+    for resolver in &resolvers[cursor.resolver_index.saturating_add(1)..] {
+        if ios_full_db_has_row(resolver, 0)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn ios_full_db_has_row(resolver: &SsedIosSearchResolver, row_offset: usize) -> Result<bool> {
+    let connection = open_ios_search_connection(&resolver.path)?;
+    let sql = format!(
+        "select 1 from {} order by rowid limit 1 offset ?",
+        quote_sql_identifier(&resolver.table),
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let mut rows = statement.query([i64::try_from(row_offset).unwrap_or(i64::MAX)])?;
+    Ok(rows.next()?.is_some())
 }
 
 fn search_ios_address_only_resolver(
@@ -760,6 +1055,33 @@ fn ios_search_column_name_is_textual(column: &str) -> bool {
 
 fn normalize_advanced_mode_name(name: &str) -> String {
     name.trim().to_ascii_lowercase()
+}
+
+fn ios_full_db_source_id(relative_path: &str) -> String {
+    relative_path.trim().replace('\\', "/")
+}
+
+fn decode_ios_full_db_cursor(cursor: Option<&str>) -> SsedIosFullDbCursor {
+    let Some(value) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+        return SsedIosFullDbCursor {
+            resolver_index: 0,
+            row_offset: 0,
+        };
+    };
+    if let Some((resolver_index, row_offset)) = value.split_once(':') {
+        return SsedIosFullDbCursor {
+            resolver_index: resolver_index.parse().unwrap_or(0),
+            row_offset: row_offset.parse().unwrap_or(0),
+        };
+    }
+    SsedIosFullDbCursor {
+        resolver_index: 0,
+        row_offset: value.parse().unwrap_or(0),
+    }
+}
+
+fn encode_ios_full_db_cursor(cursor: SsedIosFullDbCursor) -> String {
+    format!("{}:{}", cursor.resolver_index, cursor.row_offset)
 }
 
 fn decode_ios_search_text(value: &str) -> String {
