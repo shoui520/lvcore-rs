@@ -784,7 +784,9 @@ impl ReaderBookPackage {
             .iter()
             .map(|hit| normalize_search_match_text(&hit.title_text))
             .collect::<HashSet<_>>();
+        let mut next_sidecar_offset = sidecar_offset;
         for hit in sidecar_page.hits {
+            next_sidecar_offset = next_sidecar_offset.saturating_add(1);
             let title = if hit.body.title.trim().is_empty() {
                 hit.body.text.chars().take(80).collect::<String>()
             } else {
@@ -822,7 +824,7 @@ impl ReaderBookPackage {
             }
         }
         if !sidecar_page.exhausted {
-            page.next_cursor = Some(encode_ssed_sidecar_title_cursor(sidecar_page.matched_count));
+            page.next_cursor = Some(encode_ssed_sidecar_title_cursor(next_sidecar_offset));
         }
         Ok(())
     }

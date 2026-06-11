@@ -1790,6 +1790,70 @@ fn dense_honmon_exact_search_uses_sidecar_titles() {
 }
 
 #[test]
+fn dense_honmon_sidecar_title_cursor_keeps_lookahead_hit() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::SharedBodyRows);
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+    let query_page = |cursor: Option<String>| {
+        package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
+                mode: SearchMode::Forward,
+                query: "shared".to_owned(),
+                cursor,
+                limit: 1,
+                gaiji_policy: None,
+            })
+            .unwrap()
+    };
+
+    let first = query_page(None);
+    assert_eq!(first.hits.len(), 1);
+    assert_eq!(first.hits[0].title_text, "shared first");
+    assert!(matches!(
+        first.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "2"
+    ));
+    assert_eq!(first.next_cursor.as_deref(), Some("sidecar-title:1"));
+
+    let second = query_page(first.next_cursor.clone());
+    assert_eq!(second.hits.len(), 1);
+    assert_eq!(second.hits[0].title_text, "shared second");
+    assert!(matches!(
+        second.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "3"
+    ));
+    assert_eq!(second.next_cursor.as_deref(), Some("sidecar-title:2"));
+
+    let third = query_page(second.next_cursor.clone());
+    assert_eq!(third.hits.len(), 1);
+    assert_eq!(third.hits[0].title_text, "shared third");
+    assert!(matches!(
+        third.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "4"
+    ));
+    assert_eq!(third.next_cursor, None);
+}
+
+#[test]
 fn dense_honmon_search_uses_cjk_sidecar_titles() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::CjkTitleRows);

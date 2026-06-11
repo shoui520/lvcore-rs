@@ -309,9 +309,9 @@ fn write_dense_shared_body_db(path: PathBuf) {
               f_Plane text
             );
             insert into t_contents values (1, 'alpha', '<div>alpha html</div>', 'alpha body');
-            insert into t_contents values (2, 'beta first', '<div>first html</div>', 'shared sidecar body first');
-            insert into t_contents values (3, 'gamma second', '<div>second html</div>', 'shared sidecar body second');
-            insert into t_contents values (4, 'delta third', '<div>third html</div>', 'shared sidecar body third');
+            insert into t_contents values (2, 'shared first', '<div>first html</div>', 'shared sidecar body first');
+            insert into t_contents values (3, 'shared second', '<div>second html</div>', 'shared sidecar body second');
+            insert into t_contents values (4, 'shared third', '<div>third html</div>', 'shared sidecar body third');
             ",
         )
         .unwrap();
