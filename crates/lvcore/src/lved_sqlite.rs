@@ -185,6 +185,13 @@ pub struct LvedInfoPage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvedNamedPage {
+    pub name: String,
+    pub title_html: String,
+    pub title_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LvedListItem {
     pub list_id: i64,
     pub content_id: i64,
@@ -629,6 +636,71 @@ impl LvedSqliteStore {
                 .into_iter()
                 .next()
                 .or_else(|| nonempty_string(name.to_owned())))
+        })
+    }
+
+    pub fn named_pages_available(&self, table: &str) -> Result<bool> {
+        self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
+            if !is_safe_sqlite_identifier(table)
+                || !schema.table_has_columns(table, &["name", "body"])
+            {
+                return Ok(false);
+            }
+            let sql = format!(
+                "select 1 from {} where name is not null limit 1",
+                quote_identifier(table)
+            );
+            Ok(connection
+                .query_row(&sql, [], |_| Ok(()))
+                .optional()?
+                .is_some())
+        })
+    }
+
+    pub fn named_pages_page(
+        &self,
+        table: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<LvedNamedPage>> {
+        self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
+            if limit == 0
+                || !is_safe_sqlite_identifier(table)
+                || !schema.table_has_columns(table, &["name", "body"])
+            {
+                return Ok(Vec::new());
+            }
+            let order_by = if has_column(schema.columns(table), "id") {
+                "id, name"
+            } else {
+                "name"
+            };
+            let sql = format!(
+                "select name, substr(body, 1, ?) from {} where name is not null \
+                 order by {order_by} limit ? offset ?",
+                quote_identifier(table)
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map(
+                (LVED_INFO_TITLE_PREFIX_CHARS, limit as i64, offset as i64),
+                |row| {
+                    let name = sqlite_value_to_string(row.get_ref(0)?)?;
+                    let body_prefix = sqlite_value_to_string(row.get_ref(1)?)?;
+                    let title_text = html_text_lines(&body_prefix)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| name.clone());
+                    Ok(LvedNamedPage {
+                        name,
+                        title_html: title_text.clone(),
+                        title_text,
+                    })
+                },
+            )?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::from)
         })
     }
 

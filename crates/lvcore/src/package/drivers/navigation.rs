@@ -1,5 +1,7 @@
 use super::*;
 
+const LVED_NAMED_BODY_SURFACES: &[(&str, &str)] = &[("binran", "Binran")];
+
 impl ReaderBookPackage {
     fn has_multiview_provider(&self) -> bool {
         self.multiview_store.is_some() || self.metadata.format_family == FormatFamily::LvlMultiView
@@ -78,6 +80,26 @@ impl ReaderBookPackage {
                 })?),
                 diagnostics: Vec::new(),
             });
+        }
+        if let Some(store) = &self.lved_store {
+            for (surface_id, title) in LVED_NAMED_BODY_SURFACES {
+                if !store.named_pages_available(surface_id)? {
+                    continue;
+                }
+                surfaces.push(HomeSurface {
+                    href: None,
+                    surface_id: (*surface_id).to_owned(),
+                    kind: NavigationSurfaceKind::Info,
+                    status: NavigationStatus::Available,
+                    title_html: (*title).to_owned(),
+                    title_text: (*title).to_owned(),
+                    target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                        surface_id: (*surface_id).to_owned(),
+                        item_id: "root".to_owned(),
+                    })?),
+                    diagnostics: Vec::new(),
+                });
+            }
         }
         Ok(())
     }
@@ -609,6 +631,13 @@ impl NavigationProvider for ReaderBookPackage {
             }
             "info" if self.lved_store.is_some() => {
                 self.open_lved_info_surface(surface_id, cursor, limit)
+            }
+            id if self.lved_store.is_some()
+                && LVED_NAMED_BODY_SURFACES
+                    .iter()
+                    .any(|(named_surface_id, _)| id == *named_surface_id) =>
+            {
+                self.open_lved_named_page_surface(surface_id, cursor, limit)
             }
             "lved-tree" if self.lved_store.is_some() => {
                 self.open_lved_tree_surface(surface_id, cursor, limit)

@@ -379,6 +379,32 @@ fn lved_named_page_links_preserve_scroll_anchor() {
     }
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let binran_home = package
+        .home_surfaces()
+        .unwrap()
+        .into_iter()
+        .find(|surface| surface.surface_id == "binran")
+        .expect("binran table should be advertised as a named page surface");
+    assert_eq!(binran_home.kind, NavigationSurfaceKind::Info);
+    assert_eq!(binran_home.status, NavigationStatus::Available);
+    assert!(binran_home.target.is_some());
+
+    let binran_surface = package.open_surface("binran").unwrap();
+    let NavigationSurface::InfoPages { pages, .. } = binran_surface else {
+        panic!("binran should open as an info-style named page surface");
+    };
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].item_id, "usage.html");
+    assert_eq!(pages[0].label_text, "Usage");
+    assert_eq!(
+        pages[0].target.decode().unwrap(),
+        InternalTarget::LvedNamedPage {
+            table: "binran".to_owned(),
+            name: "usage.html".to_owned(),
+            anchor: None,
+        }
+    );
+
     let target = TargetToken::new(&InternalTarget::LvedNamedPage {
         table: "binran".to_owned(),
         name: "usage.html".to_owned(),

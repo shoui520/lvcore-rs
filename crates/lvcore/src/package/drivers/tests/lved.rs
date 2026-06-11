@@ -1040,6 +1040,28 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
     fs::write(dir.path().join("main.key"), key).unwrap();
 
     let package = LvedSqliteDriver.open(dir.path()).unwrap();
+    let surfaces = package.home_surfaces().unwrap();
+    assert!(surfaces.iter().any(|surface| {
+        surface.surface_id == "binran"
+            && surface.kind == NavigationSurfaceKind::Info
+            && surface.status == NavigationStatus::Available
+            && surface.target.is_some()
+    }));
+    let binran_surface = package.open_surface("binran").unwrap();
+    let NavigationSurface::InfoPages { pages, .. } = binran_surface else {
+        panic!("expected binran named page surface");
+    };
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].label_text, "Binran");
+    assert!(matches!(
+        pages[0].target.decode().unwrap(),
+        InternalTarget::LvedNamedPage {
+            table,
+            name,
+            anchor: None,
+        } if table == "binran" && name == "usage.html"
+    ));
+
     let target = TargetToken::new(&InternalTarget::LvedRow {
         table: "content".to_owned(),
         row_id: 200,
