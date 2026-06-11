@@ -1,6 +1,7 @@
 use encoding_rs::SHIFT_JIS;
 use serde::{Deserialize, Serialize};
 
+use crate::gaiji::logovista_gaiji_placeholder;
 use crate::ssed::BLOCK_SIZE;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -527,8 +528,8 @@ fn narrow_fullwidth_ascii_char(ch: char) -> char {
 }
 
 fn gaiji_placeholder(first: u8, second: u8) -> String {
-    let prefix = if first < 0xb0 { 'h' } else { 'z' };
-    format!("<{prefix}{first:02X}{second:02X}>")
+    let identity = format!("{first:02X}{second:02X}");
+    logovista_gaiji_placeholder(&identity).unwrap_or_else(|| format!("<z{identity}>"))
 }
 
 fn hex_lower(data: &[u8]) -> String {

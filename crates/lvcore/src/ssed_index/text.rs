@@ -1,5 +1,7 @@
 use encoding_rs::SHIFT_JIS;
 
+use crate::gaiji::logovista_gaiji_placeholder;
+
 pub fn decode_index_key(data: &[u8]) -> String {
     let filtered = data.split(|byte| *byte == 0).next().unwrap_or_default();
     if looks_like_plain_ascii_title(filtered) && !looks_like_jis_x0208_title_bytes(filtered) {
@@ -157,8 +159,7 @@ fn title_gaiji_marker_identity(first: u8, second: u8) -> Option<String> {
 }
 
 fn gaiji_marker_from_identity(identity: &str) -> String {
-    let prefix = if identity.starts_with('A') { 'h' } else { 'z' };
-    format!("<{prefix}{identity}>")
+    logovista_gaiji_placeholder(identity).unwrap_or_else(|| format!("<z{identity}>"))
 }
 
 fn looks_like_plain_ascii_title(data: &[u8]) -> bool {
@@ -251,8 +252,7 @@ fn narrow_fullwidth_ascii(text: &str) -> String {
 }
 
 fn gaiji_placeholder(first: u8, second: u8) -> String {
-    let prefix = if first < 0xb0 { 'h' } else { 'z' };
-    format!("<{prefix}{first:02X}{second:02X}>")
+    gaiji_marker_from_identity(&format!("{first:02X}{second:02X}"))
 }
 
 fn skip_control(data: &[u8], index: usize, end: usize) -> usize {

@@ -4,6 +4,7 @@ use quick_xml::events::{BytesStart, Event};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::gaiji::logovista_gaiji_placeholder;
 use crate::plist_xml::{PlistValue, parse_xml_plist};
 use crate::ssed_hc::decode_hc_stream_basic_text;
 use crate::ssed_index::decode_title_text;
@@ -1068,13 +1069,11 @@ fn panel_compressed_gaiji_identity(first: u8, second: u8) -> Option<String> {
 }
 
 fn gaiji_marker_from_identity(identity: &str) -> String {
-    let prefix = if identity.starts_with('A') { 'h' } else { 'z' };
-    format!("<{prefix}{identity}>")
+    logovista_gaiji_placeholder(identity).unwrap_or_else(|| format!("<z{identity}>"))
 }
 
 fn gaiji_placeholder(first: u8, second: u8) -> String {
-    let prefix = if first < 0xb0 { 'h' } else { 'z' };
-    format!("<{prefix}{first:02X}{second:02X}>")
+    gaiji_marker_from_identity(&format!("{first:02X}{second:02X}"))
 }
 
 fn decode_jis_pair(first: u8, second: u8) -> Option<char> {
