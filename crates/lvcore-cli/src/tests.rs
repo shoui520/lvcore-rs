@@ -1088,6 +1088,51 @@ fn library_render_command_routes_lved_cross_book_hrefs() {
 }
 
 #[test]
+fn validate_deep_routes_lved_cross_book_sibling_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("_DCT_SOURCE");
+    let destination = dir.path().join("_DCT_BUREI");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    write_lved_cli_fixture(&source);
+    write_lved_cli_fixture(&destination);
+
+    {
+        let connection = Connection::open(source.join("main.data")).unwrap();
+        apply_sqlcipher_key(&connection, "test-key").unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><p>source body</p><a href=\"lved.contentlink:BUREI.101#jump\">jump</a></article>' where id = 100",
+                [],
+            )
+            .unwrap();
+    }
+
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        &source,
+        ValidateOptions { deep: true },
+    );
+    let lved_list = output["exercises"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|exercise| exercise["surface_id"] == "lved-list")
+        .expect("expected LVED list surface exercise");
+
+    assert_eq!(lved_list["status"], "ok");
+    assert_eq!(lved_list["link_scan"]["status"], "ok");
+    assert!(
+        lved_list["link_scan"]["diagnostic_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "lved_cross_book_routed")
+    );
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
 fn search_command_uses_backend_search_result_sequence_for_windows() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());

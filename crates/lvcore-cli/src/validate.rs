@@ -8,7 +8,7 @@ use lvcore::{
     DriverRegistry, FormatFamily, HomeSurface, NavigationStatus, NavigationSurface,
     NavigationSurfaceKind, NavigationTarget, PackageDiscoveryOptions, RenderMode, RenderOptions,
     ResolvedTargetKind, ResolvedTargetView, ResourceKind, SearchHit, SearchMode, SearchQuery,
-    SearchResultSequence, SearchScope, SequenceHint,
+    SearchResultSequence, SearchScope, SequenceHint, TargetKind,
 };
 use serde_json::json;
 
@@ -103,6 +103,16 @@ fn open_validation_cross_book_destinations(
             dict_codes.insert(dict_code.to_owned());
         }
     }
+    if metadata_for(library, source_book_id)
+        .is_ok_and(|metadata| metadata.format_family == FormatFamily::LvedSqlite3)
+    {
+        collect_validation_lved_cross_book_dict_codes(
+            library,
+            source_book_id,
+            &surfaces,
+            &mut dict_codes,
+        );
+    }
     for dict_code in dict_codes {
         let Some(root) = validation_sibling_package_root(source_root, &dict_code) else {
             continue;
@@ -118,24 +128,89 @@ fn open_validation_cross_book_destinations(
     }
 }
 
+fn collect_validation_lved_cross_book_dict_codes(
+    library: &BookLibrary,
+    source_book_id: &BookId,
+    surfaces: &[HomeSurface],
+    dict_codes: &mut BTreeSet<String>,
+) {
+    let mut probed_surface_ids = BTreeSet::new();
+    for surface in surfaces {
+        if !should_probe_home_surface(&mut probed_surface_ids, surface) {
+            continue;
+        }
+        let Ok(opened) =
+            open_surface_probe_page(library, source_book_id, &surface.surface_id, None)
+        else {
+            continue;
+        };
+        let Ok(probe) =
+            surface_probe_targets(library, source_book_id, &surface.surface_id, &opened)
+        else {
+            continue;
+        };
+        let Some(target) = probe.first_target else {
+            continue;
+        };
+        let Ok(view) =
+            library.render_target(source_book_id, &target.target, &RenderOptions::default())
+        else {
+            continue;
+        };
+        for link in view
+            .links
+            .iter()
+            .filter(|link| link.kind == TargetKind::LvedCrossBook)
+            .take(VALIDATE_LINK_TARGET_SCAN_LIMIT)
+        {
+            if let Some(dict_code) = lved_cross_book_dict_code_from_ref(&link.label) {
+                dict_codes.insert(dict_code.to_owned());
+            }
+        }
+    }
+}
+
+fn lved_cross_book_dict_code_from_ref(raw_ref: &str) -> Option<&str> {
+    if let Some(value) = raw_ref.strip_prefix("lved.dataid.dict.") {
+        return value
+            .split_once(':')
+            .map(|(dict_code, _)| dict_code)
+            .filter(|dict_code| !dict_code.is_empty());
+    }
+    if let Some(value) = raw_ref.strip_prefix("lved.contentlink:") {
+        return value
+            .split_once('.')
+            .map(|(dict_code, _)| dict_code)
+            .filter(|dict_code| !dict_code.is_empty());
+    }
+    None
+}
+
 fn validation_sibling_package_root(source_root: &Path, dict_code: &str) -> Option<PathBuf> {
-    let wrapper_root = source_root.parent()?;
-    let collection_root = wrapper_root.parent()?;
+    let mut collection_roots = Vec::new();
+    if let Some(parent) = source_root.parent() {
+        collection_roots.push(parent.to_path_buf());
+        if let Some(grandparent) = parent.parent() {
+            collection_roots.push(grandparent.to_path_buf());
+        }
+    }
     let wanted = validation_dict_code_key(dict_code);
-    for entry in fs::read_dir(collection_root).ok()? {
-        let path = entry.ok()?.path();
-        if !path.is_dir() || path == wrapper_root {
-            continue;
+    for collection_root in collection_roots {
+        for entry in fs::read_dir(collection_root).ok()? {
+            let path = entry.ok()?.path();
+            if !path.is_dir() || path == source_root {
+                continue;
+            }
+            let name = path.file_name()?.to_string_lossy();
+            if validation_dict_code_key(&name) != wanted {
+                continue;
+            }
+            let nested = path.join(name.as_ref());
+            if nested.is_dir() {
+                return Some(nested);
+            }
+            return Some(path);
         }
-        let name = path.file_name()?.to_string_lossy();
-        if validation_dict_code_key(&name) != wanted {
-            continue;
-        }
-        let nested = path.join(name.as_ref());
-        if nested.is_dir() {
-            return Some(nested);
-        }
-        return Some(path);
     }
     None
 }
@@ -1302,9 +1377,9 @@ fn rendered_link_scan(
     for (index, link) in view.links.iter().take(limit).enumerate() {
         checked_link_count += 1;
         diagnostics.extend(link.diagnostics.clone());
-        let target_view =
-            match library.render_target(book_id, &link.token, &RenderOptions::default()) {
-                Ok(target_view) => target_view,
+        let routed_target =
+            match library.render_target_routed(book_id, &link.token, &RenderOptions::default()) {
+                Ok(routed_target) => routed_target,
                 Err(error) => {
                     let mut row = json!({
                         "status": "render_error",
@@ -1320,6 +1395,8 @@ fn rendered_link_scan(
                     return row;
                 }
             };
+        diagnostics.extend(routed_target.diagnostics);
+        let target_view = routed_target.view;
         diagnostics.extend(target_view.diagnostics.clone());
         let link_status = rendered_link_target_status(&target_view);
         match link_status {
@@ -2413,6 +2490,36 @@ mod tests {
             &SearchMode::Partial,
             "ssed-partial-nonprefix-index:0:0"
         ));
+    }
+
+    #[test]
+    fn validation_lved_cross_book_refs_expose_dict_codes() {
+        assert_eq!(
+            lved_cross_book_dict_code_from_ref("lved.contentlink:MEIKYOU3.00083000"),
+            Some("MEIKYOU3")
+        );
+        assert_eq!(
+            lved_cross_book_dict_code_from_ref("lved.dataid.dict.STEDMAN6:0001443054#0001443054"),
+            Some("STEDMAN6")
+        );
+        assert_eq!(
+            lved_cross_book_dict_code_from_ref("lved.bookmark:1#2"),
+            None
+        );
+    }
+
+    #[test]
+    fn validation_sibling_package_root_checks_direct_collection_parent() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("_DCT_SOURCE");
+        let destination = dir.path().join("_DCT_BUREI");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+
+        assert_eq!(
+            validation_sibling_package_root(&source, "BUREI").as_deref(),
+            Some(destination.as_path())
+        );
     }
 
     #[test]
