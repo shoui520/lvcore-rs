@@ -287,14 +287,8 @@ fn validate_can_open_a_previously_detected_package() {
         .next()
         .unwrap();
 
-    let output = validate_detected_package_json(
-        &registry,
-        detected,
-        ValidateOptions {
-            deep: false,
-            include_expensive_search: false,
-        },
-    );
+    let output =
+        validate_detected_package_json(&registry, detected, ValidateOptions { deep: false });
 
     assert_eq!(output["status"], "ok");
     assert_eq!(output["title"], "Example Dictionary");
@@ -311,6 +305,29 @@ fn advanced_column_overrides_unit_search_mode() {
         cli_search_mode(CliSearchMode::Exact, Some(" ".to_owned())),
         SearchMode::Exact
     );
+}
+
+#[test]
+fn validate_command_accepts_legacy_include_expensive_search_flag() {
+    let args = Args::try_parse_from([
+        "lvcore",
+        "validate",
+        "--deep",
+        "--include-expensive-search",
+        "/tmp/dict",
+    ])
+    .unwrap();
+    let Command::Validate {
+        deep,
+        include_expensive_search,
+        ..
+    } = args.command
+    else {
+        panic!("expected validate command");
+    };
+
+    assert!(deep);
+    assert!(include_expensive_search);
 }
 
 #[test]
@@ -397,10 +414,7 @@ fn validate_command_reports_advertised_search_modes() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: false,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: false },
     );
 
     assert_eq!(output["status"], "ok");
@@ -502,10 +516,7 @@ fn validate_deep_exercises_first_rendered_resource() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: true },
     );
     let exercises = output["exercises"].as_array().unwrap();
     let resource_probe = exercises
@@ -529,10 +540,7 @@ fn validate_deep_exercises_reader_render_modes() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: true },
     );
     let exercises = output["exercises"].as_array().unwrap();
     let rendered = exercises
@@ -575,10 +583,7 @@ fn validate_deep_exercises_continuous_windows() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: true },
     );
     let exercises = output["exercises"].as_array().unwrap();
     let surface_window = exercises
@@ -643,10 +648,7 @@ fn validate_deep_routes_ios_table_list_cross_book_sibling() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         &source_root,
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: true },
     );
     let table_list = output["exercises"]
         .as_array()
@@ -697,10 +699,7 @@ fn validate_deep_scans_beyond_first_target_for_rendered_resources() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: true },
     );
     let exercises = output["exercises"].as_array().unwrap();
     let resource_scan = exercises
@@ -727,10 +726,7 @@ fn validate_deep_scans_rendered_link_targets() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: true },
     );
     let exercises = output["exercises"].as_array().unwrap();
     let link_scan = exercises
@@ -755,10 +751,7 @@ fn validate_deep_exercises_advertised_search_modes() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: true },
     );
     let exercises = output["exercises"].as_array().unwrap();
     let kinds = exercises
@@ -788,10 +781,7 @@ fn validate_deep_search_probes_use_real_navigation_label_not_book_title() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: true },
     );
     let exercises = output["exercises"].as_array().unwrap();
     let exact = exercises
@@ -822,10 +812,7 @@ fn validate_deep_exercises_ssed_advertised_search_modes() {
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: false,
-        },
+        ValidateOptions { deep: true },
     );
     let exercises = output["exercises"].as_array().unwrap();
     let kinds = exercises
@@ -891,17 +878,14 @@ fn validate_deep_does_not_need_empty_cursor_pages_for_deep_visible_title_hits() 
 }
 
 #[test]
-fn validate_deep_can_explicitly_exercise_expensive_ssed_search_modes() {
+fn validate_deep_probes_ssed_partial_and_fulltext_by_default() {
     let dir = tempfile::tempdir().unwrap();
     write_ssed_cli_fixture(dir.path());
 
     let output = validate_package_json(
         &DriverRegistry::default(),
         dir.path(),
-        ValidateOptions {
-            deep: true,
-            include_expensive_search: true,
-        },
+        ValidateOptions { deep: true },
     );
     let exercises = output["exercises"].as_array().unwrap();
     let partial = exercises

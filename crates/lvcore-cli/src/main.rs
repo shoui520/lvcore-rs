@@ -52,7 +52,7 @@ enum Command {
         /// Also open available surfaces, render their first target, and run a small search.
         #[arg(long)]
         deep: bool,
-        /// Also probe expensive linear/fulltext search paths during --deep validation.
+        /// Legacy no-op; --deep probes advertised search modes by default.
         #[arg(long)]
         include_expensive_search: bool,
         /// Stream one JSON object per package as soon as it is validated.
@@ -400,7 +400,7 @@ fn main() -> Result<()> {
             paths,
             max,
             deep,
-            include_expensive_search,
+            include_expensive_search: _,
             jsonl,
             fail_on_error,
         } => {
@@ -424,10 +424,7 @@ fn main() -> Result<()> {
                         let mut row = validate_detected_package_json(
                             &registry,
                             detected,
-                            validate::ValidateOptions {
-                                deep,
-                                include_expensive_search,
-                            },
+                            validate::ValidateOptions { deep },
                         );
                         if let Some(object) = row.as_object_mut() {
                             object.insert(

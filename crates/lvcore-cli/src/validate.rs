@@ -29,7 +29,6 @@ const VALIDATE_SEARCH_PROBE_LABEL_LIMIT: usize = 12;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValidateOptions {
     pub(crate) deep: bool,
-    pub(crate) include_expensive_search: bool,
 }
 
 struct SurfaceRenderedProbeContext<'a> {
@@ -173,7 +172,6 @@ fn validate_opened_package_json(
                     &book_id,
                     &surfaces,
                     metadata.format_family,
-                    options.include_expensive_search,
                 ))
             } else {
                 None
@@ -239,7 +237,6 @@ fn exercise_reader_paths(
     book_id: &BookId,
     surfaces: &[HomeSurface],
     format_family: FormatFamily,
-    include_expensive_search: bool,
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
     let resource_scan_limit = resource_scan_limit_for(format_family);
@@ -388,7 +385,6 @@ fn exercise_reader_paths(
         surfaces,
         resource_scan_limit,
         link_scan_limit,
-        include_expensive_search,
     ));
     rows
 }
@@ -677,15 +673,10 @@ fn search_mode_exercises(
     surfaces: &[HomeSurface],
     resource_scan_limit: usize,
     link_scan_limit: usize,
-    include_expensive_search: bool,
 ) -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
     let probe_labels = search_probe_labels(library, book_id, metadata, surfaces);
     for mode in validate_search_modes_to_probe(metadata) {
-        if should_skip_search_mode_probe(metadata, &mode, include_expensive_search) {
-            rows.push(skipped_search_mode_exercise(mode));
-            continue;
-        }
         let query = select_search_probe_query(metadata, &mode, &probe_labels);
         let render_hits = mode == SearchMode::Forward;
         rows.push(search_mode_exercise(
@@ -703,23 +694,6 @@ fn search_mode_exercises(
 
 fn validate_search_modes_to_probe(metadata: &BookMetadata) -> Vec<SearchMode> {
     metadata.search_modes.to_vec()
-}
-
-fn should_skip_search_mode_probe(
-    _metadata: &BookMetadata,
-    _mode: &SearchMode,
-    _include_expensive_search: bool,
-) -> bool {
-    false
-}
-
-fn skipped_search_mode_exercise(mode: SearchMode) -> serde_json::Value {
-    json!({
-        "kind": format!("search_{}", search_mode_key(&mode)),
-        "status": "skipped_expensive",
-        "mode": mode,
-        "reason": "ssed_raw_honmon_fulltext_requires_explicit_include_expensive_search",
-    })
 }
 
 fn search_mode_exercise(
@@ -2318,10 +2292,7 @@ mod tests {
         let row = validate_package_json(
             &DriverRegistry::default(),
             dir.path(),
-            ValidateOptions {
-                deep: true,
-                include_expensive_search: false,
-            },
+            ValidateOptions { deep: true },
         );
         let lved_list = row["exercises"]
             .as_array()
@@ -2397,10 +2368,7 @@ mod tests {
         let row = validate_package_json(
             &DriverRegistry::default(),
             dir.path(),
-            ValidateOptions {
-                deep: false,
-                include_expensive_search: false,
-            },
+            ValidateOptions { deep: false },
         );
 
         assert_eq!(row["status"], "ok");
@@ -2483,43 +2451,5 @@ mod tests {
             data.extend_from_slice(&[0, 0, *literal]);
         }
         data
-    }
-
-    #[test]
-    fn ssed_search_modes_are_probed_by_default() {
-        let mut metadata = BookMetadata {
-            book_id: BookId("SSED:TEST".to_owned()),
-            format_family: FormatFamily::Ssed,
-            format_label: "SSED".to_owned(),
-            package_root: PathBuf::from("test"),
-            title: Some("test".to_owned()),
-            root_fingerprint: "test".to_owned(),
-            capabilities: vec![Capability::PreservedHtml],
-            search_modes: vec![SearchMode::Exact, SearchMode::Partial, SearchMode::FullText],
-            diagnostics: Vec::new(),
-        };
-
-        assert!(!should_skip_search_mode_probe(
-            &metadata,
-            &SearchMode::Partial,
-            false
-        ));
-        assert!(!should_skip_search_mode_probe(
-            &metadata,
-            &SearchMode::FullText,
-            false
-        ));
-
-        metadata.capabilities.clear();
-        assert!(!should_skip_search_mode_probe(
-            &metadata,
-            &SearchMode::FullText,
-            false
-        ));
-        assert!(!should_skip_search_mode_probe(
-            &metadata,
-            &SearchMode::FullText,
-            true
-        ));
     }
 }
