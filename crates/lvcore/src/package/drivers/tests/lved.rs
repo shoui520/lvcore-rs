@@ -1249,6 +1249,7 @@ fn lved_addr_links_resolve_to_nearby_content_anchors() {
                     <a href="lved.addr00000001:0004">addr resolved</a>
                     <a href="lved.addr00000002:0008">addr convert</a>
                     <a href="lved.addr00000004:0010">Label Target</a>
+                    <a href="lved.addr00000005:0010">（17）分類門</a>
                     <a href="lved.addr00001234:0567">addr unresolved</a>
                   </article>',
                   ''
@@ -1271,10 +1272,17 @@ fn lved_addr_links_resolve_to_nearby_content_anchors() {
                   '<article><p>Label target</p></article>',
                   ''
                 );
+                insert into content values (
+                  89,
+                  1,
+                  '<article><p>Taxon target</p></article>',
+                  ''
+                );
                 insert into list values (1, 42, 1, '', 'source', '');
                 insert into list values (2, 99, 1, '', 'target', '');
                 insert into list values (3, 77, 1, '', 'converted', '');
                 insert into list values (4, 88, 1, '', '<span>Label Target</span>', '');
+                insert into list values (5, 89, 1, '', '（17）分類門 Classificationus', '');
                 create table t_convert (
                   f_array_no integer,
                   block integer,
@@ -1304,6 +1312,10 @@ fn lved_addr_links_resolve_to_nearby_content_anchors() {
     assert_eq!(label_resolution.content_id, 88);
     assert!(label_resolution.anchor.is_none());
     assert_eq!(label_resolution.delta, 0);
+    let prefix_label_resolution = store.lved_address_resolution(5, 16).unwrap().unwrap();
+    assert_eq!(prefix_label_resolution.content_id, 89);
+    assert!(prefix_label_resolution.anchor.is_none());
+    assert_eq!(prefix_label_resolution.delta, 0);
 
     let source = TargetToken::new(&InternalTarget::LvedRow {
         table: "content".to_owned(),
@@ -1428,6 +1440,32 @@ fn lved_addr_links_resolve_to_nearby_content_anchors() {
             .display_html
             .as_deref()
             .is_some_and(|body| body.contains("Label target"))
+    );
+
+    let prefix_label_resolved = view
+        .links
+        .iter()
+        .find(|link| link.label == "lved.addr00000005:0010")
+        .unwrap();
+    assert_eq!(prefix_label_resolved.kind, TargetKind::LvedRow);
+    assert!(matches!(
+        prefix_label_resolved.token.decode().unwrap(),
+        InternalTarget::LvedRow {
+            table,
+            row_id: 89,
+            anchor: None,
+            query: None,
+        } if table == "content"
+    ));
+    let prefix_label_view = package
+        .render_target(&prefix_label_resolved.token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(prefix_label_view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        prefix_label_view
+            .display_html
+            .as_deref()
+            .is_some_and(|body| body.contains("Taxon target"))
     );
 
     let unresolved = view

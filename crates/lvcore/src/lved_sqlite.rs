@@ -1372,7 +1372,7 @@ fn unique_lved_list_title_targets(connection: &Connection) -> Result<BTreeMap<St
     let mut grouped: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
     for row in rows {
         let (content_id, title) = row?;
-        if let Some(label) = lved_addr_label_key(&title) {
+        for label in lved_addr_title_label_keys(&title) {
             grouped.entry(label).or_default().insert(content_id);
         }
     }
@@ -1435,6 +1435,23 @@ fn lved_addr_link_labels_in_text(value: &str) -> Vec<(String, String)> {
 }
 
 fn lved_addr_label_key(fragment: &str) -> Option<String> {
+    let text = lved_addr_label_text(fragment);
+    lved_addr_normalize_label(&text)
+}
+
+fn lved_addr_title_label_keys(fragment: &str) -> BTreeSet<String> {
+    let text = lved_addr_label_text(fragment);
+    let mut keys = BTreeSet::new();
+    if let Some(full) = lved_addr_normalize_label(&text) {
+        keys.insert(full);
+    }
+    if let Some(prefix) = lved_addr_non_ascii_prefix_label_key(&text) {
+        keys.insert(prefix);
+    }
+    keys
+}
+
+fn lved_addr_label_text(fragment: &str) -> String {
     let mut text = String::with_capacity(fragment.len());
     let mut in_tag = false;
     for ch in fragment.chars() {
@@ -1445,13 +1462,37 @@ fn lved_addr_label_key(fragment: &str) -> Option<String> {
             _ => text.push(ch),
         }
     }
-    let text = lved_decode_minimal_html_entities(&text);
-    let normalized = text
+    lved_decode_minimal_html_entities(&text)
+}
+
+fn lved_addr_normalize_label(value: &str) -> Option<String> {
+    let normalized = value
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase();
     (!normalized.is_empty()).then_some(normalized)
+}
+
+fn lved_addr_non_ascii_prefix_label_key(value: &str) -> Option<String> {
+    for (index, ch) in value.char_indices() {
+        if !ch.is_whitespace() {
+            continue;
+        }
+        let prefix = value[..index].trim();
+        if prefix.is_empty() || prefix.is_ascii() {
+            continue;
+        }
+        let suffix = value[index..].trim_start();
+        if suffix
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        {
+            return lved_addr_normalize_label(prefix);
+        }
+    }
+    None
 }
 
 fn lved_decode_minimal_html_entities(value: &str) -> String {
