@@ -1083,6 +1083,7 @@ fn rendered_view_probe(
         "render_modes": render_mode_contract_probe(library, book_id, view),
     })
     .with_diagnostics(&view.diagnostics);
+    let link_scan_limit = rendered_link_scan_limit_for_view(view, link_scan_limit);
     if link_scan_limit > 0 {
         insert_named_value(
             &mut row,
@@ -1091,6 +1092,19 @@ fn rendered_view_probe(
         );
     }
     row
+}
+
+fn rendered_link_scan_limit_for_view(view: &ResolvedTargetView, link_scan_limit: usize) -> usize {
+    if link_scan_limit == 0 || rendered_view_has_hc_diagnostics(view) {
+        return 0;
+    }
+    link_scan_limit
+}
+
+fn rendered_view_has_hc_diagnostics(view: &ResolvedTargetView) -> bool {
+    view.diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code.starts_with("hc_"))
 }
 
 fn render_mode_contract_probe(
@@ -1371,10 +1385,28 @@ fn rendered_link_scan(
     let mut ok_count = 0usize;
     let mut unsupported_count = 0usize;
     let mut deferred_count = 0usize;
+    let mut skipped_link_count = 0usize;
     let mut diagnostics = Vec::new();
     let mut samples = Vec::new();
 
-    for (index, link) in view.links.iter().take(limit).enumerate() {
+    for (index, link) in view.links.iter().enumerate() {
+        if checked_link_count >= limit {
+            break;
+        }
+        if !rendered_link_target_is_validation_safe(link.kind) {
+            skipped_link_count += 1;
+            if samples.len() < VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT {
+                samples.push(json!({
+                    "link_index": index,
+                    "status": "skipped",
+                    "label": link.label,
+                    "target_kind": link.kind,
+                    "skip_reason": "ssed_target_may_use_hc_rendering",
+                    "link_diagnostic_count": link.diagnostics.len(),
+                }));
+            }
+            continue;
+        }
         checked_link_count += 1;
         let routed_target =
             match library.render_target_routed(book_id, &link.token, &RenderOptions::default()) {
@@ -1431,7 +1463,9 @@ fn rendered_link_scan(
         }
     }
 
-    let status = if checked_link_count == 0 {
+    let status = if checked_link_count == 0 && skipped_link_count > 0 {
+        "skipped"
+    } else if checked_link_count == 0 {
         "no_link"
     } else if unsupported_count > 0 {
         "unsupported"
@@ -1447,11 +1481,23 @@ fn rendered_link_scan(
         "ok_count": ok_count,
         "unsupported_count": unsupported_count,
         "deferred_count": deferred_count,
+        "skipped_link_count": skipped_link_count,
         "elapsed_ms": started.elapsed().as_millis(),
         "samples": samples,
     });
     insert_diagnostic_fields(&mut row, &diagnostics);
     row
+}
+
+fn rendered_link_target_is_validation_safe(kind: TargetKind) -> bool {
+    !matches!(
+        kind,
+        TargetKind::SsedAddress
+            | TargetKind::SsedCrossBookAddress
+            | TargetKind::SsedDenseAnchor
+            | TargetKind::SsedAuxRecord
+            | TargetKind::SsedIosHtmlPage
+    )
 }
 
 fn rendered_link_target_status(view: &ResolvedTargetView) -> &'static str {
@@ -1648,10 +1694,11 @@ fn resource_scan_limit_for(format_family: FormatFamily) -> usize {
 
 fn link_scan_limit_for(format_family: FormatFamily) -> usize {
     match format_family {
-        FormatFamily::LvedSqlite3 | FormatFamily::LvlMultiView | FormatFamily::Hourei => {
-            VALIDATE_LINK_TARGET_SCAN_LIMIT
-        }
-        FormatFamily::Ssed | FormatFamily::Unknown => 0,
+        FormatFamily::Ssed
+        | FormatFamily::LvedSqlite3
+        | FormatFamily::LvlMultiView
+        | FormatFamily::Hourei => VALIDATE_LINK_TARGET_SCAN_LIMIT,
+        FormatFamily::Unknown => 0,
     }
 }
 
@@ -2553,8 +2600,11 @@ mod tests {
     }
 
     #[test]
-    fn validate_link_scans_skip_ssed_family() {
-        assert_eq!(link_scan_limit_for(FormatFamily::Ssed), 0);
+    fn validate_link_scans_include_ssed_but_skip_hc_views() {
+        assert_eq!(
+            link_scan_limit_for(FormatFamily::Ssed),
+            VALIDATE_LINK_TARGET_SCAN_LIMIT
+        );
         assert_eq!(
             link_scan_limit_for(FormatFamily::LvedSqlite3),
             VALIDATE_LINK_TARGET_SCAN_LIMIT
@@ -2568,6 +2618,59 @@ mod tests {
             VALIDATE_LINK_TARGET_SCAN_LIMIT
         );
         assert_eq!(link_scan_limit_for(FormatFamily::Unknown), 0);
+
+        let target = lvcore::TargetToken::new(&lvcore::InternalTarget::Unsupported {
+            reason: "fixture".to_owned(),
+        })
+        .unwrap();
+        let mut view = ResolvedTargetView {
+            kind: ResolvedTargetKind::EntryBody,
+            target,
+            href: String::new(),
+            title: None,
+            display_html: None,
+            basic_text: None,
+            scroll_anchor: None,
+            surface: None,
+            resources: Vec::new(),
+            links: Vec::new(),
+            capabilities: Vec::new(),
+            diagnostics: Vec::new(),
+            debug_trace: None,
+        };
+        assert_eq!(
+            rendered_link_scan_limit_for_view(&view, VALIDATE_LINK_TARGET_SCAN_LIMIT),
+            VALIDATE_LINK_TARGET_SCAN_LIMIT
+        );
+
+        view.diagnostics.push(lvcore::Diagnostic::info(
+            "hc_renderer_input_ready",
+            "fixture HC diagnostic",
+        ));
+        assert_eq!(
+            rendered_link_scan_limit_for_view(&view, VALIDATE_LINK_TARGET_SCAN_LIMIT),
+            0
+        );
+
+        assert!(!rendered_link_target_is_validation_safe(
+            TargetKind::SsedAddress
+        ));
+        assert!(!rendered_link_target_is_validation_safe(
+            TargetKind::SsedCrossBookAddress
+        ));
+        assert!(!rendered_link_target_is_validation_safe(
+            TargetKind::SsedDenseAnchor
+        ));
+        assert!(!rendered_link_target_is_validation_safe(
+            TargetKind::SsedAuxRecord
+        ));
+        assert!(!rendered_link_target_is_validation_safe(
+            TargetKind::SsedIosHtmlPage
+        ));
+        assert!(rendered_link_target_is_validation_safe(TargetKind::LvedRow));
+        assert!(rendered_link_target_is_validation_safe(
+            TargetKind::HoureiLaw
+        ));
     }
 
     #[test]
