@@ -123,24 +123,36 @@ impl ReaderBookPackage {
                         debug_trace: None,
                     });
                 }
-                let normalized = match source {
-                    BodySourceKind::LvedSqlite => self.normalize_lved_html_refs(&html)?,
-                    BodySourceKind::LvlMultiViewSqlite => {
-                        self.normalize_multiview_html_refs(&html)?
+                let ios_package_html_path = match target.decode()? {
+                    InternalTarget::SsedIosHtmlPage {
+                        source_id, index, ..
+                    } => self
+                        .ssed_ios_html_list_item(&source_id, index)?
+                        .and_then(|item| item.path),
+                    _ => None,
+                };
+                let normalized = if let Some(path) = ios_package_html_path {
+                    self.normalize_package_file_html_refs(&html, &path)?
+                } else {
+                    match source {
+                        BodySourceKind::LvedSqlite => self.normalize_lved_html_refs(&html)?,
+                        BodySourceKind::LvlMultiViewSqlite => {
+                            self.normalize_multiview_html_refs(&html)?
+                        }
+                        BodySourceKind::HoureiSqlite => self.normalize_hourei_html_refs(&html)?,
+                        BodySourceKind::BritannicaChronologySqlite => {
+                            self.normalize_britannica_loose_html_refs(&html)?
+                        }
+                        BodySourceKind::SidecarHtml | BodySourceKind::RendererDatabase => {
+                            self.normalize_ssed_sidecar_lved_html_refs(&html)?
+                        }
+                        _ => NormalizedHtmlRefs {
+                            html,
+                            resources: Vec::new(),
+                            links: Vec::new(),
+                            diagnostics: Vec::new(),
+                        },
                     }
-                    BodySourceKind::HoureiSqlite => self.normalize_hourei_html_refs(&html)?,
-                    BodySourceKind::BritannicaChronologySqlite => {
-                        self.normalize_britannica_loose_html_refs(&html)?
-                    }
-                    BodySourceKind::SidecarHtml | BodySourceKind::RendererDatabase => {
-                        self.normalize_ssed_sidecar_lved_html_refs(&html)?
-                    }
-                    _ => NormalizedHtmlRefs {
-                        html,
-                        resources: Vec::new(),
-                        links: Vec::new(),
-                        diagnostics: Vec::new(),
-                    },
                 };
                 Ok(ResolvedTargetView {
                     href: String::new(),

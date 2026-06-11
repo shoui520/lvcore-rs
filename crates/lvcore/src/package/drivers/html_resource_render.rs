@@ -274,7 +274,7 @@ impl ReaderBookPackage {
         })
     }
 
-    fn normalize_package_file_html_refs(
+    pub(super) fn normalize_package_file_html_refs(
         &self,
         html: &str,
         path: &str,

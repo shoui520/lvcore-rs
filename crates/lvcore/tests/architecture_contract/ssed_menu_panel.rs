@@ -959,8 +959,20 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     fs::create_dir(&package_root).unwrap();
     fs::create_dir(root.path().join("bin")).unwrap();
     fs::create_dir_all(package_root.join("OTHER/_images")).unwrap();
+    fs::create_dir_all(package_root.join("OTHER/contents/images")).unwrap();
     fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
     fs::write(package_root.join("OTHER/_images/a825.png"), b"png").unwrap();
+    fs::write(
+        package_root.join("OTHER/contents/about.html"),
+        r#"<html><head><title>About page</title></head><body><h1 id="intro">About page</h1><a href="related.html#next">Related</a><img src="images/icon.png"></body></html>"#,
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("OTHER/contents/related.html"),
+        r#"<html><body><h1 id="next">Related page</h1></body></html>"#,
+    )
+    .unwrap();
+    fs::write(package_root.join("OTHER/contents/images/icon.png"), b"png").unwrap();
     fs::write(
         root.path().join("Gaiji.plist"),
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1059,6 +1071,22 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     <key>DictFULLDB</key><string>DICT/DICT_Full.sql</string>
     <key>DictConvertAddrDB</key><string>DICT/DICT_on.sql</string>
   </dict></array>
+  <key>StatusArray</key><array><dict>
+    <key>Other</key><array>
+      <dict>
+        <key>path</key><string></string>
+        <key>key</key><string>Heading only</string>
+      </dict>
+      <dict>
+        <key>path</key><string>OTHER/contents/about.html#intro</string>
+        <key>key</key><string>About</string>
+      </dict>
+      <dict>
+        <key>path</key><string>OTHER/contents/missing.html</string>
+        <key>key</key><string>Missing</string>
+      </dict>
+    </array>
+  </dict></array>
 </dict></plist>"#,
     )
     .unwrap();
@@ -1109,6 +1137,11 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
     }));
     assert!(home.iter().any(|surface| {
         surface.surface_id == "ios-html-list:HTMLList.plist"
+            && surface.kind == NavigationSurfaceKind::Info
+            && surface.status == NavigationStatus::Available
+    }));
+    assert!(home.iter().any(|surface| {
+        surface.surface_id == "ios-dictlist-other"
             && surface.kind == NavigationSurfaceKind::Info
             && surface.status == NavigationStatus::Available
     }));
@@ -1240,6 +1273,32 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
             == "ssed_sidecar_direct_resource_missing"
             && diagnostic.message.contains("a35b.png"))
     );
+
+    let dictlist_other_surface = package.open_surface("ios-dictlist-other").unwrap();
+    let NavigationSurface::InfoPages { pages, .. } = dictlist_other_surface else {
+        panic!("DictList.plist Other entries should expose info pages");
+    };
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].label_text, "About");
+    assert!(matches!(
+        pages[0].target.decode().unwrap(),
+        InternalTarget::SsedIosHtmlPage {
+            source_id,
+            index: 0,
+            anchor: Some(anchor),
+        } if source_id == "DictList.plist:Other" && anchor == "intro"
+    ));
+    let dictlist_rendered = package
+        .render_target(&pages[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(dictlist_rendered.kind, ResolvedTargetKind::InfoPage);
+    assert_eq!(dictlist_rendered.title.as_deref(), Some("About"));
+    assert_eq!(dictlist_rendered.scroll_anchor.as_deref(), Some("intro"));
+    let dictlist_html = dictlist_rendered.display_html.unwrap();
+    assert!(dictlist_html.contains("lvcore://target/"));
+    assert!(dictlist_html.contains("lvcore://resource/"));
+    assert_eq!(dictlist_rendered.links.len(), 1);
+    assert_eq!(dictlist_rendered.resources.len(), 1);
 
     let table_surface = package
         .open_surface("ios-table-list:tableList.plist")

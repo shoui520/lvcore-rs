@@ -366,6 +366,26 @@ impl NavigationProvider for ReaderBookPackage {
                     )],
                 });
             }
+            if !self.ssed_ios_dictlist_other_items()?.is_empty() {
+                let surface_id =
+                    super::ssed_ios_plist_surfaces::IOS_DICTLIST_OTHER_SURFACE_ID.to_owned();
+                surfaces.push(HomeSurface {
+                    href: None,
+                    surface_id: surface_id.clone(),
+                    kind: NavigationSurfaceKind::Info,
+                    status: NavigationStatus::Available,
+                    title_html: "Other info pages".to_owned(),
+                    title_text: "Other info pages".to_owned(),
+                    target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                        surface_id,
+                        item_id: "root".to_owned(),
+                    })?),
+                    diagnostics: vec![Diagnostic::info(
+                        "ssed_ios_dictlist_other",
+                        "iOS DictList.plist Other entries expose preserved info pages",
+                    )],
+                });
+            }
             for source in self.ssed_ios_table_list_sources()? {
                 let (status, diagnostics) = self.ssed_ios_table_list_source_status(&source)?;
                 let target = (status == NavigationStatus::Available)
@@ -657,6 +677,11 @@ impl NavigationProvider for ReaderBookPackage {
                 && super::ssed_ios_plist_surfaces::is_ssed_ios_html_list_surface_id(id) =>
             {
                 self.open_ssed_ios_html_list_surface(surface_id, cursor, limit)
+            }
+            id if has_ssed_components
+                && super::ssed_ios_plist_surfaces::is_ssed_ios_dictlist_other_surface_id(id) =>
+            {
+                self.open_ssed_ios_dictlist_other_surface(surface_id, cursor, limit)
             }
             id if has_ssed_components
                 && super::ssed_ios_plist_surfaces::is_ssed_ios_table_list_surface_id(id) =>

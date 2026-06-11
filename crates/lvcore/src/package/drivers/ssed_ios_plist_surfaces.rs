@@ -4,6 +4,8 @@ use super::*;
 pub(super) const IOS_PLIST_PANEL_PREFIX: &str = "ios-plist:";
 pub(super) const IOS_HTML_LIST_PREFIX: &str = "ios-html-list:";
 pub(super) const IOS_TABLE_LIST_PREFIX: &str = "ios-table-list:";
+pub(super) const IOS_DICTLIST_OTHER_SURFACE_ID: &str = "ios-dictlist-other";
+const IOS_DICTLIST_OTHER_SOURCE_ID: &str = "DictList.plist:Other";
 
 #[derive(Debug, Clone)]
 pub(super) struct SsedIosPlistSurfaceSource {
@@ -20,6 +22,8 @@ pub(super) struct SsedIosHtmlListItem {
     pub label_html: String,
     pub label_text: String,
     pub html: String,
+    pub path: Option<String>,
+    pub anchor: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -207,7 +211,47 @@ impl ReaderBookPackage {
             let target = TargetToken::new(&InternalTarget::SsedIosHtmlPage {
                 source_id: source_id.to_owned(),
                 index: item.index,
-                anchor: None,
+                anchor: item.anchor.clone(),
+            })?;
+            page.push(NavigationItem {
+                item_id: item.index.to_string(),
+                label_html: item.label_html,
+                label_text: item.label_text,
+                target,
+                href: String::new(),
+                diagnostics: Vec::new(),
+            });
+        }
+        let next_cursor = has_more.then(|| offset.saturating_add(limit).to_string());
+        Ok(NavigationSurface::InfoPages {
+            surface_id: surface_id.to_owned(),
+            pages: page,
+            next_cursor,
+        })
+    }
+
+    pub(super) fn open_ssed_ios_dictlist_other_surface(
+        &self,
+        surface_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<NavigationSurface> {
+        if surface_id != IOS_DICTLIST_OTHER_SURFACE_ID {
+            return Ok(surface_open_deferred(surface_id));
+        }
+        let items = self.ssed_ios_dictlist_other_items()?;
+        let offset = decode_offset_cursor(cursor);
+        let mut page = Vec::new();
+        let mut has_more = false;
+        for item in items.into_iter().skip(offset) {
+            if page.len() >= limit {
+                has_more = true;
+                break;
+            }
+            let target = TargetToken::new(&InternalTarget::SsedIosHtmlPage {
+                source_id: IOS_DICTLIST_OTHER_SOURCE_ID.to_owned(),
+                index: item.index,
+                anchor: item.anchor.clone(),
             })?;
             page.push(NavigationItem {
                 item_id: item.index.to_string(),
@@ -525,10 +569,12 @@ impl ReaderBookPackage {
         source_id: &str,
         index: u32,
     ) -> Result<Option<SsedIosHtmlListItem>> {
-        Ok(self
-            .ssed_ios_html_list_items(source_id)?
-            .into_iter()
-            .find(|item| item.index == index))
+        let items = if source_id.eq_ignore_ascii_case(IOS_DICTLIST_OTHER_SOURCE_ID) {
+            self.ssed_ios_dictlist_other_items()?
+        } else {
+            self.ssed_ios_html_list_items(source_id)?
+        };
+        Ok(items.into_iter().find(|item| item.index == index))
     }
 
     pub(super) fn visual_body_for_ssed_ios_html_page(
@@ -581,7 +627,58 @@ impl ReaderBookPackage {
                 label_html: escape_plain_label_html(&label_text),
                 label_text,
                 html,
+                path: None,
+                anchor: None,
             });
+        }
+        Ok(items)
+    }
+
+    pub(super) fn ssed_ios_dictlist_other_items(&self) -> Result<Vec<SsedIosHtmlListItem>> {
+        let Some(source) = self.ssed_ios_plist_file_by_source_id("DictList.plist")? else {
+            return Ok(Vec::new());
+        };
+        let plist = parse_xml_plist(&source.bytes, &source.label)?;
+        let Some(dict) = plist.as_dict() else {
+            return Ok(Vec::new());
+        };
+        let Some(statuses) = dict.get("StatusArray").and_then(PlistValue::as_array) else {
+            return Ok(Vec::new());
+        };
+
+        let mut items = Vec::new();
+        for status in statuses.iter().filter_map(PlistValue::as_dict) {
+            let Some(other_rows) = status.get("Other").and_then(PlistValue::as_array) else {
+                continue;
+            };
+            for row in other_rows.iter().filter_map(PlistValue::as_dict) {
+                let label_text = plist_string(row, &["key", "name", "item", "title", "label"]);
+                if label_text.trim().is_empty() {
+                    continue;
+                }
+                let Some(path_value) = row.get("path").and_then(PlistValue::as_str) else {
+                    continue;
+                };
+                let Some(reference) = package_relative_html_reference("", path_value) else {
+                    continue;
+                };
+                if !path_has_extension(&reference.path, &["html", "htm"])
+                    || !self.storage.exists(Path::new(&reference.path))?
+                {
+                    continue;
+                }
+                let bytes = self.storage.read(Path::new(&reference.path))?;
+                let html = decode_package_html_text(&bytes);
+                let index = u32::try_from(items.len()).unwrap_or(u32::MAX);
+                items.push(SsedIosHtmlListItem {
+                    index,
+                    label_html: escape_plain_label_html(&label_text),
+                    label_text,
+                    html,
+                    path: Some(reference.path),
+                    anchor: reference.anchor,
+                });
+            }
         }
         Ok(items)
     }
@@ -765,6 +862,10 @@ pub(super) fn is_ssed_ios_panel_surface_id(surface_id: &str) -> bool {
 
 pub(super) fn is_ssed_ios_html_list_surface_id(surface_id: &str) -> bool {
     surface_id.starts_with(IOS_HTML_LIST_PREFIX)
+}
+
+pub(super) fn is_ssed_ios_dictlist_other_surface_id(surface_id: &str) -> bool {
+    surface_id == IOS_DICTLIST_OTHER_SURFACE_ID
 }
 
 pub(super) fn is_ssed_ios_table_list_surface_id(surface_id: &str) -> bool {
