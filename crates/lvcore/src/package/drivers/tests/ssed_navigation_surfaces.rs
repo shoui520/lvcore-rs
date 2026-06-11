@@ -722,7 +722,7 @@ fn ssed_partial_physical_scan_does_not_return_empty_first_page_before_later_matc
 }
 
 #[test]
-fn ssed_partial_physical_scan_limits_long_empty_visible_pages() {
+fn ssed_partial_physical_scan_limits_empty_prefilter_queries() {
     let dir = tempdir().unwrap();
 
     fs::write(
@@ -837,7 +837,7 @@ fn ssed_partial_physical_scan_limits_long_empty_visible_pages() {
                 book_id: package.metadata().book_id.clone(),
             },
             mode: SearchMode::Partial,
-            query: "target".to_owned(),
+            query: "two words".to_owned(),
             cursor: None,
             limit: 10,
             gaiji_policy: None,
@@ -845,7 +845,12 @@ fn ssed_partial_physical_scan_limits_long_empty_visible_pages() {
         .unwrap();
 
     assert!(page.hits.is_empty());
-    assert!(page.next_cursor.is_some(), "{page:#?}");
+    assert!(
+        page.next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("ssed-partial-nonprefix-noskip-index:")),
+        "{page:#?}"
+    );
     assert!(page.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "ssed_index_empty_physical_scan_limited"
             && diagnostic

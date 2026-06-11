@@ -5,7 +5,7 @@ use super::*;
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 20_480;
 const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 2;
-const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 128;
+const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 16;
 const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
@@ -84,10 +84,13 @@ impl ReaderBookPackage {
                     Some(nonprefix_cursor),
                     true,
                 );
-            } else if query.cursor.is_none() {
+            } else if query.cursor.is_none() && ssed_partial_prefix_prepass_is_bounded(&query.query)
+            {
                 if let Some(page) = self.search_ssed_partial_prefix_page(query, &needle, None)? {
                     return Ok(page);
                 }
+                return self.search_ssed_partial_nonprefix_page(query, &needle, None, false);
+            } else if query.cursor.is_none() {
                 return self.search_ssed_partial_nonprefix_page(query, &needle, None, false);
             }
         }
@@ -2323,6 +2326,11 @@ fn ssed_sidecar_title_auto_append_is_bounded(query: &str) -> bool {
     !query.is_empty() && !query.chars().any(char::is_whitespace)
 }
 
+fn ssed_partial_prefix_prepass_is_bounded(query: &str) -> bool {
+    let query = query.trim();
+    !query.is_empty() && !query.chars().any(char::is_whitespace)
+}
+
 fn ssed_fulltext_sidecar_title_prepass_is_bounded(query: &str) -> bool {
     let query = query.trim();
     query.len() >= 2
@@ -2337,7 +2345,8 @@ mod tests {
         SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
         decode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_cursor,
         encode_ssed_partial_nonprefix_offset_cursor,
-        ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_sidecar_title_auto_append_is_bounded,
+        ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_partial_prefix_prepass_is_bounded,
+        ssed_sidecar_title_auto_append_is_bounded,
     };
 
     #[test]
@@ -2360,6 +2369,14 @@ mod tests {
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("two words"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("犬"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("ｉｎ"));
+    }
+
+    #[test]
+    fn partial_prefix_prepass_is_limited_to_bounded_single_token_queries() {
+        assert!(ssed_partial_prefix_prepass_is_bounded("read"));
+        assert!(ssed_partial_prefix_prepass_is_bounded("白水"));
+        assert!(!ssed_partial_prefix_prepass_is_bounded(""));
+        assert!(!ssed_partial_prefix_prepass_is_bounded("United States"));
     }
 
     #[test]

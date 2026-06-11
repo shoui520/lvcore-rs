@@ -512,13 +512,7 @@ impl ReaderBookPackage {
             });
         };
         let forward_candidates = ssed_index_page_prefilter_candidates(needle);
-        if forward_candidates.is_empty() {
-            let diagnostics = self.scan_ssed_simple_index_rows(None, on_row)?;
-            return Ok(SsedPartialIndexScanResult {
-                diagnostics,
-                next_cursor: None,
-            });
-        }
+        let use_page_prefilter = !forward_candidates.is_empty();
         let reversed_needle = reverse_search_match_text(needle);
         let reverse_candidates = ssed_index_page_prefilter_candidates(&reversed_needle);
         let skip_backward_rows = self.ssed_has_forward_browse_index();
@@ -595,7 +589,8 @@ impl ReaderBookPackage {
                 } else {
                     &forward_candidates
                 };
-                if !ssed_index_page_prefilter_is_safe(component.component_type)
+                if !use_page_prefilter
+                    || !ssed_index_page_prefilter_is_safe(component.component_type)
                     || ssed_body_window_may_contain_query(page, page_candidates)
                 {
                     let logical_block = component.start_block + page_index as u32;
@@ -686,13 +681,7 @@ impl ReaderBookPackage {
             needle.to_owned()
         };
         let candidates = ssed_index_page_prefilter_candidates(&probe);
-        if candidates.is_empty() {
-            let diagnostics = self.scan_ssed_simple_index_rows(None, on_row)?;
-            return Ok(SsedPrefilteredIndexScanResult {
-                diagnostics,
-                next_cursor: None,
-            });
-        }
+        let use_page_prefilter = !candidates.is_empty();
         let start_component_index = cursor.map(|cursor| cursor.component_index).unwrap_or(0);
         let mut diagnostics = Vec::new();
         let mut scanned_leaf_pages = 0usize;
@@ -745,7 +734,8 @@ impl ReaderBookPackage {
                     continue;
                 }
                 scanned_leaf_pages = scanned_leaf_pages.saturating_add(1);
-                if !ssed_index_page_prefilter_is_safe(component.component_type)
+                if !use_page_prefilter
+                    || !ssed_index_page_prefilter_is_safe(component.component_type)
                     || ssed_body_window_may_contain_query(page, &candidates)
                 {
                     let logical_block = component.start_block + page_index as u32;
