@@ -149,6 +149,24 @@ enum Command {
         #[arg(long)]
         jsonl: bool,
     },
+    /// Resolve and render one target through a loaded library/corpus set.
+    LibraryRender {
+        /// Source book id that emitted the target.
+        source_book_id: String,
+        /// Target token, or a `lvcore://target/...` href emitted in rendered HTML.
+        token: String,
+        /// Package roots, payload paths, or corpus roots to inspect.
+        paths: Vec<PathBuf>,
+        /// Stop after this many discovered packages.
+        #[arg(long)]
+        max: Option<usize>,
+        /// Render mode to request.
+        #[arg(long, default_value = "native")]
+        render_mode: CliRenderMode,
+        /// Include backend debug trace in rendered output.
+        #[arg(long)]
+        debug_trace: bool,
+    },
     /// Open a reader navigation surface for one package.
     Surface {
         /// Package root or payload path to inspect.
@@ -518,6 +536,25 @@ fn main() -> Result<()> {
                 write_json_pretty(&output)?;
             }
         }
+        Command::LibraryRender {
+            source_book_id,
+            token,
+            paths,
+            max,
+            render_mode,
+            debug_trace,
+        } => {
+            let registry = DriverRegistry::default();
+            let output = library_render_command_json(
+                &registry,
+                &paths,
+                max,
+                source_book_id,
+                token,
+                cli_render_options(render_mode, debug_trace),
+            )?;
+            write_json_pretty(&output)?;
+        }
         Command::Surface {
             path,
             surface_id,
@@ -757,6 +794,40 @@ fn library_import_command_json(
 ) -> LibraryImportResult {
     let (library, import_report) = open_library_from_paths(registry, paths, max);
     library.import_result(import_report)
+}
+
+fn library_render_command_json(
+    registry: &DriverRegistry,
+    paths: &[PathBuf],
+    max: Option<usize>,
+    source_book_id: String,
+    token: String,
+    render_options: RenderOptions,
+) -> Result<serde_json::Value> {
+    let (library, import_report) = open_library_from_paths(registry, paths, max);
+    let books = library.metadata_snapshot();
+    let source_book_id = BookId(source_book_id);
+    let source_metadata = metadata_for(&library, &source_book_id)?;
+    let routed = if token.starts_with("lvcore://target/") {
+        library.render_target_href_routed(&source_book_id, &token, &render_options)?
+    } else {
+        let target = TargetToken::from_opaque(token);
+        library.render_target_routed(&source_book_id, &target, &render_options)?
+    };
+    let routed_metadata = metadata_for(&library, &routed.book_id)?;
+    Ok(json!({
+        "books": books,
+        "book_count": library.len(),
+        "opened_book_ids": import_report.opened,
+        "import_diagnostics": import_report.diagnostics,
+        "source_book_id": source_book_id,
+        "source_metadata": source_metadata,
+        "routed_book_id": routed.book_id,
+        "routed_metadata": routed_metadata,
+        "routing_diagnostics": routed.diagnostics,
+        "render_options": render_options,
+        "view": routed.view,
+    }))
 }
 
 fn library_import_command_jsonl(

@@ -923,6 +923,85 @@ fn library_search_command_uses_all_books_scope_and_routed_rendering() {
 }
 
 #[test]
+fn library_render_command_routes_lved_cross_book_hrefs() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("_DCT_SOURCE");
+    let destination = dir.path().join("_DCT_BUREI");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    write_lved_cli_fixture(&source);
+    write_lved_cli_fixture(&destination);
+
+    {
+        let connection = Connection::open(source.join("main.data")).unwrap();
+        apply_sqlcipher_key(&connection, "test-key").unwrap();
+        connection
+            .execute(
+                "update content set body = '<article><p>source body</p><a href=\"lved.contentlink:BUREI.101#jump\">jump</a></article>' where id = 100",
+                [],
+            )
+            .unwrap();
+    }
+
+    let source_rendered = search_command_json(
+        &DriverRegistry::default(),
+        &source,
+        "alp".to_owned(),
+        SearchMode::Forward,
+        10,
+        None,
+        RenderOptions::default(),
+        true,
+        0,
+        0,
+    )
+    .unwrap();
+    let href = first_target_href(
+        source_rendered["rendered_first"]["display_html"]
+            .as_str()
+            .unwrap(),
+    );
+    let source_book_id = DriverRegistry::default()
+        .open_best(&source)
+        .unwrap()
+        .metadata()
+        .book_id
+        .0
+        .clone();
+
+    let output = library_render_command_json(
+        &DriverRegistry::default(),
+        &[dir.path().to_path_buf()],
+        None,
+        source_book_id,
+        href,
+        RenderOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(output["book_count"].as_u64(), Some(2));
+    assert_eq!(
+        output["routed_metadata"]["package_root"].as_str().unwrap(),
+        destination.to_string_lossy()
+    );
+    assert_eq!(output["view"]["kind"], "entry_body");
+    assert_eq!(output["view"]["scroll_anchor"].as_str(), Some("jump"));
+    assert!(
+        output["view"]["display_html"]
+            .as_str()
+            .unwrap()
+            .contains("next body")
+    );
+    assert!(
+        output["routing_diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "lved_cross_book_routed")
+    );
+}
+
+#[test]
 fn search_command_uses_backend_search_result_sequence_for_windows() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
