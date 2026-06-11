@@ -173,9 +173,9 @@ fn exercise_reader_paths(
     let mut rows = Vec::new();
     let resource_scan_limit = resource_scan_limit_for(format_family);
     let link_scan_limit = link_scan_limit_for(format_family);
-    let mut probed_surface_kinds = BTreeSet::new();
+    let mut probed_surface_ids = BTreeSet::new();
     for surface in surfaces {
-        if !should_probe_home_surface(&mut probed_surface_kinds, surface) {
+        if !should_probe_home_surface(&mut probed_surface_ids, surface) {
             continue;
         }
         let started = Instant::now();
@@ -314,32 +314,13 @@ fn exercise_reader_paths(
 }
 
 fn should_probe_home_surface(
-    probed_surface_kinds: &mut BTreeSet<&'static str>,
+    probed_surface_ids: &mut BTreeSet<String>,
     surface: &HomeSurface,
 ) -> bool {
     if surface.status != NavigationStatus::Available || surface.surface_id == "search" {
         return false;
     }
-    probed_surface_kinds.insert(home_surface_probe_kind_key(surface))
-}
-
-fn home_surface_probe_kind_key(surface: &HomeSurface) -> &'static str {
-    match surface.kind {
-        NavigationSurfaceKind::Menu => "menu",
-        NavigationSurfaceKind::ScreenMenu => "screen_menu",
-        NavigationSurfaceKind::EncyclopediaIndex => "encyclopedia_index",
-        NavigationSurfaceKind::AuxiliaryIndex => "auxiliary_index",
-        NavigationSurfaceKind::Toc => "toc",
-        NavigationSurfaceKind::TitleIndexBrowse => "title_index_browse",
-        NavigationSurfaceKind::MultiSelector => "multi_selector",
-        NavigationSurfaceKind::Panel => "panel",
-        NavigationSurfaceKind::Hanrei => "hanrei",
-        NavigationSurfaceKind::Info => "info",
-        NavigationSurfaceKind::SearchFallback => "search_fallback",
-        NavigationSurfaceKind::LvedTree => "lved_tree",
-        NavigationSurfaceKind::LawTree => "law_tree",
-        NavigationSurfaceKind::MultiviewTree => "multiview_tree",
-    }
+    probed_surface_ids.insert(surface.surface_id.clone())
 }
 
 #[derive(Debug)]
@@ -1047,7 +1028,7 @@ fn continuous_window_probe(
     target: &lvcore::TargetToken,
     sequence_hint: SequenceHint,
 ) -> serde_json::Value {
-    match library.resolve_target_window(
+    match library.resolve_target_window_routed(
         book_id,
         target,
         Some(&sequence_hint),
@@ -1055,13 +1036,22 @@ fn continuous_window_probe(
         1,
         &RenderOptions::default(),
     ) {
-        Ok(window) => continuous_window_result_json(window),
+        Ok(window) => continuous_routed_window_result_json(window),
         Err(error) => json!({
             "status": "window_error",
             "sequence_hint": sequence_hint,
             "error": error.to_string(),
         }),
     }
+}
+
+fn continuous_routed_window_result_json(window: lvcore::RoutedTargetWindow) -> serde_json::Value {
+    let routed_book_id = window.book_id.clone();
+    let mut row = continuous_window_result_json(window.window);
+    if let Some(object) = row.as_object_mut() {
+        object.insert("routed_book_id".to_owned(), json!(routed_book_id));
+    }
+    row
 }
 
 fn continuous_window_result_json(window: lvcore::TargetWindow) -> serde_json::Value {
@@ -1933,7 +1923,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn validate_deep_surface_probe_samples_one_surface_per_kind() {
+    fn validate_deep_surface_probe_samples_unique_surface_ids() {
         let mut probed = BTreeSet::new();
         let first_aux = HomeSurface {
             surface_id: "aux-index:0".to_owned(),
@@ -1955,6 +1945,16 @@ mod tests {
             href: None,
             diagnostics: Vec::new(),
         };
+        let duplicate_aux = HomeSurface {
+            surface_id: "aux-index:1".to_owned(),
+            kind: NavigationSurfaceKind::AuxiliaryIndex,
+            status: NavigationStatus::Available,
+            title_html: "1992 duplicate".to_owned(),
+            title_text: "1992 duplicate".to_owned(),
+            target: None,
+            href: None,
+            diagnostics: Vec::new(),
+        };
         let hanrei = HomeSurface {
             surface_id: "hanrei".to_owned(),
             kind: NavigationSurfaceKind::Hanrei,
@@ -1967,7 +1967,8 @@ mod tests {
         };
 
         assert!(should_probe_home_surface(&mut probed, &first_aux));
-        assert!(!should_probe_home_surface(&mut probed, &second_aux));
+        assert!(should_probe_home_surface(&mut probed, &second_aux));
+        assert!(!should_probe_home_surface(&mut probed, &duplicate_aux));
         assert!(should_probe_home_surface(&mut probed, &hanrei));
     }
 
