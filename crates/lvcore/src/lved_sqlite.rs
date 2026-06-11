@@ -1191,11 +1191,11 @@ fn load_lved_addr_resolution_lookup(
         return Ok(resolved);
     }
     let anchors_by_block = lved_addr_anchors_by_block(connection)?;
-    for key in link_keys {
-        if resolved.contains_key(&key) {
+    for key in &link_keys {
+        if resolved.contains_key(key) {
             continue;
         }
-        let Some((block, offset)) = split_lved_addr_key(&key) else {
+        let Some((block, offset)) = split_lved_addr_key(key) else {
             continue;
         };
         let Some(anchors) = anchors_by_block.get(block) else {
@@ -1220,6 +1220,7 @@ fn load_lved_addr_resolution_lookup(
             break;
         }
     }
+    lved_addr_resolutions_from_unique_link_labels(connection, schema, &link_keys, &mut resolved)?;
     Ok(resolved)
 }
 
@@ -1311,6 +1312,157 @@ fn lved_addr_anchors_by_block(connection: &Connection) -> Result<LvedAddrAnchors
         anchors.sort_by_key(|(offset, _, _)| *offset);
     }
     Ok(anchors_by_block)
+}
+
+fn lved_addr_resolutions_from_unique_link_labels(
+    connection: &Connection,
+    schema: &LvedSqliteSchema,
+    link_keys: &BTreeSet<String>,
+    resolved: &mut BTreeMap<String, LvedAddrResolution>,
+) -> Result<()> {
+    if !schema.table_has_columns("list", &["refid", "title"]) {
+        return Ok(());
+    }
+    let title_targets = unique_lved_list_title_targets(connection)?;
+    if title_targets.is_empty() {
+        return Ok(());
+    }
+    let link_labels = lved_addr_link_labels(connection)?;
+    for key in link_keys {
+        if resolved.contains_key(key) {
+            continue;
+        }
+        let Some(labels) = link_labels.get(key) else {
+            continue;
+        };
+        let mut candidates = BTreeSet::new();
+        for label in labels {
+            if let Some(content_id) = title_targets.get(label) {
+                candidates.insert(*content_id);
+            }
+        }
+        if candidates.len() != 1 {
+            continue;
+        }
+        let content_id = candidates.into_iter().next().unwrap_or_default();
+        resolved.insert(
+            key.clone(),
+            LvedAddrResolution {
+                content_id,
+                anchor: None,
+                delta: 0,
+            },
+        );
+    }
+    Ok(())
+}
+
+fn unique_lved_list_title_targets(connection: &Connection) -> Result<BTreeMap<String, i64>> {
+    let mut statement = connection.prepare(
+        "select distinct l.refid, cast(l.title as blob) \
+         from list l join content c on c.id = l.refid \
+         where l.title is not null",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            sqlite_value_to_string(row.get_ref(1)?)?,
+        ))
+    })?;
+    let mut grouped: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
+    for row in rows {
+        let (content_id, title) = row?;
+        if let Some(label) = lved_addr_label_key(&title) {
+            grouped.entry(label).or_default().insert(content_id);
+        }
+    }
+    Ok(grouped
+        .into_iter()
+        .filter_map(|(label, targets)| {
+            (targets.len() == 1).then(|| (label, targets.into_iter().next().unwrap_or_default()))
+        })
+        .collect())
+}
+
+fn lved_addr_link_labels(connection: &Connection) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut statement = connection.prepare(
+        "select cast(body as blob) from content where cast(body as text) like '%lved.addr%'",
+    )?;
+    let rows = statement.query_map([], |row| sqlite_value_to_string(row.get_ref(0)?))?;
+    let mut labels = BTreeMap::new();
+    for row in rows {
+        for (key, label) in lved_addr_link_labels_in_text(&row?) {
+            labels
+                .entry(key)
+                .or_insert_with(BTreeSet::new)
+                .insert(label);
+        }
+    }
+    Ok(labels)
+}
+
+fn lved_addr_link_labels_in_text(value: &str) -> Vec<(String, String)> {
+    let lower = value.to_ascii_lowercase();
+    let mut labels = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find("<a") {
+        let start = cursor + relative_start;
+        let Some(relative_end) = lower[start..].find('>') else {
+            break;
+        };
+        let tag_end = start + relative_end;
+        let tag = &value[start..tag_end];
+        let Some(href) = html_tag_quoted_attr_value(tag, "href") else {
+            cursor = tag_end.saturating_add(1);
+            continue;
+        };
+        let Some(address) = parse_lved_address(&href) else {
+            cursor = tag_end.saturating_add(1);
+            continue;
+        };
+        let label_start = tag_end.saturating_add(1);
+        let Some(relative_close) = lower[label_start..].find("</a>") else {
+            cursor = label_start;
+            continue;
+        };
+        let label_end = label_start + relative_close;
+        if let Some(label) = lved_addr_label_key(&value[label_start..label_end]) {
+            labels.push((lved_addr_key(address.block, address.offset), label));
+        }
+        cursor = label_end.saturating_add(4);
+    }
+    labels
+}
+
+fn lved_addr_label_key(fragment: &str) -> Option<String> {
+    let mut text = String::with_capacity(fragment.len());
+    let mut in_tag = false;
+    for ch in fragment.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if in_tag => {}
+            _ => text.push(ch),
+        }
+    }
+    let text = lved_decode_minimal_html_entities(&text);
+    let normalized = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn lved_decode_minimal_html_entities(value: &str) -> String {
+    value
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 fn lved_addr_keys_in_text(value: &str) -> BTreeSet<String> {
