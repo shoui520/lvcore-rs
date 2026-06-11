@@ -919,9 +919,10 @@ impl ReaderBookPackage {
         let page_limit = query.limit.saturating_add(1);
         let label_policy = query.label_gaiji_policy();
         let title_cursor = decode_ssed_fulltext_title_cursor(query.cursor.as_deref());
+        let sidecar_body_cursor = decode_ssed_fulltext_sidecar_body_cursor(query.cursor.as_deref());
         let chronology_cursor = decode_ssed_fulltext_chronology_cursor(query.cursor.as_deref());
         let row_cursor = decode_ssed_fulltext_row_cursor(query.cursor.as_deref());
-        let offset = decode_ssed_fulltext_body_cursor(query.cursor.as_deref());
+        let body_offset = decode_ssed_fulltext_body_cursor(query.cursor.as_deref());
         let mut diagnostics = Vec::new();
         if query.cursor.is_none()
             && ssed_fulltext_sidecar_title_prepass_is_bounded(&query.query)
@@ -966,11 +967,12 @@ impl ReaderBookPackage {
         let row_cursor_explicit = row_cursor.is_some();
         let run_sidecar =
             chronology_cursor.is_none() && !body_cursor_explicit && !row_cursor_explicit;
+        let sidecar_offset = sidecar_body_cursor.unwrap_or(0);
         let sidecar_page = if run_sidecar {
             search_ssed_dense_sidecar_bodies_with_resolvers(
                 self.ssed_sidecar_body_resolvers()?,
                 &query.query,
-                offset,
+                sidecar_offset,
                 sidecar_limit,
             )?
         } else {
@@ -1024,7 +1026,9 @@ impl ReaderBookPackage {
             hits.truncate(query.limit);
             return Ok(SearchPage {
                 hits,
-                next_cursor: Some(query.limit.to_string()),
+                next_cursor: Some(encode_ssed_fulltext_sidecar_body_cursor(
+                    sidecar_offset.saturating_add(query.limit),
+                )),
                 result_sequence: None,
                 diagnostics,
             });
@@ -1033,7 +1037,9 @@ impl ReaderBookPackage {
             hits.truncate(query.limit);
             return Ok(SearchPage {
                 hits,
-                next_cursor: Some((offset + query.limit).to_string()),
+                next_cursor: Some(encode_ssed_fulltext_sidecar_body_cursor(
+                    sidecar_offset.saturating_add(query.limit),
+                )),
                 result_sequence: None,
                 diagnostics,
             });
@@ -1095,16 +1101,18 @@ impl ReaderBookPackage {
             }
             if hits.len() >= query.limit {
                 hits.truncate(query.limit);
+                let exhausted_next_cursor =
+                    honmon_body_window_scan_needed.then(|| "body:0".to_owned());
                 return Ok(SearchPage {
                     hits,
-                    next_cursor: chronology_exhausted.then_some("body:0".to_owned()).or_else(
-                        || {
-                            Some(format!(
-                                "chronology:{}",
-                                chronology_offset.saturating_add(chronology_hits)
-                            ))
-                        },
-                    ),
+                    next_cursor: if chronology_exhausted {
+                        exhausted_next_cursor
+                    } else {
+                        Some(format!(
+                            "chronology:{}",
+                            chronology_offset.saturating_add(chronology_hits)
+                        ))
+                    },
                     result_sequence: None,
                     diagnostics,
                 });
@@ -1167,11 +1175,6 @@ impl ReaderBookPackage {
             ),
         ));
         let mut matched_count = 0usize;
-        let body_offset = if sidecar_page.exhausted {
-            offset.saturating_sub(sidecar_page.matched_count)
-        } else {
-            offset
-        };
         let body_hit_ranges_by_component = self.ssed_fulltext_body_hit_ranges(
             catalog,
             &needle,
@@ -1363,7 +1366,8 @@ impl ReaderBookPackage {
                 }
             }
         }
-        let next_cursor = (hits.len() > query.limit).then(|| (offset + query.limit).to_string());
+        let next_cursor =
+            (hits.len() > query.limit).then(|| format!("body:{}", body_offset + query.limit));
         hits.truncate(query.limit);
 
         Ok(SearchPage {
@@ -1855,7 +1859,7 @@ impl ReaderBookPackage {
             return Ok(None);
         }
         let mut page = collector.into_search_page(query.limit);
-        page.next_cursor = Some("body:0".to_owned());
+        page.next_cursor = Some(encode_ssed_fulltext_sidecar_body_cursor(0));
         page.diagnostics.insert(
             0,
             Diagnostic::info(
@@ -1898,7 +1902,7 @@ impl ReaderBookPackage {
             .as_deref()
             .map(|cursor| format!("title:{cursor}"))
             .or_else(|| physical_next_cursor.map(|cursor| format!("title:{cursor}")))
-            .or_else(|| Some("body:0".to_owned()));
+            .or_else(|| Some(encode_ssed_fulltext_sidecar_body_cursor(0)));
         page.diagnostics.insert(
             0,
             Diagnostic::info(
@@ -1925,7 +1929,7 @@ impl ReaderBookPackage {
         if page.hits.is_empty() {
             return Ok(None);
         }
-        page.next_cursor = Some("body:0".to_owned());
+        page.next_cursor = Some(encode_ssed_fulltext_sidecar_body_cursor(0));
         page.diagnostics.insert(
             0,
             Diagnostic::info(
@@ -1978,7 +1982,7 @@ impl ReaderBookPackage {
             .as_deref()
             .map(|cursor| format!("title:{cursor}"))
             .or_else(|| physical_next_cursor.map(|cursor| format!("title:{cursor}")))
-            .or_else(|| Some("body:0".to_owned()));
+            .or_else(|| Some(encode_ssed_fulltext_sidecar_body_cursor(0)));
         page.diagnostics.insert(
             0,
             Diagnostic::info(
@@ -2192,12 +2196,34 @@ fn decode_ssed_fulltext_title_cursor(cursor: Option<&str>) -> Option<SsedFulltex
 fn decode_ssed_fulltext_body_cursor(cursor: Option<&str>) -> usize {
     match cursor {
         Some(value) if value.starts_with("title:") => 0,
+        Some(value) if value.starts_with(SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX) => 0,
         Some(value) if value.starts_with("chronology:") => 0,
         Some(value) if let Some(body) = value.strip_prefix("body:") => {
             body.parse::<usize>().unwrap_or(0)
         }
-        value => decode_offset_cursor(value),
+        Some(_) | None => 0,
     }
+}
+
+const SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX: &str = "sidecar-body:";
+
+fn decode_ssed_fulltext_sidecar_body_cursor(cursor: Option<&str>) -> Option<usize> {
+    let cursor = cursor?;
+    if let Some(value) = cursor.strip_prefix(SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX) {
+        return value.parse::<usize>().ok();
+    }
+    if cursor.starts_with("title:")
+        || cursor.starts_with("body:")
+        || cursor.starts_with("chronology:")
+        || cursor.starts_with("row:")
+    {
+        return None;
+    }
+    Some(decode_offset_cursor(Some(cursor)))
+}
+
+fn encode_ssed_fulltext_sidecar_body_cursor(offset: usize) -> String {
+    format!("{SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX}{offset}")
 }
 
 fn decode_ssed_fulltext_chronology_cursor(cursor: Option<&str>) -> Option<usize> {

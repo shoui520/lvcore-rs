@@ -865,7 +865,8 @@ fn search_mode_exercise(
 }
 
 fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
-    !(matches!(mode, SearchMode::FullText) && cursor.starts_with("body:"))
+    !(matches!(mode, SearchMode::FullText)
+        && (cursor.starts_with("body:") || cursor.starts_with("sidecar-body:")))
 }
 
 fn search_cursor_probe(
@@ -2541,6 +2542,10 @@ mod tests {
     #[test]
     fn validate_search_cursor_probe_skips_expensive_fulltext_body_cursors() {
         assert!(!should_probe_search_cursor(&SearchMode::FullText, "body:0"));
+        assert!(!should_probe_search_cursor(
+            &SearchMode::FullText,
+            "sidecar-body:0"
+        ));
         assert!(should_probe_search_cursor(
             &SearchMode::FullText,
             "title:ssed-partial-index:2:126"

@@ -29,6 +29,7 @@ mod ssed_renderer_input;
 
 enum DenseSidecarFixture {
     BodyRows,
+    SharedBodyRows,
     BodyRowsWithLvedLinks,
     AndroidRowidTimesFiveBodyRows,
     TitleOnlyThenBodyRows,
@@ -112,6 +113,9 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
     match fixture {
         DenseSidecarFixture::BodyRows => {
             write_dense_body_db(root.join("body.db"), true, true, false);
+        }
+        DenseSidecarFixture::SharedBodyRows => {
+            write_dense_shared_body_db(root.join("body.db"));
         }
         DenseSidecarFixture::BodyRowsWithLvedLinks => {
             write_dense_body_db_with_lved_links(root.join("body.db"));
@@ -291,6 +295,26 @@ fn write_dense_body_db(path: PathBuf, alpha: bool, beta: bool, blob: bool) {
                 .unwrap();
         }
     }
+}
+
+fn write_dense_shared_body_db(path: PathBuf) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table t_contents (
+              f_DataId integer primary key,
+              f_Title text,
+              f_Html text,
+              f_Plane text
+            );
+            insert into t_contents values (1, 'alpha', '<div>alpha html</div>', 'alpha body');
+            insert into t_contents values (2, 'beta first', '<div>first html</div>', 'shared sidecar body first');
+            insert into t_contents values (3, 'gamma second', '<div>second html</div>', 'shared sidecar body second');
+            insert into t_contents values (4, 'delta third', '<div>third html</div>', 'shared sidecar body third');
+            ",
+        )
+        .unwrap();
 }
 
 fn write_dense_plain_body_db(path: PathBuf) {
