@@ -48,6 +48,7 @@ mod ssed_ios_search;
 mod ssed_multi_ids;
 mod ssed_multi_surfaces;
 mod ssed_navigation;
+mod ssed_package_html_surfaces;
 mod ssed_panel_navigation;
 mod ssed_panel_surfaces;
 mod ssed_renderer_resources;

@@ -292,7 +292,27 @@ impl ReaderBookPackage {
         while let Some(attr) = next_html_href_or_src_attr(html, &lower, cursor) {
             output.push_str(&html[cursor..attr.value_start]);
             let raw_value = &html[attr.value_start..attr.value_end];
-            if let Some(reference) = package_relative_html_reference(&base_dir, raw_value) {
+            if attr.name == HtmlAttrName::Href
+                && let Some(address) = parse_lved_address(raw_value)
+            {
+                if ssed_loose_address_is_package_html_ui_sentinel(address.block, address.offset) {
+                    output.push_str(raw_value);
+                } else if let Some(target) = self.ssed_target_for_loose_address(
+                    address.block,
+                    address.offset,
+                    &mut diagnostics,
+                )? {
+                    let decoded = target.decode()?;
+                    if seen_target_tokens.insert(target.as_str().to_owned()) {
+                        links.push(TargetLink::new(raw_value, &decoded)?);
+                    }
+                    output.push_str(&format!("lvcore://target/{}", target.as_str()));
+                } else {
+                    output.push_str(raw_value);
+                }
+            } else if package_html_attr_value_has_scheme(raw_value) {
+                output.push_str(raw_value);
+            } else if let Some(reference) = package_relative_html_reference(&base_dir, raw_value) {
                 if attr.name == HtmlAttrName::Href
                     && path_has_extension(&reference.path, &["html", "htm"])
                 {
@@ -423,6 +443,29 @@ impl ReaderBookPackage {
             diagnostics,
         })
     }
+}
+
+fn ssed_loose_address_is_package_html_ui_sentinel(block: u32, offset: u32) -> bool {
+    block == 0x8000_0000 && offset == 0xffff
+}
+
+fn package_html_attr_value_has_scheme(raw_value: &str) -> bool {
+    let unescaped = html_unescape_minimal(raw_value);
+    let value = unescaped.trim();
+    let Some(colon) = value.find(':') else {
+        return false;
+    };
+    let first_separator = value.find(['/', '?', '#']).unwrap_or(value.len());
+    if colon > first_separator {
+        return false;
+    }
+    let Some(first) = value.as_bytes().first().copied() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && value[..colon]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
 }
 
 fn optional_missing_package_font_js_data_url(

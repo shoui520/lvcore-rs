@@ -404,6 +404,27 @@ impl NavigationProvider for ReaderBookPackage {
                     )],
                 });
             }
+            if let Some(source) = self.ssed_exinfo_index_url_source()? {
+                surfaces.push(HomeSurface {
+                    href: None,
+                    surface_id: super::ssed_package_html_surfaces::SSED_EXINFO_INDEX_URL_SURFACE_ID
+                        .to_owned(),
+                    kind: NavigationSurfaceKind::Info,
+                    status: NavigationStatus::Available,
+                    title_html: escape_plain_label_html(&source.title),
+                    title_text: source.title,
+                    target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                        surface_id:
+                            super::ssed_package_html_surfaces::SSED_EXINFO_INDEX_URL_SURFACE_ID
+                                .to_owned(),
+                        item_id: "root".to_owned(),
+                    })?),
+                    diagnostics: vec![Diagnostic::info(
+                        "ssed_exinfo_index_url",
+                        "EXINFO.INI INDEXURL exposes a package HTML start page",
+                    )],
+                });
+            }
             for source in self.ssed_ios_table_list_sources()? {
                 let (status, diagnostics) = self.ssed_ios_table_list_source_status(&source)?;
                 let target = (status == NavigationStatus::Available)
@@ -723,6 +744,11 @@ impl NavigationProvider for ReaderBookPackage {
                 && super::ssed_ios_app_menu_surfaces::is_ssed_ios_app_menu_xml_surface_id(id) =>
             {
                 self.open_ssed_ios_app_menu_xml_surface(surface_id, cursor, limit)
+            }
+            id if has_ssed_components
+                && super::ssed_package_html_surfaces::is_ssed_exinfo_index_url_surface_id(id) =>
+            {
+                self.open_ssed_exinfo_index_url_surface(surface_id, cursor, limit)
             }
             id if has_ssed_components
                 && super::ssed_ios_plist_surfaces::is_ssed_ios_table_list_surface_id(id) =>

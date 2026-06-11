@@ -284,6 +284,110 @@ fn ssed_missing_declared_menu_does_not_hide_panel_home_surface() {
 }
 
 #[test]
+fn ssed_exinfo_index_url_exposes_package_html_surface() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    let sibling_templates_root = root.path().join("DICT_Templates");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(&sibling_templates_root).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("HONMON.DIC"),
+        sseddata_literal_fixture_at(1, b"entry body"),
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("EXINFO.INI"),
+        b"[GENERAL]\nHTML=1\nINDEXURL=index.html\n",
+    )
+    .unwrap();
+    fs::write(
+        sibling_templates_root.join("index.html"),
+        br#"<html><head><title>Start Page</title><link rel="stylesheet" href="style.css"></head><body><img src="cover.png"><a href="main.html">main</a><a href="lved.addr00000001:0000">entry</a><a href="lved.addr80000000:ffff">panel</a><a href="lved:top">top</a></body></html>"#,
+    )
+    .unwrap();
+    fs::write(
+        sibling_templates_root.join("main.html"),
+        b"<html><title>Main Page</title><body>Main</body></html>",
+    )
+    .unwrap();
+    fs::write(sibling_templates_root.join("style.css"), b"body{}").unwrap();
+    fs::write(sibling_templates_root.join("cover.png"), b"png").unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let surfaces = package.home_surfaces().unwrap();
+    let surface = surfaces
+        .iter()
+        .find(|surface| surface.surface_id == "ssed-exinfo-index-url")
+        .expect("EXINFO INDEXURL should expose a package HTML info surface");
+
+    assert_eq!(surface.kind, NavigationSurfaceKind::Info);
+    assert_eq!(surface.status, NavigationStatus::Available);
+    assert_eq!(surface.title_text, "Start Page");
+
+    let NavigationSurface::InfoPages { pages, .. } =
+        package.open_surface("ssed-exinfo-index-url").unwrap()
+    else {
+        panic!("EXINFO INDEXURL should open as info pages");
+    };
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].label_text, "Start Page");
+    assert!(matches!(
+        pages[0].target.decode().unwrap(),
+        InternalTarget::Resource { .. }
+    ));
+
+    let view = package
+        .render_target(&pages[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(view.kind, ResolvedTargetKind::InfoPage);
+    let html = view.display_html.as_deref().unwrap();
+    assert!(!html.contains("style.css"));
+    assert!(!html.contains("cover.png"));
+    assert!(!html.contains("main.html"));
+    assert!(!html.contains("lved.addr00000001:0000"));
+    assert!(html.contains("lved.addr80000000:ffff"));
+    assert!(html.contains("lved:top"));
+    assert_eq!(view.resources.len(), 2);
+    assert_eq!(view.links.len(), 2);
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "resource_missing"
+                && diagnostic.code != "ssed_loose_address_unresolved")
+    );
+}
+
+#[test]
+fn ssed_exinfo_index_url_placeholder_template_is_not_home_surface() {
+    let root = tempdir().unwrap();
+    let package_root = root.path().join("DICT");
+    fs::create_dir(&package_root).unwrap();
+    fs::create_dir(package_root.join("Templates")).unwrap();
+    fs::write(package_root.join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        package_root.join("EXINFO.INI"),
+        b"[GENERAL]\nHTML=1\nINDEXURL=index.html\n",
+    )
+    .unwrap();
+    fs::write(
+        package_root.join("Templates/index.html"),
+        br#"<html><title>Template</title><body><!--index--><link href="<!--css-->"></body></html>"#,
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(&package_root).unwrap();
+    let surfaces = package.home_surfaces().unwrap();
+
+    assert!(
+        !surfaces
+            .iter()
+            .any(|surface| surface.surface_id == "ssed-exinfo-index-url"),
+        "placeholder-only INDEXURL templates require renderer substitution and should not be exposed raw"
+    );
+}
+
+#[test]
 fn ssed_panels_honor_exinfo_panelxml_metadata_name() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
