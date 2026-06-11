@@ -1247,6 +1247,7 @@ fn lved_addr_links_resolve_to_nearby_content_anchors() {
                   1,
                   '<article>
                     <a href="lved.addr00000001:0004">addr resolved</a>
+                    <a href="lved.addr00000002:0008">addr convert</a>
                     <a href="lved.addr00001234:0567">addr unresolved</a>
                   </article>',
                   ''
@@ -1257,8 +1258,26 @@ fn lved_addr_links_resolve_to_nearby_content_anchors() {
                   cast('<article><a name="000000010020"></a><p>Addr target</p></article>' as blob),
                   ''
                 );
+                insert into content values (
+                  77,
+                  1,
+                  '<article><p>Converted target</p></article>',
+                  ''
+                );
                 insert into list values (1, 42, 1, '', 'source', '');
                 insert into list values (2, 99, 1, '', 'target', '');
+                insert into list values (3, 77, 1, '', 'converted', '');
+                create table t_convert (
+                  f_array_no integer,
+                  block integer,
+                  offset integer,
+                  old_title text,
+                  id integer,
+                  title text,
+                  type integer
+                );
+                insert into t_convert values (1, 2, 8, 'old converted', 77, 'converted', 0);
+                insert into t_convert values (2, 3, 9, 'old unlinked', 77, 'converted', 0);
                 "#,
             )
             .unwrap();
@@ -1266,6 +1285,14 @@ fn lved_addr_links_resolve_to_nearby_content_anchors() {
     fs::write(dir.path().join("main.key"), key).unwrap();
 
     let package = LvedSqliteDriver.open(dir.path()).unwrap();
+    let store = crate::lved_sqlite::LvedSqliteStore::discover(dir.path())
+        .unwrap()
+        .unwrap();
+    let unlinked_resolution = store.lved_address_resolution(3, 9).unwrap().unwrap();
+    assert_eq!(unlinked_resolution.content_id, 77);
+    assert!(unlinked_resolution.anchor.is_none());
+    assert_eq!(unlinked_resolution.delta, 0);
+
     let source = TargetToken::new(&InternalTarget::LvedRow {
         table: "content".to_owned(),
         row_id: 42,
@@ -1318,6 +1345,45 @@ fn lved_addr_links_resolve_to_nearby_content_anchors() {
             .display_html
             .as_deref()
             .is_some_and(|body| body.contains("Addr target"))
+    );
+
+    let converted = view
+        .links
+        .iter()
+        .find(|link| link.label == "lved.addr00000002:0008")
+        .unwrap();
+    assert_eq!(converted.kind, TargetKind::LvedRow);
+    assert_eq!(
+        converted
+            .attributes
+            .get("lved_addr_delta")
+            .map(String::as_str),
+        Some("0")
+    );
+    assert!(
+        converted
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "lved_address_deferred")
+    );
+    assert!(matches!(
+        converted.token.decode().unwrap(),
+        InternalTarget::LvedRow {
+            table,
+            row_id: 77,
+            anchor: None,
+            query: None,
+        } if table == "content"
+    ));
+    let converted_view = package
+        .render_target(&converted.token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(converted_view.kind, ResolvedTargetKind::EntryBody);
+    assert!(
+        converted_view
+            .display_html
+            .as_deref()
+            .is_some_and(|body| body.contains("Converted target"))
     );
 
     let unresolved = view

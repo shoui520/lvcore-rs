@@ -276,7 +276,7 @@ impl ReaderBookPackage {
                 InternalTarget::LvedRow {
                     table: "content".to_owned(),
                     row_id: resolution.content_id,
-                    anchor: Some(resolution.anchor),
+                    anchor: resolution.anchor,
                     query: None,
                 },
                 Some(resolution.delta),

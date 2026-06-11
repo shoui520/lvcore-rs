@@ -116,7 +116,8 @@ struct LvedMediaIndex {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LvedAddrResolution {
     pub content_id: i64,
-    pub anchor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
     pub delta: u32,
 }
 
@@ -1183,14 +1184,17 @@ fn load_lved_addr_resolution_lookup(
         return Ok(BTreeMap::new());
     }
 
+    let mut resolved = lved_addr_resolutions_from_t_convert(connection, schema)?;
+
     let link_keys = lved_addr_link_keys(connection)?;
     if link_keys.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(resolved);
     }
-
     let anchors_by_block = lved_addr_anchors_by_block(connection)?;
-    let mut resolved = BTreeMap::new();
     for key in link_keys {
+        if resolved.contains_key(&key) {
+            continue;
+        }
         let Some((block, offset)) = split_lved_addr_key(&key) else {
             continue;
         };
@@ -1209,12 +1213,61 @@ fn load_lved_addr_resolution_lookup(
                 key.clone(),
                 LvedAddrResolution {
                     content_id: *content_id,
-                    anchor: anchor.clone(),
+                    anchor: Some(anchor.clone()),
                     delta,
                 },
             );
             break;
         }
+    }
+    Ok(resolved)
+}
+
+fn lved_addr_resolutions_from_t_convert(
+    connection: &Connection,
+    schema: &LvedSqliteSchema,
+) -> Result<BTreeMap<String, LvedAddrResolution>> {
+    if !schema.table_has_columns("t_convert", &["block", "offset", "id"]) {
+        return Ok(BTreeMap::new());
+    }
+    let mut content_exists = connection.prepare("select 1 from content where id = ? limit 1")?;
+    let mut resolved = BTreeMap::new();
+    let order_by = if has_column(schema.columns("t_convert"), "f_array_no") {
+        " order by f_array_no"
+    } else {
+        ""
+    };
+    let sql = format!("select block, offset, id from t_convert{order_by}");
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            sqlite_value_to_optional_i64(row.get_ref(0)?)?,
+            sqlite_value_to_optional_i64(row.get_ref(1)?)?,
+            sqlite_value_to_optional_i64(row.get_ref(2)?)?,
+        ))
+    })?;
+    for row in rows {
+        let (block, offset, content_id) = row?;
+        let (Some(block), Some(offset), Some(content_id)) = (block, offset, content_id) else {
+            continue;
+        };
+        let (Ok(block), Ok(offset)) = (u32::try_from(block), u32::try_from(offset)) else {
+            continue;
+        };
+        if content_exists
+            .query_row([content_id], |_| Ok(()))
+            .optional()?
+            .is_none()
+        {
+            continue;
+        }
+        resolved
+            .entry(lved_addr_key(block, offset))
+            .or_insert_with(|| LvedAddrResolution {
+                content_id,
+                anchor: None,
+                delta: 0,
+            });
     }
     Ok(resolved)
 }
