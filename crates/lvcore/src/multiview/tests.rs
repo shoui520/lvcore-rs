@@ -258,3 +258,38 @@ fn law_multiview_fulltext_search_uses_law_body_tables() {
     assert_eq!(body.title, "第一三条 保佐人の同意を要する行為等");
     assert!(body.html.contains("保証及び相続"));
 }
+
+#[test]
+fn multiview_index_prefixed_links_can_resolve_law_body_anchors() {
+    let dir = tempfile::tempdir().unwrap();
+    let body_path = dir.path().join("blvbat");
+    let body = Connection::open(&body_path).unwrap();
+    body.execute_batch(
+        r#"
+        create table t_B250 (
+            f_hore_code text,
+            f_hore_id integer,
+            f_rec_id integer,
+            f_rec_type integer,
+            f_title_no text,
+            f_title_sub text,
+            f_anchor text,
+            f_text text,
+            f_text_plane text
+        );
+        insert into t_B250 values
+            ('B250', 1, 20000, 0, '第二条', '定義', 'B250_HON-j2',
+             '<p>所得税法の定義。</p>',
+             '所得税法の定義。');
+        "#,
+    )
+    .unwrap();
+    drop(body);
+
+    let store = MultiviewStore::discover(dir.path()).unwrap().unwrap();
+    let resolved = store.body_for_href("index:B250_HON-j2").unwrap().unwrap();
+
+    assert_eq!(resolved.title, "第二条 定義");
+    assert!(resolved.html.contains("所得税法の定義"));
+    assert_eq!(resolved.source, "blvbat:t_B250");
+}

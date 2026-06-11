@@ -573,6 +573,7 @@ impl MultiviewStore {
     }
 
     fn law_body_for_href(&self, href: &str) -> Result<Option<MultiviewBody>> {
+        let href = href.strip_prefix("index:").unwrap_or(href);
         let Some(payload) = self.first_payload_by_role(MultiviewPayloadRole::LawBody)? else {
             return Ok(None);
         };
