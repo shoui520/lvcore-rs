@@ -357,8 +357,13 @@ fn lved_resource_key(value: &str) -> Option<String> {
 }
 
 fn split_lved_target_anchor(value: &str) -> (&str, &str) {
-    let value = value.split_once('?').map_or(value, |(head, _)| head);
-    value.split_once('#').unwrap_or((value, ""))
+    let target_end = value.find(['?', '#']).unwrap_or(value.len());
+    let target = &value[..target_end];
+    let anchor = value
+        .split_once('#')
+        .map(|(_, anchor)| anchor.split_once('?').map_or(anchor, |(head, _)| head))
+        .unwrap_or("");
+    (target, anchor)
 }
 
 fn strip_ascii_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
@@ -422,6 +427,14 @@ mod tests {
             lved_dataid_anchor("lved.dataid:00157445#body"),
             Some(("00157445".to_owned(), Some("body".to_owned())))
         );
+        assert_eq!(
+            lved_dataid_anchor("lved.dataid:00157445?pane#body"),
+            Some(("00157445".to_owned(), Some("body".to_owned())))
+        );
+        assert_eq!(
+            lved_dataid_anchor("lved.dataid:00157445#body?pane"),
+            Some(("00157445".to_owned(), Some("body".to_owned())))
+        );
 
         let Some(InternalTarget::LvedRow { row_id, anchor, .. }) =
             lved_dataid_target("lved.dataid:123#body")
@@ -456,6 +469,13 @@ mod tests {
         };
         assert_eq!(name, "picture.html");
         assert!(anchor.is_none());
+        let Some(InternalTarget::LvedInfoPage { name, anchor }) =
+            lved_dict_info_target("lved.dict.TEST:pictlink.picture.html?query#map")
+        else {
+            panic!("expected dict info target with query-before-fragment anchor");
+        };
+        assert_eq!(name, "picture.html");
+        assert_eq!(anchor.as_deref(), Some("map"));
         let Some(InternalTarget::LvedInfoPage { name, anchor }) =
             lved_info_target("lved.info:about.html.html#summary")
         else {
