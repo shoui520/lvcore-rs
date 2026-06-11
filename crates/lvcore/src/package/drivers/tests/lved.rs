@@ -1190,3 +1190,116 @@ fn lved_protocol_router_preserves_observed_non_entry_hooks() {
             .any(|diagnostic| { diagnostic.code == "lved_image_address_hook_deferred" })
     );
 }
+
+#[test]
+fn lved_addr_links_resolve_to_nearby_content_anchors() {
+    let dir = tempdir().unwrap();
+    let payload = dir.path().join("main.data");
+    let key = "test-key";
+    {
+        let connection = Connection::open(&payload).unwrap();
+        apply_sqlcipher_key(&connection, key).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                create table content (id integer primary key, type integer, body, media text);
+                create table list (id integer primary key, refid integer, type integer, anchor text, title text, titlesub text);
+                insert into content values (
+                  42,
+                  1,
+                  '<article>
+                    <a href="lved.addr00000001:0004">addr resolved</a>
+                    <a href="lved.addr00001234:0567">addr unresolved</a>
+                  </article>',
+                  ''
+                );
+                insert into content values (
+                  99,
+                  1,
+                  cast('<article><a name="000000010020"></a><p>Addr target</p></article>' as blob),
+                  ''
+                );
+                insert into list values (1, 42, 1, '', 'source', '');
+                insert into list values (2, 99, 1, '', 'target', '');
+                "#,
+            )
+            .unwrap();
+    }
+    fs::write(dir.path().join("main.key"), key).unwrap();
+
+    let package = LvedSqliteDriver.open(dir.path()).unwrap();
+    let source = TargetToken::new(&InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id: 42,
+        anchor: None,
+        query: None,
+    })
+    .unwrap();
+    let view = package
+        .render_target(&source, &RenderOptions::default())
+        .unwrap();
+    let html = view.display_html.as_deref().unwrap();
+    assert!(!html.contains("lved.addr"));
+
+    let resolved = view
+        .links
+        .iter()
+        .find(|link| link.label == "lved.addr00000001:0004")
+        .unwrap();
+    assert_eq!(resolved.kind, TargetKind::LvedRow);
+    assert_eq!(
+        resolved
+            .attributes
+            .get("lved_original_href")
+            .map(String::as_str),
+        Some("lved.addr00000001:0004")
+    );
+    assert_eq!(
+        resolved
+            .attributes
+            .get("lved_addr_delta")
+            .map(String::as_str),
+        Some("28")
+    );
+    assert!(matches!(
+        resolved.token.decode().unwrap(),
+        InternalTarget::LvedRow {
+            table,
+            row_id: 99,
+            anchor: Some(anchor),
+            query: None,
+        } if table == "content" && anchor == "000000010020"
+    ));
+    let target_view = package
+        .render_target(&resolved.token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(target_view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(target_view.scroll_anchor.as_deref(), Some("000000010020"));
+    assert!(
+        target_view
+            .display_html
+            .as_deref()
+            .is_some_and(|body| body.contains("Addr target"))
+    );
+
+    let unresolved = view
+        .links
+        .iter()
+        .find(|link| link.label == "lved.addr00001234:0567")
+        .unwrap();
+    assert_eq!(unresolved.kind, TargetKind::LvedAddress);
+    assert!(matches!(
+        unresolved.token.decode().unwrap(),
+        InternalTarget::LvedAddress {
+            block: 0x0000_1234,
+            offset: 0x0567,
+            ..
+        }
+    ));
+    assert!(
+        unresolved
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "lved_address_deferred")
+    );
+}

@@ -113,15 +113,24 @@ impl ReaderBookPackage {
                     }
                 }
                 LvedHtmlRefKind::Address => {
-                    if let Some(target) = lved_address_target(raw_ref) {
+                    if let Some((target, resolution_delta)) =
+                        self.lved_address_target_with_resolution(raw_ref)?
+                    {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
                             let mut link = TargetLink::new(raw_ref, &target)?;
-                            link.diagnostics.push(Diagnostic::info(
-                                "lved_address_deferred",
-                                "LVED address link is preserved as a typed target; this package did not provide an address resolver for it",
-                            ));
+                            if let Some(delta) = resolution_delta {
+                                link.attributes
+                                    .insert("lved_original_href".to_owned(), raw_ref.to_owned());
+                                link.attributes
+                                    .insert("lved_addr_delta".to_owned(), delta.to_string());
+                            } else {
+                                link.diagnostics.push(Diagnostic::info(
+                                    "lved_address_deferred",
+                                    "LVED address link is preserved as a typed target; this package did not provide an address resolver for it",
+                                ));
+                            }
                             links.push(link);
                         }
                         output.push_str(&href);
@@ -234,6 +243,30 @@ impl ReaderBookPackage {
             links,
             diagnostics,
         })
+    }
+
+    fn lved_address_target_with_resolution(
+        &self,
+        raw_ref: &str,
+    ) -> Result<Option<(InternalTarget, Option<u32>)>> {
+        let Some(address) = parse_lved_address(raw_ref) else {
+            return Ok(None);
+        };
+        if let Some(store) = &self.lved_store
+            && let Some(resolution) =
+                store.lved_address_resolution(address.block, address.offset)?
+        {
+            return Ok(Some((
+                InternalTarget::LvedRow {
+                    table: "content".to_owned(),
+                    row_id: resolution.content_id,
+                    anchor: Some(resolution.anchor),
+                    query: None,
+                },
+                Some(resolution.delta),
+            )));
+        }
+        Ok(lved_address_target(raw_ref).map(|target| (target, None)))
     }
 
     pub(super) fn normalize_ssed_sidecar_lved_html_refs(

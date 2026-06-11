@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::ios_dictlist::discover_ios_dictlist_info;
 use crate::search::SearchMode;
+use crate::ssed_loose_media::parse_lved_address;
 use crate::storage::regular_file_inside_root;
 
 mod discovery;
@@ -41,6 +42,11 @@ pub use discovery::{
     lved_payload_path, parse_android_dictinfo, read_lved_key_file,
 };
 
+type LvedAddrResolutionLookup = BTreeMap<String, LvedAddrResolution>;
+type LvedAddrResolutionCache = Arc<Mutex<Option<Arc<LvedAddrResolutionLookup>>>>;
+type LvedAddrAnchor = (u32, String, i64);
+type LvedAddrAnchorsByBlock = BTreeMap<String, Vec<LvedAddrAnchor>>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LvedKeyFile {
     pub path: PathBuf,
@@ -66,6 +72,8 @@ pub struct LvedSqliteStore {
     schema_cache: Arc<Mutex<Option<Arc<LvedSqliteSchema>>>>,
     #[serde(skip, default = "default_lved_media_index_cache")]
     media_index_cache: Arc<Mutex<BTreeMap<String, Arc<LvedMediaIndex>>>>,
+    #[serde(skip, default = "default_lved_addr_resolution_cache")]
+    addr_resolution_cache: LvedAddrResolutionCache,
 }
 
 fn default_lved_connection_cache() -> Arc<Mutex<Option<Connection>>> {
@@ -92,12 +100,24 @@ fn default_lved_media_index_cache() -> Arc<Mutex<BTreeMap<String, Arc<LvedMediaI
     Arc::new(Mutex::new(BTreeMap::new()))
 }
 
+fn default_lved_addr_resolution_cache() -> LvedAddrResolutionCache {
+    Arc::new(Mutex::new(None))
+}
+
 const LVED_INFO_TITLE_PREFIX_CHARS: i64 = 8192;
+const LVED_ADDR_MAX_DELTA: u32 = 0x100;
 
 #[derive(Debug, Clone, Default)]
 struct LvedMediaIndex {
     by_name: BTreeMap<String, i64>,
     by_id: BTreeMap<i64, i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvedAddrResolution {
+    pub content_id: i64,
+    pub anchor: String,
+    pub delta: u32,
 }
 
 impl std::fmt::Debug for LvedSqliteStore {
@@ -209,6 +229,7 @@ impl LvedSqliteStore {
             title_cache: default_lved_title_cache(),
             schema_cache: default_lved_schema_cache(),
             media_index_cache: default_lved_media_index_cache(),
+            addr_resolution_cache: default_lved_addr_resolution_cache(),
         }
     }
 
@@ -239,6 +260,7 @@ impl LvedSqliteStore {
             title_cache: default_lved_title_cache(),
             schema_cache: default_lved_schema_cache(),
             media_index_cache: default_lved_media_index_cache(),
+            addr_resolution_cache: default_lved_addr_resolution_cache(),
         }))
     }
 
@@ -438,6 +460,36 @@ impl LvedSqliteStore {
             .find_map(|hit| (!hit.title_text.trim().is_empty()).then_some(hit.title_text));
             Ok(title)
         })
+    }
+
+    pub fn lved_address_resolution(
+        &self,
+        block: u32,
+        offset: u32,
+    ) -> Result<Option<LvedAddrResolution>> {
+        let key = lved_addr_key(block, offset);
+        let lookup = self.lved_addr_resolutions_arc()?;
+        Ok(lookup.get(&key).cloned())
+    }
+
+    fn lved_addr_resolutions_arc(&self) -> Result<Arc<LvedAddrResolutionLookup>> {
+        {
+            let cache = self.addr_resolution_cache.lock().map_err(|_| {
+                Error::Driver("LVED_SQLITE3 address resolution cache is poisoned".to_owned())
+            })?;
+            if let Some(lookup) = cache.as_ref() {
+                return Ok(Arc::clone(lookup));
+            }
+        }
+
+        let lookup = Arc::new(self.with_connection(|connection| {
+            let schema = self.schema(connection)?;
+            load_lved_addr_resolution_lookup(connection, &schema)
+        })?);
+        let mut cache = self.addr_resolution_cache.lock().map_err(|_| {
+            Error::Driver("LVED_SQLITE3 address resolution cache is poisoned".to_owned())
+        })?;
+        Ok(Arc::clone(cache.get_or_insert(lookup)))
     }
 
     pub fn info_html(&self, row_id: i64) -> Result<Option<String>> {
@@ -1049,6 +1101,198 @@ fn lved_info_available(connection: &Connection, schema: &LvedSqliteSchema) -> Re
         .optional()
         .map(|value| value.is_some())
         .map_err(Error::from)
+}
+
+fn load_lved_addr_resolution_lookup(
+    connection: &Connection,
+    schema: &LvedSqliteSchema,
+) -> Result<BTreeMap<String, LvedAddrResolution>> {
+    if !schema.table_has_columns("content", &["id", "body"]) {
+        return Ok(BTreeMap::new());
+    }
+
+    let link_keys = lved_addr_link_keys(connection)?;
+    if link_keys.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let anchors_by_block = lved_addr_anchors_by_block(connection)?;
+    let mut resolved = BTreeMap::new();
+    for key in link_keys {
+        let Some((block, offset)) = split_lved_addr_key(&key) else {
+            continue;
+        };
+        let Some(anchors) = anchors_by_block.get(block) else {
+            continue;
+        };
+        for (anchor_offset, anchor, content_id) in anchors {
+            let delta = anchor_offset.saturating_sub(offset);
+            if *anchor_offset < offset {
+                continue;
+            }
+            if delta > LVED_ADDR_MAX_DELTA {
+                break;
+            }
+            resolved.insert(
+                key.clone(),
+                LvedAddrResolution {
+                    content_id: *content_id,
+                    anchor: anchor.clone(),
+                    delta,
+                },
+            );
+            break;
+        }
+    }
+    Ok(resolved)
+}
+
+fn lved_addr_link_keys(connection: &Connection) -> Result<BTreeSet<String>> {
+    let mut statement = connection.prepare(
+        "select cast(body as blob) from content where cast(body as text) like '%lved.addr%'",
+    )?;
+    let rows = statement.query_map([], |row| sqlite_value_to_string(row.get_ref(0)?))?;
+    let mut keys = BTreeSet::new();
+    for row in rows {
+        keys.extend(lved_addr_keys_in_text(&row?));
+    }
+    Ok(keys)
+}
+
+fn lved_addr_anchors_by_block(connection: &Connection) -> Result<LvedAddrAnchorsByBlock> {
+    let mut statement = connection.prepare(
+        "select id, cast(body as blob) from content where cast(body as text) like '%name=%'",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            sqlite_value_to_string(row.get_ref(1)?)?,
+        ))
+    })?;
+    let mut anchors_by_block: LvedAddrAnchorsByBlock = BTreeMap::new();
+    for row in rows {
+        let (content_id, body) = row?;
+        for anchor in lved_html_anchor_names(&body) {
+            let Some((block, offset)) = lved_hex_anchor_key(&anchor) else {
+                continue;
+            };
+            anchors_by_block
+                .entry(block)
+                .or_default()
+                .push((offset, anchor, content_id));
+        }
+    }
+    for anchors in anchors_by_block.values_mut() {
+        anchors.sort_by_key(|(offset, _, _)| *offset);
+    }
+    Ok(anchors_by_block)
+}
+
+fn lved_addr_keys_in_text(value: &str) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    let mut cursor = 0usize;
+    while cursor < value.len() {
+        let Some(address) = parse_lved_address(&value[cursor..]) else {
+            break;
+        };
+        let raw_offset = value[cursor..].find(&address.raw).unwrap_or_default();
+        cursor += raw_offset + address.raw.len();
+        keys.insert(lved_addr_key(address.block, address.offset));
+    }
+    keys
+}
+
+fn lved_addr_key(block: u32, offset: u32) -> String {
+    format!("{block:08x}:{offset:04x}")
+}
+
+fn split_lved_addr_key(key: &str) -> Option<(&str, u32)> {
+    let (block, offset) = key.split_once(':')?;
+    let offset = u32::from_str_radix(offset, 16).ok()?;
+    Some((block, offset))
+}
+
+fn lved_html_anchor_names(value: &str) -> Vec<String> {
+    let lower = value.to_ascii_lowercase();
+    let mut names = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find("<a") {
+        let start = cursor + relative_start;
+        let Some(relative_end) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + relative_end;
+        if let Some(name) = html_tag_quoted_attr_value(&value[start..end], "name") {
+            let name = name.trim();
+            if !name.is_empty() {
+                names.push(name.to_owned());
+            }
+        }
+        cursor = end.saturating_add(1);
+    }
+    names
+}
+
+fn html_tag_quoted_attr_value(tag: &str, attr: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let lower_bytes = lower.as_bytes();
+    let bytes = tag.as_bytes();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find(attr) {
+        let start = cursor + relative_start;
+        let before_is_boundary = start == 0
+            || lower_bytes
+                .get(start - 1)
+                .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'<');
+        let after = start + attr.len();
+        let after_is_boundary = lower_bytes
+            .get(after)
+            .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_');
+        if !before_is_boundary || !after_is_boundary {
+            cursor = after;
+            continue;
+        }
+        let mut index = after;
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            index += 1;
+        }
+        if bytes.get(index).copied() != Some(b'=') {
+            cursor = after;
+            continue;
+        }
+        index += 1;
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            index += 1;
+        }
+        let quote = bytes.get(index).copied()?;
+        if quote != b'\'' && quote != b'"' {
+            cursor = after;
+            continue;
+        }
+        let value_start = index + 1;
+        let value_end = bytes[value_start..]
+            .iter()
+            .position(|byte| *byte == quote)
+            .map(|relative| value_start + relative)?;
+        return Some(tag[value_start..value_end].to_owned());
+    }
+    None
+}
+
+fn lved_hex_anchor_key(anchor: &str) -> Option<(String, u32)> {
+    let lower = anchor.trim().to_ascii_lowercase();
+    if lower.len() < 12 || !lower.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let block = lower.get(..8)?.to_owned();
+    let offset = u32::from_str_radix(lower.get(8..12)?, 16).ok()?;
+    Some((block, offset))
 }
 
 impl From<LvedSearchHit> for LvedListItem {
