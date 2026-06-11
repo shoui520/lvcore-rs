@@ -133,9 +133,7 @@ fn decode_title_payload_text(data: &[u8], keep_gaiji: &mut impl FnMut(&str) -> b
             if let Some(identity) = title_gaiji_marker_identity(data[index], data[index + 1])
                 && keep_gaiji(&identity)
             {
-                out.push_str("<z");
-                out.push_str(&identity);
-                out.push('>');
+                out.push_str(&gaiji_marker_from_identity(&identity));
             }
             index += 2;
             continue;
@@ -156,6 +154,11 @@ fn title_gaiji_marker_identity(first: u8, second: u8) -> Option<String> {
         return Some(format!("{first:02X}{second:02X}"));
     }
     None
+}
+
+fn gaiji_marker_from_identity(identity: &str) -> String {
+    let prefix = if identity.starts_with('A') { 'h' } else { 'z' };
+    format!("<{prefix}{identity}>")
 }
 
 fn looks_like_plain_ascii_title(data: &[u8]) -> bool {

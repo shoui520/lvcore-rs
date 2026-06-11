@@ -1043,15 +1043,9 @@ fn decode_panel_text(data: &[u8]) -> String {
         }
         if i + 1 < data.len() && (0xa1..=0xfe).contains(&data[i]) {
             if let Some(identity) = panel_compressed_gaiji_identity(data[i], data[i + 1]) {
-                out.push_str("<z");
-                out.push_str(&identity);
-                out.push('>');
+                out.push_str(&gaiji_marker_from_identity(&identity));
             } else {
-                out.push_str(&format!(
-                    "<z{}{:02X}>",
-                    if data[i] < 0xb0 { "A" } else { "B" },
-                    data[i + 1]
-                ));
+                out.push_str(&gaiji_placeholder(data[i], data[i + 1]));
             }
             i += 2;
             continue;
@@ -1071,6 +1065,16 @@ fn panel_compressed_gaiji_identity(first: u8, second: u8) -> Option<String> {
     };
     let variant = first.checked_sub(base)?;
     (variant <= 0x0f).then(|| format!("{plane}{second:02X}{variant:X}"))
+}
+
+fn gaiji_marker_from_identity(identity: &str) -> String {
+    let prefix = if identity.starts_with('A') { 'h' } else { 'z' };
+    format!("<{prefix}{identity}>")
+}
+
+fn gaiji_placeholder(first: u8, second: u8) -> String {
+    let prefix = if first < 0xb0 { 'h' } else { 'z' };
+    format!("<{prefix}{first:02X}{second:02X}>")
 }
 
 fn decode_jis_pair(first: u8, second: u8) -> Option<char> {
@@ -1237,6 +1241,21 @@ mod tests {
         assert_eq!(parsed.records[0].block, 3);
         assert_eq!(parsed.records[0].offset, 0x20);
         assert_eq!(parsed.records[0].text, "あ");
+    }
+
+    #[test]
+    fn panel_bin_gaiji_placeholders_use_logovista_halfwidth_marker_family() {
+        let data = (1u32)
+            .to_le_bytes()
+            .into_iter()
+            .chain((4u32).to_le_bytes())
+            .chain((3u32).to_le_bytes())
+            .chain((0x20u32).to_le_bytes())
+            .chain([0xa1, 0x40, 0xb1, 0x23])
+            .collect::<Vec<_>>();
+        let parsed = parse_panel_bin(&data).unwrap();
+
+        assert_eq!(parsed.records[0].text, "<hA400><zB230>");
     }
 
     #[test]

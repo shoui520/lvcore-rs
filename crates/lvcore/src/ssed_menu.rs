@@ -283,11 +283,7 @@ fn parse_menu_stream_inner(
 
         if i + 1 < data.len() && (0xa1..=0xfe).contains(&b) {
             if private_depth == 0 {
-                line.add_text(format!(
-                    "<z{}{:02X}>",
-                    if b < 0xb0 { "A" } else { "B" },
-                    data[i + 1]
-                ));
+                line.add_text(gaiji_placeholder(b, data[i + 1]));
             }
             i += 2;
             continue;
@@ -530,6 +526,11 @@ fn narrow_fullwidth_ascii_char(ch: char) -> char {
     }
 }
 
+fn gaiji_placeholder(first: u8, second: u8) -> String {
+    let prefix = if first < 0xb0 { 'h' } else { 'z' };
+    format!("<{prefix}{first:02X}{second:02X}>")
+}
+
 fn hex_lower(data: &[u8]) -> String {
     data.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -597,6 +598,14 @@ mod tests {
         assert_eq!(second.records.len(), 1);
         assert_eq!(second.records[0].label(), "う");
         assert!(second.next_cursor.is_none());
+    }
+
+    #[test]
+    fn menu_gaiji_placeholders_use_logovista_halfwidth_marker_family() {
+        let data = b"\x1f\x09\x00\x01\xa1\x40\xb1\x23\x1f\x0a";
+        let parsed = parse_menu_stream(data);
+
+        assert_eq!(parsed.records[0].label(), "<hA140><zB123>");
     }
 
     #[test]

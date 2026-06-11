@@ -1010,7 +1010,7 @@ mod tests {
                 0x23, 0x61, 0x23, 0x6c, 0x21, 0x21, 0xa1, 0x75, 0x23, 0x73, 0x23, 0x74, 0x23, 0x69,
                 0x23, 0x6d, 0x23, 0x61, 0x23, 0x74, 0x23, 0x65, 0x1f, 0x05, 0x1f, 0x0a,
             ]),
-            "<zA140>nterval <zA175>stimate"
+            "<hA140>nterval <hA175>stimate"
         );
     }
 
@@ -1023,7 +1023,7 @@ mod tests {
                 ],
                 |identity| identity == "A140",
             ),
-            "<zA140>n"
+            "<hA140>n"
         );
     }
 }
