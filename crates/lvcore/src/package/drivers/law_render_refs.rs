@@ -215,15 +215,34 @@ impl ReaderBookPackage {
             .strip_prefix("lved_ref:")
             .and_then(|rest| rest.split_once(':').map(|(_, target)| target))
             .unwrap_or(&value);
-        let target = InternalTarget::MultiviewHref {
-            href: target_href.to_owned(),
-            anchor: None,
-        };
+        let target = self.multiview_target_for_href(target_href)?;
         let token = TargetToken::new(&target)?;
         if seen_target_tokens.insert(token.as_str().to_owned()) {
             links.push(TargetLink::new(raw_value, &target)?);
         }
         Ok(Some(format!("lvcore://target/{}", token.as_str())))
+    }
+
+    fn multiview_target_for_href(&self, href: &str) -> Result<InternalTarget> {
+        if let Some((data_id, anchor)) = lved_dataid_anchor(href) {
+            if let Some(store) = &self.multiview_store
+                && let Some((resolved_href, resolved_anchor)) =
+                    store.content_target_for_lved_dataid(&data_id)?
+            {
+                return Ok(InternalTarget::MultiviewHref {
+                    href: resolved_href,
+                    anchor: anchor.or(resolved_anchor),
+                });
+            }
+            return Ok(InternalTarget::MultiviewHref {
+                href: data_id,
+                anchor,
+            });
+        }
+        Ok(InternalTarget::MultiviewHref {
+            href: href.to_owned(),
+            anchor: None,
+        })
     }
 
     fn multiview_package_resource(&self, raw_value: &str) -> Result<Option<InternalResource>> {

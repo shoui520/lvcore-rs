@@ -535,13 +535,48 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     assert!(html.contains(r#"src="javascript:bad()""#));
     assert!(html.contains(r#"data="file:///tmp/outside.bin""#));
     assert!(html.contains(r#"src="lvcore://resource/already-normalized""#));
-    assert_eq!(view.links.len(), 1);
+    assert_eq!(view.links.len(), 3);
     assert_eq!(view.resources.len(), 1);
     assert!(
         view.diagnostics
             .iter()
             .all(|diagnostic| diagnostic.code != "resource_missing")
     );
+    let dataid_next = view
+        .links
+        .iter()
+        .find(|link| link.label == "lved.dataid:000002")
+        .expect("expected lved.dataid row link");
+    assert_eq!(
+        dataid_next.token.decode().unwrap(),
+        InternalTarget::MultiviewHref {
+            href: "000002".to_owned(),
+            anchor: None,
+        }
+    );
+    let dataid_next_view = package
+        .render_target(&dataid_next.token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(dataid_next_view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(dataid_next_view.title.as_deref(), Some("本文"));
+
+    let dataid_anchor = view
+        .links
+        .iter()
+        .find(|link| link.label == "lved.dataid:000004")
+        .expect("expected lved.dataid anchor link");
+    assert_eq!(
+        dataid_anchor.token.decode().unwrap(),
+        InternalTarget::MultiviewHref {
+            href: "000001".to_owned(),
+            anchor: Some("000004".to_owned()),
+        }
+    );
+    let dataid_anchor_view = package
+        .render_target(&dataid_anchor.token, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(dataid_anchor_view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(dataid_anchor_view.scroll_anchor.as_deref(), Some("000004"));
     let basic_view = package
         .render_target(
             &target,
@@ -554,7 +589,7 @@ fn multiview_menu_and_search_targets_resolve_to_preserved_body_html() {
     assert!(basic_view.display_html.is_none());
     assert_eq!(
         basic_view.basic_text.as_deref(),
-        Some("まえがき\nbody\nnext")
+        Some("まえがき\nbody\nnextdataid nextlocal anchor")
     );
     assert!(basic_view.resources.is_empty());
     assert!(basic_view.links.is_empty());

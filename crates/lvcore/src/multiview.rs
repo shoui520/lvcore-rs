@@ -436,6 +436,60 @@ impl MultiviewStore {
         Ok(None)
     }
 
+    pub fn content_target_for_lved_dataid(
+        &self,
+        data_id: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
+        let Ok(parsed_id) = data_id.parse::<i64>() else {
+            return Ok(None);
+        };
+        let Some(payload) = self.first_payload_by_role(MultiviewPayloadRole::ContentSearchBody)?
+        else {
+            return Ok(None);
+        };
+        let sqlite_path = self.sqlite_path_for_payload(payload)?;
+        self.with_connection(&sqlite_path, |connection| {
+            let schema = self.schema(&sqlite_path, connection)?;
+            if !schema.table_has_columns("t_contents", &["f_ID"]) {
+                return Ok(None);
+            }
+            if let Some(content_id) = connection
+                .query_row(
+                    "select f_ID from t_contents where f_ID = ? limit 1",
+                    [parsed_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+            {
+                return Ok(Some((multiview_content_href_for_id(content_id), None)));
+            }
+            if !schema.table_has_columns("t_contents", &["f_Body"]) {
+                return Ok(None);
+            }
+            let pattern = format!("%{}%", escape_sql_like(data_id));
+            let mut statement = connection.prepare(
+                "select f_ID, cast(f_Body as blob) from t_contents \
+                 where cast(f_Body as text) like ? escape '\\' order by f_ID limit 64",
+            )?;
+            let rows = statement.query_map([pattern], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    sqlite_value_to_string(row.get_ref(1)?)?,
+                ))
+            })?;
+            for row in rows {
+                let (content_id, body) = row?;
+                if multiview_body_has_anchor(&body, data_id) {
+                    return Ok(Some((
+                        multiview_content_href_for_id(content_id),
+                        Some(data_id.to_owned()),
+                    )));
+                }
+            }
+            Ok(None)
+        })
+    }
+
     pub fn law_list_for_href(&self, href: &str) -> Result<Option<MultiviewLawList>> {
         if !href.eq_ignore_ascii_case("50on") {
             return Ok(None);
@@ -1178,6 +1232,83 @@ fn plain_snippet(text: &str, max_chars: usize) -> Option<String> {
         .take(max_chars)
         .collect::<String>();
     (!snippet.is_empty()).then_some(snippet)
+}
+
+fn multiview_content_href_for_id(content_id: i64) -> String {
+    format!("{content_id:06}")
+}
+
+fn multiview_body_has_anchor(body: &str, anchor: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find("<a") {
+        let start = cursor + relative_start;
+        let Some(relative_end) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + relative_end;
+        let tag = &body[start..end];
+        if html_tag_quoted_attr_value(tag, "name")
+            .or_else(|| html_tag_quoted_attr_value(tag, "id"))
+            .is_some_and(|value| value.trim() == anchor)
+        {
+            return true;
+        }
+        cursor = end.saturating_add(1);
+    }
+    false
+}
+
+fn html_tag_quoted_attr_value(tag: &str, attr: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let lower_bytes = lower.as_bytes();
+    let bytes = tag.as_bytes();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = lower[cursor..].find(attr) {
+        let start = cursor + relative_start;
+        let before_is_boundary = start == 0
+            || lower_bytes
+                .get(start - 1)
+                .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'<');
+        let after = start + attr.len();
+        let after_is_boundary = lower_bytes
+            .get(after)
+            .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_');
+        if !before_is_boundary || !after_is_boundary {
+            cursor = after;
+            continue;
+        }
+        let mut index = after;
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            index += 1;
+        }
+        if bytes.get(index).copied() != Some(b'=') {
+            cursor = after;
+            continue;
+        }
+        index += 1;
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            index += 1;
+        }
+        let quote = bytes.get(index).copied()?;
+        if quote != b'\'' && quote != b'"' {
+            cursor = after;
+            continue;
+        }
+        let value_start = index + 1;
+        let value_end = bytes[value_start..]
+            .iter()
+            .position(|byte| *byte == quote)
+            .map(|relative| value_start + relative)?;
+        return Some(tag[value_start..value_end].to_owned());
+    }
+    None
 }
 
 fn sql_match_operator_and_pattern(query: &str, mode: &SearchMode) -> (&'static str, String) {
