@@ -253,33 +253,52 @@ impl ReaderBookPackage {
                 }
                 let data = self.read_ssed_stream_render_slice(&component, offset, length)?;
                 let mut gaiji_resources = BTreeMap::<String, ResourceRef>::new();
-                let rendered = decode_hc_stream_common_html_with_gaiji_render_policy(
-                    &data,
-                    |code| {
-                        let lookup_code = marker_profile.gaiji_lookup_code(code);
-                        let resolution = self.resolve_gaiji(&lookup_code, &options.gaiji_policy);
-                        let text = resolution
-                            .unicode
-                            .clone()
-                            .unwrap_or_else(|| "〓".to_owned());
-                        let html = gaiji_resource_html(&resolution, &text);
-                        let resolved = resolution.unicode.is_some() || html.is_some();
-                        if html.is_some()
-                            && let Some(resource) = resolution.resource.clone()
-                        {
-                            gaiji_resources
-                                .entry(resource.token.as_str().to_owned())
-                                .or_insert(resource);
-                        }
-                        diagnostics.extend(resolution.diagnostics);
-                        Some(HcCommonHtmlGaiji {
-                            text,
-                            html,
-                            resolved,
-                        })
-                    },
-                    |code| marker_profile.suppresses_gaiji_code(code),
-                );
+                let color_sample_table = match self.ssed_color_sample_table() {
+                    Ok(table) => table,
+                    Err(error) => {
+                        diagnostics.push(Diagnostic::warning(
+                            "ssed_color_sample_table_unreadable",
+                            format!(
+                                "COLSMPL.DIC could not be read for HC color-sample controls: {error}"
+                            ),
+                        ));
+                        None
+                    }
+                };
+                let rendered =
+                    decode_hc_stream_common_html_with_gaiji_render_policy_and_color_samples(
+                        &data,
+                        |code| {
+                            let lookup_code = marker_profile.gaiji_lookup_code(code);
+                            let resolution =
+                                self.resolve_gaiji(&lookup_code, &options.gaiji_policy);
+                            let text = resolution
+                                .unicode
+                                .clone()
+                                .unwrap_or_else(|| "〓".to_owned());
+                            let html = gaiji_resource_html(&resolution, &text);
+                            let resolved = resolution.unicode.is_some() || html.is_some();
+                            if html.is_some()
+                                && let Some(resource) = resolution.resource.clone()
+                            {
+                                gaiji_resources
+                                    .entry(resource.token.as_str().to_owned())
+                                    .or_insert(resource);
+                            }
+                            diagnostics.extend(resolution.diagnostics);
+                            Some(HcCommonHtmlGaiji {
+                                text,
+                                html,
+                                resolved,
+                            })
+                        },
+                        |code| marker_profile.suppresses_gaiji_code(code),
+                        |sample_key| {
+                            color_sample_table
+                                .and_then(|table| table.by_sample_key(sample_key))
+                                .cloned()
+                        },
+                    );
                 let title = self
                     .title_for_body_target(&target)?
                     .unwrap_or_else(|| "SSED entry stream".to_owned());

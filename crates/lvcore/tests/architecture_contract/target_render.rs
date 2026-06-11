@@ -439,6 +439,71 @@ fn native_hc_common_html_fallback_embeds_resource_backed_template_gaiji() {
 }
 
 #[test]
+fn native_hc_common_html_fallback_renders_colsmpl_color_samples() {
+    let dir = tempdir().unwrap();
+    let record_start = 0x80;
+    let mut idx = vec![0u8; record_start + 2 * 0x30];
+    idx[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Color Fixture";
+    idx[0x0c] = title.len() as u8;
+    idx[0x0d..0x0d + title.len()].copy_from_slice(title);
+    idx[0x4d] = 2;
+    write_record(
+        &mut idx[record_start..record_start + 0x30],
+        0x00,
+        1,
+        1,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut idx[record_start + 0x30..record_start + 0x60],
+        0xe0,
+        7,
+        7,
+        "COLSMPL.DIC",
+    );
+    fs::write(dir.path().join("DICT.IDX"), idx).unwrap();
+
+    let mut honmon = vec![0x1f, 0x14, 0x1e, 0x01, 0x1f, 0x15];
+    honmon.extend_from_slice(&body_jis("色"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture_at(1, &honmon),
+    )
+    .unwrap();
+
+    let mut color_record = vec![0u8; 2048];
+    color_record[..6].copy_from_slice(&[0xf2, 0xd7, 0xc2, 0xf3, 0x61, 0xf5]);
+    color_record[20..22].copy_from_slice(&[0x4d, 0x75]);
+    fs::write(
+        dir.path().join("COLSMPL.DIC"),
+        sseddata_literal_fixture_at(7, &color_record),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 0,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(&token, &RenderOptions::default())
+        .unwrap();
+    let html = view.display_html.as_deref().unwrap_or_default();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(view.basic_text.as_deref(), Some("色"));
+    assert!(html.contains("class=\"media lv-hc-color-sample\""));
+    assert!(html.contains("data-lv-color-sample=\"1e01\""));
+    assert!(html.contains("data-lv-color-label=\"藍\""));
+    assert!(html.contains("data-lv-munsell=\"2PB3/5\""));
+    assert!(html.contains("data-lv-rgb-estimated=\"3a3960\""));
+    assert!(html.contains("style=\"background-color:#3a3960\""));
+}
+
+#[test]
 fn hc_common_html_fallback_honors_frontend_gaiji_source_priority() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

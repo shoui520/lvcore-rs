@@ -4,6 +4,7 @@ use encoding_rs::SHIFT_JIS;
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::Diagnostic;
+use crate::ssed_color_sample::ColorSampleRecord;
 use crate::ssed_index::decode_jis_pair;
 use crate::ssed_sound_data::parse_sounddata_marker_at;
 
@@ -25,6 +26,8 @@ pub struct HcCommonHtmlRender {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub media: Vec<HcCommonHtmlMedia>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_samples: Vec<HcCommonHtmlColorSample>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -43,6 +46,21 @@ pub struct HcCommonHtmlMedia {
     pub payload_hex: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HcCommonHtmlColorSample {
+    pub sample_key: String,
+    pub status: HcCommonHtmlColorSampleStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<ColorSampleRecord>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HcCommonHtmlColorSampleStatus {
+    ResolvedMunsell,
+    UnresolvedSampleKey,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HcTextStats {
     pub controls: usize,
@@ -50,6 +68,10 @@ pub struct HcTextStats {
     pub style_controls: usize,
     pub link_controls: usize,
     pub media_controls: usize,
+    #[serde(default)]
+    pub color_samples: usize,
+    #[serde(default)]
+    pub color_sample_ends: usize,
     pub private_controls: usize,
     pub nonprinting_controls: usize,
     pub unknown_controls: usize,
@@ -237,11 +259,26 @@ pub fn decode_hc_stream_common_html_with_gaiji_render_policy(
     mut gaiji_render: impl FnMut(&str) -> Option<HcCommonHtmlGaiji>,
     mut suppress_gaiji: impl FnMut(&str) -> bool,
 ) -> HcCommonHtmlRender {
+    decode_hc_stream_common_html_with_gaiji_render_policy_and_color_samples(
+        data,
+        &mut gaiji_render,
+        &mut suppress_gaiji,
+        |_sample_key| None,
+    )
+}
+
+pub fn decode_hc_stream_common_html_with_gaiji_render_policy_and_color_samples(
+    data: &[u8],
+    mut gaiji_render: impl FnMut(&str) -> Option<HcCommonHtmlGaiji>,
+    mut suppress_gaiji: impl FnMut(&str) -> bool,
+    mut color_sample: impl FnMut(&str) -> Option<ColorSampleRecord>,
+) -> HcCommonHtmlRender {
     let mut html = String::with_capacity(data.len().saturating_mul(2));
     let mut text = String::with_capacity(data.len());
     let mut stats = HcTextStats::default();
     let mut links = Vec::new();
     let mut media = Vec::new();
+    let mut color_samples = Vec::new();
     let mut unknown_ops = BTreeSet::new();
     let mut style_stack: Vec<HcHtmlStyle> = Vec::new();
     let mut inline_stack: Vec<HcHtmlInline> = Vec::new();
@@ -379,6 +416,31 @@ pub fn decode_hc_stream_common_html_with_gaiji_render_policy(
                     payload_hex: hex_lower(payload),
                 });
                 append_media_placeholder(&mut html, op, payload, media_index);
+                offset = next;
+                continue;
+            }
+
+            if op == 0x14 {
+                let sample_key = hex_lower(payload);
+                let record = color_sample(&sample_key);
+                let status = if record.is_some() {
+                    HcCommonHtmlColorSampleStatus::ResolvedMunsell
+                } else {
+                    HcCommonHtmlColorSampleStatus::UnresolvedSampleKey
+                };
+                append_color_sample_html(&mut html, &sample_key, record.as_ref());
+                color_samples.push(HcCommonHtmlColorSample {
+                    sample_key,
+                    status,
+                    record,
+                });
+                stats.color_samples += 1;
+                offset = next;
+                continue;
+            }
+
+            if op == 0x15 {
+                stats.color_sample_ends += 1;
                 offset = next;
                 continue;
             }
@@ -538,6 +600,7 @@ pub fn decode_hc_stream_common_html_with_gaiji_render_policy(
         stats,
         links,
         media,
+        color_samples,
         diagnostics,
     }
 }
@@ -1138,6 +1201,59 @@ fn append_media_placeholder_for_control(
     html.push_str("></span>");
 }
 
+fn append_color_sample_html(
+    html: &mut String,
+    sample_key: &str,
+    record: Option<&ColorSampleRecord>,
+) {
+    html.push_str("<span class=\"media lv-hc-color-sample");
+    let Some(record) = record else {
+        html.push_str(" lv-hc-color-sample-unresolved\" data-lv-color-sample=\"");
+        push_html_attr(html, sample_key);
+        html.push_str("\" data-lv-color-sample-status=\"unresolved_sample_key\">??</span>");
+        return;
+    };
+
+    let rgb_hex = record.estimated_rgb_hex.as_deref();
+    if rgb_hex.is_none() {
+        html.push_str(" lv-hc-color-sample-unresolved");
+    }
+    html.push_str("\" data-lv-color-sample=\"");
+    push_html_attr(html, sample_key);
+    html.push_str("\" data-lv-color-sample-status=\"resolved_munsell\"");
+    if !record.label.is_empty() {
+        html.push_str(" data-lv-color-label=\"");
+        push_html_attr(html, &record.label);
+        html.push('"');
+    }
+    if !record.munsell.is_empty() {
+        html.push_str(" data-lv-munsell=\"");
+        push_html_attr(html, &record.munsell);
+        html.push('"');
+    }
+    if let Some(rgb_hex) = rgb_hex {
+        html.push_str(" data-lv-rgb-estimated=\"");
+        push_html_attr(html, rgb_hex);
+        html.push_str("\" style=\"background-color:#");
+        push_html_attr(html, rgb_hex);
+        html.push('"');
+    }
+    let title = match (!record.label.is_empty(), !record.munsell.is_empty()) {
+        (true, true) => Some(format!("{} {}", record.label, record.munsell)),
+        (true, false) => Some(record.label.clone()),
+        (false, true) => Some(record.munsell.clone()),
+        (false, false) => None,
+    };
+    if let Some(title) = title {
+        html.push_str(" title=\"");
+        push_html_attr(html, &title);
+        html.push_str("\" aria-label=\"");
+        push_html_attr(html, &title);
+        html.push('"');
+    }
+    html.push_str(">&#12288;&#12288;</span>");
+}
+
 fn hex_lower(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len() * 2);
     for byte in data {
@@ -1239,12 +1355,15 @@ fn be16_at(data: &[u8], offset: usize) -> Option<u16> {
 mod tests {
     use encoding_rs::SHIFT_JIS;
 
+    use crate::ssed_color_sample::{ColorSampleRecord, ColorSampleRgbStatus};
+
     use super::{
-        HcBasicTextGaiji, HcCommonHtmlGaiji, decode_hc_html_numeric_character_references,
-        decode_hc_stream_basic_text, decode_hc_stream_basic_text_with_gaiji,
-        decode_hc_stream_basic_text_with_gaiji_policy, decode_hc_stream_common_html,
-        decode_hc_stream_common_html_with_gaiji,
+        HcBasicTextGaiji, HcCommonHtmlColorSampleStatus, HcCommonHtmlGaiji,
+        decode_hc_html_numeric_character_references, decode_hc_stream_basic_text,
+        decode_hc_stream_basic_text_with_gaiji, decode_hc_stream_basic_text_with_gaiji_policy,
+        decode_hc_stream_common_html, decode_hc_stream_common_html_with_gaiji,
         decode_hc_stream_common_html_with_gaiji_render_policy,
+        decode_hc_stream_common_html_with_gaiji_render_policy_and_color_samples,
         decode_hc_text_numeric_character_references, hc_marker_profile_for_renderer,
     };
 
@@ -1426,6 +1545,52 @@ mod tests {
         assert_eq!(rendered.media[1].control, "1f64");
         assert!(rendered.html.contains("data-lv-media-index=\"0\""));
         assert!(rendered.html.contains("data-lv-media-index=\"1\""));
+    }
+
+    #[test]
+    fn common_html_renders_resolved_and_unresolved_color_samples() {
+        let data = [0x1f, 0x14, 0x1e, 0x01, 0x1f, 0x15, 0x1f, 0x14, 0x1e, 0x02];
+        let record = ColorSampleRecord {
+            record_index: 0,
+            sample_number: 1,
+            sample_key: Some("1e01".to_owned()),
+            munsell_raw_hex: "f2d7c2f361f5".to_owned(),
+            munsell: "2PB3/5".to_owned(),
+            label_raw_hex: "4d75".to_owned(),
+            label: "藍".to_owned(),
+            estimated_rgb: Some([58, 57, 96]),
+            estimated_rgb_hex: Some("3a3960".to_owned()),
+            rgb_status: ColorSampleRgbStatus::EstimatedFromMunsell,
+        };
+
+        let rendered = decode_hc_stream_common_html_with_gaiji_render_policy_and_color_samples(
+            &data,
+            |_code| None,
+            |_code| false,
+            |sample_key| (sample_key == "1e01").then(|| record.clone()),
+        );
+
+        assert_eq!(rendered.stats.color_samples, 2);
+        assert_eq!(rendered.stats.color_sample_ends, 1);
+        assert_eq!(rendered.color_samples.len(), 2);
+        assert_eq!(
+            rendered.color_samples[0].status,
+            HcCommonHtmlColorSampleStatus::ResolvedMunsell
+        );
+        assert_eq!(
+            rendered.color_samples[1].status,
+            HcCommonHtmlColorSampleStatus::UnresolvedSampleKey
+        );
+        assert!(rendered.html.contains("data-lv-color-sample=\"1e01\""));
+        assert!(rendered.html.contains("data-lv-munsell=\"2PB3/5\""));
+        assert!(rendered.html.contains("data-lv-rgb-estimated=\"3a3960\""));
+        assert!(rendered.html.contains("style=\"background-color:#3a3960\""));
+        assert!(rendered.html.contains("data-lv-color-sample=\"1e02\""));
+        assert!(
+            rendered
+                .html
+                .contains("data-lv-color-sample-status=\"unresolved_sample_key\"")
+        );
     }
 
     #[test]

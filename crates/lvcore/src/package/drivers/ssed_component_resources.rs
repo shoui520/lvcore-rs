@@ -1,6 +1,35 @@
 use super::*;
 
 impl ReaderBookPackage {
+    pub(super) fn ssed_color_sample_table(&self) -> Result<Option<&ColorSampleTable>> {
+        let table = self.ssed_color_sample_table.get_or_init(|| {
+            self.load_ssed_color_sample_table()
+                .map_err(|error| error.to_string())
+        });
+        match table {
+            Ok(Some(table)) => Ok(Some(table)),
+            Ok(None) => Ok(None),
+            Err(error) => Err(Error::Driver(error.clone())),
+        }
+    }
+
+    fn load_ssed_color_sample_table(&self) -> Result<Option<ColorSampleTable>> {
+        let Some(component) = self.ssed_catalog.as_ref().and_then(|catalog| {
+            catalog.components.iter().find(|component| {
+                component.role == SsedComponentRole::ColSample
+                    || component.filename.eq_ignore_ascii_case("COLSMPL.DIC")
+            })
+        }) else {
+            return Ok(None);
+        };
+        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+            return Ok(None);
+        };
+        let mut reader = SsedDataFile::open(path)?;
+        let data = reader.read_range(0, reader.header().expanded_size())?;
+        Ok(Some(parse_color_sample_table(&data)))
+    }
+
     pub(super) fn read_ssed_colscr_image(
         &self,
         component_name: &str,

@@ -291,6 +291,9 @@ provider slices:
 - SSED KOJIEN6-style `COLSMPL.DIC` records are parsed as typed color-sample
   metadata preserving exact Munsell notation and JIS labels, plus an explicitly
   estimated RGB swatch value for reader display when the Munsell notation parses;
+- SSED common-HC HTML fallback resolves `1f14` color-sample controls through
+  `COLSMPL.DIC`, exposing swatch HTML and structured resolved/unresolved sample
+  metadata while preserving the official-RGB caveat;
 - explicit deferred/unsupported diagnostics instead of fake output.
 
 `logovista-tools` remains the research oracle while `lvcore-rs` ports stable

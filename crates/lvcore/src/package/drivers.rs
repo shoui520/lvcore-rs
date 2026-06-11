@@ -170,12 +170,14 @@ use crate::ssed_aux_index::{
     SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,
     parse_aux_index_specs_from_exinfo, parse_aux_index_text_bytes,
 };
+use crate::ssed_color_sample::{ColorSampleTable, parse_color_sample_table};
 use crate::ssed_encyclopedia::{SsedEncyclopediaRow, parse_encyclopedia_index_bytes};
 use crate::ssed_figure::{FigureDimensions, figure_bitmap_to_png};
 use crate::ssed_ga16::{ga16_glyph_png, ga16_resource_covers_code};
 use crate::ssed_hc::{
     HcBasicTextGaiji, HcCommonHtmlGaiji, decode_hc_stream_basic_text_with_gaiji_policy,
-    decode_hc_stream_common_html_with_gaiji_render_policy, hc_marker_profile_for_renderer,
+    decode_hc_stream_common_html_with_gaiji_render_policy_and_color_samples,
+    hc_marker_profile_for_renderer,
 };
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_title_text,
@@ -316,6 +318,7 @@ pub struct ReaderBookPackage {
     ssed_navigation_surface_pages: Mutex<SsedNavigationSurfaceCache>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
     ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
+    ssed_color_sample_table: OnceLock<std::result::Result<Option<ColorSampleTable>, String>>,
     ssed_panel_xml: OnceLock<std::result::Result<Option<SsedPanelXml>, String>>,
     ssed_panel_plists: Mutex<BTreeMap<String, std::result::Result<Arc<PlistValue>, String>>>,
 }
@@ -438,6 +441,7 @@ impl ReaderBookPackage {
             ssed_navigation_surface_pages: Mutex::new(BTreeMap::new()),
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),
+            ssed_color_sample_table: OnceLock::new(),
             ssed_panel_xml: OnceLock::new(),
             ssed_panel_plists: Mutex::new(BTreeMap::new()),
         }
