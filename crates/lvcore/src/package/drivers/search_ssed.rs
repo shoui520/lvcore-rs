@@ -1398,9 +1398,9 @@ impl ReaderBookPackage {
         let native_scan_needed = self.ssed_honmon_body_window_scan_is_needed_with_diagnostics(
             catalog,
             diagnostics,
-            "ssed_native_index_search_deferred_sidecar_backed",
-            "SSED native title/index search was deferred because ordered HONBUN renderer rows are the visual body source",
-            "SSED native title/index search was deferred because sampled native index targets dereference to dense sidecar bodies",
+            "ssed_native_index_search_skipped_sidecar_backed",
+            "SSED native title/index search skipped raw HONMON targets because ordered HONBUN renderer rows are the visual body source",
+            "SSED native title/index search skipped raw HONMON targets because sampled native index targets dereference to dense sidecar bodies",
         )?;
         Ok(!native_scan_needed)
     }

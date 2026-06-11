@@ -1743,9 +1743,12 @@ fn dense_honmon_search_uses_cjk_sidecar_titles() {
                 .iter()
                 .any(|diagnostic| diagnostic.code == "ssed_sidecar_title_search")
         );
-        assert!(page.diagnostics.iter().any(
-            |diagnostic| diagnostic.code == "ssed_native_index_search_deferred_sidecar_backed"
-        ));
+        assert!(
+            page.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code
+                    == "ssed_native_index_search_skipped_sidecar_backed")
+        );
     }
 }
 
