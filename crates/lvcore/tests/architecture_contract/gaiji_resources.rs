@@ -100,7 +100,7 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
         .unwrap();
     assert!(bitmap_png.starts_with(b"\x89PNG\r\n\x1a\n"));
 
-    let unresolved = package.resolve_gaiji("B999", &GaijiPolicy::default());
+    let unresolved = package.resolve_gaiji("A999", &GaijiPolicy::default());
     assert_eq!(
         unresolved.preferred_source,
         Some(GaijiSourcePreference::Unresolved)
@@ -112,6 +112,48 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "gaiji_unresolved")
+    );
+}
+
+#[test]
+fn ssed_fullwidth_unbacked_gaiji_is_formatting_helper_candidate() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let resolved = package.resolve_gaiji("B947", &GaijiPolicy::default());
+    assert_eq!(
+        resolved.preferred_source,
+        Some(GaijiSourcePreference::Unresolved)
+    );
+    assert!(resolved.resource.is_none());
+    assert!(resolved.unicode.is_none());
+    assert!(resolved.nonliteral_marker);
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "gaiji_formatting_helper_candidate")
+    );
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "gaiji_unresolved")
+    );
+
+    let label = lvcore::resolve_rich_label(
+        package.as_ref(),
+        "word<zB947>end",
+        &LabelOptions::default().gaiji_policy,
+    );
+    assert_eq!(label.text, "wordend");
+    assert_eq!(label.html, "wordend");
+    assert!(
+        label
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "gaiji_formatting_helper_candidate")
     );
 }
 

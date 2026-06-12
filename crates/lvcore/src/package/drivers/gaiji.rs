@@ -72,6 +72,10 @@ impl GaijiProvider for ReaderBookPackage {
         let unicode = self.gaiji_unicode_map.get(&code).cloned();
         let template_resource = self.template_gaiji_resource(&code);
         let ga16_resource = self.ga16_gaiji_resource_ref(&code);
+        let formatting_helper_candidate = unicode.is_none()
+            && template_resource.is_none()
+            && ga16_resource.is_none()
+            && is_full_width_gaiji_code(&code);
         let preferred_source = policy.priority.iter().copied().find(|source| match source {
             GaijiSourcePreference::Unicode => unicode.is_some(),
             GaijiSourcePreference::ExternalResource => template_resource.is_some(),
@@ -83,7 +87,15 @@ impl GaijiProvider for ReaderBookPackage {
             Some(GaijiSourcePreference::Ga16Bitmap) => ga16_resource,
             _ => template_resource.or(ga16_resource),
         };
-        let diagnostics = if matches!(
+        let diagnostics = if formatting_helper_candidate {
+            vec![
+                Diagnostic::info(
+                    "gaiji_formatting_helper_candidate",
+                    format!("{code} has no Unicode, Template, or GA16 display backing and is classified as a probable LogoVista formatting helper"),
+                )
+                .with_context("gaiji_space", "full"),
+            ]
+        } else if matches!(
             preferred_source,
             None | Some(GaijiSourcePreference::Unresolved)
         ) {
@@ -100,8 +112,12 @@ impl GaijiProvider for ReaderBookPackage {
             preferred_source,
             unicode,
             resource,
-            nonliteral_marker: false,
+            nonliteral_marker: formatting_helper_candidate,
             diagnostics,
         }
     }
+}
+
+fn is_full_width_gaiji_code(code: &str) -> bool {
+    u16::from_str_radix(code, 16).is_ok_and(|value| value >= 0xB000)
 }

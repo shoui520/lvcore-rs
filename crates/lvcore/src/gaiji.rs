@@ -112,6 +112,10 @@ pub fn resolve_rich_label(
 
         let resolution = provider.resolve_gaiji(marker.raw, policy);
         diagnostics.extend(resolution.diagnostics.clone());
+        if resolution.nonliteral_marker {
+            cursor = marker.end;
+            continue;
+        }
         let fallback_text = resolution.unicode.as_deref().unwrap_or("〓");
         text.push_str(fallback_text);
         append_gaiji_html(&mut html, &resolution, fallback_text);

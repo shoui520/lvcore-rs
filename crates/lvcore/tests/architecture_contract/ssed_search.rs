@@ -788,7 +788,7 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
     .unwrap();
     fs::write(
         dir.path().join("FHTITLE.DIC"),
-        sseddata_literal_fixture(b"alpha <zB123> zA128 zB999\x1f\x0a"),
+        sseddata_literal_fixture(b"alpha <zB123> zA128 zA999\x1f\x0a"),
     )
     .unwrap();
     fs::write(
@@ -815,7 +815,7 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
     assert_eq!(hit.title_text, "alpha 一 〓 〓");
     assert!(hit.title_html.contains("alpha 一 "));
     assert!(hit.title_html.contains("lvcore://resource/"));
-    assert!(hit.title_html.contains(r#"data-gaiji="B999""#));
+    assert!(hit.title_html.contains(r#"data-gaiji="A999""#));
     assert!(!hit.title_html.contains("<zB123>"));
     assert!(!hit.title_html.contains("zA128"));
     assert!(
@@ -830,7 +830,7 @@ fn ssed_search_and_navigation_labels_resolve_gaiji_markers() {
     };
     assert_eq!(items[0].label_text, "alpha 一 〓 〓");
     assert!(items[0].label_html.contains("lvcore://resource/"));
-    assert!(items[0].label_html.contains(r#"data-gaiji="B999""#));
+    assert!(items[0].label_html.contains(r#"data-gaiji="A999""#));
     assert!(
         items[0]
             .diagnostics
