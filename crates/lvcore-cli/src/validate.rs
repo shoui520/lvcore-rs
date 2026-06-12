@@ -7,8 +7,8 @@ use lvcore::{
     BookId, BookLibrary, BookMetadata, Capability, DetectedPackage, Diagnostic, DiagnosticSeverity,
     DriverRegistry, FormatFamily, HomeSurface, NavigationStatus, NavigationSurface,
     NavigationSurfaceKind, NavigationTarget, PackageDiscoveryOptions, RenderMode, RenderOptions,
-    ResolvedTargetKind, ResolvedTargetView, ResourceKind, SearchHit, SearchMode, SearchQuery,
-    SearchResultSequence, SearchScope, SequenceHint, TargetKind,
+    ResolvedTargetKind, ResolvedTargetView, ResourceKind, SearchHit, SearchMode, SearchPage,
+    SearchQuery, SearchResultSequence, SearchScope, SequenceHint, TargetKind,
 };
 use serde_json::json;
 
@@ -1982,15 +1982,19 @@ fn select_validation_search_probe_query(
     for label in validation_search_probe_fallback_labels(metadata, mode) {
         push_search_probe_candidate(&mut candidates, label, mode);
     }
+    let mut first_noisy_hit = None;
     for (index, candidate) in candidates.iter().enumerate() {
-        match search_probe_query_has_hits(library, book_id, mode, candidate) {
-            Ok(true) => return candidate.clone(),
-            Ok(false) => {}
+        match search_probe_query_hit_quality(library, book_id, mode, candidate) {
+            Ok(ValidationSearchProbeHitQuality::CleanHit) => return candidate.clone(),
+            Ok(ValidationSearchProbeHitQuality::NoisyHit) => {
+                first_noisy_hit.get_or_insert_with(|| candidate.clone());
+            }
+            Ok(ValidationSearchProbeHitQuality::Miss) => {}
             Err(_) if index == 0 => return query,
             Err(_) => {}
         }
     }
-    query
+    first_noisy_hit.unwrap_or(query)
 }
 
 fn validation_search_probe_should_hit_check(mode: &SearchMode) -> bool {
@@ -2010,14 +2014,35 @@ fn validation_search_probe_fallback_labels(
     }
 }
 
-fn search_probe_query_has_hits(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValidationSearchProbeHitQuality {
+    Miss,
+    NoisyHit,
+    CleanHit,
+}
+
+fn search_probe_query_hit_quality(
     library: &BookLibrary,
     book_id: &BookId,
     mode: &SearchMode,
     query: &str,
-) -> lvcore::Result<bool> {
+) -> lvcore::Result<ValidationSearchProbeHitQuality> {
     let (page, _) = search_with_empty_cursor_follow(library, book_id, mode, query, 1)?;
-    Ok(!page.hits.is_empty())
+    Ok(validation_search_probe_hit_quality(&page))
+}
+
+fn validation_search_probe_hit_quality(page: &SearchPage) -> ValidationSearchProbeHitQuality {
+    if page.hits.is_empty() {
+        return ValidationSearchProbeHitQuality::Miss;
+    }
+    if page
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "ssed_title_label_search_fallback_skipped_short_query")
+    {
+        return ValidationSearchProbeHitQuality::NoisyHit;
+    }
+    ValidationSearchProbeHitQuality::CleanHit
 }
 
 fn search_probe_prefers_real_labels(_format_family: FormatFamily, mode: &SearchMode) -> bool {
@@ -2347,6 +2372,7 @@ mod tests {
     use super::*;
     use std::fs;
 
+    use lvcore::TargetToken;
     use rusqlite::Connection;
     use tempfile::tempdir;
 
@@ -2572,6 +2598,58 @@ mod tests {
             &SearchMode::Advanced("advanced1".to_owned())
         ));
         assert!(is_default_search_probe_label("新"));
+    }
+
+    #[test]
+    fn validation_search_probe_hit_quality_marks_short_fallback_skip_noisy() {
+        let clean = validation_search_probe_page(vec![validation_search_probe_hit()], Vec::new());
+        assert_eq!(
+            validation_search_probe_hit_quality(&clean),
+            ValidationSearchProbeHitQuality::CleanHit
+        );
+
+        let noisy = validation_search_probe_page(
+            vec![validation_search_probe_hit()],
+            vec![Diagnostic::info(
+                "ssed_title_label_search_fallback_skipped_short_query",
+                "short query",
+            )],
+        );
+        assert_eq!(
+            validation_search_probe_hit_quality(&noisy),
+            ValidationSearchProbeHitQuality::NoisyHit
+        );
+
+        let miss = validation_search_probe_page(Vec::new(), Vec::new());
+        assert_eq!(
+            validation_search_probe_hit_quality(&miss),
+            ValidationSearchProbeHitQuality::Miss
+        );
+    }
+
+    fn validation_search_probe_page(
+        hits: Vec<SearchHit>,
+        diagnostics: Vec<Diagnostic>,
+    ) -> SearchPage {
+        SearchPage {
+            hits,
+            next_cursor: None,
+            result_sequence: None,
+            diagnostics,
+        }
+    }
+
+    fn validation_search_probe_hit() -> SearchHit {
+        SearchHit {
+            book_id: BookId("TEST".to_owned()),
+            target: TargetToken::from_opaque("test"),
+            href: String::new(),
+            title_html: "hit".to_owned(),
+            title_text: "hit".to_owned(),
+            snippet_html: None,
+            sequence_hint: None,
+            diagnostics: Vec::new(),
+        }
     }
 
     #[test]
