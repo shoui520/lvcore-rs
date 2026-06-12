@@ -1612,12 +1612,20 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
                 value: full_db_surface_id.to_owned(),
                 cursor: Some(items[0].item_id.clone()),
             }),
-            0,
-            0,
+            1,
+            1,
             &RenderOptions::default(),
         )
         .unwrap();
     assert_eq!(full_db_window.center.kind, ResolvedTargetKind::EntryBody);
+    assert!(full_db_window.before.is_empty());
+    assert!(full_db_window.after.is_empty());
+    assert!(
+        !full_db_window
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "sequence_window_boundary")
+    );
 }
 
 #[test]

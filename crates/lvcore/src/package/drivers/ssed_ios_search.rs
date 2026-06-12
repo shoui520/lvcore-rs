@@ -413,7 +413,8 @@ impl ReaderBookPackage {
         for item in &items[center_index + 1..items.len().min(center_index + 1 + after)] {
             after_views.push(render_item(item)?);
         }
-        if center_index == 0 && before > 0 {
+        let expected_before = before.min(cursor_state.row_offset);
+        if before_views.len() < expected_before {
             diagnostics.push(Diagnostic::info(
                 "sequence_window_boundary",
                 "iOS DictFULLDB cursor window did not include all requested previous items",
