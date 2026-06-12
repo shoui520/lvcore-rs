@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use lvcore::{
     BookId, BookLibrary, BookMetadata, Capability, DetectedPackage, Diagnostic, DiagnosticSeverity,
-    DriverRegistry, FormatFamily, HomeSurface, NavigationStatus, NavigationSurface,
+    DriverRegistry, FormatFamily, HomeSurface, InternalTarget, NavigationStatus, NavigationSurface,
     NavigationSurfaceKind, NavigationTarget, PackageDiscoveryOptions, RenderMode, RenderOptions,
     ResolvedTargetKind, ResolvedTargetView, ResourceKind, SearchHit, SearchMode, SearchPage,
     SearchQuery, SearchResultSequence, SearchScope, SequenceHint, TargetKind,
@@ -94,15 +94,12 @@ fn open_validation_cross_book_destinations(
         return;
     };
     let mut dict_codes = BTreeSet::new();
-    for diagnostic in surfaces
-        .iter()
-        .flat_map(|surface| surface.diagnostics.iter())
-        .filter(|diagnostic| diagnostic.code == "ssed_ios_table_list_cross_book")
-    {
-        if let Some(dict_code) = diagnostic.context.get("dict_code") {
-            dict_codes.insert(dict_code.to_owned());
-        }
-    }
+    collect_validation_ssed_cross_book_dict_codes(
+        library,
+        source_book_id,
+        &surfaces,
+        &mut dict_codes,
+    );
     if metadata_for(library, source_book_id)
         .is_ok_and(|metadata| metadata.format_family == FormatFamily::LvedSqlite3)
     {
@@ -124,6 +121,37 @@ fn open_validation_cross_book_destinations(
         };
         if let Some(detected) = detected.pop() {
             let _ = library.open_detected_package(detected, registry);
+        }
+    }
+}
+
+fn collect_validation_ssed_cross_book_dict_codes(
+    library: &BookLibrary,
+    source_book_id: &BookId,
+    surfaces: &[HomeSurface],
+    dict_codes: &mut BTreeSet<String>,
+) {
+    let mut probed_surface_ids = BTreeSet::new();
+    for surface in surfaces {
+        if !should_probe_home_surface(&mut probed_surface_ids, surface) {
+            continue;
+        }
+        let Ok(opened) =
+            open_surface_probe_page(library, source_book_id, &surface.surface_id, None)
+        else {
+            continue;
+        };
+        let Ok(probe) =
+            surface_probe_targets(library, source_book_id, &surface.surface_id, &opened)
+        else {
+            continue;
+        };
+        for target in &probe.resource_targets {
+            let Ok(InternalTarget::SsedCrossBookAddress { dict_code, .. }) = target.target.decode()
+            else {
+                continue;
+            };
+            dict_codes.insert(dict_code);
         }
     }
 }

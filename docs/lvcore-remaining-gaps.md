@@ -4,13 +4,16 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-home-surface-diagnostic-cleanup.jsonl`
-- Produced after removing available home-surface success diagnostics.
+- `/tmp/lvcore-all-corpora-validation-20260612-ios-ssed-cross-book-routing.jsonl`
+- Produced after routing iOS SSED cross-book validation targets through sibling
+  packages without relying on reader-facing diagnostics.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
 Previous planning baseline:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-home-surface-diagnostic-cleanup.jsonl`
+- Produced after removing available home-surface success diagnostics.
 - `/tmp/lvcore-all-corpora-validation-20260612-navigation-diagnostic-cleanup.jsonl`
 - Produced after removing stale success-path SSED navigation diagnostics.
 - `/tmp/lvcore-all-corpora-validation-20260612-gaiji-helper-tightened.jsonl`
@@ -71,6 +74,60 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0e. iOS SSED cross-book validation routing context (resolved)
+
+Why this matters:
+
+- The latest gate after home-surface diagnostic cleanup exposed one real
+  validator-context gap: iOS `KQNEWJE5` tableList rows target sibling SSED
+  dictionary `KQNEWEJ6`, but deep package validation no longer opened that
+  sibling after success diagnostics were removed.
+- The underlying library routing path already supports SSED cross-book targets
+  when the sibling package is open.
+- The validator was incorrectly coupled to a reader-facing
+  `HomeSurface.diagnostics` marker as its internal sibling-discovery signal.
+
+Current status:
+
+- Deep validation now probes available surface targets, decodes
+  `SsedCrossBookAddress` tokens, and opens matching sibling packages before the
+  exercise pass.
+- This keeps reader-facing home surfaces clean while preserving validation
+  coverage for iOS tableList cross-book rows.
+- Focused test passed:
+  - `cargo test -p lvcore-cli validate_deep_routes_ios_table_list_cross_book_sibling -- --nocapture`
+- Focused cross-book regression tests passed:
+  - `cargo test -p lvcore-cli cross_book -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ios-ssed-cross-book-target-routing.jsonl`
+  - `KQNEWJE5` validates with package status `ok`.
+  - `ios-table-list:tableList.plist` routes to
+    `SSED:KQNEWEJ6:*`, renders as `entry_body`, and emits
+    `ssed_cross_book_routed`.
+  - `ssed_cross_book_destination_missing` and `ssed_cross_book_deferred` are
+    zero.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-ios-ssed-cross-book-routing.jsonl`
+  - 334 packages validated with package status 334 `ok`.
+  - Baseline warnings remain only `hc_render_common_html_fallback`.
+  - `ssed_cross_book_destination_missing` and `ssed_cross_book_deferred` are
+    zero in the baseline diagnostic scope.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/Other/iOS/KQNEWJE5/KQNEWJE5`
+- Destination package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/Other/iOS/KQNEWEJ6/KQNEWEJ6`
+- Observed row:
+  - `surface_id`: `ios-table-list:tableList.plist`
+  - label: `United States`
+  - target: `HONMON.DIC:231605:1770` in dictionary `KQNEWEJ6`
+
+Changed code area:
+
+- `crates/lvcore-cli/src/validate.rs`
 
 ### 0d. Available home-surface success diagnostic noise (resolved)
 
