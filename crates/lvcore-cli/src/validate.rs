@@ -753,7 +753,8 @@ fn search_mode_exercises(
     let mut rows = Vec::new();
     let probe_labels = search_probe_labels(library, book_id, metadata, surfaces);
     for mode in validate_search_modes_to_probe(metadata) {
-        let query = select_search_probe_query(metadata, &mode, &probe_labels);
+        let query =
+            select_validation_search_probe_query(library, book_id, metadata, &mode, &probe_labels);
         let render_hits = mode == SearchMode::Forward;
         rows.push(search_mode_exercise(
             library,
@@ -1862,12 +1863,12 @@ fn metadata_title_contains_cjk(metadata: &BookMetadata) -> bool {
     })
 }
 
-fn select_search_probe_query(
+fn search_probe_candidate_queries(
     metadata: &BookMetadata,
     mode: &SearchMode,
     labels: &[String],
-) -> String {
-    let mut prioritized_labels = labels
+) -> Vec<String> {
+    let prioritized_labels = labels
         .iter()
         .filter(|label| !is_default_search_probe_label(label))
         .chain(
@@ -1875,21 +1876,71 @@ fn select_search_probe_query(
                 .iter()
                 .filter(|label| is_default_search_probe_label(label)),
         );
-    let mut normal_labels = labels.iter();
-    let label_iter: &mut dyn Iterator<Item = &String> =
-        if search_probe_prefers_real_labels(metadata.format_family, mode) {
-            &mut prioritized_labels
-        } else {
-            &mut normal_labels
-        };
-    for label in label_iter {
-        let query = search_probe_query(label, mode);
-        if !search_probe_query_is_useful(&query) {
-            continue;
+    let mut candidates = Vec::new();
+    if search_probe_prefers_real_labels(metadata.format_family, mode) {
+        for label in prioritized_labels {
+            push_search_probe_candidate(&mut candidates, label, mode);
         }
+    } else {
+        for label in labels {
+            push_search_probe_candidate(&mut candidates, label, mode);
+        }
+    }
+    candidates
+}
+
+fn push_search_probe_candidate(candidates: &mut Vec<String>, label: &str, mode: &SearchMode) {
+    let query = search_probe_query(label, mode);
+    if !search_probe_query_is_useful(&query) || candidates.iter().any(|seen| seen == &query) {
+        return;
+    }
+    candidates.push(query);
+}
+
+fn select_validation_search_probe_query(
+    library: &BookLibrary,
+    book_id: &BookId,
+    metadata: &BookMetadata,
+    mode: &SearchMode,
+    labels: &[String],
+) -> String {
+    let mut candidates = search_probe_candidate_queries(metadata, mode, labels);
+    if candidates.is_empty() {
+        candidates.push("a".to_owned());
+    }
+    let query = candidates[0].clone();
+    if mode != &SearchMode::Forward {
         return query;
     }
-    "a".to_owned()
+    for label in validation_forward_search_probe_labels(metadata) {
+        push_search_probe_candidate(&mut candidates, label, mode);
+    }
+    for (index, candidate) in candidates.iter().enumerate() {
+        match search_probe_query_has_hits(library, book_id, mode, candidate) {
+            Ok(true) => return candidate.clone(),
+            Ok(false) => {}
+            Err(_) if index == 0 => return query,
+            Err(_) => {}
+        }
+    }
+    query
+}
+
+fn validation_forward_search_probe_labels(metadata: &BookMetadata) -> &'static [&'static str] {
+    match metadata.format_family {
+        FormatFamily::LvedSqlite3 => &["a", "あ", "お", "結", "祝"],
+        _ => default_search_probe_labels(metadata),
+    }
+}
+
+fn search_probe_query_has_hits(
+    library: &BookLibrary,
+    book_id: &BookId,
+    mode: &SearchMode,
+    query: &str,
+) -> lvcore::Result<bool> {
+    let (page, _) = search_with_empty_cursor_follow(library, book_id, mode, query, 1)?;
+    Ok(!page.hits.is_empty())
 }
 
 fn search_probe_prefers_real_labels(_format_family: FormatFamily, mode: &SearchMode) -> bool {
