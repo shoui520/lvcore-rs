@@ -71,9 +71,11 @@ pub(super) fn search_lved_sqlite_connection(
     let projection = lved_list_projection(provider.list_columns);
     let search_table = quote_identifier(provider.search_table);
     let list_table = quote_identifier(provider.list_table);
+    // `l.id` is equal to the FTS rowid here, but ordering by the virtual-table
+    // rowid lets SQLite stream broad CJK FTS matches instead of sorting them.
     let sql = format!(
         "select l.id, l.refid, {}, {}, {}, {} \
-         from {search_table} s join {list_table} l on l.id = s.rowid where {where_clause} order by l.id limit ? offset ?",
+         from {search_table} s join {list_table} l on l.id = s.rowid where {where_clause} order by s.rowid limit ? offset ?",
         projection.anchor, projection.title, projection.subtitle, projection.kind
     );
     let mut statement = connection.prepare(&sql)?;
@@ -105,7 +107,7 @@ fn search_lved_sqlite_fts_variants(
     let match_expr = fts_table_match_expr(provider.search_table);
     let sql = format!(
         "select l.id, l.refid, {}, {}, {}, {} \
-         from {search_table} join {list_table} l on l.id = {search_table}.rowid where {match_expr} order by l.id limit ?",
+         from {search_table} join {list_table} l on l.id = {search_table}.rowid where {match_expr} order by {search_table}.rowid limit ?",
         projection.anchor, projection.title, projection.subtitle, projection.kind
     );
     let mut hits_by_list_id = BTreeMap::new();

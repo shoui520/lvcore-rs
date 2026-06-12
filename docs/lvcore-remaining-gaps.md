@@ -4,6 +4,16 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-lved-fts-rowid-order.jsonl`
+- Produced after changing LVED_SQLITE3 FTS list joins to order by the FTS
+  virtual-table rowid instead of the joined `list.id`, avoiding temp B-tree
+  sorts for broad CJK full-text searches.
+- 336 packages validated with package status 336 `ok`.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260612-body-offset-cursor-skip.jsonl`
 - Produced after bounding native SSED full-text body continuation validation:
   body byte-candidate lookup uses `memmem`, and deep validation no longer
@@ -11,9 +21,6 @@ Latest full-corpus gate:
 - 336 packages validated with package status 336 `ok`.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
-
 - `/tmp/lvcore-all-corpora-validation-20260612-ssed-partial-unverified-cursor.jsonl`
 - Produced after changing large SSED partial-prefix pages to expose unverified
   non-prefix continuations instead of proving those continuations during
@@ -91,6 +98,66 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0h. LVED SQLCipher broad CJK full-text latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate had no non-HC correctness failures, but it exposed
+  a concrete LVED_SQLITE3 search latency gap: `_DCT_HBHYAKKA` spent about 6.1s
+  in `search_full_text` for query `アイ`, plus about 1.4s probing cursor `1`.
+- `_DCT_SSJPKOKU` showed the same pattern for query `あ`, with a roughly 4.2s
+  first page and about 1.4s cursor probe.
+- Direct SQL evidence on `_DCT_HBHYAKKA` showed the old query plan scanned the
+  FTS virtual table and then used a temp B-tree for `order by l.id`, even though
+  the join condition is `l.id = s.rowid`.
+
+Current status:
+
+- LVED_SQLITE3 FTS list joins now order by the FTS virtual-table rowid. This is
+  semantically equivalent to `list.id` for those joined rows, but lets SQLite
+  stream FTS rowid order without materializing a broad match set for sorting.
+- The same rowid ordering is used for single-variant direct FTS queries and
+  hiragana/katakana variant query pages before the variant merge step.
+- Focused tests passed:
+  - `cargo test -p lvcore searches_lved_list_rows_and_preserves_content_html -- --nocapture`
+  - `cargo test -p lvcore lved_sqlite -- --nocapture`
+- Direct real-package probes after the change:
+  - `_DCT_HBHYAKKA`, query `アイ`, first page about 0.23s and cursor page about
+    0.24s.
+  - `_DCT_SSJPKOKU`, query `あ`, first page about 1.67s and cursor page about
+    1.44s.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-lved-fts-rowid-order.jsonl`
+  - `_DCT_HBHYAKKA` package status `ok`; `search_full_text` elapsed about 37ms
+    and cursor probe about 18ms.
+  - `_DCT_SSJPKOKU` package status `ok`; `search_full_text` elapsed about 2.1s
+    and cursor probe about 1.1s.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-lved-fts-rowid-order.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback`.
+  - Total gate wall time was about 561s.
+  - `_DCT_HBHYAKKA` package elapsed about 0.7s in the full gate, with
+    `search_full_text` about 35ms and cursor probe about 17ms.
+  - `_DCT_SSJPKOKU` remains the slowest LVED_SQLITE3 full-text sample but is
+    improved from the previous gate: `search_full_text` about 2.2s and cursor
+    probe about 1.1s.
+
+Baseline evidence:
+
+- Baseline full-corpus JSONL:
+  - `/tmp/lvcore-all-corpora-validation-20260612-body-offset-cursor-skip.jsonl`
+- Baseline symptoms:
+  - `_DCT_HBHYAKKA` `search_full_text` query `アイ` elapsed about 6.1s; cursor
+    probe about 1.4s.
+  - `_DCT_SSJPKOKU` `search_full_text` query `あ` elapsed about 4.2s; cursor
+    probe about 1.4s.
+
+Changed code area:
+
+- `crates/lvcore/src/lved_sqlite/sql_search.rs`
 
 ### 0g. Large SSED partial-search first-page latency (resolved)
 

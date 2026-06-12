@@ -352,9 +352,9 @@ fn searches_lved_list_rows_and_preserves_content_html() {
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
                       values (4, 'alpha beta', 'ateb ahpla', 'alpha beta', 'alpha beta article', '', '', '∥alpha beta∥');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
-                      values (6, '法務', '務法', '法務', '法務 body', '', '', '∥法務∥');
+                      values (6, '法務', '務法', '法務', '法 body first', '', '', '∥法務∥');
                     insert into search(rowid, forward, back, part, fts, advanced1, advanced2, filter)
-                      values (7, 'abbreviation', 'noitaiverbba', 'abbreviation', '法 body', '', '', '∥abbreviation∥');
+                      values (7, 'abbreviation', 'noitaiverbba', 'abbreviation', '法 body second', '', '', '∥abbreviation∥');
                     ",
                 )
                 .unwrap();
@@ -391,6 +391,16 @@ fn searches_lved_list_rows_and_preserves_content_html() {
     assert_eq!(guarded_cjk_forward_hits.len(), 1);
     assert_eq!(guarded_cjk_forward_hits[0].content_id, 105);
     assert_eq!(guarded_cjk_forward_hits[0].title_text, "法務");
+    let guarded_cjk_fulltext_first = store
+        .search_page("法", &SearchMode::FullText, 0, 1)
+        .unwrap();
+    assert_eq!(guarded_cjk_fulltext_first.len(), 1);
+    assert_eq!(guarded_cjk_fulltext_first[0].list_id, 6);
+    let guarded_cjk_fulltext_second = store
+        .search_page("法", &SearchMode::FullText, 1, 1)
+        .unwrap();
+    assert_eq!(guarded_cjk_fulltext_second.len(), 1);
+    assert_eq!(guarded_cjk_fulltext_second[0].list_id, 7);
     let advanced_hits = store
         .search("topic", &SearchMode::Advanced("advanced1".to_owned()), 10)
         .unwrap();
