@@ -519,7 +519,7 @@ pub(super) fn ssed_aux_index_rows_to_flat_nodes(
         .collect()
 }
 
-fn ssed_aux_index_row_target(
+pub(in crate::package::drivers) fn ssed_aux_index_row_target(
     package: &ReaderBookPackage,
     row: &SsedAuxIndexRow,
     next_target_row: Option<&SsedAuxIndexRow>,
@@ -597,6 +597,16 @@ fn ssed_aux_index_row_target(
         diagnostics.push(diagnostic);
         return Ok(None);
     }
+    let pointer = if let Some(catalog) = &package.ssed_catalog {
+        if let Some(component) = catalog.component_for_address(row.block) {
+            ssed_aux_honmon_render_pointer(package, component, row, next_target_row)?
+                .unwrap_or(pointer)
+        } else {
+            pointer
+        }
+    } else {
+        pointer
+    };
     match package.ssed_target_for_index_pointer_with_bound(pointer, end)? {
         Ok(target) => Ok(Some(target)),
         Err(diagnostic) => {
@@ -604,6 +614,154 @@ fn ssed_aux_index_row_target(
             Ok(None)
         }
     }
+}
+
+const SSED_AUX_HONMON_ENTRY_MARKER_FORWARD_SCAN_LIMIT: usize = 4096;
+
+fn ssed_aux_honmon_render_pointer(
+    package: &ReaderBookPackage,
+    component: &SsedComponent,
+    row: &SsedAuxIndexRow,
+    next_target_row: Option<&SsedAuxIndexRow>,
+) -> Result<Option<SsedIndexPointer>> {
+    if component.role != SsedComponentRole::Honmon {
+        return Ok(None);
+    }
+    let Some(component_offset) = component.relative_offset(row.block, row.offset) else {
+        return Ok(None);
+    };
+    let Some(path) = package.resolve_readable_ssed_component_path(component)? else {
+        return Ok(None);
+    };
+    let mut reader = SsedDataFile::open(path)?;
+    let Ok(start) = usize::try_from(component_offset) else {
+        return Ok(None);
+    };
+    let bound = next_target_row
+        .and_then(|next| {
+            package
+                .ssed_catalog
+                .as_ref()
+                .and_then(|catalog| catalog.component_for_address(next.block))
+                .filter(|next_component| next_component.filename == component.filename)
+                .and_then(|next_component| next_component.relative_offset(next.block, next.offset))
+        })
+        .and_then(|offset| usize::try_from(offset).ok());
+    let match_texts = ssed_aux_label_target_match_texts(&row.label);
+    let Some(marker_offset) =
+        ssed_aux_matching_entry_marker_offset(package, &mut reader, start, bound, &match_texts)?
+    else {
+        return Ok(None);
+    };
+    ssed_component_offset_to_pointer(component, marker_offset).map(Some)
+}
+
+fn ssed_aux_matching_entry_marker_offset(
+    package: &ReaderBookPackage,
+    reader: &mut SsedDataFile,
+    start: usize,
+    bound: Option<usize>,
+    match_texts: &[String],
+) -> Result<Option<usize>> {
+    if match_texts.is_empty() {
+        return Ok(None);
+    }
+    let expanded_size = reader.header().expanded_size();
+    if start >= expanded_size {
+        return Ok(None);
+    }
+    let scan_end = bound
+        .unwrap_or_else(|| start.saturating_add(SSED_AUX_HONMON_ENTRY_MARKER_FORWARD_SCAN_LIMIT))
+        .min(start.saturating_add(SSED_AUX_HONMON_ENTRY_MARKER_FORWARD_SCAN_LIMIT))
+        .min(expanded_size);
+    if scan_end <= start.saturating_add(1) {
+        return Ok(None);
+    }
+    let data = reader.read_range(start, scan_end - start)?;
+    let Some(last_marker_start) = data.len().checked_sub(SSED_ENTRY_MARKER.len()) else {
+        return Ok(None);
+    };
+    for marker_pos in 1..=last_marker_start {
+        if data.get(marker_pos..marker_pos + SSED_ENTRY_MARKER.len())
+            != Some(SSED_ENTRY_MARKER.as_slice())
+        {
+            continue;
+        }
+        let entry_start = if marker_pos >= 2 && data[marker_pos - 2..marker_pos] == [0x1f, 0x02] {
+            start + marker_pos - 2
+        } else {
+            start + marker_pos
+        };
+        if entry_start < start || entry_start >= scan_end {
+            continue;
+        }
+        let title_len = 512.min(expanded_size.saturating_sub(entry_start));
+        let title_data = reader.read_range(entry_start, title_len)?;
+        let title = decode_title_text_with_gaiji_filter(&title_data, |identity| {
+            package.gaiji_unicode_map.contains_key(identity)
+        });
+        let title_key = normalize_search_match_text(&title);
+        if match_texts.iter().any(|candidate| candidate == &title_key) {
+            return Ok(Some(entry_start));
+        }
+    }
+    Ok(None)
+}
+
+fn ssed_aux_label_target_match_texts(label: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    push_unique_ssed_aux_label_target_match_text(&mut candidates, label);
+    let stripped = label.trim_start_matches(is_ssed_aux_label_decoration);
+    if stripped != label {
+        push_unique_ssed_aux_label_target_match_text(&mut candidates, stripped);
+    }
+    candidates
+}
+
+fn push_unique_ssed_aux_label_target_match_text(candidates: &mut Vec<String>, label: &str) {
+    let normalized = normalize_search_match_text(label.trim());
+    if !normalized.is_empty() && !candidates.contains(&normalized) {
+        candidates.push(normalized);
+    }
+}
+
+fn is_ssed_aux_label_decoration(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            '■' | '□'
+                | '▲'
+                | '△'
+                | '▼'
+                | '▽'
+                | '◆'
+                | '◇'
+                | '●'
+                | '○'
+                | '◎'
+                | '§'
+                | '・'
+                | '-'
+                | '－'
+                | '–'
+                | '—'
+                | '▶'
+                | '▷'
+        )
+}
+
+fn ssed_component_offset_to_pointer(
+    component: &SsedComponent,
+    component_offset: usize,
+) -> Result<SsedIndexPointer> {
+    let block_delta = u32::try_from(component_offset / BLOCK_SIZE as usize)
+        .map_err(|_| Error::Driver("SSED component offset block delta is too large".to_owned()))?;
+    let offset = u32::try_from(component_offset % BLOCK_SIZE as usize)
+        .map_err(|_| Error::Driver("SSED component offset does not fit in u32".to_owned()))?;
+    Ok(SsedIndexPointer {
+        block: component.start_block.saturating_add(block_delta),
+        offset,
+    })
 }
 
 fn ssed_aux_honmon_target_non_renderable_diagnostic(
@@ -735,7 +893,7 @@ fn ssed_entry_marker_len_in_slice(data: &[u8]) -> Option<usize> {
         .then_some(SSED_ENTRY_MARKER.len())
 }
 
-fn nearest_higher_aux_target_row<'a>(
+pub(in crate::package::drivers) fn nearest_higher_aux_target_row<'a>(
     rows: &'a [SsedAuxIndexRow],
     row: &SsedAuxIndexRow,
 ) -> Option<&'a SsedAuxIndexRow> {

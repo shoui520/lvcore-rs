@@ -1516,6 +1516,127 @@ fn ssed_exinfo_auxiliary_index_opens_as_navigation_tree() {
 }
 
 #[test]
+fn ssed_exinfo_auxiliary_index_drives_search_when_native_indexes_are_absent() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("EXINFO.INI"),
+        cp932("[GENERAL]\nIDXCOUNT=1\nIDXNAME0=メニュー\nIDXINFO0=SPEECH.IDX\n"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("SPEECH.IDX"),
+        cp932(
+            "00000000\t00000000\tスピーチ文例集\n\
+             00000002\t00000010\t\t▼開宴の辞（司会者）\n\
+             00000002\t00000080\t\t▼閉会の辞（司会者）\n",
+        ),
+    )
+    .unwrap();
+    let mut body = vec![b'a'; 256];
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&SSED_ENTRY_MARKER);
+    entry.extend_from_slice(&body_jis("▼開宴の辞（司会者）"));
+    entry.extend_from_slice(&[0x1f, 0x0a]);
+    body[0x30..0x30 + entry.len()].copy_from_slice(&entry);
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&body], 2, 2),
+    )
+    .unwrap();
+    let catalog = SsedCatalog {
+        title: "SPEECH".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 2,
+            end_block: 2,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let search_modes = ssed_aux_index_search_modes(dir.path()).unwrap();
+    assert_eq!(
+        search_modes,
+        vec![
+            SearchMode::Exact,
+            SearchMode::Forward,
+            SearchMode::Backward,
+            SearchMode::Partial
+        ]
+    );
+    let mut capabilities = ssed_capabilities(&catalog, dir.path());
+    capabilities.push(Capability::NativeSearch);
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("SPEECH".to_owned()),
+            evidence: Vec::new(),
+        },
+        capabilities,
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    assert!(
+        package
+            .metadata()
+            .search_modes
+            .contains(&SearchMode::Forward)
+    );
+    assert!(
+        !package
+            .metadata()
+            .search_modes
+            .contains(&SearchMode::FullText)
+    );
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "開宴".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "▼開宴の辞（司会者）");
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "ssed_auxiliary_index_label_search" })
+    );
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedBoundedAddress {
+            component,
+            block: 2,
+            offset: 0x30,
+            end_block: 2,
+            end_offset: 0x80
+        } if component == "HONMON.DIC"
+    ));
+}
+
+#[test]
 fn ssed_auxiliary_index_reports_non_renderable_honmon_targets_inside_entry_marker_controls() {
     let dir = tempdir().unwrap();
     fs::write(

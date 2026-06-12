@@ -7,8 +7,9 @@ use crate::error::Result;
 use crate::lved_sqlite::LvedSqliteSummary;
 use crate::search::SearchMode;
 use crate::ssed::SsedCatalog;
+use crate::ssed_aux_index::{parse_aux_index_specs_from_exinfo, parse_aux_index_text_bytes};
 use crate::ssed_sidecar::discover_ssed_sidecar_body_resolvers_with_candidates;
-use crate::storage::DirectoryStorage;
+use crate::storage::{DirectoryStorage, StorageBackend};
 
 pub(super) fn lved_capabilities(
     search_modes: &[SearchMode],
@@ -116,4 +117,45 @@ pub(super) fn ssed_sidecar_search_modes(
         SearchMode::Backward,
         SearchMode::FullText,
     ])
+}
+
+pub(super) fn ssed_aux_index_search_modes(root: &Path) -> Result<Vec<SearchMode>> {
+    if !ssed_aux_index_has_searchable_rows(root)? {
+        return Ok(Vec::new());
+    }
+    Ok(vec![
+        SearchMode::Exact,
+        SearchMode::Forward,
+        SearchMode::Backward,
+        SearchMode::Partial,
+    ])
+}
+
+fn ssed_aux_index_has_searchable_rows(root: &Path) -> Result<bool> {
+    let storage = DirectoryStorage::new(root.to_path_buf());
+    let exinfo = Path::new("EXINFO.INI");
+    if !storage.exists(exinfo)? {
+        return Ok(false);
+    }
+    let specs = parse_aux_index_specs_from_exinfo(&storage.read(exinfo)?);
+    for spec in specs {
+        if !ssed_aux_index_info_is_text_idx(&spec.info) {
+            continue;
+        }
+        let path = Path::new(&spec.info);
+        if !storage.exists(path)? {
+            continue;
+        }
+        let rows = parse_aux_index_text_bytes(&storage.read(path)?)?;
+        if rows.iter().any(|row| row.has_target()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn ssed_aux_index_info_is_text_idx(value: &str) -> bool {
+    Path::new(value)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
 }

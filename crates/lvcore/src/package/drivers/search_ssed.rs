@@ -1,6 +1,9 @@
 use std::{cell::Cell, collections::HashSet};
 
 use super::*;
+use crate::package::drivers::ssed_navigation::{
+    nearest_higher_aux_target_row, ssed_aux_index_row_target,
+};
 
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 20_480;
@@ -11,6 +14,7 @@ const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
+const SSED_AUX_LABEL_CURSOR_PREFIX: &str = "ssed-aux-label:";
 
 impl ReaderBookPackage {
     pub(super) fn search_ssed_simple_indexes(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -40,6 +44,16 @@ impl ReaderBookPackage {
             ));
         }
         let needle = normalize_search_match_text(&query.query);
+        if let Some(aux_label_row_offset) = decode_ssed_aux_label_cursor(query.cursor.as_deref()) {
+            return self.search_ssed_aux_index_labels(query, &needle, aux_label_row_offset);
+        }
+        let has_decodable_ssed_indexes = self
+            .ssed_catalog
+            .as_ref()
+            .is_some_and(|catalog| has_decodable_ssed_index_rows(catalog, &self.storage));
+        if !has_decodable_ssed_indexes && self.has_searchable_ssed_aux_index()? {
+            return self.search_ssed_aux_index_labels(query, &needle, 0);
+        }
         if let Some(sidecar_offset) = decode_ssed_sidecar_title_cursor(query.cursor.as_deref()) {
             return self.search_ssed_sidecar_title_page(query, sidecar_offset, Vec::new());
         }
@@ -272,6 +286,112 @@ impl ReaderBookPackage {
                 .extend(pending_empty_title_label_fallback_diagnostics);
         }
         Ok(page)
+    }
+
+    fn has_searchable_ssed_aux_index(&self) -> Result<bool> {
+        for spec in self.ssed_aux_index_specs()? {
+            if !path_has_extension(&spec.info, &["idx"]) {
+                continue;
+            }
+            let path = Path::new(&spec.info);
+            if !self.storage.exists(path)? {
+                continue;
+            }
+            let rows = parse_aux_index_text_bytes(&self.storage.read(path)?)?;
+            if rows.iter().any(|row| row.has_target()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn search_ssed_aux_index_labels(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        row_offset: usize,
+    ) -> Result<SearchPage> {
+        let label_policy = query.label_gaiji_policy();
+        let mut checked_rows = 0usize;
+        let mut hits = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut seen_targets = HashSet::new();
+        let mut stopped = SsedAuxLabelSearchStop::Exhausted;
+
+        'specs: for spec in self.ssed_aux_index_specs()? {
+            if !path_has_extension(&spec.info, &["idx"]) {
+                continue;
+            }
+            let path = Path::new(&spec.info);
+            if !self.storage.exists(path)? {
+                continue;
+            }
+            let rows = parse_aux_index_text_bytes(&self.storage.read(path)?)?;
+            for row in &rows {
+                if checked_rows < row_offset {
+                    checked_rows = checked_rows.saturating_add(1);
+                    continue;
+                }
+                checked_rows = checked_rows.saturating_add(1);
+                if !row.has_target()
+                    || !ssed_aux_label_search_row_matches(&query.mode, needle, &row.label)
+                {
+                    continue;
+                }
+                let mut target_diagnostics = Vec::new();
+                let target = ssed_aux_index_row_target(
+                    self,
+                    row,
+                    nearest_higher_aux_target_row(&rows, row),
+                    &mut target_diagnostics,
+                )?;
+                let Some(target) = target else {
+                    diagnostics.extend(target_diagnostics);
+                    continue;
+                };
+                if !seen_targets.insert(target.as_str().to_owned()) {
+                    continue;
+                }
+                let label = self.ssed_rich_label_with_policy(&row.label, &label_policy);
+                let href = target.href();
+                let mut hit_diagnostics = target_diagnostics;
+                hit_diagnostics.extend(label.diagnostics);
+                hits.push(SearchHit {
+                    href,
+                    book_id: self.metadata.book_id.clone(),
+                    target,
+                    title_html: label.html,
+                    title_text: label.text,
+                    snippet_html: None,
+                    sequence_hint: None,
+                    diagnostics: hit_diagnostics,
+                });
+                if hits.len() >= query.limit {
+                    stopped = SsedAuxLabelSearchStop::PageFull;
+                    break 'specs;
+                }
+            }
+        }
+
+        if !hits.is_empty() {
+            diagnostics.insert(
+                0,
+                Diagnostic::info(
+                    "ssed_auxiliary_index_label_search",
+                    "SSED search used EXINFO auxiliary text index labels",
+                ),
+            );
+        }
+        let next_cursor = match stopped {
+            SsedAuxLabelSearchStop::Exhausted => None,
+            SsedAuxLabelSearchStop::PageFull => Some(encode_ssed_aux_label_cursor(checked_rows)),
+        };
+        Ok(SearchPage {
+            hits,
+            next_cursor,
+            result_sequence: None,
+            diagnostics,
+        })
     }
 
     fn search_ssed_partial_prefix_page(
@@ -2280,6 +2400,12 @@ enum SsedTitleLabelFallbackStop {
     PageFull,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SsedAuxLabelSearchStop {
+    Exhausted,
+    PageFull,
+}
+
 fn decode_ssed_title_label_cursor(cursor: Option<&str>) -> Option<usize> {
     cursor?
         .strip_prefix(SSED_TITLE_LABEL_CURSOR_PREFIX)?
@@ -2289,6 +2415,17 @@ fn decode_ssed_title_label_cursor(cursor: Option<&str>) -> Option<usize> {
 
 fn encode_ssed_title_label_cursor(offset: usize) -> String {
     format!("{SSED_TITLE_LABEL_CURSOR_PREFIX}{offset}")
+}
+
+fn decode_ssed_aux_label_cursor(cursor: Option<&str>) -> Option<usize> {
+    cursor?
+        .strip_prefix(SSED_AUX_LABEL_CURSOR_PREFIX)?
+        .parse()
+        .ok()
+}
+
+fn encode_ssed_aux_label_cursor(offset: usize) -> String {
+    format!("{SSED_AUX_LABEL_CURSOR_PREFIX}{offset}")
 }
 
 fn ssed_title_label_fallback_is_reasonable(mode: &SearchMode, needle: &str) -> bool {
@@ -2359,6 +2496,54 @@ fn ssed_search_mode_matches(mode: &SearchMode, key: &str, needle: &str) -> bool 
         SearchMode::Partial => key.contains(needle),
         SearchMode::FullText | SearchMode::Advanced(_) => false,
     }
+}
+
+fn ssed_aux_label_search_row_matches(mode: &SearchMode, needle: &str, label: &str) -> bool {
+    ssed_aux_label_search_match_texts(label)
+        .iter()
+        .any(|candidate| ssed_search_mode_matches(mode, candidate, needle))
+}
+
+fn ssed_aux_label_search_match_texts(label: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    push_unique_aux_label_match_text(&mut candidates, label);
+    let stripped = label.trim_start_matches(is_ssed_aux_label_decoration);
+    if stripped != label {
+        push_unique_aux_label_match_text(&mut candidates, stripped);
+    }
+    candidates
+}
+
+fn push_unique_aux_label_match_text(candidates: &mut Vec<String>, label: &str) {
+    let normalized = normalize_search_match_text(label.trim());
+    if !normalized.is_empty() && !candidates.contains(&normalized) {
+        candidates.push(normalized);
+    }
+}
+
+fn is_ssed_aux_label_decoration(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            '■' | '□'
+                | '▲'
+                | '△'
+                | '▼'
+                | '▽'
+                | '◆'
+                | '◇'
+                | '●'
+                | '○'
+                | '◎'
+                | '§'
+                | '・'
+                | '-'
+                | '－'
+                | '–'
+                | '—'
+                | '▶'
+                | '▷'
+        )
 }
 
 fn ssed_sidecar_title_search_mode(mode: &SearchMode) -> Option<SsedSidecarTitleSearchMode> {

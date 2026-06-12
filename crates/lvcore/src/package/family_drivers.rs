@@ -2,8 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use super::capabilities::{
-    hourei_capabilities, lved_capabilities, multiview_capabilities, ssed_search_modes,
-    ssed_sidecar_search_modes, standard_search_modes,
+    hourei_capabilities, lved_capabilities, multiview_capabilities, ssed_aux_index_search_modes,
+    ssed_search_modes, ssed_sidecar_search_modes, standard_search_modes,
 };
 use super::drivers::{
     HoureiDriver, LvedSqliteDriver, LvlMultiViewDriver, PackageStores, ReaderBookPackage,
@@ -106,6 +106,16 @@ impl SsedDriver {
                         vec![super::Capability::FullTextSearch],
                     );
                 }
+            }
+        }
+        if search_modes.is_empty() {
+            let aux_modes = ssed_aux_index_search_modes(&package_root)?;
+            if !aux_modes.is_empty() {
+                extend_unique_search_modes(&mut search_modes, aux_modes);
+                extend_unique_capabilities(
+                    &mut capabilities,
+                    vec![super::Capability::NativeSearch],
+                );
             }
         }
         Ok(Box::new(ReaderBookPackage::new(
