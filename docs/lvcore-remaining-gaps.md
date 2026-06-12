@@ -4,15 +4,19 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-html-attr-scanner.jsonl`
-- Produced after fixing shared HTML attribute scanning for large LVED
-  preserved-HTML pages and CHM/package-HTML pages with non-tag `<` text.
+- `/tmp/lvcore-all-corpora-validation-20260612-ssed-partial-unverified-cursor.jsonl`
+- Produced after changing large SSED partial-prefix pages to expose unverified
+  non-prefix continuations instead of proving those continuations during
+  first-page search.
 - 336 packages validated: the previous 334-package corpus set plus two
   additional `Other/Android` packages discovered by the gate root set.
 - Package-level status: 336 `ok`.
 
 Previous planning baseline:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-html-attr-scanner.jsonl`
+- Produced after fixing shared HTML attribute scanning for large LVED
+  preserved-HTML pages and CHM/package-HTML pages with non-tag `<` text.
 - `/tmp/lvcore-all-corpora-validation-20260612-ios-ssed-cross-book-routing.jsonl`
 - Produced after routing iOS SSED cross-book validation targets through sibling
   packages without relying on reader-facing diagnostics.
@@ -71,6 +75,7 @@ Important info/status classes from the latest gate:
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
 | `ssed_fulltext_body_direct_scan` | 5 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
+| `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 51 | Large-index partial-search continuation intentionally deferred |
 | `lved_viewer_hook_deferred` | 188 info diagnostics plus deferred samples | Intentional external viewer policy |
 | `gaiji_formatting_helper_candidate` | 16 | Observed OUKOKU11 `B947`/`B948` helper codes |
 | `ssed_navigation_empty_sentinel` | 18 | Expected sentinel classification |
@@ -78,6 +83,85 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0g. Large SSED partial-search first-page latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate had no non-HC correctness failures, but it did
+  expose a concrete SSED search usability/performance gap: `_DCT_SAIYOREI`
+  spent about 18.2 seconds in `search_partial`.
+- The slow query was `〆を`. Forward/prefix search found the visible first hit
+  quickly, but partial search then synchronously probed the large non-prefix
+  contains continuation to prove whether more hits existed.
+- SAIYOREI has about 31k supported index blocks, including a large
+  `MUL1_1_2.DIC` index. Treating the continuation probe as first-page work made
+  ordinary partial search appear stalled.
+
+Current status:
+
+- Large SSED partial-prefix pages now return the prefix hits immediately and
+  expose an explicit unverified non-prefix continuation cursor:
+  `ssed-partial-nonprefix-unverified-index:*`.
+- The unverified cursor remains executable. If followed, it performs the same
+  bounded non-prefix scan and then converts later matched-offset continuations
+  back to visible physical-page anchors.
+- Deep validation does not automatically probe this unverified continuation,
+  because doing so turns an explicit next-page operation back into first-page
+  validation latency.
+- Direct `_DCT_SAIYOREI` partial search for `〆を` dropped from roughly 18-20
+  seconds to about 20 ms for the first page.
+- Focused tests passed:
+  - `cargo test -p lvcore partial_nonprefix_cursors_preserve_prefix_skip_state -- --nocapture`
+  - `cargo test -p lvcore ssed_partial_deferred_nonprefix_cursor_resumes_at_visible_physical_page -- --nocapture`
+  - `cargo test -p lvcore ssed_partial_prefix_page_defers_large_nonprefix_cursor_without_visibility_probe -- --nocapture`
+  - `cargo test -p lvcore ssed_partial_search_defers_nonprefix_fill_for_large_indexes -- --nocapture`
+  - `cargo test -p lvcore-cli validate_search_cursor_probe_skips_expensive_fulltext_body_cursors -- --nocapture`
+  - `cargo test -p lvcore-cli validate_deep_probes_ssed_partial_and_fulltext_by_default -- --nocapture`
+  - `cargo test -p lvcore-cli validate_deep_exercises_ssed_advertised_search_modes -- --nocapture`
+- Test note:
+  - The broader `cargo test -p lvcore ssed_partial -- --nocapture` still hits
+    the known pre-existing sparse partial-search architecture failure
+    `ssed_partial_search_uses_physical_scan_cursor_for_sparse_indexes`.
+    That failure predates this fix and remains outside this item.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-saiyorei-unverified-partial.jsonl`
+  - `_DCT_SAIYOREI` validated with package status `ok`.
+  - Total focused validation wall time was about 2.9 seconds.
+  - The `search_partial` exercise elapsed about 8 ms and reported
+    `ssed-partial-nonprefix-unverified-index:0:0` with cursor probe status
+    `not_probed`.
+- Adjacent slow-package check:
+  - `/tmp/lvcore-focused-validate-kqnewej6-unverified-partial.jsonl`
+  - `_DCT_KQNEWEJ6` validated with package status `ok`.
+  - Its `search_partial` exercise elapsed about 665 ms and also reported the
+    unverified continuation with cursor probe status `not_probed`.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-ssed-partial-unverified-cursor.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback`.
+  - The gate has 51
+    `ssed-partial-nonprefix-unverified-index:*` cursors marked `not_probed`.
+  - `_DCT_SAIYOREI` package elapsed about 3.0 seconds in the full gate, with
+    `search_partial` about 9 ms.
+  - `_DCT_KQNEWEJ6` package elapsed about 7.6 seconds in the full gate, with
+    `search_partial` about 666 ms.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_SAIYOREI`
+- Baseline full-corpus JSONL:
+  - `/tmp/lvcore-all-corpora-validation-20260612-html-attr-scanner.jsonl`
+- Baseline symptom:
+  - `search_partial` elapsed about 18.2 seconds for query `〆を`.
+  - The package-level validation elapsed about 21.3 seconds.
+
+Changed code areas:
+
+- `crates/lvcore/src/package/drivers/search_ssed.rs`
+- `crates/lvcore-cli/src/validate.rs`
 
 ### 0f. Large LVED preserved-HTML info page validation latency (resolved)
 
@@ -773,7 +857,7 @@ resources, links, or targets.
 
 Current status:
 
-- All 334 known packages in the baseline open and deep-validate at package
+- All 336 known packages in the baseline open and deep-validate at package
   status `ok`.
 
 Known gap:

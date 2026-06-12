@@ -922,7 +922,7 @@ fn search_mode_exercise(
                     json!({
                         "status": "not_probed",
                         "cursor": cursor,
-                        "reason": "body full-text continuation cursors may rescan large SSED body windows",
+                        "reason": skipped_search_cursor_probe_reason(&mode, cursor),
                     })
                 };
                 if let Some(object) = row.as_object_mut() {
@@ -951,8 +951,22 @@ fn search_mode_exercise(
 }
 
 fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
+    if matches!(mode, SearchMode::Partial)
+        && cursor.starts_with("ssed-partial-nonprefix-unverified-index:")
+    {
+        return false;
+    }
     !(matches!(mode, SearchMode::FullText)
         && (cursor.starts_with("body:") || cursor.starts_with("sidecar-body:")))
+}
+
+fn skipped_search_cursor_probe_reason(mode: &SearchMode, cursor: &str) -> &'static str {
+    if matches!(mode, SearchMode::Partial)
+        && cursor.starts_with("ssed-partial-nonprefix-unverified-index:")
+    {
+        return "unverified partial non-prefix continuation may scan large SSED indexes";
+    }
+    "body full-text continuation cursors may rescan large SSED body windows"
 }
 
 fn search_cursor_probe(
@@ -2932,6 +2946,10 @@ mod tests {
         assert!(should_probe_search_cursor(
             &SearchMode::Partial,
             "ssed-partial-nonprefix-index:0:0"
+        ));
+        assert!(!should_probe_search_cursor(
+            &SearchMode::Partial,
+            "ssed-partial-nonprefix-unverified-index:0:0"
         ));
     }
 

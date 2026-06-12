@@ -1245,7 +1245,7 @@ fn ssed_partial_search_defers_nonprefix_fill_for_large_indexes() {
         first
             .next_cursor
             .as_deref()
-            .is_some_and(|cursor| cursor.starts_with("ssed-partial-nonprefix-index:"))
+            .is_some_and(|cursor| cursor.starts_with("ssed-partial-nonprefix-unverified-index:"))
     );
 }
 

@@ -430,8 +430,10 @@ impl ReaderBookPackage {
             .map(encode_ssed_partial_prefix_cursor);
         if page.next_cursor.is_none() {
             let remaining = query.limit.saturating_sub(page.hits.len());
-            if remaining > 0 {
-                if !page.hits.is_empty() && self.ssed_partial_nonprefix_fill_should_defer() {
+            if !page.hits.is_empty() && self.ssed_partial_nonprefix_fill_should_defer() {
+                page.next_cursor = Some(encode_ssed_partial_unverified_nonprefix_cursor(None));
+            } else if remaining > 0 {
+                if !page.hits.is_empty() {
                     page.next_cursor = self
                         .ssed_deferred_partial_nonprefix_cursor_if_visible(query, needle, true)?;
                 } else {
@@ -535,16 +537,31 @@ impl ReaderBookPackage {
                 SsedPartialNonprefixCursor::MatchedOffset { offset, .. }
                 | SsedPartialNonprefixCursor::MatchedPhysicalOffset { offset, .. },
             ) => offset,
-            Some(SsedPartialNonprefixCursor::Physical { .. }) | None => 0,
+            Some(
+                SsedPartialNonprefixCursor::Physical { .. }
+                | SsedPartialNonprefixCursor::UnverifiedPhysical { .. },
+            )
+            | None => 0,
         };
         let physical_cursor = match cursor {
             Some(
                 SsedPartialNonprefixCursor::Physical { cursor, .. }
+                | SsedPartialNonprefixCursor::UnverifiedPhysical { cursor, .. }
                 | SsedPartialNonprefixCursor::MatchedPhysicalOffset { cursor, .. },
             ) => Some(cursor),
             Some(SsedPartialNonprefixCursor::MatchedOffset { .. }) | None => None,
         };
-        let offset_cursor_physical_start = physical_cursor;
+        let offset_cursor_physical_start = match cursor {
+            Some(
+                SsedPartialNonprefixCursor::Physical { .. }
+                | SsedPartialNonprefixCursor::MatchedPhysicalOffset { .. },
+            ) => physical_cursor,
+            Some(
+                SsedPartialNonprefixCursor::MatchedOffset { .. }
+                | SsedPartialNonprefixCursor::UnverifiedPhysical { .. },
+            )
+            | None => None,
+        };
         let mut collector = SsedIndexSearchCollector::new(
             self,
             &SearchMode::Partial,
@@ -2993,7 +3010,7 @@ struct SsedPartialNonprefixPhysicalScan {
     visible_start_cursor: Option<SsedPartialIndexScanCursor>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SsedPartialNonprefixCursor {
     MatchedOffset {
         offset: usize,
@@ -3005,6 +3022,10 @@ enum SsedPartialNonprefixCursor {
         skip_prefix_rows: bool,
     },
     Physical {
+        cursor: SsedPartialIndexScanCursor,
+        skip_prefix_rows: bool,
+    },
+    UnverifiedPhysical {
         cursor: SsedPartialIndexScanCursor,
         skip_prefix_rows: bool,
     },
@@ -3021,12 +3042,17 @@ impl SsedPartialNonprefixCursor {
             }
             | Self::Physical {
                 skip_prefix_rows, ..
+            }
+            | Self::UnverifiedPhysical {
+                skip_prefix_rows, ..
             } => *skip_prefix_rows,
         }
     }
 }
 
 const SSED_PARTIAL_PREFIX_CURSOR_PREFIX: &str = "ssed-partial-prefix:";
+const SSED_PARTIAL_NONPREFIX_UNVERIFIED_INDEX_CURSOR_PREFIX: &str =
+    "ssed-partial-nonprefix-unverified-index:";
 const SSED_PARTIAL_NONPREFIX_INDEX_CURSOR_PREFIX: &str = "ssed-partial-nonprefix-index:";
 const SSED_PARTIAL_NONPREFIX_OFFSET_CURSOR_PREFIX: &str = "ssed-partial-nonprefix-offset:";
 const SSED_PARTIAL_NONPREFIX_PHYSICAL_OFFSET_CURSOR_PREFIX: &str =
@@ -3071,6 +3097,17 @@ fn decode_ssed_partial_nonprefix_cursor(
         cursor.strip_prefix(SSED_PARTIAL_NONPREFIX_NOSKIP_PHYSICAL_OFFSET_CURSOR_PREFIX)
     {
         return decode_ssed_partial_nonprefix_physical_offset_cursor(value, false);
+    }
+    if let Some(value) = cursor.strip_prefix(SSED_PARTIAL_NONPREFIX_UNVERIFIED_INDEX_CURSOR_PREFIX)
+    {
+        let (component_index, page_index) = value.split_once(':')?;
+        return Some(SsedPartialNonprefixCursor::UnverifiedPhysical {
+            cursor: SsedPartialIndexScanCursor {
+                component_index: component_index.parse().ok()?,
+                page_index: page_index.parse().ok()?,
+            },
+            skip_prefix_rows: true,
+        });
     }
     if let Some(value) = cursor.strip_prefix(SSED_PARTIAL_NONPREFIX_INDEX_CURSOR_PREFIX) {
         let (component_index, page_index) = value.split_once(':')?;
@@ -3128,6 +3165,19 @@ fn encode_ssed_partial_nonprefix_cursor(
         SSED_PARTIAL_NONPREFIX_NOSKIP_INDEX_CURSOR_PREFIX
     };
     format!("{prefix}{}:{}", cursor.component_index, cursor.page_index)
+}
+
+fn encode_ssed_partial_unverified_nonprefix_cursor(
+    cursor: Option<SsedPartialIndexScanCursor>,
+) -> String {
+    let cursor = cursor.unwrap_or(SsedPartialIndexScanCursor {
+        component_index: 0,
+        page_index: 0,
+    });
+    format!(
+        "{SSED_PARTIAL_NONPREFIX_UNVERIFIED_INDEX_CURSOR_PREFIX}{}:{}",
+        cursor.component_index, cursor.page_index
+    )
 }
 
 fn encode_ssed_partial_nonprefix_offset_cursor(offset: String, skip_prefix_rows: bool) -> String {
@@ -3501,6 +3551,7 @@ mod tests {
         decode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_cursor,
         encode_ssed_partial_nonprefix_offset_cursor,
         encode_ssed_partial_nonprefix_physical_offset_cursor,
+        encode_ssed_partial_unverified_nonprefix_cursor,
         ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_partial_prefix_prepass_is_bounded,
         ssed_sidecar_title_auto_append_is_bounded,
     };
@@ -3541,6 +3592,26 @@ mod tests {
         assert_eq!(
             decode_ssed_partial_nonprefix_cursor(Some(old_index)),
             Some(SsedPartialNonprefixCursor::Physical {
+                cursor: SsedPartialIndexScanCursor {
+                    component_index: 2,
+                    page_index: 56,
+                },
+                skip_prefix_rows: true,
+            })
+        );
+
+        let unverified_index =
+            encode_ssed_partial_unverified_nonprefix_cursor(Some(SsedPartialIndexScanCursor {
+                component_index: 2,
+                page_index: 56,
+            }));
+        assert_eq!(
+            unverified_index,
+            "ssed-partial-nonprefix-unverified-index:2:56"
+        );
+        assert_eq!(
+            decode_ssed_partial_nonprefix_cursor(Some(&unverified_index)),
+            Some(SsedPartialNonprefixCursor::UnverifiedPhysical {
                 cursor: SsedPartialIndexScanCursor {
                     component_index: 2,
                     page_index: 56,
