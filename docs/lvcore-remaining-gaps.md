@@ -4,6 +4,16 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-body-offset-cursor-skip.jsonl`
+- Produced after bounding native SSED full-text body continuation validation:
+  body byte-candidate lookup uses `memmem`, and deep validation no longer
+  follows expensive `body-offset:*` full-text continuation cursors by default.
+- 336 packages validated with package status 336 `ok`.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260612-ssed-partial-unverified-cursor.jsonl`
 - Produced after changing large SSED partial-prefix pages to expose unverified
   non-prefix continuations instead of proving those continuations during
@@ -11,9 +21,6 @@ Latest full-corpus gate:
 - 336 packages validated: the previous 334-package corpus set plus two
   additional `Other/Android` packages discovered by the gate root set.
 - Package-level status: 336 `ok`.
-
-Previous planning baseline:
-
 - `/tmp/lvcore-all-corpora-validation-20260612-html-attr-scanner.jsonl`
 - Produced after fixing shared HTML attribute scanning for large LVED
   preserved-HTML pages and CHM/package-HTML pages with non-tag `<` text.
@@ -68,17 +75,18 @@ Important info/status classes from the latest gate:
 
 | Marker | Count | Classification |
 | --- | ---: | --- |
-| `sidecar-body-row:*` cursor probed `ok` | 27 | Dense sidecar body cursor fix verified |
+| `sidecar-body-row:*` cursor probed `ok` | 28 | Dense sidecar body cursor fix verified |
 | `row:0` full-text cursor probed `ok` | 122 | Native title-prepass row cursor fix verified |
-| `sidecar-body-start` cursor probed `ok` | 32 | Sidecar body phase start cursor fix verified |
+| `sidecar-body-start` cursor probed `ok` | 33 | Sidecar body phase start cursor fix verified |
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
+| `body-offset:*` cursor `not_probed` | 1 | Expensive native body continuation intentionally deferred |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
-| `ssed_fulltext_body_direct_scan` | 5 | Direct native HONMON fallback exercised |
+| `ssed_fulltext_body_direct_scan` | 10 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 51 | Large-index partial-search continuation intentionally deferred |
-| `lved_viewer_hook_deferred` | 188 info diagnostics plus deferred samples | Intentional external viewer policy |
-| `gaiji_formatting_helper_candidate` | 16 | Observed OUKOKU11 `B947`/`B948` helper codes |
-| `ssed_navigation_empty_sentinel` | 18 | Expected sentinel classification |
+| `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
+| `gaiji_formatting_helper_candidate` | 36 | Observed OUKOKU11 `B947`/`B948` helper codes |
+| `ssed_navigation_empty_sentinel` | 19 | Expected sentinel classification |
 | `skipped_large_view` | 38 | Validator cap for large native HTML alternate mode |
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
@@ -659,10 +667,33 @@ Current status:
     exits through direct byte-window scan without index remap.
 - Residual tradeoff: direct body hits use body-derived labels rather than native
   index titles when the expensive index-remap path is skipped.
+- The direct HONMON byte-candidate lookup now uses `memmem` instead of a
+  byte-window equality loop, preserving the earliest candidate after the
+  requested start offset while reducing broad scan overhead.
+- Deep validation no longer automatically follows native `body-offset:*`
+  full-text continuations. Those cursors remain executable next-page cursors,
+  but probing them by default reintroduced multi-second body scans as validation
+  work rather than first-page coverage.
+- Focused `_DCT_KENE7J5` validation after the `body-offset:*` probe policy
+  change:
+  - `/tmp/lvcore-focused-validate-kene7j5-body-offset-skip.jsonl`
+  - Package status `ok`; total wall time about 4.1s.
+  - `search_full_text` query `は殺` elapsed about 3.6s, returned one hit, and
+    preserved `body-offset:484f4e4d4f4e2e444943:f6534`.
+  - The continuation cursor was reported as `not_probed` with reason
+    `body full-text continuation cursors may rescan large SSED body windows`.
 - Full-corpus gate
   `/tmp/lvcore-all-corpora-validation-20260612-native-direct-scan.jsonl`
   validated 334 packages with package status 334 `ok`.
 - The gate has no remaining `ssed_fulltext_body_window_scan` diagnostics.
+- Full-corpus gate after the `body-offset:*` probe policy change:
+  - `/tmp/lvcore-all-corpora-validation-20260612-body-offset-cursor-skip.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback`.
+  - The gate has one `body-offset:*` cursor, marked `not_probed`.
+  - `_DCT_KENE7J5` package elapsed about 4.0s; `search_full_text` elapsed about
+    3.5s and retained the same continuation cursor.
 
 Latest-gate packages with `ssed_fulltext_body_window_scan` before the direct
 scan change:
@@ -674,7 +705,8 @@ scan change:
 Known example:
 
 - `_DCT_KENE7J5`, query from validation, first page previously took roughly 30s.
-- Its continuation uses `body-offset:*` and validates successfully.
+- Its continuation uses `body-offset:*`; the cursor remains executable but is no
+  longer followed by default deep validation.
 
 Likely code area:
 

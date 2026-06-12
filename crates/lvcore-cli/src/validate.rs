@@ -957,7 +957,9 @@ fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
         return false;
     }
     !(matches!(mode, SearchMode::FullText)
-        && (cursor.starts_with("body:") || cursor.starts_with("sidecar-body:")))
+        && (cursor.starts_with("body:")
+            || cursor.starts_with("body-offset:")
+            || cursor.starts_with("sidecar-body:")))
 }
 
 fn skipped_search_cursor_probe_reason(mode: &SearchMode, cursor: &str) -> &'static str {
@@ -2939,7 +2941,7 @@ mod tests {
             &SearchMode::FullText,
             "title:ssed-partial-index:2:126"
         ));
-        assert!(should_probe_search_cursor(
+        assert!(!should_probe_search_cursor(
             &SearchMode::FullText,
             "body-offset:484f4e4d4f4e2e444943:1000"
         ));

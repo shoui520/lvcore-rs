@@ -2897,10 +2897,7 @@ fn ssed_fulltext_first_byte_candidate_offset(
         .iter()
         .filter(|candidate| !candidate.is_empty())
         .filter_map(|candidate| {
-            data[start..]
-                .windows(candidate.len())
-                .position(|window| window == candidate)
-                .map(|relative| start + relative)
+            memchr::memmem::find(&data[start..], candidate).map(|relative| start + relative)
         })
         .min()
 }
@@ -3551,7 +3548,7 @@ mod tests {
         decode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_cursor,
         encode_ssed_partial_nonprefix_offset_cursor,
         encode_ssed_partial_nonprefix_physical_offset_cursor,
-        encode_ssed_partial_unverified_nonprefix_cursor,
+        encode_ssed_partial_unverified_nonprefix_cursor, ssed_fulltext_first_byte_candidate_offset,
         ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_partial_prefix_prepass_is_bounded,
         ssed_sidecar_title_auto_append_is_bounded,
     };
@@ -3576,6 +3573,25 @@ mod tests {
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("two words"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("犬"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("ｉｎ"));
+    }
+
+    #[test]
+    fn fulltext_byte_candidate_offset_returns_earliest_candidate_after_start() {
+        let candidates = vec![b"target".to_vec(), b"needle".to_vec()];
+        let data = b"xx needle xx target xx needle";
+
+        assert_eq!(
+            ssed_fulltext_first_byte_candidate_offset(data, &candidates, 0),
+            Some(3)
+        );
+        assert_eq!(
+            ssed_fulltext_first_byte_candidate_offset(data, &candidates, 4),
+            Some(13)
+        );
+        assert_eq!(
+            ssed_fulltext_first_byte_candidate_offset(data, &candidates, data.len()),
+            None
+        );
     }
 
     #[test]
