@@ -9,6 +9,7 @@ const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 20_480;
 const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 2;
 const SSED_PARTIAL_NONPREFIX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 8;
+const SSED_PARTIAL_NONPREFIX_PREFILTERED_LEAF_PAGE_BUDGET: usize = 128;
 const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 16;
 const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
@@ -480,6 +481,7 @@ impl ReaderBookPackage {
         }
         Ok(probe_page
             .visible_start_cursor
+            .map(|cursor| encode_ssed_partial_nonprefix_cursor(Some(cursor), skip_prefix_rows))
             .or_else(|| Some(encode_ssed_partial_nonprefix_cursor(None, skip_prefix_rows))))
     }
 
@@ -558,12 +560,14 @@ impl ReaderBookPackage {
             &mut collector,
             skip_prefix_rows,
         )?;
+        let visible_start_cursor = physical_scan.visible_start_cursor;
+        let matched_offset_physical_start = offset_cursor_physical_start.or(visible_start_cursor);
         let mut page = collector.into_search_page(query.limit);
         page.next_cursor = page
             .next_cursor
             .take()
             .map(|cursor| {
-                if let Some(physical_start) = offset_cursor_physical_start {
+                if let Some(physical_start) = matched_offset_physical_start {
                     encode_ssed_partial_nonprefix_physical_offset_cursor(
                         physical_start,
                         cursor,
@@ -576,7 +580,7 @@ impl ReaderBookPackage {
             .or(physical_scan.next_cursor);
         Ok(SsedPartialNonprefixSearchPage {
             page,
-            visible_start_cursor: physical_scan.visible_start_cursor,
+            visible_start_cursor,
         })
     }
 
@@ -650,57 +654,42 @@ impl ReaderBookPackage {
         let mut advanced_empty_pages = 0usize;
         let mut use_empty_scan_budget = false;
         let mut first_visible_row_cursor = None;
+        let has_page_prefilter_candidates =
+            !ssed_index_page_prefilter_candidates(needle).is_empty();
+        let prefiltered_leaf_page_budget = has_page_prefilter_candidates
+            .then_some(SSED_PARTIAL_NONPREFIX_PREFILTERED_LEAF_PAGE_BUDGET);
         loop {
             let scan_start_cursor = current_cursor;
-            let scan_result = if use_empty_scan_budget {
-                self.scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
-                    needle,
-                    current_cursor,
-                    SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET,
-                    |row_cursor, row| {
-                        if skip_prefix_rows
-                            && ssed_title_label_fallback_row_matches(
-                                self,
-                                &SearchMode::Forward,
-                                needle,
-                                &row,
-                            )
-                        {
-                            return Ok(true);
-                        }
-                        let had_hits = collector.has_hits();
-                        let keep_scanning = collector.push_row(row)?;
-                        if !had_hits && collector.has_hits() && first_visible_row_cursor.is_none() {
-                            first_visible_row_cursor = Some(row_cursor);
-                        }
-                        Ok(keep_scanning)
-                    },
-                )?
+            let fallback_leaf_page_budget = if use_empty_scan_budget {
+                SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET
             } else {
-                self.scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
-                    needle,
-                    current_cursor,
-                    SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET,
-                    |row_cursor, row| {
-                        if skip_prefix_rows
-                            && ssed_title_label_fallback_row_matches(
-                                self,
-                                &SearchMode::Forward,
-                                needle,
-                                &row,
-                            )
-                        {
-                            return Ok(true);
-                        }
-                        let had_hits = collector.has_hits();
-                        let keep_scanning = collector.push_row(row)?;
-                        if !had_hits && collector.has_hits() && first_visible_row_cursor.is_none() {
-                            first_visible_row_cursor = Some(row_cursor);
-                        }
-                        Ok(keep_scanning)
-                    },
-                )?
+                SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET
             };
+            let leaf_page_budget =
+                prefiltered_leaf_page_budget.unwrap_or(fallback_leaf_page_budget);
+            let scan_result = self.scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
+                needle,
+                current_cursor,
+                leaf_page_budget,
+                |row_cursor, row| {
+                    if skip_prefix_rows
+                        && ssed_title_label_fallback_row_matches(
+                            self,
+                            &SearchMode::Forward,
+                            needle,
+                            &row,
+                        )
+                    {
+                        return Ok(true);
+                    }
+                    let had_hits = collector.has_hits();
+                    let keep_scanning = collector.push_row(row)?;
+                    if !had_hits && collector.has_hits() && first_visible_row_cursor.is_none() {
+                        first_visible_row_cursor = Some(row_cursor);
+                    }
+                    Ok(keep_scanning)
+                },
+            )?;
             let next_cursor = scan_result.next_cursor;
             collector.extend_diagnostics(scan_result.diagnostics);
             if collector.has_hits() || next_cursor.is_none() {
@@ -716,12 +705,11 @@ impl ReaderBookPackage {
                     next_cursor.as_deref(),
                     false,
                 );
-                let visible_start_cursor = collector.has_hits().then(|| {
-                    encode_ssed_partial_nonprefix_cursor(
-                        first_visible_row_cursor.or(scan_start_cursor),
-                        skip_prefix_rows,
-                    )
-                });
+                let visible_start_cursor = if collector.has_hits() {
+                    first_visible_row_cursor.or(scan_start_cursor)
+                } else {
+                    None
+                };
                 return Ok(SsedPartialNonprefixPhysicalScan {
                     next_cursor,
                     visible_start_cursor,
@@ -2944,13 +2932,13 @@ struct SsedFulltextBodyCursor {
 #[derive(Debug)]
 struct SsedPartialNonprefixSearchPage {
     page: SearchPage,
-    visible_start_cursor: Option<String>,
+    visible_start_cursor: Option<SsedPartialIndexScanCursor>,
 }
 
 #[derive(Debug, Default)]
 struct SsedPartialNonprefixPhysicalScan {
     next_cursor: Option<String>,
-    visible_start_cursor: Option<String>,
+    visible_start_cursor: Option<SsedPartialIndexScanCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

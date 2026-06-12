@@ -625,7 +625,8 @@ impl ReaderBookPackage {
         let skip_backward_rows = self.ssed_has_forward_browse_index();
         let start_component_index = cursor.map(|cursor| cursor.component_index).unwrap_or(0);
         let mut diagnostics = Vec::new();
-        let mut scanned_leaf_pages = 0usize;
+        let mut decoded_leaf_pages = 0usize;
+        let mut prefiltered_leaf_pages = 0usize;
 
         'components: for component in catalog.components_by_role(SsedComponentRole::Index) {
             if component.index < start_component_index {
@@ -689,17 +690,19 @@ impl ReaderBookPackage {
                 if !is_leaf_page(word) {
                     continue;
                 }
-                scanned_leaf_pages = scanned_leaf_pages.saturating_add(1);
                 let page_candidates = if ssed_index_component_name_is_backward(&component.filename)
                 {
                     &reverse_candidates
                 } else {
                     &forward_candidates
                 };
-                if !use_page_prefilter
-                    || !ssed_index_page_prefilter_is_safe(component.component_type)
-                    || ssed_body_window_may_contain_query(page, page_candidates)
-                {
+                let page_prefilter_is_safe =
+                    ssed_index_page_prefilter_is_safe(component.component_type);
+                let page_may_match = !use_page_prefilter
+                    || !page_prefilter_is_safe
+                    || ssed_body_window_may_contain_query(page, page_candidates);
+                if page_may_match {
+                    decoded_leaf_pages = decoded_leaf_pages.saturating_add(1);
                     let logical_block = component.start_block + page_index as u32;
                     let (page_rows, unknown) = parse_supported_leaf_page(
                         &component.filename,
@@ -730,17 +733,30 @@ impl ReaderBookPackage {
                             break 'components;
                         }
                     }
-                }
-                if scanned_leaf_pages >= leaf_page_budget {
-                    let next_cursor = next_ssed_partial_index_scan_cursor(
-                        catalog,
-                        component.index,
-                        page_index.saturating_add(1),
-                    );
-                    return Ok(SsedPartialIndexScanResult {
-                        diagnostics,
-                        next_cursor: next_cursor.map(encode_ssed_partial_index_scan_cursor),
-                    });
+                    if decoded_leaf_pages >= leaf_page_budget {
+                        let next_cursor = next_ssed_partial_index_scan_cursor(
+                            catalog,
+                            component.index,
+                            page_index.saturating_add(1),
+                        );
+                        return Ok(SsedPartialIndexScanResult {
+                            diagnostics,
+                            next_cursor: next_cursor.map(encode_ssed_partial_index_scan_cursor),
+                        });
+                    }
+                } else {
+                    prefiltered_leaf_pages = prefiltered_leaf_pages.saturating_add(1);
+                    if prefiltered_leaf_pages >= SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET {
+                        let next_cursor = next_ssed_partial_index_scan_cursor(
+                            catalog,
+                            component.index,
+                            page_index.saturating_add(1),
+                        );
+                        return Ok(SsedPartialIndexScanResult {
+                            diagnostics,
+                            next_cursor: next_cursor.map(encode_ssed_partial_index_scan_cursor),
+                        });
+                    }
                 }
             }
         }

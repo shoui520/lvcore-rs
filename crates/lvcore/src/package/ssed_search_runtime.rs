@@ -14,6 +14,7 @@ pub(super) const SSED_FULLTEXT_BODY_WINDOW_BYTES: usize = 16 * 1024;
 pub(super) const SSED_FULLTEXT_SCAN_WINDOW_BYTES: usize = 256 * 1024;
 pub(super) const SSED_FULLTEXT_SCAN_OVERLAP_BYTES: usize = 512;
 pub(super) const SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET: usize = 8;
+pub(super) const SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET: usize = 1024;
 
 #[derive(Debug, Clone)]
 pub(super) struct SsedFulltextRow {

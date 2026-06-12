@@ -717,17 +717,10 @@ fn ssed_partial_physical_scan_does_not_return_empty_first_page_before_later_matc
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "target");
     assert_eq!(page.next_cursor, None);
-    assert!(
-        page.diagnostics
-            .iter()
-            .any(|diagnostic| { diagnostic.code == "ssed_index_empty_physical_pages_skipped" })
-    );
-    assert!(
-        !page
-            .diagnostics
-            .iter()
-            .any(|diagnostic| { diagnostic.code == "ssed_index_empty_physical_scan_limited" })
-    );
+    assert!(page.diagnostics.iter().all(|diagnostic| {
+        diagnostic.code != "ssed_index_empty_physical_pages_skipped"
+            && diagnostic.code != "ssed_index_empty_physical_scan_limited"
+    }));
 }
 
 #[test]
@@ -1088,6 +1081,31 @@ fn ssed_partial_deferred_nonprefix_cursor_resumes_at_visible_physical_page() {
     assert_eq!(third_page.hits.len(), 1);
     assert_eq!(third_page.hits[0].title_text, "x00-two");
     assert!(third_page.diagnostics.iter().all(|diagnostic| {
+        diagnostic.code != "ssed_index_empty_physical_pages_skipped"
+            && diagnostic.code != "ssed_index_empty_physical_scan_limited"
+    }));
+
+    let nonprefix_first_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "00-".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(nonprefix_first_page.hits.len(), 1);
+    assert_eq!(nonprefix_first_page.hits[0].title_text, "x00-one");
+    assert!(
+        nonprefix_first_page.next_cursor.as_deref().is_some_and(
+            |cursor| cursor.starts_with("ssed-partial-nonprefix-noskip-physical-offset:")
+        )
+    );
+    assert!(nonprefix_first_page.diagnostics.iter().all(|diagnostic| {
         diagnostic.code != "ssed_index_empty_physical_pages_skipped"
             && diagnostic.code != "ssed_index_empty_physical_scan_limited"
     }));

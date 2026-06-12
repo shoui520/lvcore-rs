@@ -4,8 +4,8 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-native-direct-scan.jsonl`
-- Produced after the direct native HONMON full-text body scan fallback.
+- `/tmp/lvcore-all-corpora-validation-20260612-hkkigak6-partial-prefilter.jsonl`
+- Produced after the HKKIGAK6 sparse partial-search cursor fix.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
@@ -37,8 +37,8 @@ HC visual rendering and frontend reader work remain intentionally deferred.
 ## Current State
 
 Package opening and broad deep validation are green across the known corpus set.
-Remaining work is mostly in feature depth, performance, classification policy,
-and explicitly deferred rendering areas.
+Remaining concrete non-HC work from the latest gate is in classification policy,
+plus explicitly deferred rendering areas.
 
 Warning diagnostics in the baseline:
 
@@ -55,7 +55,7 @@ Important info/status classes from the latest gate:
 | `sidecar-body:0` cursor `not_probed` | 154 | Legacy title-prepass phase cursor, not a physical body cursor |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
 | `ssed_fulltext_body_direct_scan` | 5 | Direct native HONMON fallback exercised |
-| `ssed_index_empty_physical_pages_skipped` | 1 package / 2 diagnostics | Real SSED/iOS partial-search candidate |
+| `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
 | `lved_viewer_hook_deferred` | 188 info diagnostics plus deferred samples | Intentional external viewer policy |
 | `ssed_navigation_empty_sentinel` | 18 | Expected sentinel classification |
 | `skipped_large_view` | 38 | Validator cap for large native HTML alternate mode |
@@ -184,13 +184,31 @@ Done criteria:
 - Add focused synthetic regression only after reproducing the real package
   behavior.
 
-### 3. iOS HKKIGAK6 sparse partial-search native index cursor
+### 3. iOS HKKIGAK6 sparse partial-search native index cursor (resolved)
 
 Why this matters:
 
 - This is the remaining `ssed_index_empty_physical_pages_skipped` class.
 - It is not HC and not LVED.
 - It is probably performance/cursor quality rather than missing results.
+
+Current status:
+
+- SSED partial non-prefix scans now use a larger leaf-page batch only when byte
+  prefilter candidates exist. Whitespace/no-prefilter queries keep the smaller
+  bounded scan budget.
+- Matched-offset continuations now preserve the first visible physical row when
+  the sparse scan finds more than one hit, so HKKIGAK6 emits
+  `ssed-partial-nonprefix-noskip-physical-offset:*` instead of a generic
+  matched-offset cursor.
+- Focused HKKIGAK6 validation
+  `/tmp/lvcore-focused-validate-hkkigak6-partial-prefilter.jsonl` validated the
+  Windows and iOS HKKIGAK6 packages with package status 2 `ok`.
+- Full-corpus gate
+  `/tmp/lvcore-all-corpora-validation-20260612-hkkigak6-partial-prefilter.jsonl`
+  validated 334 packages with package status 334 `ok`.
+- The gate has no remaining `ssed_index_empty_physical_pages_skipped` or
+  `ssed_index_empty_physical_scan_limited` diagnostics.
 
 Baseline evidence:
 
@@ -334,7 +352,7 @@ Current status:
 
 Known gaps:
 
-- iOS HKKIGAK6 sparse native partial-search cursor behavior.
+- None from the latest baseline.
 
 ### Browse/navigation surfaces
 
