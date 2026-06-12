@@ -2027,19 +2027,34 @@ fn search_probe_query_hit_quality(
     mode: &SearchMode,
     query: &str,
 ) -> lvcore::Result<ValidationSearchProbeHitQuality> {
-    let (page, _) = search_with_empty_cursor_follow(library, book_id, mode, query, 1)?;
+    let (page, _) = search_with_empty_cursor_follow(
+        library,
+        book_id,
+        mode,
+        query,
+        validation_search_probe_hit_check_limit(mode),
+    )?;
     Ok(validation_search_probe_hit_quality(&page))
+}
+
+fn validation_search_probe_hit_check_limit(mode: &SearchMode) -> usize {
+    match mode {
+        SearchMode::Forward => 3,
+        _ => 1,
+    }
 }
 
 fn validation_search_probe_hit_quality(page: &SearchPage) -> ValidationSearchProbeHitQuality {
     if page.hits.is_empty() {
         return ValidationSearchProbeHitQuality::Miss;
     }
-    if page
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "ssed_title_label_search_fallback_skipped_short_query")
-    {
+    if page.diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.code.as_str(),
+            "ssed_title_label_search_fallback_skipped_short_query"
+                | "ssed_title_label_search_fallback_limited"
+        )
+    }) {
         return ValidationSearchProbeHitQuality::NoisyHit;
     }
     ValidationSearchProbeHitQuality::CleanHit
@@ -2601,7 +2616,16 @@ mod tests {
     }
 
     #[test]
-    fn validation_search_probe_hit_quality_marks_short_fallback_skip_noisy() {
+    fn validation_search_probe_hit_quality_marks_fallback_diagnostics_noisy() {
+        assert_eq!(
+            validation_search_probe_hit_check_limit(&SearchMode::Forward),
+            3
+        );
+        assert_eq!(
+            validation_search_probe_hit_check_limit(&SearchMode::Exact),
+            1
+        );
+
         let clean = validation_search_probe_page(vec![validation_search_probe_hit()], Vec::new());
         assert_eq!(
             validation_search_probe_hit_quality(&clean),
@@ -2617,6 +2641,18 @@ mod tests {
         );
         assert_eq!(
             validation_search_probe_hit_quality(&noisy),
+            ValidationSearchProbeHitQuality::NoisyHit
+        );
+
+        let limited = validation_search_probe_page(
+            vec![validation_search_probe_hit()],
+            vec![Diagnostic::info(
+                "ssed_title_label_search_fallback_limited",
+                "bounded fallback page",
+            )],
+        );
+        assert_eq!(
+            validation_search_probe_hit_quality(&limited),
             ValidationSearchProbeHitQuality::NoisyHit
         );
 
