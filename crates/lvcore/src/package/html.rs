@@ -500,6 +500,10 @@ pub(super) fn next_html_href_or_src_attr(
             search = attr_start + 1;
             continue;
         };
+        if lower[tag_start..].starts_with("<!--") || html_index_inside_comment(lower, tag_start) {
+            search = attr_start + 1;
+            continue;
+        }
         let Some(tag_end) = html_tag_end(html, tag_start) else {
             search = attr_start + 1;
             continue;
@@ -536,6 +540,16 @@ pub(super) fn next_html_href_or_src_attr(
         });
     }
     None
+}
+
+fn html_index_inside_comment(lower: &str, index: usize) -> bool {
+    let before = &lower[..index.min(lower.len())];
+    let Some(comment_start) = before.rfind("<!--") else {
+        return false;
+    };
+    before
+        .rfind("-->")
+        .is_none_or(|comment_end| comment_end < comment_start)
 }
 
 fn html_ref_attr_at(lower: &str, attr_start: usize) -> Option<(&'static str, HtmlAttrName)> {
@@ -626,6 +640,19 @@ mod tests {
         let attr = next_html_href_or_src_attr(html, &lower, 0).unwrap();
         assert_eq!(attr.name, HtmlAttrName::Href);
         assert_eq!(&html[attr.value_start..attr.value_end], "keep.html");
+    }
+
+    #[test]
+    fn does_not_scan_attrs_inside_html_comments() {
+        let html = r#"<a href="keep.html"></a><!--<img src="skip.png">--><img src="after.png">"#;
+        let lower = html.to_ascii_lowercase();
+        let first = next_html_href_or_src_attr(html, &lower, 0).unwrap();
+        assert_eq!(first.name, HtmlAttrName::Href);
+        assert_eq!(&html[first.value_start..first.value_end], "keep.html");
+        let second = next_html_href_or_src_attr(html, &lower, first.value_end).unwrap();
+        assert_eq!(second.name, HtmlAttrName::Src);
+        assert_eq!(&html[second.value_start..second.value_end], "after.png");
+        assert!(next_html_href_or_src_attr(html, &lower, second.value_end).is_none());
     }
 
     #[test]
