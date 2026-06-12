@@ -20,7 +20,9 @@ impl ReaderBookPackage {
             let raw_ref = &html[start..end];
             match ref_kind {
                 LvedHtmlRefKind::Media => {
-                    if let Some(resource) = lved_media_resource(raw_ref) {
+                    if lved_external_viewer_image_ref(raw_ref) {
+                        output.push_str(raw_ref);
+                    } else if let Some(resource) = lved_media_resource(raw_ref) {
                         let token = ResourceToken::new(&resource)?;
                         let href = format!("lvcore://resource/{}", token.as_str());
                         if seen_resource_tokens.insert(token.as_str().to_owned()) {
@@ -56,7 +58,9 @@ impl ReaderBookPackage {
                     }
                 }
                 LvedHtmlRefKind::Image => {
-                    if let Some(resource) = lved_image_resource(raw_ref) {
+                    if lved_external_viewer_image_ref(raw_ref) {
+                        output.push_str(raw_ref);
+                    } else if let Some(resource) = lved_image_resource(raw_ref) {
                         let token = ResourceToken::new(&resource)?;
                         let href = format!("lvcore://resource/{}", token.as_str());
                         if seen_resource_tokens.insert(token.as_str().to_owned()) {
@@ -361,7 +365,9 @@ impl ReaderBookPackage {
                     }
                 }
                 LvedHtmlRefKind::Media => {
-                    if let Some(resource) = lved_media_resource(raw_ref) {
+                    if lved_external_viewer_image_ref(raw_ref) {
+                        output.push_str(raw_ref);
+                    } else if let Some(resource) = lved_media_resource(raw_ref) {
                         let token = ResourceToken::new(&resource)?;
                         let href = format!("lvcore://resource/{}", token.as_str());
                         if seen_resource_tokens.insert(token.as_str().to_owned()) {
@@ -399,7 +405,9 @@ impl ReaderBookPackage {
                     }
                 }
                 LvedHtmlRefKind::Image => {
-                    if let Some(resource) = lved_image_resource(raw_ref) {
+                    if lved_external_viewer_image_ref(raw_ref) {
+                        output.push_str(raw_ref);
+                    } else if let Some(resource) = lved_image_resource(raw_ref) {
                         let token = ResourceToken::new(&resource)?;
                         let href = format!("lvcore://resource/{}", token.as_str());
                         if seen_resource_tokens.insert(token.as_str().to_owned()) {
@@ -798,6 +806,9 @@ impl ReaderBookPackage {
         }
         let relative = value.split(['#', '?']).next().unwrap_or("").trim();
         if relative.is_empty() {
+            return Ok(None);
+        }
+        if lved_external_viewer_image_path(relative) {
             return Ok(None);
         }
         let lower_relative = relative.to_ascii_lowercase();

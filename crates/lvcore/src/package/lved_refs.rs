@@ -145,6 +145,38 @@ pub(super) fn lved_image_resource(raw_ref: &str) -> Option<InternalResource> {
     })
 }
 
+pub(super) fn lved_external_viewer_image_ref(raw_ref: &str) -> bool {
+    let Some(key) = lved_resource_key_payload(raw_ref).and_then(lved_resource_key) else {
+        return false;
+    };
+    lved_external_viewer_image_path(&key)
+}
+
+pub(super) fn lved_external_viewer_image_path(value: &str) -> bool {
+    let value = html_unescape_minimal(value);
+    let value = value
+        .split_once('?')
+        .map_or(value.as_str(), |(head, _)| head);
+    let value = value
+        .split_once('#')
+        .map_or(value, |(head, _)| head)
+        .trim()
+        .replace('\\', "/");
+    let mut relative = value.as_str();
+    while let Some(stripped) = relative.strip_prefix("./") {
+        relative = stripped;
+    }
+    let mut escaped_package_root = false;
+    while let Some(stripped) = relative.strip_prefix("../") {
+        escaped_package_root = true;
+        relative = stripped;
+    }
+    escaped_package_root
+        && relative
+            .to_ascii_lowercase()
+            .starts_with("_images/uppercase-letters/")
+}
+
 pub(super) fn lved_pdf_resource(raw_ref: &str) -> Option<InternalResource> {
     let key = raw_ref
         .strip_prefix("lved.pdf:")
@@ -356,6 +388,17 @@ fn lved_resource_key(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| html_unescape_minimal(value))
 }
 
+fn lved_resource_key_payload(raw_ref: &str) -> Option<&str> {
+    if let Some(value) = raw_ref.strip_prefix("lved.media.") {
+        value.split_once(':').map(|(_, key)| key)
+    } else {
+        raw_ref
+            .strip_prefix("lved.media:")
+            .or_else(|| raw_ref.strip_prefix("lved.image:"))
+            .or_else(|| raw_ref.strip_prefix("lved.imag:"))
+    }
+}
+
 fn split_lved_target_anchor(value: &str) -> (&str, &str) {
     let target_end = value.find(['?', '#']).unwrap_or(value.len());
     let target = &value[..target_end];
@@ -417,6 +460,32 @@ mod tests {
         };
 
         assert_eq!(reference, "000010.wav");
+    }
+
+    #[test]
+    fn identifies_external_lved_viewer_image_references() {
+        assert!(lved_external_viewer_image_ref(
+            "lved.media:../../_images/UpperCase-Letters/Upper_Asterisc.jpg"
+        ));
+        assert!(lved_external_viewer_image_ref(
+            "lved.image:..\\..\\_images\\UpperCase-Letters\\Upper_Asterisc.jpg?cache"
+        ));
+        assert!(lved_external_viewer_image_ref(
+            "lved.media.image:../../_images/UpperCase-Letters/Upper_Asterisc.jpg#top"
+        ));
+
+        assert!(!lved_external_viewer_image_ref(
+            "lved.media:../../image/FULL/zA265.jpg"
+        ));
+        assert!(!lved_external_viewer_image_ref("lved.image:missing.png"));
+        assert!(!lved_external_viewer_image_ref(
+            "lved.media:_images/UpperCase-Letters/Upper_Asterisc.jpg"
+        ));
+
+        assert!(lved_external_viewer_image_path(
+            "../../_images/UpperCase-Letters/Upper_Asterisc.jpg"
+        ));
+        assert!(!lved_external_viewer_image_path("image/FULL/zA265.jpg"));
     }
 
     #[test]

@@ -800,6 +800,55 @@ fn lved_missing_media_blob_resource_is_not_advertised_as_readable() {
 }
 
 #[test]
+fn lved_external_viewer_image_ref_is_not_advertised_as_package_media() {
+    let dir = tempdir().unwrap();
+    write_lved_search_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        apply_sqlcipher_key(&connection, "test-key").unwrap();
+        connection
+            .execute(
+                r#"insert into content values (
+                  103,
+                  1,
+                  '<article><h1>Viewer Image</h1><img src="lved.media:../../_images/UpperCase-Letters/Upper_Asterisc.jpg"><img src="../../_images/UpperCase-Letters/Upper_Asterisc.jpg"></article>',
+                  ''
+                )"#,
+                [],
+            )
+            .unwrap();
+    }
+
+    let package = LvedSqliteDriver.open(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id: 103,
+        anchor: None,
+        query: None,
+    })
+    .unwrap();
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert!(view.resources.is_empty());
+    assert!(view.display_html.as_deref().is_some_and(|html| {
+        html.contains("lved.media:../../_images/UpperCase-Letters/Upper_Asterisc.jpg")
+    }));
+    assert!(
+        view.display_html
+            .as_deref()
+            .is_some_and(|html| html.contains("../../_images/UpperCase-Letters/Upper_Asterisc.jpg"))
+    );
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "resource_missing")
+    );
+}
+
+#[test]
 fn lved_search_and_list_labels_are_sanitized_for_app_chrome() {
     let dir = tempdir().unwrap();
     write_lved_search_fixture(dir.path());
