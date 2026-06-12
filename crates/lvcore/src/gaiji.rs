@@ -116,7 +116,7 @@ pub fn resolve_rich_label(
             cursor = marker.end;
             continue;
         }
-        let fallback_text = resolution.unicode.as_deref().unwrap_or("〓");
+        let fallback_text = gaiji_resolution_text(&resolution);
         text.push_str(fallback_text);
         append_gaiji_html(&mut html, &resolution, fallback_text);
 
@@ -301,10 +301,23 @@ fn z_gaiji_marker_end(bytes: &[u8], start: usize) -> Option<usize> {
     Some(end)
 }
 
+fn gaiji_resolution_text(resolution: &GaijiResolution) -> &str {
+    if matches!(
+        resolution.preferred_source,
+        Some(GaijiSourcePreference::Unresolved)
+    ) {
+        return "〓";
+    }
+    resolution.unicode.as_deref().unwrap_or("〓")
+}
+
 fn append_gaiji_html(html: &mut String, resolution: &GaijiResolution, fallback_text: &str) {
     match resolution.preferred_source {
         Some(GaijiSourcePreference::Unicode) if resolution.unicode.is_some() => {
             html.push_str(&escape_html(fallback_text));
+        }
+        Some(GaijiSourcePreference::Unresolved) => {
+            append_unresolved_gaiji_html(html, &resolution.identity);
         }
         Some(GaijiSourcePreference::ExternalResource | GaijiSourcePreference::Ga16Bitmap) => {
             if let Some(resource) = &resolution.resource
@@ -564,5 +577,37 @@ mod tests {
         let label = resolve_rich_label(&Provider, "AR<hA13E>UMENTACION", &GaijiPolicy::default());
         assert_eq!(label.text, "ARóUMENTACION");
         assert_eq!(label.html, "ARóUMENTACION");
+    }
+
+    #[test]
+    fn rich_label_honors_explicit_unresolved_gaiji_policy() {
+        struct Provider;
+
+        impl GaijiProvider for Provider {
+            fn resolve_gaiji(&self, identity: &str, _policy: &GaijiPolicy) -> GaijiResolution {
+                assert_eq!(identity, "<zB123>");
+                GaijiResolution {
+                    identity: "B123".to_owned(),
+                    preferred_source: Some(GaijiSourcePreference::Unresolved),
+                    unicode: Some("一".to_owned()),
+                    resource: None,
+                    nonliteral_marker: false,
+                    diagnostics: Vec::new(),
+                }
+            }
+        }
+
+        let policy = GaijiPolicy {
+            priority: vec![
+                GaijiSourcePreference::Unresolved,
+                GaijiSourcePreference::Unicode,
+            ],
+        };
+        let label = resolve_rich_label(&Provider, "A<zB123>B", &policy);
+        assert_eq!(label.text, "A〓B");
+        assert_eq!(
+            label.html,
+            r#"A<span class="lvcore-gaiji-unresolved" data-gaiji="B123">〓</span>B"#
+        );
     }
 }

@@ -4,15 +4,15 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-kojien6-packed-link.jsonl`
-- Produced after the KOJIEN6 packed SSED link-address normalization fix.
+- `/tmp/lvcore-all-corpora-validation-20260612-gaiji-policy.jsonl`
+- Produced after the gaiji policy selected-source rendering fix.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
 Previous planning baseline:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-body-cursor.jsonl`
-- Produced after commit `386b714` (`Resume SSED fulltext body cursors physically`)
+- `/tmp/lvcore-all-corpora-validation-20260612-kojien6-packed-link.jsonl`
+- Produced after the KOJIEN6 packed SSED link-address normalization fix.
 
 This is a working backlog, not a claim that lvcore is complete.
 
@@ -62,6 +62,42 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0. Gaiji policy selected-source rendering (resolved)
+
+Why this matters:
+
+- The architecture requires gaiji preference order to be a runtime user setting,
+  not a display hardcode.
+- `GaijiResolution` intentionally keeps fallback data, for example Unicode plus
+  Template/GA16 resource refs, but rich-label rendering must still honor the
+  selected `preferred_source`.
+- Before this fix, an explicit `Unresolved` preference could still display a
+  Unicode fallback in rich labels.
+
+Current status:
+
+- `resolve_rich_label` now renders `GaijiSourcePreference::Unresolved` as the
+  unresolved marker/span even when Unicode fallback data is present.
+- Package gaiji diagnostics distinguish policy-selected unresolved gaiji from
+  genuinely missing backing data.
+- Existing fallback-retention semantics are preserved: a resolution may still
+  carry Unicode/resource fallbacks for inspection and alternate policy choices.
+- Focused tests passed:
+  - `cargo test -p lvcore gaiji -- --nocapture`
+  - `cargo fmt --check`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+- Full-corpus shared-provider regression gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-gaiji-policy.jsonl`
+  - 334 packages validated with package status 334 `ok`.
+  - Warning profile unchanged: only deferred `hc_render_common_html_fallback`.
+
+Baseline evidence:
+
+- This was source/contract-backed rather than a warning class in the latest
+  full-corpus JSONL.
+- Relevant architecture note: gaiji policy can reorder Unicode, Template, GA16,
+  and unresolved priority across labels and surfaces.
 
 ### 1. SSED dense sidecar full-text continuation performance (resolved)
 
