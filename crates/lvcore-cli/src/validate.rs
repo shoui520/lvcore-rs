@@ -25,7 +25,7 @@ const VALIDATE_SURFACE_TARGET_PAGE_LIMIT: usize = 16;
 const VALIDATE_SURFACE_PROBE_PAGE_LIMIT: usize = 16;
 const VALIDATE_EMPTY_SEARCH_CURSOR_FOLLOW_LIMIT: usize = 4;
 const VALIDATE_SEARCH_CURSOR_PROBE_LIMIT: usize = 1;
-const VALIDATE_SEARCH_PROBE_LABEL_LIMIT: usize = 12;
+const VALIDATE_SEARCH_PROBE_LABEL_LIMIT: usize = 48;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValidateOptions {
@@ -1870,17 +1870,13 @@ fn search_probe_candidate_queries(
 ) -> Vec<String> {
     let mut candidates = Vec::new();
     if search_probe_prefers_real_labels(metadata.format_family, mode) {
-        for label in labels.iter().filter(|label| {
-            !is_default_search_probe_label(label)
-                && search_probe_label_is_preferred_for_mode(label, mode)
-        }) {
-            push_search_probe_candidate(&mut candidates, label, mode);
-        }
-        for label in labels.iter().filter(|label| {
-            !is_default_search_probe_label(label)
-                && !search_probe_label_is_preferred_for_mode(label, mode)
-        }) {
-            push_search_probe_candidate(&mut candidates, label, mode);
+        for preference in 0..=2 {
+            for label in labels.iter().filter(|label| {
+                !is_default_search_probe_label(label)
+                    && search_probe_label_preference_for_mode(label, mode) == preference
+            }) {
+                push_search_probe_candidate(&mut candidates, label, mode);
+            }
         }
         for label in labels
             .iter()
@@ -1896,13 +1892,68 @@ fn search_probe_candidate_queries(
     candidates
 }
 
-fn search_probe_label_is_preferred_for_mode(label: &str, mode: &SearchMode) -> bool {
+fn search_probe_label_preference_for_mode(label: &str, mode: &SearchMode) -> u8 {
     match mode {
-        SearchMode::Partial => search_probe_lookup_text(label)
-            .and_then(|lookup| lookup.chars().next())
-            .is_some_and(|ch| ch.is_alphanumeric()),
-        _ => true,
+        SearchMode::Partial => {
+            let query = search_probe_query(label, mode);
+            if search_probe_query_looks_like_pronunciation(&query) {
+                return 2;
+            }
+            let original_starts_numeric = search_probe_first_alphanumeric(label)
+                .is_some_and(is_search_probe_numeric_like_start);
+            let lookup_starts_well = search_probe_lookup_text(label)
+                .and_then(|lookup| lookup.chars().next())
+                .is_some_and(is_search_probe_preferred_partial_start);
+            let query_starts_well = query
+                .chars()
+                .next()
+                .is_some_and(is_search_probe_preferred_partial_start);
+            match (
+                lookup_starts_well && !original_starts_numeric,
+                query_starts_well,
+            ) {
+                (true, true) => 0,
+                (_, true) => 1,
+                _ => 2,
+            }
+        }
+        _ => 0,
     }
+}
+
+fn search_probe_first_alphanumeric(label: &str) -> Option<char> {
+    label.chars().find(|ch| ch.is_alphanumeric())
+}
+
+fn search_probe_query_looks_like_pronunciation(query: &str) -> bool {
+    query.chars().any(|ch| matches!(ch as u32, 0x0250..=0x02af))
+}
+
+fn is_search_probe_preferred_partial_start(ch: char) -> bool {
+    ch.is_alphabetic() && !is_search_probe_numeric_like_start(ch)
+}
+
+fn is_search_probe_numeric_like_start(ch: char) -> bool {
+    ch.is_numeric()
+        || matches!(
+            ch,
+            '〇' | '零'
+                | '一'
+                | '二'
+                | '三'
+                | '四'
+                | '五'
+                | '六'
+                | '七'
+                | '八'
+                | '九'
+                | '十'
+                | '百'
+                | '千'
+                | '万'
+                | '億'
+                | '兆'
+        )
 }
 
 fn push_search_probe_candidate(candidates: &mut Vec<String>, label: &str, mode: &SearchMode) {
@@ -2541,11 +2592,23 @@ mod tests {
             "あ".to_owned(),
             "――曙光が".to_owned(),
             "キャッシュバランス型企業年金".to_owned(),
+            "「007 は殺しの番号」".to_owned(),
+            "ひゃくとおばん【110 番】".to_owned(),
+            "100% Pure Java".to_owned(),
+            "A(１), a(１) /eɪ/".to_owned(),
+            "alpha".to_owned(),
+            "１型糖尿病［がたとうにょうびょう］の治療［ちりょう］".to_owned(),
+            "Abdominal injury".to_owned(),
         ];
 
         let partial = search_probe_candidate_queries(&metadata, &SearchMode::Partial, &labels);
         assert_eq!(partial[0], "キャ");
-        assert_eq!(partial[1], "曙光");
+        assert_eq!(partial[1], "ひゃ");
+        assert_eq!(partial[2], "al");
+        assert_eq!(partial[3], "Ab");
+        let pronunciation = partial.iter().position(|query| query == "eɪ").unwrap();
+        assert!(pronunciation > 3);
+        assert!(partial[..4].iter().all(|query| query != "eɪ"));
 
         let exact = search_probe_candidate_queries(&metadata, &SearchMode::Exact, &labels);
         assert_eq!(exact[0], "――曙光が");
@@ -2575,7 +2638,7 @@ mod tests {
             push_probe_label(&mut labels, &format!("probe{index}"));
         }
         assert_eq!(labels.len(), VALIDATE_SEARCH_PROBE_LABEL_LIMIT);
-        assert_eq!(labels.last().map(String::as_str), Some("probe11"));
+        assert_eq!(labels.last().map(String::as_str), Some("probe47"));
     }
 
     #[test]
