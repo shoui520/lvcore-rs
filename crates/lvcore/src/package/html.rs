@@ -488,7 +488,106 @@ pub(super) fn next_html_href_or_src_attr(
 ) -> Option<HtmlAttrRange> {
     let mut search = cursor.min(lower.len());
     while search < lower.len() {
-        let relative = lower[search..]
+        let (tag_start, scan_start) =
+            if let Some(tag_start) = containing_html_tag_start(lower, search) {
+                (tag_start, search)
+            } else {
+                let tag_start = next_html_tag_start(lower, search)?;
+                (tag_start, tag_start + 1)
+            };
+
+        let Some(tag_end) = html_tag_end(html, tag_start) else {
+            search = tag_start + 1;
+            continue;
+        };
+        if let Some(attr) = next_html_ref_attr_in_tag(html, lower, tag_start, tag_end, scan_start) {
+            return Some(attr);
+        }
+        search = tag_end.max(tag_start + 1);
+    }
+    None
+}
+
+fn next_html_tag_start(lower: &str, mut search: usize) -> Option<usize> {
+    while search < lower.len() {
+        let relative = lower[search..].find('<')?;
+        let tag_start = search + relative;
+        if lower[tag_start..].starts_with("<!--") {
+            search = lower[tag_start + "<!--".len()..]
+                .find("-->")
+                .map(|offset| tag_start + "<!--".len() + offset + "-->".len())
+                .unwrap_or(lower.len());
+            continue;
+        }
+        if html_likely_tag_start(lower, tag_start) {
+            return Some(tag_start);
+        }
+        search = tag_start + 1;
+    }
+    None
+}
+
+fn containing_html_tag_start(lower: &str, cursor: usize) -> Option<usize> {
+    let cursor = cursor.min(lower.len());
+    let next_gt = lower[cursor..].find('>')?;
+    if lower[cursor..]
+        .find('<')
+        .is_some_and(|next_lt| next_lt < next_gt)
+    {
+        return None;
+    }
+    let mut index = cursor;
+    while index > 0 {
+        index -= 1;
+        match lower.as_bytes()[index] {
+            b'<' if html_likely_tag_start(lower, index) => return Some(index),
+            b'<' | b'>' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn html_likely_tag_start(lower: &str, tag_start: usize) -> bool {
+    let bytes = lower.as_bytes();
+    let Some(mut byte) = bytes.get(tag_start + 1).copied() else {
+        return false;
+    };
+    if matches!(byte, b'!' | b'?') {
+        return true;
+    }
+    let mut index = tag_start + 1;
+    if byte == b'/' {
+        index += 1;
+        let Some(next) = bytes.get(index).copied() else {
+            return false;
+        };
+        byte = next;
+    }
+    if !byte.is_ascii_alphabetic() {
+        return false;
+    }
+    index += 1;
+    while let Some(byte) = bytes.get(index).copied() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b':' | b'_') {
+            index += 1;
+            continue;
+        }
+        return byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>');
+    }
+    false
+}
+
+fn next_html_ref_attr_in_tag(
+    html: &str,
+    lower: &str,
+    tag_start: usize,
+    tag_end: usize,
+    scan_start: usize,
+) -> Option<HtmlAttrRange> {
+    let mut search = scan_start.max(tag_start + 1).min(tag_end);
+    while search < tag_end {
+        let relative = lower[search..tag_end]
             .bytes()
             .position(|byte| matches!(byte, b'd' | b'h' | b's'))?;
         let attr_start = search + relative;
@@ -496,38 +595,21 @@ pub(super) fn next_html_href_or_src_attr(
             search = attr_start + 1;
             continue;
         };
-        let Some(tag_start) = lower[..attr_start].rfind('<') else {
-            search = attr_start + 1;
-            continue;
-        };
-        if lower[tag_start..].starts_with("<!--") || html_index_inside_comment(lower, tag_start) {
-            search = attr_start + 1;
-            continue;
-        }
-        let Some(tag_end) = html_tag_end(html, tag_start) else {
-            search = attr_start + 1;
-            continue;
-        };
-        if tag_end <= attr_start || lower[tag_start..attr_start].contains('>') {
-            search = attr_start + 1;
-            continue;
-        }
-
         let mut index = attr_start + attr_name.len();
-        index = skip_ascii_whitespace(lower, index)?;
-        if !lower[index..].starts_with('=') {
+        index = skip_ascii_whitespace_before(lower, index, tag_end)?;
+        if lower.as_bytes().get(index) != Some(&b'=') {
             search = attr_start + attr_name.len();
             continue;
         }
         index += 1;
-        index = skip_ascii_whitespace(lower, index)?;
+        index = skip_ascii_whitespace_before(lower, index, tag_end)?;
         let quote = *lower.as_bytes().get(index)?;
         if quote != b'"' && quote != b'\'' {
             search = attr_start + attr_name.len();
             continue;
         }
         let value_start = index + 1;
-        let value_end = html.as_bytes()[value_start..]
+        let value_end = html.as_bytes()[value_start..tag_end]
             .iter()
             .position(|byte| *byte == quote)
             .map(|offset| value_start + offset)?;
@@ -542,14 +624,15 @@ pub(super) fn next_html_href_or_src_attr(
     None
 }
 
-fn html_index_inside_comment(lower: &str, index: usize) -> bool {
-    let before = &lower[..index.min(lower.len())];
-    let Some(comment_start) = before.rfind("<!--") else {
-        return false;
-    };
-    before
-        .rfind("-->")
-        .is_none_or(|comment_end| comment_end < comment_start)
+fn skip_ascii_whitespace_before(value: &str, mut index: usize, end: usize) -> Option<usize> {
+    while index < end {
+        let ch = value[index..end].chars().next()?;
+        if !ch.is_ascii_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    (index < end).then_some(index)
 }
 
 fn html_ref_attr_at(lower: &str, attr_start: usize) -> Option<(&'static str, HtmlAttrName)> {
@@ -653,6 +736,17 @@ mod tests {
         assert_eq!(second.name, HtmlAttrName::Src);
         assert_eq!(&html[second.value_start..second.value_end], "after.png");
         assert!(next_html_href_or_src_attr(html, &lower, second.value_end).is_none());
+    }
+
+    #[test]
+    fn skips_non_tag_angle_brackets_before_ref_attrs() {
+        let html = r#"<script>if (alpha < href && beta < src) {}</script><a href="ok.html"></a>"#;
+        let lower = html.to_ascii_lowercase();
+        let attr = next_html_href_or_src_attr(html, &lower, 0).unwrap();
+
+        assert_eq!(attr.name, HtmlAttrName::Href);
+        assert_eq!(&html[attr.value_start..attr.value_end], "ok.html");
+        assert!(next_html_href_or_src_attr(html, &lower, attr.value_end).is_none());
     }
 
     #[test]

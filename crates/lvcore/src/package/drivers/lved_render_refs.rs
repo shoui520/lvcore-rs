@@ -82,7 +82,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            let mut link = target_link_with_token(raw_ref, &target, token.clone());
                             link.diagnostics.push(Diagnostic::info(
                                 "lved_image_address_hook_deferred",
                                 "LVED address-style image hook is preserved as a non-executed target",
@@ -123,7 +123,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            let mut link = target_link_with_token(raw_ref, &target, token.clone());
                             if let Some(delta) = resolution_delta {
                                 link.attributes
                                     .insert("lved_original_href".to_owned(), raw_ref.to_owned());
@@ -151,7 +151,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            links.push(TargetLink::new(raw_ref, &target)?);
+                            links.push(target_link_with_token(raw_ref, &target, token.clone()));
                         }
                         output.push_str(&href);
                     } else {
@@ -167,7 +167,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            let mut link = target_link_with_token(raw_ref, &target, token.clone());
                             link.diagnostics.push(Diagnostic::info(
                                 "lved_cross_book_deferred",
                                 "cross-dictionary LVED link requires library-wide routing",
@@ -188,7 +188,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            links.push(TargetLink::new(raw_ref, &target)?);
+                            links.push(target_link_with_token(raw_ref, &target, token.clone()));
                         }
                         output.push_str(&href);
                     } else {
@@ -204,7 +204,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            links.push(TargetLink::new(raw_ref, &target)?);
+                            links.push(target_link_with_token(raw_ref, &target, token.clone()));
                         }
                         output.push_str(&href);
                     } else {
@@ -220,7 +220,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            links.push(TargetLink::new(raw_ref, &target)?);
+                            links.push(target_link_with_token(raw_ref, &target, token.clone()));
                         }
                         output.push_str(&href);
                     } else {
@@ -236,7 +236,7 @@ impl ReaderBookPackage {
                     let token = TargetToken::new(&target)?;
                     let href = format!("lvcore://target/{}", token.as_str());
                     if seen_target_tokens.insert(token.as_str().to_owned()) {
-                        let mut link = TargetLink::new(raw_ref, &target)?;
+                        let mut link = target_link_with_token(raw_ref, &target, token.clone());
                         link.diagnostics.push(Diagnostic::info(
                             "lved_viewer_hook_deferred",
                             "LVED viewer hook is preserved as a non-executed target",
@@ -319,7 +319,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            let mut link = target_link_with_token(raw_ref, &target, token.clone());
                             if let Some(html_anchor) = html_anchor {
                                 link.attributes
                                     .insert("html_anchor".to_owned(), html_anchor);
@@ -348,7 +348,11 @@ impl ReaderBookPackage {
                         )? {
                             let decoded = target.decode()?;
                             if seen_target_tokens.insert(target.as_str().to_owned()) {
-                                links.push(TargetLink::new(raw_ref, &decoded)?);
+                                links.push(target_link_with_token(
+                                    raw_ref,
+                                    &decoded,
+                                    target.clone(),
+                                ));
                             }
                             output.push_str(&format!("lvcore://target/{}", target.as_str()));
                         } else {
@@ -429,7 +433,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            let mut link = target_link_with_token(raw_ref, &target, token.clone());
                             link.diagnostics.push(Diagnostic::info(
                                 "ssed_sidecar_lved_image_address_hook_deferred",
                                 "SSED sidecar address-style LVED image hook is preserved as a non-executed target",
@@ -470,7 +474,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            let mut link = TargetLink::new(raw_ref, &target)?;
+                            let mut link = target_link_with_token(raw_ref, &target, token.clone());
                             link.diagnostics.push(Diagnostic::info(
                                 "ssed_sidecar_cross_book_deferred",
                                 "cross-dictionary sidecar link requires library-wide routing",
@@ -493,7 +497,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            links.push(TargetLink::new(raw_ref, &target)?);
+                            links.push(target_link_with_token(raw_ref, &target, token.clone()));
                         }
                         output.push_str(&href);
                     } else {
@@ -511,7 +515,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            links.push(TargetLink::new(raw_ref, &target)?);
+                            links.push(target_link_with_token(raw_ref, &target, token.clone()));
                         }
                         output.push_str(&href);
                     } else {
@@ -527,7 +531,7 @@ impl ReaderBookPackage {
                         let token = TargetToken::new(&target)?;
                         let href = format!("lvcore://target/{}", token.as_str());
                         if seen_target_tokens.insert(token.as_str().to_owned()) {
-                            links.push(TargetLink::new(raw_ref, &target)?);
+                            links.push(target_link_with_token(raw_ref, &target, token.clone()));
                         }
                         output.push_str(&href);
                     } else {
@@ -543,7 +547,7 @@ impl ReaderBookPackage {
                     let token = TargetToken::new(&target)?;
                     let href = format!("lvcore://target/{}", token.as_str());
                     if seen_target_tokens.insert(token.as_str().to_owned()) {
-                        let mut link = TargetLink::new(raw_ref, &target)?;
+                        let mut link = target_link_with_token(raw_ref, &target, token.clone());
                         link.diagnostics.push(Diagnostic::info(
                             "ssed_sidecar_lved_viewer_hook_deferred",
                             "SSED sidecar LVED viewer hook is preserved as a non-executed target",
@@ -600,7 +604,7 @@ impl ReaderBookPackage {
                 let token = TargetToken::new(&target)?;
                 let href = format!("lvcore://target/{}", token.as_str());
                 if seen_target_tokens.insert(token.as_str().to_owned()) {
-                    let mut link = TargetLink::new(raw_value, &target)?;
+                    let mut link = target_link_with_token(raw_value, &target, token.clone());
                     link.diagnostics.push(Diagnostic::info(
                         "lved_relative_viewer_hook_deferred",
                         "LVED relative appendix hook is preserved as a non-executed target",
@@ -652,7 +656,7 @@ impl ReaderBookPackage {
                 output.push_str(&html[cursor..attr.value_start]);
                 let decoded = target.decode()?;
                 if seen_target_tokens.insert(target.as_str().to_owned()) {
-                    links.push(TargetLink::new(raw_value, &decoded)?);
+                    links.push(target_link_with_token(raw_value, &decoded, target.clone()));
                 }
                 output.push_str(&format!("lvcore://target/{}", target.as_str()));
                 cursor = attr.value_end;
@@ -833,6 +837,17 @@ impl ReaderBookPackage {
             key: relative.to_owned(),
             resource_kind: resource_kind_from_path(relative),
         }))
+    }
+}
+
+fn target_link_with_token(label: &str, target: &InternalTarget, token: TargetToken) -> TargetLink {
+    TargetLink {
+        href: token.href(),
+        token,
+        label: label.to_owned(),
+        kind: target.kind(),
+        diagnostics: Vec::new(),
+        attributes: BTreeMap::new(),
     }
 }
 

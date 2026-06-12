@@ -4,14 +4,18 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-ios-ssed-cross-book-routing.jsonl`
-- Produced after routing iOS SSED cross-book validation targets through sibling
-  packages without relying on reader-facing diagnostics.
-- 334 packages validated.
-- Package-level status: 334 `ok`.
+- `/tmp/lvcore-all-corpora-validation-20260612-html-attr-scanner.jsonl`
+- Produced after fixing shared HTML attribute scanning for large LVED
+  preserved-HTML pages and CHM/package-HTML pages with non-tag `<` text.
+- 336 packages validated: the previous 334-package corpus set plus two
+  additional `Other/Android` packages discovered by the gate root set.
+- Package-level status: 336 `ok`.
 
 Previous planning baseline:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-ios-ssed-cross-book-routing.jsonl`
+- Produced after routing iOS SSED cross-book validation targets through sibling
+  packages without relying on reader-facing diagnostics.
 - `/tmp/lvcore-all-corpora-validation-20260612-home-surface-diagnostic-cleanup.jsonl`
 - Produced after removing available home-surface success diagnostics.
 - `/tmp/lvcore-all-corpora-validation-20260612-navigation-diagnostic-cleanup.jsonl`
@@ -53,7 +57,7 @@ Warning diagnostics in the baseline:
 
 | Diagnostic | Count | Classification |
 | --- | ---: | --- |
-| `hc_render_common_html_fallback` | 431 | Deferred HC visual rendering |
+| `hc_render_common_html_fallback` | 1936 | Deferred HC visual rendering |
 | `ssed_loose_address_unresolved` | 0 | Closed by packed SSED link-address normalization |
 
 Important info/status classes from the latest gate:
@@ -74,6 +78,74 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0f. Large LVED preserved-HTML info page validation latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate had no non-HC correctness failures, but it did
+  expose a concrete LVED usability/performance gap: `_DCT_GENIUSE6` spent
+  roughly 50 seconds in the `info` surface exercise.
+- The slow samples were very large preserved-HTML index pages such as
+  `rank_d.html`, with about 7,000 `lved.dataid:` links and rendered HTML near
+  1.8 MB.
+- This affected real reader work because opening or validating those pages made
+  normal non-HC browse/render behavior feel stalled even though output was
+  correct.
+
+Current status:
+
+- The shared HTML `href`/`src`/`data` attribute scanner now walks forward by
+  likely real tags and skips comments directly instead of reverse-searching
+  from the start of the document for every attribute.
+- The scanner ignores implausible `<` starts so package HTML with JavaScript or
+  text comparisons does not degrade while probing CHM/hanrei pages.
+- LVED link construction now reuses the already-created target token when
+  building `TargetLink` records.
+- Direct render of `_DCT_GENIUSE6` `info/rank_d.html` dropped from about 13
+  seconds to about 1 second.
+- Focused tests passed:
+  - `cargo test -p lvcore package::html -- --nocapture`
+  - `cargo test -p lvcore lved -- --nocapture`
+  - `cargo test -p lvcore-cli validate_deep -- --nocapture`
+  - `cargo test -p lvcore-cli -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-geniuse6-tag-filter.jsonl`
+  - `_DCT_GENIUSE6` validated with package status `ok`.
+  - Total focused validation wall time was about 4.2 seconds.
+  - The `info` surface exercise elapsed about 3.2 seconds, with
+    `resource_scan` about 1.5 seconds and `link_scan` about 1.7 seconds.
+  - The same large linked pages still render as `info_page` with zero target
+    diagnostics in the focused link scan.
+- Focused CHM/package-HTML regression validation passed:
+  - `/tmp/lvcore-focused-validate-sinmei7-tag-filter.jsonl`
+  - `_DCT_SINMEI7` validated with package status `ok`.
+  - The Windows SSED `hanrei` surface exercise elapsed about 13 ms after the
+    scanner began skipping implausible `<` starts.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-html-attr-scanner.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 334-package baseline path set is fully covered; the gate also
+    includes two additional `Other/Android` packages.
+  - Warning diagnostics remain only `hc_render_common_html_fallback`.
+  - `_DCT_GENIUSE6` package elapsed about 3.9 seconds in the full gate.
+  - `_DCT_SINMEI7` package elapsed about 5.3 seconds in the full gate.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SQLCIPHER_DICTS_WINDOWS/_DCT_GENIUSE6`
+- Baseline full-corpus JSONL:
+  - `/tmp/lvcore-all-corpora-validation-20260612-ios-ssed-cross-book-routing.jsonl`
+- Baseline symptom:
+  - `info` surface exercise elapsed about 50 seconds.
+  - `resource_scan` elapsed about 24 seconds.
+  - `link_scan` elapsed about 26 seconds.
+
+Changed code areas:
+
+- `crates/lvcore/src/package/html.rs`
+- `crates/lvcore/src/package/drivers/lved_render_refs.rs`
 
 ### 0e. iOS SSED cross-book validation routing context (resolved)
 
