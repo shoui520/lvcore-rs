@@ -451,7 +451,7 @@ pub(super) fn ssed_aux_index_rows_to_nodes(
 
     for (index, row) in visible_rows.iter().enumerate() {
         let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
-        let next_target_row = nearest_higher_aux_target_row(all_rows, row);
+        let next_target_row = ssed_aux_bound_target_row(all_rows, row);
         let mut node_diagnostics = rich_label.diagnostics;
         let target =
             ssed_aux_index_row_target(package, row, next_target_row, &mut node_diagnostics)?;
@@ -501,7 +501,7 @@ pub(super) fn ssed_aux_index_rows_to_flat_nodes(
         .enumerate()
         .map(|(index, row)| {
             let rich_label = package.ssed_rich_label_with_policy(&row.label, gaiji_policy);
-            let next_target_row = nearest_higher_aux_target_row(all_rows, row);
+            let next_target_row = ssed_aux_bound_target_row(all_rows, row);
             let mut node_diagnostics = rich_label.diagnostics;
             let target =
                 ssed_aux_index_row_target(package, row, next_target_row, &mut node_diagnostics)?;
@@ -558,14 +558,7 @@ pub(in crate::package::drivers) fn ssed_aux_index_row_target(
             column: 0,
         })?));
     }
-    let pointer = SsedIndexPointer {
-        block: row.block,
-        offset: row.offset,
-    };
-    let end = next_target_row.map(|next| SsedIndexPointer {
-        block: next.block,
-        offset: next.offset,
-    });
+    let mut effective_next_target_row = next_target_row;
     if let Some(catalog) = &package.ssed_catalog
         && let Some(component) = catalog.component_for_address(row.block)
         && component.relative_offset(row.block, row.offset).is_some()
@@ -587,19 +580,21 @@ pub(in crate::package::drivers) fn ssed_aux_index_row_target(
     if let Some(catalog) = &package.ssed_catalog
         && let Some(component) = catalog.component_for_address(row.block)
         && component.role == SsedComponentRole::Honmon
-        && let Some(diagnostic) = ssed_aux_honmon_target_non_renderable_diagnostic(
-            package,
-            component,
-            row,
-            next_target_row,
-        )?
     {
-        diagnostics.push(diagnostic);
-        return Ok(None);
+        effective_next_target_row =
+            ssed_aux_effective_honmon_bound_row(package, component, row, next_target_row)?;
     }
+    let pointer = SsedIndexPointer {
+        block: row.block,
+        offset: row.offset,
+    };
+    let end = effective_next_target_row.map(|next| SsedIndexPointer {
+        block: next.block,
+        offset: next.offset,
+    });
     let pointer = if let Some(catalog) = &package.ssed_catalog {
         if let Some(component) = catalog.component_for_address(row.block) {
-            ssed_aux_honmon_render_pointer(package, component, row, next_target_row)?
+            ssed_aux_honmon_render_pointer(package, component, row, effective_next_target_row)?
                 .unwrap_or(pointer)
         } else {
             pointer
@@ -617,6 +612,52 @@ pub(in crate::package::drivers) fn ssed_aux_index_row_target(
 }
 
 const SSED_AUX_HONMON_ENTRY_MARKER_FORWARD_SCAN_LIMIT: usize = 4096;
+const MIN_AUX_HONMON_RANGE_BYTES: u64 = 8;
+
+fn ssed_aux_effective_honmon_bound_row<'a>(
+    package: &ReaderBookPackage,
+    component: &SsedComponent,
+    row: &SsedAuxIndexRow,
+    next_target_row: Option<&'a SsedAuxIndexRow>,
+) -> Result<Option<&'a SsedAuxIndexRow>> {
+    let Some(next) = next_target_row else {
+        return Ok(None);
+    };
+    let Some(next_component) = package
+        .ssed_catalog
+        .as_ref()
+        .and_then(|catalog| catalog.component_for_address(next.block))
+    else {
+        return Ok(next_target_row);
+    };
+    if !next_component
+        .filename
+        .eq_ignore_ascii_case(&component.filename)
+    {
+        return Ok(next_target_row);
+    }
+    let (Some(component_offset), Some(next_offset)) = (
+        component.relative_offset(row.block, row.offset),
+        next_component.relative_offset(next.block, next.offset),
+    ) else {
+        return Ok(next_target_row);
+    };
+    let Some(path) = package.resolve_readable_ssed_component_path(component)? else {
+        return Ok(next_target_row);
+    };
+    let mut reader = SsedDataFile::open(path)?;
+    let Ok(component_offset_usize) = usize::try_from(component_offset) else {
+        return Ok(next_target_row);
+    };
+    let stream_start = ssed_aux_honmon_stream_start_offset(&mut reader, component_offset_usize)?;
+    if next_offset > u64::try_from(stream_start).unwrap_or(u64::MAX) {
+        let range_len = next_offset - u64::try_from(stream_start).unwrap_or(0);
+        if range_len < MIN_AUX_HONMON_RANGE_BYTES {
+            return Ok(None);
+        }
+    }
+    Ok(next_target_row)
+}
 
 fn ssed_aux_honmon_render_pointer(
     package: &ReaderBookPackage,
@@ -764,83 +805,6 @@ fn ssed_component_offset_to_pointer(
     })
 }
 
-fn ssed_aux_honmon_target_non_renderable_diagnostic(
-    package: &ReaderBookPackage,
-    component: &SsedComponent,
-    row: &SsedAuxIndexRow,
-    next_target_row: Option<&SsedAuxIndexRow>,
-) -> Result<Option<Diagnostic>> {
-    const MIN_AUX_HONMON_RANGE_BYTES: u64 = 8;
-
-    let Some(component_offset) = component.relative_offset(row.block, row.offset) else {
-        return Ok(None);
-    };
-    let Some(path) = package.resolve_readable_ssed_component_path(component)? else {
-        return Ok(None);
-    };
-    let mut reader = SsedDataFile::open(path)?;
-    let Ok(component_offset_usize) = usize::try_from(component_offset) else {
-        return Ok(Some(
-            Diagnostic::info(
-                "ssed_auxiliary_index_body_target_non_renderable",
-                format!(
-                    "auxiliary index row {} points to a HONMON offset too large to validate",
-                    row.line_number
-                ),
-            )
-            .with_context("component", &component.filename),
-        ));
-    };
-
-    if let Some(next) = next_target_row
-        && let Some(next_component) = package
-            .ssed_catalog
-            .as_ref()
-            .and_then(|catalog| catalog.component_for_address(next.block))
-        && next_component
-            .filename
-            .eq_ignore_ascii_case(&component.filename)
-        && let Some(next_offset) = next_component.relative_offset(next.block, next.offset)
-    {
-        let stream_start =
-            ssed_aux_honmon_stream_start_offset(&mut reader, component_offset_usize)?;
-        if next_offset > u64::try_from(stream_start).unwrap_or(u64::MAX) {
-            let range_len = next_offset - u64::try_from(stream_start).unwrap_or(0);
-            if range_len < MIN_AUX_HONMON_RANGE_BYTES {
-                return Ok(Some(
-                    Diagnostic::info(
-                        "ssed_auxiliary_index_body_target_non_renderable",
-                        format!(
-                            "auxiliary index row {} points into a {range_len} byte HONMON range, which is not a renderable entry body",
-                            row.line_number
-                        ),
-                    )
-                    .with_context("component", &component.filename)
-                    .with_context("block", row.block.to_string())
-                    .with_context("offset", row.offset.to_string()),
-                ));
-            }
-        }
-    }
-
-    if ssed_aux_honmon_offset_is_inside_entry_marker(&mut reader, component_offset_usize)? {
-        return Ok(Some(
-            Diagnostic::info(
-                "ssed_auxiliary_index_body_target_non_renderable",
-                format!(
-                    "auxiliary index row {} points inside an SSED entry marker/control header",
-                    row.line_number
-                ),
-            )
-            .with_context("component", &component.filename)
-            .with_context("block", row.block.to_string())
-            .with_context("offset", row.offset.to_string()),
-        ));
-    }
-
-    Ok(None)
-}
-
 fn ssed_aux_honmon_stream_start_offset(
     reader: &mut SsedDataFile,
     component_offset: usize,
@@ -859,48 +823,30 @@ fn ssed_aux_honmon_stream_start_offset(
     Ok(component_offset)
 }
 
-fn ssed_aux_honmon_offset_is_inside_entry_marker(
-    reader: &mut SsedDataFile,
-    component_offset: usize,
-) -> Result<bool> {
-    let scan_start = component_offset.saturating_sub(SSED_ENTRY_MARKER.len() + 2);
-    let data = reader.read_range(scan_start, SSED_ENTRY_MARKER.len() * 3)?;
-    for relative_start in 0..data.len().min(SSED_ENTRY_MARKER.len() + 2) {
-        let absolute_start = scan_start + relative_start;
-        let Some(marker_len) = ssed_entry_marker_len_in_slice(&data[relative_start..]) else {
-            continue;
-        };
-        if component_offset > absolute_start
-            && component_offset < absolute_start.saturating_add(marker_len)
-            && !(marker_len == SSED_ENTRY_MARKER.len() + 2
-                && component_offset == absolute_start + 2)
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn ssed_entry_marker_len_in_slice(data: &[u8]) -> Option<usize> {
-    if data.starts_with(&[0x1f, 0x02])
-        && data
-            .get(2..2 + SSED_ENTRY_MARKER.len())
-            .is_some_and(|marker| marker == SSED_ENTRY_MARKER)
-    {
-        return Some(SSED_ENTRY_MARKER.len() + 2);
-    }
-    data.starts_with(&SSED_ENTRY_MARKER)
-        .then_some(SSED_ENTRY_MARKER.len())
-}
-
-pub(in crate::package::drivers) fn nearest_higher_aux_target_row<'a>(
+pub(in crate::package::drivers) fn ssed_aux_bound_target_row<'a>(
     rows: &'a [SsedAuxIndexRow],
     row: &SsedAuxIndexRow,
 ) -> Option<&'a SsedAuxIndexRow> {
-    rows.iter()
+    let row_index = rows
+        .iter()
+        .position(|candidate| candidate.line_number == row.line_number)?;
+    if let Some(descendant) = rows[row_index + 1..]
+        .iter()
+        .take_while(|candidate| candidate.depth > row.depth)
         .filter(|candidate| candidate.has_target() && candidate.virtual_selector().is_none())
         .filter(|candidate| (candidate.block, candidate.offset) > (row.block, row.offset))
         .min_by_key(|candidate| (candidate.block, candidate.offset))
+    {
+        return Some(descendant);
+    }
+    rows[row_index + 1..]
+        .iter()
+        .take_while(|candidate| candidate.depth >= row.depth)
+        .find(|candidate| {
+            candidate.has_target()
+                && candidate.virtual_selector().is_none()
+                && (candidate.block, candidate.offset) > (row.block, row.offset)
+        })
 }
 
 pub(in crate::package::drivers) fn ssed_menu_record_target(

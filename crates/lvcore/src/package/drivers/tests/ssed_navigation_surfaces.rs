@@ -1637,7 +1637,7 @@ fn ssed_exinfo_auxiliary_index_drives_search_when_native_indexes_are_absent() {
 }
 
 #[test]
-fn ssed_auxiliary_index_reports_non_renderable_honmon_targets_inside_entry_marker_controls() {
+fn ssed_auxiliary_index_keeps_control_offset_honmon_targets_actionable() {
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("EXINFO.INI"),
@@ -1703,14 +1703,32 @@ fn ssed_auxiliary_index_reports_non_renderable_honmon_targets_inside_entry_marke
     };
     let marker_child = &nodes[0].children[0];
     let payload_child = &nodes[0].children[1];
-    assert!(marker_child.target.is_none());
-    assert!(payload_child.target.is_none());
-    assert!(marker_child.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "ssed_auxiliary_index_body_target_non_renderable"
-    }));
-    assert!(payload_child.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "ssed_auxiliary_index_body_target_non_renderable"
-    }));
+    assert!(matches!(
+        marker_child
+            .target
+            .as_ref()
+            .unwrap()
+            .decode()
+            .unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 2,
+            offset: 2
+        } if component == "HONMON.DIC"
+    ));
+    assert!(matches!(
+        payload_child
+            .target
+            .as_ref()
+            .unwrap()
+            .decode()
+            .unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 2,
+            offset: 4
+        } if component == "HONMON.DIC"
+    ));
 }
 
 #[test]

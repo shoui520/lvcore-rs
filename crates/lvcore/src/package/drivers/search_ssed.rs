@@ -2,7 +2,7 @@ use std::{cell::Cell, collections::HashSet};
 
 use super::*;
 use crate::package::drivers::ssed_navigation::{
-    nearest_higher_aux_target_row, ssed_aux_index_row_target,
+    ssed_aux_bound_target_row, ssed_aux_index_row_target,
 };
 
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
@@ -342,7 +342,7 @@ impl ReaderBookPackage {
                 let target = ssed_aux_index_row_target(
                     self,
                     row,
-                    nearest_higher_aux_target_row(&rows, row),
+                    ssed_aux_bound_target_row(&rows, row),
                     &mut target_diagnostics,
                 )?;
                 let Some(target) = target else {
