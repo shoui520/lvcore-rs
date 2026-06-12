@@ -140,6 +140,88 @@ fn ssed_hc_renderer_input_carries_stream_resource_refs() {
 }
 
 #[test]
+fn ssed_common_html_links_normalize_packed_honmon_block_addresses() {
+    let dir = tempdir().unwrap();
+    let mut honmon = Vec::new();
+    honmon.extend_from_slice(&SSED_ENTRY_MARKER);
+    honmon.extend_from_slice(&body_jis("前"));
+    honmon.extend_from_slice(&[
+        0x1f, 0x44, 0xaa, 0xbb, 0xcc, 0xdd, 0x00, 0x64, 0x00, 0x00, 0x00, 0x64,
+    ]);
+    honmon.extend_from_slice(&body_jis("リンク"));
+    honmon.extend_from_slice(&[0x1f, 0x64, 0, 0, 0, 0, 0, 0]);
+    honmon.extend_from_slice(&body_jis("後"));
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&honmon], 100, 100),
+    )
+    .unwrap();
+    let catalog = SsedCatalog {
+        title: "Packed link block".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 100,
+            end_block: 100,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 80,
+            title: Some("Packed link block".to_owned()),
+            evidence: Vec::new(),
+        },
+        Vec::new(),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+    let token = TargetToken::new(&InternalTarget::SsedAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 100,
+        offset: 0,
+    })
+    .unwrap();
+
+    let view = package
+        .render_target(&token, &RenderOptions::default())
+        .unwrap();
+
+    assert_eq!(view.links.len(), 1);
+    assert!(matches!(
+        view.links[0].token.decode().unwrap(),
+        InternalTarget::SsedAddress {
+            component,
+            block: 100,
+            offset: 100,
+        } if component == "HONMON.DIC"
+    ));
+    assert!(
+        view.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_loose_address_unresolved")
+    );
+    let html = view.display_html.as_deref().unwrap_or_default();
+    assert!(html.contains("href=\"lvcore://target/"));
+    assert!(!html.contains("href=\"lvaddr://06553600/0100\""));
+}
+
+#[test]
 fn ssed_basic_text_uses_logovista_gaiji_placeholders_for_unresolved_stream_pairs() {
     let dir = tempdir().unwrap();
     let mut honmon = Vec::new();

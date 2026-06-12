@@ -4,8 +4,8 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-hkkigak6-partial-prefilter.jsonl`
-- Produced after the HKKIGAK6 sparse partial-search cursor fix.
+- `/tmp/lvcore-all-corpora-validation-20260612-kojien6-packed-link.jsonl`
+- Produced after the KOJIEN6 packed SSED link-address normalization fix.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
@@ -37,15 +37,15 @@ HC visual rendering and frontend reader work remain intentionally deferred.
 ## Current State
 
 Package opening and broad deep validation are green across the known corpus set.
-Remaining concrete non-HC work from the latest gate is in classification policy,
-plus explicitly deferred rendering areas.
+No concrete non-HC warning-level blocker remains in the latest gate. The
+remaining warning class is the explicitly deferred HC common HTML fallback.
 
 Warning diagnostics in the baseline:
 
 | Diagnostic | Count | Classification |
 | --- | ---: | --- |
 | `hc_render_common_html_fallback` | 965 | Deferred HC visual rendering |
-| `ssed_loose_address_unresolved` | 6 | Non-HC candidate, needs triage |
+| `ssed_loose_address_unresolved` | 0 | Closed by packed SSED link-address normalization |
 
 Important info/status classes from the latest gate:
 
@@ -238,7 +238,7 @@ Done criteria:
 - Preserve native title/index partial search semantics.
 - Focused validation only on HKKIGAK6 until commit gate.
 
-### 4. KOJIEN6 loose SSED address warning
+### 4. KOJIEN6 loose SSED address warning (resolved)
 
 Why this matters:
 
@@ -253,11 +253,26 @@ Baseline evidence:
 - Address: `00640000:0064`
 - Count: 6
 
-Likely code area:
+Current status:
 
-- `crates/lvcore/src/package/drivers/html_resource_render.rs`
-- `crates/lvcore/src/package/drivers/ssed_navigation.rs`
-- SSED loose media/address helpers
+- KOJIEN6 common stream links can encode a valid HONMON block in the high word of
+  the decoded block value. The observed `00640000:0064` link normalizes to block
+  `100`, offset `100`, which is inside the declared HONMON component.
+- LVCore now normalizes that packed address form before loose SSED target
+  resolution, yielding a normal `ssed_address` target link instead of an
+  unresolved-address warning.
+- Focused KOJIEN6 validation
+  `/tmp/lvcore-focused-validate-kojien6-packed-link.jsonl` validated the package
+  with status `ok` and zero `ssed_loose_address_unresolved` diagnostics.
+- Full-corpus gate
+  `/tmp/lvcore-all-corpora-validation-20260612-kojien6-packed-link.jsonl`
+  validated 334 packages with package status 334 `ok`.
+- The gate has no remaining `ssed_loose_address_unresolved` diagnostics.
+
+Changed code area:
+
+- `crates/lvcore/src/package/drivers/renderer.rs`
+- `crates/lvcore/src/package/drivers/tests/ssed_renderer_input.rs`
 
 Done criteria:
 

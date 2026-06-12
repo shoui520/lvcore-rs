@@ -408,8 +408,9 @@ impl ReaderBookPackage {
     ) -> Result<Vec<TargetLink>> {
         let mut target_links = Vec::new();
         for link in links {
-            let Some(token) =
-                self.ssed_target_for_loose_address(link.block, link.offset, diagnostics)?
+            let (block, offset) =
+                self.normalized_hc_common_html_link_address(link.block, link.offset);
+            let Some(token) = self.ssed_target_for_loose_address(block, offset, diagnostics)?
             else {
                 continue;
             };
@@ -428,6 +429,24 @@ impl ReaderBookPackage {
             });
         }
         Ok(target_links)
+    }
+
+    fn normalized_hc_common_html_link_address(&self, block: u32, offset: u32) -> (u32, u32) {
+        let Some(catalog) = &self.ssed_catalog else {
+            return (block, offset);
+        };
+        if catalog.component_for_address(block).is_some()
+            || block & 0xffff != 0
+            || offset >= BLOCK_SIZE
+        {
+            return (block, offset);
+        }
+        let packed_block = block >> 16;
+        if packed_block != 0 && catalog.component_for_address(packed_block).is_some() {
+            (packed_block, offset)
+        } else {
+            (block, offset)
+        }
     }
 
     fn finalize_resolved_view(
