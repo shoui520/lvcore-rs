@@ -493,21 +493,18 @@ impl NavigationProvider for ReaderBookPackage {
                 .is_some_and(|catalog| has_decodable_ssed_index_rows(catalog, &self.storage))
             {
                 surfaces.push(HomeSurface {
-                        href: None,
+                    href: None,
+                    surface_id: "title-index".to_owned(),
+                    kind: NavigationSurfaceKind::TitleIndexBrowse,
+                    status: NavigationStatus::Available,
+                    title_html: "Title/Index Browse".to_owned(),
+                    title_text: "Title/Index Browse".to_owned(),
+                    target: Some(TargetToken::new(&InternalTarget::TitleIndexItem {
                         surface_id: "title-index".to_owned(),
-                        kind: NavigationSurfaceKind::TitleIndexBrowse,
-                        status: NavigationStatus::Available,
-                        title_html: "Title/Index Browse".to_owned(),
-                        title_text: "Title/Index Browse".to_owned(),
-                        target: Some(TargetToken::new(&InternalTarget::TitleIndexItem {
-                            surface_id: "title-index".to_owned(),
-                            item_id: "root".to_owned(),
-                        })?),
-                        diagnostics: vec![Diagnostic::info(
-                            "surface_partial",
-                            "SSED title/index browsing is available for supported leaf row grammars; exact/forward simple-index search can use internal tree pages while other paths may still scan linearly",
-                        )],
-                    });
+                        item_id: "root".to_owned(),
+                    })?),
+                    diagnostics: Vec::new(),
+                });
             }
         }
         if self.lved_store.is_some() && !lved_is_primary_family {

@@ -2349,6 +2349,79 @@ fn ssed_numeric_auxiliary_index_opens_without_exinfo() {
 }
 
 #[test]
+fn ssed_numeric_auxiliary_index_routes_virtual_selectors_without_success_noise() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("0000015f.idx"),
+        cp932(
+            "00000000\t00000000\tRoot\n\
+                 00000001\t0000ffff\t\tPanel selector\n",
+        ),
+    )
+    .unwrap();
+    fs::write(dir.path().join("00000001.idx"), SSEDINFO_MAGIC).unwrap();
+    fs::write(dir.path().join("Panels.xml"), b"<panels/>").unwrap();
+    let catalog = SsedCatalog {
+        title: "Numeric".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 0x5221,
+            end_block: 0x5230,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Numeric".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    let surface = package.open_surface("numeric-aux:0000015f.idx").unwrap();
+    let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
+        panic!("expected numeric auxiliary navigation tree");
+    };
+    let target = nodes[0].children[0]
+        .target
+        .as_ref()
+        .unwrap()
+        .decode()
+        .unwrap();
+    assert!(matches!(
+        target,
+        InternalTarget::PanelCell {
+            panel_id,
+            row: 0,
+            column: 0,
+        } if panel_id == "00000001"
+    ));
+    assert!(nodes[0].children[0].diagnostics.iter().all(|diagnostic| {
+        diagnostic.code != "ssed_auxiliary_index_virtual_selector"
+            && diagnostic.code != "ssed_auxiliary_index_virtual_selector_without_panels"
+    }));
+}
+
+#[test]
 fn ssed_auxiliary_index_routes_menu_component_targets_as_menu_items() {
     let dir = tempdir().unwrap();
     fs::write(

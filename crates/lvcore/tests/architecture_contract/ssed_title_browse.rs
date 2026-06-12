@@ -47,6 +47,38 @@ fn ssed_simple_title_index_surface_resolves_entry_targets() {
 }
 
 #[test]
+fn ssed_title_index_home_surface_is_available_without_partial_diagnostic_noise() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"alpha\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("alpha", 1, 2, 13, 0)),
+    )
+    .unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let surfaces = package.home_surfaces().unwrap();
+    let title_index = surfaces
+        .iter()
+        .find(|surface| surface.surface_id == "title-index")
+        .expect("decodable SSED index should expose title-index browse");
+    assert_eq!(title_index.status, NavigationStatus::Available);
+    assert_eq!(title_index.kind, NavigationSurfaceKind::TitleIndexBrowse);
+    assert!(title_index.target.is_some());
+    assert!(
+        title_index
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "surface_partial")
+    );
+}
+
+#[test]
 fn title_index_browse_strips_observed_display_only_markers() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();

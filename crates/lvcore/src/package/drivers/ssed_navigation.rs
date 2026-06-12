@@ -542,16 +542,6 @@ pub(in crate::package::drivers) fn ssed_aux_index_row_target(
             );
             return Ok(None);
         }
-        diagnostics.push(
-            Diagnostic::info(
-                "ssed_auxiliary_index_virtual_selector",
-                format!(
-                    "auxiliary index row {} points to virtual selector {selector}; routing through panel {selector}",
-                    row.line_number
-                ),
-            )
-            .with_context("panel_id", &selector),
-        );
         return Ok(Some(TargetToken::new(&InternalTarget::PanelCell {
             panel_id: selector,
             row: 0,

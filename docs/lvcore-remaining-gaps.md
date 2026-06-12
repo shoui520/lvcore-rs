@@ -4,13 +4,15 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-gaiji-helper-tightened.jsonl`
-- Produced after tightening shared gaiji formatting-helper classification.
+- `/tmp/lvcore-all-corpora-validation-20260612-navigation-diagnostic-cleanup.jsonl`
+- Produced after removing stale success-path SSED navigation diagnostics.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
 Previous planning baseline:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-gaiji-helper-tightened.jsonl`
+- Produced after tightening shared gaiji formatting-helper classification.
 - `/tmp/lvcore-all-corpora-validation-20260612-sidecar-start-cursor.jsonl`
 - Produced after the SSED sidecar body start cursor fix.
 - `/tmp/lvcore-all-corpora-validation-20260612-title-prepass-row-cursor.jsonl`
@@ -67,6 +69,79 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0c. SSED auxiliary virtual-selector success diagnostic noise (resolved)
+
+Why this matters:
+
+- The previous full-corpus gate had three
+  `ssed_auxiliary_index_virtual_selector` info diagnostics, all from
+  `_DCT_ZYAKUKOG`.
+- Those rows are successful auxiliary-index routes into package panel targets,
+  not degraded behavior.
+- Keeping success-path routing evidence as reader-facing diagnostics made normal
+  auxiliary navigation look like a gap.
+
+Current status:
+
+- Auxiliary-index virtual selectors still route through `PanelCell` targets when
+  `Panels.xml` is present.
+- The diagnostic remains for the real gap case where a virtual selector exists
+  but no panel metadata is available.
+- Focused tests passed:
+  - `cargo test -p lvcore ssed_numeric_auxiliary_index_routes_virtual_selectors_without_success_noise -- --nocapture`
+  - `cargo test -p lvcore ssed_numeric_auxiliary_index_opens_without_exinfo -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-zyakukog-aux-selector-cleanup.jsonl`
+  - `_DCT_ZYAKUKOG` validated with package status `ok` and zero concrete
+    `ssed_auxiliary_index_virtual_selector` diagnostics.
+- Full-corpus navigation regression gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-navigation-diagnostic-cleanup.jsonl`
+  - 334 packages validated with package status 334 `ok`.
+  - `ssed_auxiliary_index_virtual_selector` is now zero concrete diagnostics.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_ZYAKUKOG`
+- Observed successful panel IDs: `16000000`, `17000000`, `18000000`.
+
+### 0b. SSED title-index surface partial diagnostic noise (resolved)
+
+Why this matters:
+
+- `surface_partial` was emitted for every decodable SSED title/index browse
+  surface, even though the browse surface itself is available, cursor-paged,
+  and reader-facing.
+- The diagnostic text described conservative search-provider internals, not a
+  limitation of opening or browsing the title/index surface.
+- Keeping it on the home surface made working SSED browse support look
+  partially implemented in reader-facing metadata.
+
+Current status:
+
+- Decodable SSED title/index home surfaces are now exposed as available without
+  `surface_partial` diagnostics.
+- The title/index browse implementation and target resolution behavior are
+  unchanged.
+- Focused tests passed:
+  - `cargo test -p lvcore ssed_title_index_home_surface_is_available_without_partial_diagnostic_noise -- --nocapture`
+  - `cargo test -p lvcore ssed_simple_title_index_surface_resolves_entry_targets -- --nocapture`
+  - `cargo fmt --check`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-25igaku-surface-partial-cleanup.jsonl`
+  - `_DCT_25IGAKU` validated with package status `ok` and zero concrete
+    `surface_partial` diagnostics.
+- Full-corpus navigation regression gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-navigation-diagnostic-cleanup.jsonl`
+  - 334 packages validated with package status 334 `ok`.
+  - `surface_partial` is now zero concrete diagnostics.
+
+Baseline evidence:
+
+- Previous full-corpus gate
+  `/tmp/lvcore-all-corpora-validation-20260612-gaiji-helper-tightened.jsonl`
+  had 186 concrete `surface_partial` info diagnostics, all on SSED packages.
 
 ### 0a. Gaiji formatting helper classification overbreadth (resolved)
 
