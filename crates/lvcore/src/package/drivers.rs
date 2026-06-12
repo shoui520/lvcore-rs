@@ -229,7 +229,7 @@ use crate::ssed_sidecar::{
     lookup_ssed_sidecar_body_by_address_with_resolvers, lookup_ssed_sidecar_media,
     lookup_ssed_sidecar_range_bound_with_resolvers,
     search_ssed_dense_sidecar_bodies_with_resolvers,
-    search_ssed_dense_sidecar_titles_with_resolvers,
+    search_ssed_dense_sidecar_titles_with_resolvers, sidecar_sql_prefilter_is_authoritative,
 };
 use crate::ssed_sound_data::{SoundDataIndex, load_sounddata_index, parse_sounddata_marker_at};
 use crate::storage::{

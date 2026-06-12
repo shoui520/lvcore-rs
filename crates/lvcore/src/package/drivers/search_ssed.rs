@@ -1453,7 +1453,7 @@ impl ReaderBookPackage {
                 let next_cursor = if row_page.exhausted {
                     None
                 } else {
-                    Some(format!("row:{}", row_page.next_row_offset))
+                    Some(encode_ssed_fulltext_row_cursor(row_page.next_row_offset))
                 };
                 hits.truncate(query.limit);
                 return Ok(SearchPage {
@@ -2629,7 +2629,7 @@ impl ReaderBookPackage {
             return Ok(None);
         }
         let mut page = collector.into_search_page(query.limit);
-        page.next_cursor = Some(encode_ssed_fulltext_sidecar_body_cursor(0));
+        page.next_cursor = Some(self.ssed_fulltext_post_title_prepass_cursor(query)?);
         page.diagnostics.insert(
             0,
             Diagnostic::info(
@@ -2667,12 +2667,13 @@ impl ReaderBookPackage {
             return Ok(None);
         }
         let mut page = collector.into_search_page(query.limit);
+        let post_title_prepass_cursor = self.ssed_fulltext_post_title_prepass_cursor(query)?;
         page.next_cursor = page
             .next_cursor
             .as_deref()
             .map(|cursor| format!("title:{cursor}"))
             .or_else(|| physical_next_cursor.map(|cursor| format!("title:{cursor}")))
-            .or_else(|| Some(encode_ssed_fulltext_sidecar_body_cursor(0)));
+            .or(Some(post_title_prepass_cursor));
         page.diagnostics.insert(
             0,
             Diagnostic::info(
@@ -2747,12 +2748,13 @@ impl ReaderBookPackage {
         if page.hits.is_empty() {
             return Ok(None);
         }
+        let post_title_prepass_cursor = self.ssed_fulltext_post_title_prepass_cursor(query)?;
         page.next_cursor = page
             .next_cursor
             .as_deref()
             .map(|cursor| format!("title:{cursor}"))
             .or_else(|| physical_next_cursor.map(|cursor| format!("title:{cursor}")))
-            .or_else(|| Some(encode_ssed_fulltext_sidecar_body_cursor(0)));
+            .or(Some(post_title_prepass_cursor));
         page.diagnostics.insert(
             0,
             Diagnostic::info(
@@ -2761,6 +2763,26 @@ impl ReaderBookPackage {
             ),
         );
         Ok(Some(page))
+    }
+
+    fn ssed_fulltext_post_title_prepass_cursor(&self, query: &SearchQuery) -> Result<String> {
+        let sidecar_resolvers = self.ssed_sidecar_body_resolvers()?;
+        if sidecar_resolvers.is_empty() {
+            return Ok(encode_ssed_fulltext_row_cursor(0));
+        }
+        if sidecar_sql_prefilter_is_authoritative(&query.query) {
+            let sidecar_page = search_ssed_dense_sidecar_bodies_with_resolvers(
+                sidecar_resolvers,
+                &query.query,
+                0,
+                None,
+                1,
+            )?;
+            if sidecar_page.hits.is_empty() && sidecar_page.exhausted {
+                return Ok(encode_ssed_fulltext_row_cursor(0));
+            }
+        }
+        Ok(encode_ssed_fulltext_sidecar_body_cursor(0))
     }
 }
 
@@ -3236,6 +3258,10 @@ fn decode_ssed_fulltext_row_cursor(cursor: Option<&str>) -> Option<usize> {
     cursor?
         .strip_prefix("row:")
         .and_then(|value| value.parse::<usize>().ok())
+}
+
+fn encode_ssed_fulltext_row_cursor(offset: usize) -> String {
+    format!("row:{offset}")
 }
 
 fn decode_ssed_sidecar_title_cursor(cursor: Option<&str>) -> Option<usize> {

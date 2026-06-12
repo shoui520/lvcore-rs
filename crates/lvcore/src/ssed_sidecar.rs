@@ -594,7 +594,7 @@ fn search_ssed_dense_sidecar_bodies_prefiltered(
     })
 }
 
-fn sidecar_sql_prefilter_is_authoritative(query: &str) -> bool {
+pub(crate) fn sidecar_sql_prefilter_is_authoritative(query: &str) -> bool {
     let query = query.trim();
     !query.is_empty()
         && !query.chars().any(char::is_whitespace)

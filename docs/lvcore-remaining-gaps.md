@@ -4,15 +4,15 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-gaiji-policy.jsonl`
-- Produced after the gaiji policy selected-source rendering fix.
+- `/tmp/lvcore-all-corpora-validation-20260612-title-prepass-row-cursor.jsonl`
+- Produced after the SSED native title-prepass row cursor fix.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
 Previous planning baseline:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-kojien6-packed-link.jsonl`
-- Produced after the KOJIEN6 packed SSED link-address normalization fix.
+- `/tmp/lvcore-all-corpora-validation-20260612-gaiji-policy.jsonl`
+- Produced after the gaiji policy selected-source rendering fix.
 
 This is a working backlog, not a claim that lvcore is complete.
 
@@ -52,7 +52,8 @@ Important info/status classes from the latest gate:
 | Marker | Count | Classification |
 | --- | ---: | --- |
 | `sidecar-body-row:*` cursor probed `ok` | 27 | Dense sidecar body cursor fix verified |
-| `sidecar-body:0` cursor `not_probed` | 154 | Legacy title-prepass phase cursor, not a physical body cursor |
+| `row:0` full-text cursor probed `ok` | 122 | Native title-prepass row cursor fix verified |
+| `sidecar-body:0` cursor `not_probed` | 32 | Narrow remaining sidecar/body phase cursor class |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
 | `ssed_fulltext_body_direct_scan` | 5 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
@@ -123,8 +124,8 @@ Current status:
   validated 334 packages with package status 334 `ok`.
 - The gate found 27 `sidecar-body-row:*` cursors, all with cursor probe status
   `ok`.
-- The old `sidecar-body:1` `not_probed` bucket is gone; only 154 legacy
-  `sidecar-body:0` title-prepass phase cursors remain skipped.
+- At that gate, the old `sidecar-body:1` `not_probed` bucket was gone and 154
+  legacy `sidecar-body:0` title-prepass phase cursors remained skipped.
 - Focused real-package probes passed:
   - `_DCT_PROYAL53`, query `ひゃ`: first page and physical continuation returned
     quickly with `ssed_fulltext_sidecar_scan`.
@@ -156,7 +157,68 @@ Likely code area:
 - `crates/lvcore/src/package/drivers/search_ssed.rs`
 - `crates/lvcore-cli/src/validate.rs`
 
-### 2. SSED native full-text first-page body scan cost (resolved)
+### 2. SSED native title-prepass full-text phase cursor (resolved)
+
+Why this matters:
+
+- The previous full-corpus baseline still had 154 `sidecar-body:0` full-text
+  cursor probes marked `not_probed`.
+- These cursors came from native title/index prepass pages, not dense sidecar
+  body result pages.
+- When the query can prove there are no dense sidecar body hits, the next phase
+  can safely be the native row-driven HONMON body cursor instead of the legacy
+  sidecar phase cursor.
+
+Current status:
+
+- Native SSED full-text title/index prepass now emits `row:0` after title hits
+  when there are no sidecar body resolvers.
+- If sidecar body resolvers exist, LVCore first uses the dense sidecar SQL
+  prefilter only for queries where that prefilter is authoritative. If it proves
+  there are no sidecar body hits, the prepass emits `row:0`.
+- If sidecar body hits may exist, LVCore preserves `sidecar-body:0` so the dense
+  sidecar body phase still runs first and does not skip results.
+- Focused real-package probes passed:
+  - `_DCT_25IGAKU`, query `カー`: first page now returns `row:0`.
+  - `_DCT_45KAGAKU`, query `0`: first page now returns `row:0`.
+- Focused validation passed:
+  - `/tmp/lvcore-focused-validate-25igaku-row-cursor.jsonl`
+  - `/tmp/lvcore-focused-validate-45kagaku-row-cursor.jsonl`
+  - Both packages validated with package status `ok`, zero warnings/errors, and
+    `search_full_text.cursor_probe.status` `ok` for cursor `row:0`.
+- Full-corpus gate
+  `/tmp/lvcore-all-corpora-validation-20260612-title-prepass-row-cursor.jsonl`
+  validated 334 packages with package status 334 `ok`.
+- The gate has 122 `row:0` full-text cursor probes, all with status `ok`.
+- The `sidecar-body:0` `not_probed` bucket dropped from 154 to 32.
+- Remaining `sidecar-body:0` skipped probes are narrower:
+  - 22 authoritative native title-prepass queries where dense sidecar body hits
+    exist, so the sidecar body phase is intentionally preserved.
+  - 6 non-authoritative native title-prepass queries.
+  - 4 sidecar-title-prepass queries.
+
+Baseline evidence:
+
+- The previous full-corpus baseline had 154 `sidecar-body:0` `not_probed` cursor
+  probes.
+- Representative rows were native `ssed_fulltext_title_index_prepass`
+  continuations for `_DCT_25IGAKU` and `_DCT_45KAGAKU`.
+
+Changed code area:
+
+- `crates/lvcore/src/package/drivers/search_ssed.rs`
+- `crates/lvcore/src/package/drivers.rs`
+- `crates/lvcore/src/ssed_sidecar.rs`
+- `crates/lvcore/src/package/drivers/tests/fulltext.rs`
+
+Done criteria:
+
+- Emit a probeable native body cursor for native title-prepass continuation
+  pages when doing so cannot skip dense sidecar body results.
+- Preserve sidecar body phase ordering when sidecar body hits may exist.
+- Verify with focused synthetic tests and focused real-package validation.
+
+### 3. SSED native full-text first-page body scan cost (resolved)
 
 Why this matters:
 
@@ -220,7 +282,7 @@ Done criteria:
 - Add focused synthetic regression only after reproducing the real package
   behavior.
 
-### 3. iOS HKKIGAK6 sparse partial-search native index cursor (resolved)
+### 4. iOS HKKIGAK6 sparse partial-search native index cursor (resolved)
 
 Why this matters:
 
@@ -274,7 +336,7 @@ Done criteria:
 - Preserve native title/index partial search semantics.
 - Focused validation only on HKKIGAK6 until commit gate.
 
-### 4. KOJIEN6 loose SSED address warning (resolved)
+### 5. KOJIEN6 loose SSED address warning (resolved)
 
 Why this matters:
 
