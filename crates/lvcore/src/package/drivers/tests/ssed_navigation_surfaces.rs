@@ -1017,9 +1017,13 @@ fn ssed_visible_title_label_fallback_does_not_return_empty_no_hit_cursor() {
     let leaf_count = row_count.div_ceil(rows_per_leaf);
     let mut titles = Vec::new();
     let mut title_offsets = Vec::new();
-    for _ in 0..row_count {
+    for index in 0..row_count {
         title_offsets.push(u16::try_from(titles.len()).unwrap());
-        titles.extend_from_slice(b"x\x1f\x0a");
+        if index == 0 {
+            titles.extend_from_slice(b"target\x1f\x0a");
+        } else {
+            titles.extend_from_slice(b"x\x1f\x0a");
+        }
     }
     let title_chunks = titles.chunks(crate::ssed::CHUNK_SIZE).collect::<Vec<_>>();
     let title_block_count = titles
@@ -1190,6 +1194,26 @@ fn ssed_visible_title_label_fallback_does_not_return_empty_no_hit_cursor() {
             .any(|diagnostic| { diagnostic.code == "ssed_sidecar_title_search" })
     );
     assert!(!sidecar_page.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_title_label_search_fallback_no_hit_limited"
+    }));
+
+    let target_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "target".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(target_page.hits.len(), 1);
+    assert_eq!(target_page.hits[0].title_text, "target");
+    assert_eq!(target_page.next_cursor, None);
+    assert!(!target_page.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "ssed_title_label_search_fallback_no_hit_limited"
     }));
 }

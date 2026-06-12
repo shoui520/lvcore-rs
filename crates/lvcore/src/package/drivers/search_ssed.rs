@@ -799,6 +799,16 @@ impl ReaderBookPackage {
         needle: &str,
         row_offset: usize,
     ) -> Result<SearchPage> {
+        self.search_ssed_title_label_fallback_page_inner(query, needle, row_offset, true)
+    }
+
+    fn search_ssed_title_label_fallback_page_inner(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        row_offset: usize,
+        probe_page_full_cursor: bool,
+    ) -> Result<SearchPage> {
         let label_policy = query.label_gaiji_policy();
         let skip_backward_rows = self.ssed_has_forward_browse_index();
         let mut checked_rows = 0usize;
@@ -876,6 +886,16 @@ impl ReaderBookPackage {
         let next_cursor = match stopped {
             SsedTitleLabelFallbackStop::Exhausted => None,
             SsedTitleLabelFallbackStop::Budget if hits.is_empty() => None,
+            SsedTitleLabelFallbackStop::PageFull
+                if probe_page_full_cursor
+                    && !self.ssed_title_label_fallback_cursor_has_visible_hit(
+                        query,
+                        needle,
+                        checked_rows,
+                    )? =>
+            {
+                None
+            }
             SsedTitleLabelFallbackStop::Budget | SsedTitleLabelFallbackStop::PageFull => {
                 Some(encode_ssed_title_label_cursor(checked_rows))
             }
@@ -905,6 +925,23 @@ impl ReaderBookPackage {
             result_sequence: None,
             diagnostics,
         })
+    }
+
+    fn ssed_title_label_fallback_cursor_has_visible_hit(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        row_offset: usize,
+    ) -> Result<bool> {
+        let mut probe_query = query.clone();
+        probe_query.limit = 1;
+        let probe_page = self.search_ssed_title_label_fallback_page_inner(
+            &probe_query,
+            needle,
+            row_offset,
+            false,
+        )?;
+        Ok(!probe_page.hits.is_empty())
     }
 
     fn search_ssed_sidecar_title_page(
