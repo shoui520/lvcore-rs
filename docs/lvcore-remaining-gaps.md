@@ -4,13 +4,15 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-sidecar-start-cursor.jsonl`
-- Produced after the SSED sidecar body start cursor fix.
+- `/tmp/lvcore-all-corpora-validation-20260612-gaiji-helper-tightened.jsonl`
+- Produced after tightening shared gaiji formatting-helper classification.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
 Previous planning baseline:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-sidecar-start-cursor.jsonl`
+- Produced after the SSED sidecar body start cursor fix.
 - `/tmp/lvcore-all-corpora-validation-20260612-title-prepass-row-cursor.jsonl`
 - Produced after the SSED native title-prepass row cursor fix.
 
@@ -59,11 +61,58 @@ Important info/status classes from the latest gate:
 | `ssed_fulltext_body_direct_scan` | 5 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
 | `lved_viewer_hook_deferred` | 188 info diagnostics plus deferred samples | Intentional external viewer policy |
+| `gaiji_formatting_helper_candidate` | 16 | Observed OUKOKU11 `B947`/`B948` helper codes |
 | `ssed_navigation_empty_sentinel` | 18 | Expected sentinel classification |
 | `skipped_large_view` | 38 | Validator cap for large native HTML alternate mode |
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0a. Gaiji formatting helper classification overbreadth (resolved)
+
+Why this matters:
+
+- The latest gate had 16 `gaiji_formatting_helper_candidate` info markers,
+  all from Android/iOS OUKOKU11.
+- LVCore had been classifying any unbacked full-width `B***` gaiji as a
+  nonliteral helper, but the corpus evidence only supported the observed
+  OUKOKU11 helper pair `B947`/`B948`.
+- Overbroad classification could hide a real unresolved full-width gaiji in
+  labels/search/navigation output.
+
+Current status:
+
+- The shared gaiji provider now treats only observed helper codes `B947` and
+  `B948` as `nonliteral_marker`.
+- Normal unbacked full-width gaiji such as `B123` remain visible unresolved
+  markers, preserving the reader/debug signal instead of silently suppressing
+  them.
+- This is provider-level gaiji classification only; HC visual/profile fallback
+  behavior remains deferred.
+- Focused tests passed:
+  - `cargo test -p lvcore gaiji -- --nocapture`
+  - `cargo test -p lvcore ssed_basic_text_uses_logovista_gaiji_placeholders_for_unresolved_stream_pairs -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-oukok11-gaiji-helper-tightened.jsonl`
+  - `/tmp/lvcore-focused-validate-ios-oukok11-gaiji-helper-tightened.jsonl`
+  - Both OUKOKU11 packages validated with package status `ok`.
+- Full-corpus shared-provider regression gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-gaiji-helper-tightened.jsonl`
+  - 334 packages validated with package status 334 `ok`.
+  - Warning profile unchanged: only deferred `hc_render_common_html_fallback`
+    at 965 concrete diagnostics.
+  - `gaiji_formatting_helper_candidate` remains limited to 16 concrete info
+    diagnostics in the two OUKOKU11 packages.
+
+Baseline evidence:
+
+- Packages:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LogoVistaAndroid/SSED/.OUKOKU11`
+  - `/home/shoui/Agents/CodexMax/LogoVista/Other/iOS/OUKOKU11/OUKOKU11`
+- Observed helper messages were for `B947` and `B948` only.
+- No `logovista-tools` source match was found for `B947`/`B948`, so the LVCore
+  fix is deliberately corpus-observation-scoped rather than copied from HC
+  renderer logic.
 
 ### 0. Gaiji policy selected-source rendering (resolved)
 

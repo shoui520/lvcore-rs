@@ -116,31 +116,33 @@ fn ssed_gaiji_resolution_honors_policy_and_keeps_fallbacks() {
 }
 
 #[test]
-fn ssed_fullwidth_unbacked_gaiji_is_formatting_helper_candidate() {
+fn ssed_observed_unbacked_gaiji_helper_codes_are_nonliteral_markers() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
 
     let package = DriverRegistry::default().open_best(dir.path()).unwrap();
-    let resolved = package.resolve_gaiji("B947", &GaijiPolicy::default());
-    assert_eq!(
-        resolved.preferred_source,
-        Some(GaijiSourcePreference::Unresolved)
-    );
-    assert!(resolved.resource.is_none());
-    assert!(resolved.unicode.is_none());
-    assert!(resolved.nonliteral_marker);
-    assert!(
-        resolved
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "gaiji_formatting_helper_candidate")
-    );
-    assert!(
-        resolved
-            .diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic.code != "gaiji_unresolved")
-    );
+    for code in ["B947", "B948"] {
+        let resolved = package.resolve_gaiji(code, &GaijiPolicy::default());
+        assert_eq!(
+            resolved.preferred_source,
+            Some(GaijiSourcePreference::Unresolved)
+        );
+        assert!(resolved.resource.is_none());
+        assert!(resolved.unicode.is_none());
+        assert!(resolved.nonliteral_marker);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "gaiji_formatting_helper_candidate")
+        );
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "gaiji_unresolved")
+        );
+    }
 
     let label = lvcore::resolve_rich_label(
         package.as_ref(),
@@ -154,6 +156,45 @@ fn ssed_fullwidth_unbacked_gaiji_is_formatting_helper_candidate() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "gaiji_formatting_helper_candidate")
+    );
+}
+
+#[test]
+fn ssed_unbacked_fullwidth_gaiji_without_helper_evidence_stays_visible_unresolved() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
+
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let resolved = package.resolve_gaiji("B123", &GaijiPolicy::default());
+    assert_eq!(
+        resolved.preferred_source,
+        Some(GaijiSourcePreference::Unresolved)
+    );
+    assert!(resolved.resource.is_none());
+    assert!(resolved.unicode.is_none());
+    assert!(!resolved.nonliteral_marker);
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "gaiji_unresolved")
+    );
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "gaiji_formatting_helper_candidate")
+    );
+
+    let label = lvcore::resolve_rich_label(
+        package.as_ref(),
+        "word<zB123>end",
+        &LabelOptions::default().gaiji_policy,
+    );
+    assert_eq!(label.text, "word〓end");
+    assert_eq!(
+        label.html,
+        r#"word<span class="lvcore-gaiji-unresolved" data-gaiji="B123">〓</span>end"#
     );
 }
 

@@ -75,7 +75,7 @@ impl GaijiProvider for ReaderBookPackage {
         let formatting_helper_candidate = unicode.is_none()
             && template_resource.is_none()
             && ga16_resource.is_none()
-            && is_full_width_gaiji_code(&code);
+            && is_observed_formatting_helper_gaiji_code(&code);
         let preferred_source = policy.priority.iter().copied().find(|source| match source {
             GaijiSourcePreference::Unicode => unicode.is_some(),
             GaijiSourcePreference::ExternalResource => template_resource.is_some(),
@@ -91,7 +91,7 @@ impl GaijiProvider for ReaderBookPackage {
             vec![
                 Diagnostic::info(
                     "gaiji_formatting_helper_candidate",
-                    format!("{code} has no Unicode, Template, or GA16 display backing and is classified as a probable LogoVista formatting helper"),
+                    format!("{code} has no Unicode, Template, or GA16 display backing and is classified as an observed LogoVista formatting helper"),
                 )
                 .with_context("gaiji_space", "full"),
             ]
@@ -120,8 +120,8 @@ impl GaijiProvider for ReaderBookPackage {
     }
 }
 
-fn is_full_width_gaiji_code(code: &str) -> bool {
-    u16::from_str_radix(code, 16).is_ok_and(|value| value >= 0xB000)
+fn is_observed_formatting_helper_gaiji_code(code: &str) -> bool {
+    matches!(code, "B947" | "B948")
 }
 
 #[cfg(test)]
