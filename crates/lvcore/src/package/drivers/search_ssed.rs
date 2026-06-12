@@ -5,6 +5,7 @@ use super::*;
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 20_480;
 const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 2;
+const SSED_PARTIAL_NONPREFIX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 8;
 const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 16;
 const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
@@ -509,7 +510,7 @@ impl ReaderBookPackage {
                 );
                 return Ok(next_cursor);
             }
-            if advanced_empty_pages >= SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT {
+            if advanced_empty_pages >= SSED_PARTIAL_NONPREFIX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT {
                 let next_cursor = next_cursor
                     .as_deref()
                     .and_then(|cursor| decode_ssed_partial_index_scan_cursor(Some(cursor)))

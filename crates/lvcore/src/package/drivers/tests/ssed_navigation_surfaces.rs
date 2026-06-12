@@ -604,7 +604,7 @@ fn ssed_partial_physical_scan_does_not_return_empty_first_page_before_later_matc
     )
     .unwrap();
 
-    let leaf_count = 9usize;
+    let leaf_count = 96usize;
     let mut internal = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
     internal[0..2].copy_from_slice(&0x0002u16.to_be_bytes());
     internal[2..4].copy_from_slice(&u16::try_from(leaf_count).unwrap().to_be_bytes());
@@ -632,9 +632,12 @@ fn ssed_partial_physical_scan_does_not_return_empty_first_page_before_later_matc
         }
         index_stream.extend_from_slice(&leaf);
     }
+    let index_chunks = index_stream
+        .chunks(crate::ssed::CHUNK_SIZE)
+        .collect::<Vec<_>>();
     fs::write(
         dir.path().join("FHINDEX.DIC"),
-        fixture_sseddata_literal_chunks(&[&index_stream], 200, 200 + leaf_count as u32),
+        fixture_sseddata_literal_chunks(&index_chunks, 200, 200 + leaf_count as u32),
     )
     .unwrap();
 
@@ -718,6 +721,12 @@ fn ssed_partial_physical_scan_does_not_return_empty_first_page_before_later_matc
         page.diagnostics
             .iter()
             .any(|diagnostic| { diagnostic.code == "ssed_index_empty_physical_pages_skipped" })
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "ssed_index_empty_physical_scan_limited" })
     );
 }
 
@@ -856,7 +865,7 @@ fn ssed_partial_physical_scan_limits_empty_prefilter_queries() {
             && diagnostic
                 .context
                 .get("advanced_empty_pages")
-                .is_some_and(|value| value == "2")
+                .is_some_and(|value| value == "8")
     }));
 }
 
