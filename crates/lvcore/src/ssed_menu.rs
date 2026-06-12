@@ -315,7 +315,8 @@ fn parse_menu_stream_inner(
 }
 
 pub fn is_empty_menu_sentinel(data: &[u8]) -> bool {
-    data.starts_with(&[0x1f, 0x03]) && data[2..].iter().all(|byte| *byte == 0)
+    (data.starts_with(&[0x1f, 0x03]) && data[2..].iter().all(|byte| *byte == 0))
+        || (data.starts_with(&[0x1f, 0x02, 0x1f, 0x03]) && data[4..].iter().all(|byte| *byte == 0))
 }
 
 fn finish_active_link(line: &mut LineBuilder, destination: Option<SsedMenuDestination>) {
@@ -578,6 +579,17 @@ mod tests {
         let parsed = parse_menu_stream(data);
 
         assert!(parsed.records.is_empty());
+        assert!(parsed.empty_sentinel);
+        assert!(is_empty_menu_sentinel(data));
+    }
+
+    #[test]
+    fn recognizes_observed_prefixed_empty_navigation_sentinel() {
+        let data = b"\x1f\x02\x1f\x03\x00\x00\x00\x00";
+        let parsed = parse_menu_stream(data);
+
+        assert!(parsed.records.is_empty());
+        assert_eq!(parsed.unknown_controls, 0);
         assert!(parsed.empty_sentinel);
         assert!(is_empty_menu_sentinel(data));
     }
