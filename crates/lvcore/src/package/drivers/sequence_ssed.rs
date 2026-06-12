@@ -68,24 +68,24 @@ impl ReaderBookPackage {
             );
         }
 
-        let (component, block, offset) = match target.decode()? {
+        let (component, block, offset, index_component) = match target.decode()? {
             InternalTarget::SsedAddress {
                 component,
                 block,
                 offset,
-            }
-            | InternalTarget::SsedBoundedAddress {
+            } => (component, block, offset, None),
+            InternalTarget::SsedBoundedAddress {
                 component,
                 block,
                 offset,
                 ..
-            }
-            | InternalTarget::SsedIndexAddress {
+            } => (component, block, offset, None),
+            InternalTarget::SsedIndexAddress {
                 component,
                 block,
                 offset,
-                ..
-            } => (component, block, offset),
+                index_component,
+            } => (component, block, offset, Some(index_component)),
             _ => return Ok(None),
         };
 
@@ -118,7 +118,7 @@ impl ReaderBookPackage {
             before,
             after,
             options,
-            component_filter: None,
+            component_filter: index_component.as_deref(),
             key_filter: multi_key_filter.as_deref(),
             start_offset: None,
             allow_miss: false,

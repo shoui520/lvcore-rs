@@ -367,6 +367,122 @@ fn title_index_browse_prefers_forward_rows_over_backward_search_rows() {
 }
 
 #[test]
+fn title_index_browse_prefers_headword_index_over_keyword_index() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_fk_before_fh_indexes(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"headword\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FKTITLE.DIC"),
+        sseddata_literal_fixture(b"keyword\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("headword", 1, 2, 15, 0)),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FKINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("keyword", 1, 4, 13, 0)),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+
+    let surface = package.open_surface("title-index").unwrap();
+    let NavigationSurface::TitleIndexBrowse { items, .. } = surface else {
+        panic!("expected SSED title/index browse");
+    };
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["headword"]
+    );
+    assert_eq!(items[0].item_id, "FHINDEX.DIC:0");
+}
+
+#[test]
+fn title_index_window_preserves_explicit_index_component() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("DICT.IDX"),
+        ssedinfo_fixture_with_alt_forward_and_fh_indexes(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        sseddata_literal_fixture(b"0123456789abcdef"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        sseddata_literal_fixture(b"headword\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FZTITLE.DIC"),
+        sseddata_literal_fixture(b"prev\x1f\x0akeyword\x1f\x0anext\x1f\x0a"),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture("headword", 1, 8, 15, 0)),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("FZINDEX.DIC"),
+        sseddata_literal_fixture(&simple_index_fixture_rows(&[
+            ("prev", 1, 2, 13, 0),
+            ("keyword", 1, 4, 13, 6),
+            ("next", 1, 6, 13, 15),
+        ])),
+    )
+    .unwrap();
+    let package = DriverRegistry::default().open_best(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::SsedIndexAddress {
+        component: "HONMON.DIC".to_owned(),
+        block: 1,
+        offset: 4,
+        index_component: "FZINDEX.DIC".to_owned(),
+    })
+    .unwrap();
+
+    let window = package
+        .resolve_target_window(
+            &target,
+            Some(&lvcore::SequenceHint::TitleIndexOrder {
+                value: "title-index".to_owned(),
+                cursor: None,
+            }),
+            1,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+
+    assert_eq!(window.center.title.as_deref(), Some("keyword"));
+    assert_eq!(window.before.len(), 1);
+    assert_eq!(window.before[0].title.as_deref(), Some("prev"));
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].title.as_deref(), Some("next"));
+    assert!(
+        !window
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "sequence_target_not_in_title_index")
+    );
+}
+
+#[test]
 fn ssed_search_hits_render_with_index_body_boundaries() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("DICT.IDX"), ssedinfo_fixture()).unwrap();
@@ -509,4 +625,96 @@ fn title_index_browse_skips_backward_components_before_opening_them() {
             .iter()
             .any(|diagnostic| diagnostic.code == "ssed_index_component_decode_failed")
     );
+}
+
+fn ssedinfo_fixture_with_fk_before_fh_indexes() -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 5 * 0x30];
+    data[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"FH FK Fixture";
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 5;
+    write_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x30..record_start + 0x60],
+        0x04,
+        13,
+        13,
+        "FKTITLE.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x60..record_start + 0x90],
+        0x90,
+        14,
+        14,
+        "FKINDEX.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x90..record_start + 0xc0],
+        0x05,
+        15,
+        15,
+        "FHTITLE.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0xc0..record_start + 0xf0],
+        0x91,
+        16,
+        16,
+        "FHINDEX.DIC",
+    );
+    data
+}
+
+fn ssedinfo_fixture_with_alt_forward_and_fh_indexes() -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 5 * 0x30];
+    data[..8].copy_from_slice(SSEDINFO_MAGIC);
+    let title = b"Alternate Forward Fixture";
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 5;
+    write_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        1,
+        10,
+        "HONMON.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x30..record_start + 0x60],
+        0x05,
+        13,
+        13,
+        "FZTITLE.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x60..record_start + 0x90],
+        0x91,
+        14,
+        14,
+        "FZINDEX.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0x90..record_start + 0xc0],
+        0x05,
+        15,
+        15,
+        "FHTITLE.DIC",
+    );
+    write_record(
+        &mut data[record_start + 0xc0..record_start + 0xf0],
+        0x91,
+        16,
+        16,
+        "FHINDEX.DIC",
+    );
+    data
 }

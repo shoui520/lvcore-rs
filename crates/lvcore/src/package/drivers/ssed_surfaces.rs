@@ -447,10 +447,16 @@ impl ReaderBookPackage {
         let mut rows = Vec::new();
         let mut seen = 0usize;
         let skip_backward_rows = self.ssed_has_forward_browse_index();
+        let primary_browse_indexes = self.ssed_primary_browse_index_names();
         let diagnostics = self.scan_ssed_ordered_index_rows_with_filters(
             None,
             |component| {
-                !(skip_backward_rows && ssed_index_component_name_is_backward(&component.filename))
+                if skip_backward_rows && ssed_index_component_name_is_backward(&component.filename)
+                {
+                    return false;
+                }
+                primary_browse_indexes.is_empty()
+                    || primary_browse_indexes.contains(&component.filename.to_ascii_uppercase())
             },
             |row| {
                 if seen >= offset {
@@ -472,6 +478,53 @@ impl ReaderBookPackage {
                         && !ssed_index_component_name_is_backward(&component.filename)
                 })
         })
+    }
+
+    pub(super) fn ssed_primary_browse_index_names(&self) -> BTreeSet<String> {
+        let Some(catalog) = &self.ssed_catalog else {
+            return BTreeSet::new();
+        };
+        let mut best_rank = None::<u8>;
+        let mut names = BTreeSet::new();
+        for component in catalog.components_by_role(SsedComponentRole::Index) {
+            if !is_supported_index_type(component.component_type)
+                || ssed_index_component_name_is_backward(&component.filename)
+            {
+                continue;
+            }
+            let rank = ssed_browse_index_priority(component);
+            match best_rank {
+                None => {
+                    best_rank = Some(rank);
+                    names.insert(component.filename.to_ascii_uppercase());
+                }
+                Some(best) if rank < best => {
+                    best_rank = Some(rank);
+                    names.clear();
+                    names.insert(component.filename.to_ascii_uppercase());
+                }
+                Some(best) if rank == best => {
+                    names.insert(component.filename.to_ascii_uppercase());
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+}
+
+fn ssed_browse_index_priority(component: &SsedComponent) -> u8 {
+    let upper = component.filename.to_ascii_uppercase();
+    if upper == "FHINDEX.DIC" {
+        0
+    } else if component.component_type == 0x91 {
+        1
+    } else if upper == "FKINDEX.DIC" {
+        2
+    } else if component.component_type == 0x90 {
+        3
+    } else {
+        4
     }
 }
 
