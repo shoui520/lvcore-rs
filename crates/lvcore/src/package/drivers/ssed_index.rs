@@ -594,6 +594,21 @@ impl ReaderBookPackage {
         leaf_page_budget: usize,
         mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
     ) -> Result<SsedPartialIndexScanResult> {
+        self.scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
+            needle,
+            cursor,
+            leaf_page_budget,
+            |_, row| on_row(row),
+        )
+    }
+
+    pub(super) fn scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
+        &self,
+        needle: &str,
+        cursor: Option<SsedPartialIndexScanCursor>,
+        leaf_page_budget: usize,
+        mut on_row: impl FnMut(SsedPartialIndexScanCursor, SsedIndexRow) -> Result<bool>,
+    ) -> Result<SsedPartialIndexScanResult> {
         let Some(catalog) = &self.ssed_catalog else {
             return Ok(SsedPartialIndexScanResult {
                 diagnostics: vec![Diagnostic::error(
@@ -706,8 +721,12 @@ impl ReaderBookPackage {
                             .with_context("component", &component.filename),
                         );
                     }
+                    let row_cursor = SsedPartialIndexScanCursor {
+                        component_index: component.index,
+                        page_index,
+                    };
                     for row in page_rows {
-                        if !on_row(row)? {
+                        if !on_row(row_cursor, row)? {
                             break 'components;
                         }
                     }

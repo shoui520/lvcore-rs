@@ -648,14 +648,15 @@ impl ReaderBookPackage {
         let mut current_cursor = cursor;
         let mut advanced_empty_pages = 0usize;
         let mut use_empty_scan_budget = false;
+        let mut first_visible_row_cursor = None;
         loop {
             let scan_start_cursor = current_cursor;
             let scan_result = if use_empty_scan_budget {
-                self.scan_ssed_partial_index_rows_paged_with_leaf_budget(
+                self.scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
                     needle,
                     current_cursor,
                     SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET,
-                    |row| {
+                    |row_cursor, row| {
                         if skip_prefix_rows
                             && ssed_title_label_fallback_row_matches(
                                 self,
@@ -666,23 +667,38 @@ impl ReaderBookPackage {
                         {
                             return Ok(true);
                         }
-                        collector.push_row(row)
+                        let had_hits = collector.has_hits();
+                        let keep_scanning = collector.push_row(row)?;
+                        if !had_hits && collector.has_hits() && first_visible_row_cursor.is_none() {
+                            first_visible_row_cursor = Some(row_cursor);
+                        }
+                        Ok(keep_scanning)
                     },
                 )?
             } else {
-                self.scan_ssed_partial_index_rows_paged(needle, current_cursor, |row| {
-                    if skip_prefix_rows
-                        && ssed_title_label_fallback_row_matches(
-                            self,
-                            &SearchMode::Forward,
-                            needle,
-                            &row,
-                        )
-                    {
-                        return Ok(true);
-                    }
-                    collector.push_row(row)
-                })?
+                self.scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
+                    needle,
+                    current_cursor,
+                    SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET,
+                    |row_cursor, row| {
+                        if skip_prefix_rows
+                            && ssed_title_label_fallback_row_matches(
+                                self,
+                                &SearchMode::Forward,
+                                needle,
+                                &row,
+                            )
+                        {
+                            return Ok(true);
+                        }
+                        let had_hits = collector.has_hits();
+                        let keep_scanning = collector.push_row(row)?;
+                        if !had_hits && collector.has_hits() && first_visible_row_cursor.is_none() {
+                            first_visible_row_cursor = Some(row_cursor);
+                        }
+                        Ok(keep_scanning)
+                    },
+                )?
             };
             let next_cursor = scan_result.next_cursor;
             collector.extend_diagnostics(scan_result.diagnostics);
@@ -700,7 +716,10 @@ impl ReaderBookPackage {
                     false,
                 );
                 let visible_start_cursor = collector.has_hits().then(|| {
-                    encode_ssed_partial_nonprefix_cursor(scan_start_cursor, skip_prefix_rows)
+                    encode_ssed_partial_nonprefix_cursor(
+                        first_visible_row_cursor.or(scan_start_cursor),
+                        skip_prefix_rows,
+                    )
                 });
                 return Ok(SsedPartialNonprefixPhysicalScan {
                     next_cursor,

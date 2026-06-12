@@ -1045,8 +1045,7 @@ fn ssed_partial_deferred_nonprefix_cursor_resumes_at_visible_physical_page() {
     assert_eq!(first_page.hits.len(), 1);
     assert_eq!(first_page.hits[0].title_text, "002");
     let deferred_cursor = first_page.next_cursor.as_deref().unwrap();
-    assert!(deferred_cursor.starts_with("ssed-partial-nonprefix-index:2:"));
-    assert_ne!(deferred_cursor, "ssed-partial-nonprefix-index:2:0");
+    assert_eq!(deferred_cursor, "ssed-partial-nonprefix-index:2:121");
 
     let second_page = package
         .search(&SearchQuery {
@@ -1068,7 +1067,10 @@ fn ssed_partial_deferred_nonprefix_cursor_resumes_at_visible_physical_page() {
             && diagnostic.code != "ssed_index_empty_physical_scan_limited"
     }));
     let physical_offset_cursor = second_page.next_cursor.as_deref().unwrap();
-    assert!(physical_offset_cursor.starts_with("ssed-partial-nonprefix-physical-offset:2:"));
+    assert_eq!(
+        physical_offset_cursor,
+        "ssed-partial-nonprefix-physical-offset:2:121:1"
+    );
 
     let third_page = package
         .search(&SearchQuery {
