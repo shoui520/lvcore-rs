@@ -34,6 +34,11 @@ impl ReaderBookPackage {
                 Ok(lookup_britannica_chronology_record(&self.root, &key)?
                     .map(|record| record.title()))
             }
+            InternalTarget::SsedAuxRecord { source, key, .. }
+                if source == super::ssed_sizk_surfaces::SSED_SIZK_SOURCE_ID =>
+            {
+                self.title_for_ssed_sizk_record(&key)
+            }
             InternalTarget::SsedIosHtmlPage {
                 source_id, index, ..
             } => Ok(self
@@ -225,6 +230,11 @@ impl BodyProvider for ReaderBookPackage {
                 if source == BRITANNICA_CHRONOLOGY_SOURCE_ID =>
             {
                 self.visual_body_for_britannica_chronology_record(&key)
+            }
+            InternalTarget::SsedAuxRecord { source, key, .. }
+                if source == super::ssed_sizk_surfaces::SSED_SIZK_SOURCE_ID =>
+            {
+                self.visual_body_for_ssed_sizk_record(&key)
             }
             InternalTarget::SsedIosHtmlPage {
                 source_id, index, ..

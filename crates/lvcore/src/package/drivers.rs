@@ -53,6 +53,7 @@ mod ssed_panel_navigation;
 mod ssed_panel_surfaces;
 mod ssed_renderer_resources;
 mod ssed_screen_surfaces;
+mod ssed_sizk_surfaces;
 mod ssed_surfaces;
 
 use encoding_rs::SHIFT_JIS;

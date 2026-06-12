@@ -26,6 +26,7 @@ mod ssed_component_resources;
 mod ssed_loose_resources;
 mod ssed_navigation_surfaces;
 mod ssed_renderer_input;
+mod ssed_sizk;
 
 enum DenseSidecarFixture {
     BodyRows,

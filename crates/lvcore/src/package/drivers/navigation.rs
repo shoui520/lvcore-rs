@@ -317,6 +317,9 @@ impl NavigationProvider for ReaderBookPackage {
                     diagnostics: Vec::new(),
                 });
             }
+            if let Some(surface) = self.ssed_sizk_home_surface()? {
+                surfaces.push(surface);
+            }
             if !self.retained_ios_fts_payloads.is_empty() {
                 surfaces.push(HomeSurface {
                     href: None,
@@ -723,6 +726,9 @@ impl NavigationProvider for ReaderBookPackage {
             }
             "hanrei" if has_ssed_components => {
                 self.open_ssed_hanrei_surface(surface_id, cursor, limit)
+            }
+            id if has_ssed_components && id == super::ssed_sizk_surfaces::SSED_SIZK_SURFACE_ID => {
+                self.open_ssed_sizk_surface(surface_id, cursor, limit)
             }
             "ios-retained-fts" if has_ssed_components => Ok(NavigationSurface::Deferred {
                 surface_id: surface_id.to_owned(),
