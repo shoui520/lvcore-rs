@@ -1700,7 +1700,7 @@ fn dense_honmon_fulltext_searches_sidecar_titles_before_bodies() {
 
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "beta");
-    assert_eq!(page.next_cursor.as_deref(), Some("sidecar-body:0"));
+    assert_eq!(page.next_cursor.as_deref(), Some("sidecar-body-start"));
     assert!(
         page.diagnostics
             .iter()

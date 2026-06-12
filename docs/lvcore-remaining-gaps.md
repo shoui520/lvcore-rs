@@ -4,15 +4,15 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-title-prepass-row-cursor.jsonl`
-- Produced after the SSED native title-prepass row cursor fix.
+- `/tmp/lvcore-all-corpora-validation-20260612-sidecar-start-cursor.jsonl`
+- Produced after the SSED sidecar body start cursor fix.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
 Previous planning baseline:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-gaiji-policy.jsonl`
-- Produced after the gaiji policy selected-source rendering fix.
+- `/tmp/lvcore-all-corpora-validation-20260612-title-prepass-row-cursor.jsonl`
+- Produced after the SSED native title-prepass row cursor fix.
 
 This is a working backlog, not a claim that lvcore is complete.
 
@@ -53,7 +53,8 @@ Important info/status classes from the latest gate:
 | --- | ---: | --- |
 | `sidecar-body-row:*` cursor probed `ok` | 27 | Dense sidecar body cursor fix verified |
 | `row:0` full-text cursor probed `ok` | 122 | Native title-prepass row cursor fix verified |
-| `sidecar-body:0` cursor `not_probed` | 32 | Narrow remaining sidecar/body phase cursor class |
+| `sidecar-body-start` cursor probed `ok` | 32 | Sidecar body phase start cursor fix verified |
+| `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
 | `ssed_fulltext_body_direct_scan` | 5 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
@@ -176,26 +177,35 @@ Current status:
 - If sidecar body resolvers exist, LVCore first uses the dense sidecar SQL
   prefilter only for queries where that prefilter is authoritative. If it proves
   there are no sidecar body hits, the prepass emits `row:0`.
-- If sidecar body hits may exist, LVCore preserves `sidecar-body:0` so the dense
-  sidecar body phase still runs first and does not skip results.
+- When a sidecar body phase has an initial SQL-prefiltered hit, LVCore emits the
+  probe-safe `sidecar-body-start` cursor so the dense sidecar body phase still
+  runs first without using the legacy matched-offset cursor.
+- Legacy `sidecar-body:0` remains accepted for compatibility and as a fallback
+  when no safe start cursor can be established.
 - Focused real-package probes passed:
   - `_DCT_25IGAKU`, query `カー`: first page now returns `row:0`.
   - `_DCT_45KAGAKU`, query `0`: first page now returns `row:0`.
+  - `_DCT_GENKANA5`, query `01`: native title-prepass now returns
+    `sidecar-body-start`.
+  - iOS `KENCOLLO`, query `ab`: sidecar-title prepass now returns
+    `sidecar-body-start`.
+  - iOS `Dconci98`, query `A`: native title-prepass now returns
+    `sidecar-body-start`.
 - Focused validation passed:
   - `/tmp/lvcore-focused-validate-25igaku-row-cursor.jsonl`
   - `/tmp/lvcore-focused-validate-45kagaku-row-cursor.jsonl`
   - Both packages validated with package status `ok`, zero warnings/errors, and
     `search_full_text.cursor_probe.status` `ok` for cursor `row:0`.
+  - `/tmp/lvcore-focused-validate-sidecar-start-affected-32.jsonl`
+  - The 32-package affected set validated with package status 32 `ok`; all 32
+    `sidecar-body-start` probes had status `ok`.
 - Full-corpus gate
-  `/tmp/lvcore-all-corpora-validation-20260612-title-prepass-row-cursor.jsonl`
+  `/tmp/lvcore-all-corpora-validation-20260612-sidecar-start-cursor.jsonl`
   validated 334 packages with package status 334 `ok`.
 - The gate has 122 `row:0` full-text cursor probes, all with status `ok`.
-- The `sidecar-body:0` `not_probed` bucket dropped from 154 to 32.
-- Remaining `sidecar-body:0` skipped probes are narrower:
-  - 22 authoritative native title-prepass queries where dense sidecar body hits
-    exist, so the sidecar body phase is intentionally preserved.
-  - 6 non-authoritative native title-prepass queries.
-  - 4 sidecar-title-prepass queries.
+- The gate has 32 `sidecar-body-start` full-text cursor probes, all with status
+  `ok`.
+- No `sidecar-body:*` cursor remains `not_probed`.
 
 Baseline evidence:
 
@@ -209,6 +219,7 @@ Changed code area:
 - `crates/lvcore/src/package/drivers/search_ssed.rs`
 - `crates/lvcore/src/package/drivers.rs`
 - `crates/lvcore/src/ssed_sidecar.rs`
+- `crates/lvcore/src/package/drivers/tests/dense_sidecar.rs`
 - `crates/lvcore/src/package/drivers/tests/fulltext.rs`
 
 Done criteria:

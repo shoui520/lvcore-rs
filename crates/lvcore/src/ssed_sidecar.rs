@@ -449,6 +449,24 @@ pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
     })
 }
 
+pub(crate) fn search_ssed_dense_sidecar_bodies_prefiltered_with_resolvers(
+    resolvers: &[SsedSidecarBodyResolver],
+    query: &str,
+    offset: usize,
+    cursor: Option<&SsedSidecarBodyCursor>,
+    limit: usize,
+) -> Result<SsedSidecarSearchPage> {
+    let needle = normalize_sidecar_search_text(query);
+    if needle.is_empty() || limit == 0 {
+        return Ok(SsedSidecarSearchPage {
+            hits: Vec::new(),
+            matched_count: 0,
+            exhausted: true,
+        });
+    }
+    search_ssed_dense_sidecar_bodies_prefiltered(resolvers, query, &needle, offset, cursor, limit)
+}
+
 pub fn search_ssed_dense_sidecar_titles_with_resolvers(
     resolvers: &[SsedSidecarBodyResolver],
     mode: SsedSidecarTitleSearchMode,

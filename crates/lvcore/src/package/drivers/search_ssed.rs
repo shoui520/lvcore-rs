@@ -2700,7 +2700,7 @@ impl ReaderBookPackage {
         if page.hits.is_empty() {
             return Ok(None);
         }
-        page.next_cursor = Some(encode_ssed_fulltext_sidecar_body_cursor(0));
+        page.next_cursor = Some(self.ssed_fulltext_post_sidecar_title_prepass_cursor(query)?);
         page.diagnostics.insert(
             0,
             Diagnostic::info(
@@ -2781,8 +2781,38 @@ impl ReaderBookPackage {
             if sidecar_page.hits.is_empty() && sidecar_page.exhausted {
                 return Ok(encode_ssed_fulltext_row_cursor(0));
             }
+            return Ok(encode_ssed_fulltext_sidecar_body_start_cursor());
+        }
+        if self.ssed_fulltext_prefiltered_sidecar_body_has_initial_hit(query, sidecar_resolvers)? {
+            return Ok(encode_ssed_fulltext_sidecar_body_start_cursor());
         }
         Ok(encode_ssed_fulltext_sidecar_body_cursor(0))
+    }
+
+    fn ssed_fulltext_post_sidecar_title_prepass_cursor(
+        &self,
+        query: &SearchQuery,
+    ) -> Result<String> {
+        let sidecar_resolvers = self.ssed_sidecar_body_resolvers()?;
+        if self.ssed_fulltext_prefiltered_sidecar_body_has_initial_hit(query, sidecar_resolvers)? {
+            return Ok(encode_ssed_fulltext_sidecar_body_start_cursor());
+        }
+        Ok(encode_ssed_fulltext_sidecar_body_cursor(0))
+    }
+
+    fn ssed_fulltext_prefiltered_sidecar_body_has_initial_hit(
+        &self,
+        query: &SearchQuery,
+        sidecar_resolvers: &[SsedSidecarBodyResolver],
+    ) -> Result<bool> {
+        let sidecar_page = search_ssed_dense_sidecar_bodies_prefiltered_with_resolvers(
+            sidecar_resolvers,
+            &query.query,
+            0,
+            None,
+            1,
+        )?;
+        Ok(!sidecar_page.hits.is_empty())
     }
 }
 
@@ -3149,11 +3179,15 @@ fn decode_ssed_fulltext_body_cursor(cursor: Option<&str>) -> usize {
 }
 
 const SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX: &str = "sidecar-body:";
+const SSED_FULLTEXT_SIDECAR_BODY_START_CURSOR: &str = "sidecar-body-start";
 const SSED_FULLTEXT_SIDECAR_BODY_PHYSICAL_CURSOR_PREFIX: &str = "sidecar-body-row:";
 const SSED_FULLTEXT_BODY_CURSOR_PREFIX: &str = "body-offset:";
 
 fn decode_ssed_fulltext_sidecar_body_cursor(cursor: Option<&str>) -> Option<usize> {
     let cursor = cursor?;
+    if cursor == SSED_FULLTEXT_SIDECAR_BODY_START_CURSOR {
+        return Some(0);
+    }
     if let Some(value) = cursor.strip_prefix(SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX) {
         return value.parse::<usize>().ok();
     }
@@ -3172,6 +3206,10 @@ fn decode_ssed_fulltext_sidecar_body_cursor(cursor: Option<&str>) -> Option<usiz
 
 fn encode_ssed_fulltext_sidecar_body_cursor(offset: usize) -> String {
     format!("{SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX}{offset}")
+}
+
+fn encode_ssed_fulltext_sidecar_body_start_cursor() -> String {
+    SSED_FULLTEXT_SIDECAR_BODY_START_CURSOR.to_owned()
 }
 
 fn decode_ssed_fulltext_sidecar_body_physical_cursor(
