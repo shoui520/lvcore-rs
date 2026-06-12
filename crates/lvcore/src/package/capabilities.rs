@@ -3,9 +3,11 @@ use std::path::Path;
 use super::ssed_index_probe::has_decodable_ssed_index_rows;
 use super::ssed_payload::has_supported_sseddata_component_payload_casefolded;
 use super::{Capability, FormatFamily};
+use crate::error::Result;
 use crate::lved_sqlite::LvedSqliteSummary;
 use crate::search::SearchMode;
 use crate::ssed::SsedCatalog;
+use crate::ssed_sidecar::discover_ssed_sidecar_body_resolvers_with_candidates;
 use crate::storage::DirectoryStorage;
 
 pub(super) fn lved_capabilities(
@@ -96,4 +98,22 @@ pub(super) fn ssed_search_modes(catalog: &SsedCatalog, root: &Path) -> Vec<Searc
         modes.push(SearchMode::FullText);
     }
     modes
+}
+
+pub(super) fn ssed_sidecar_search_modes(
+    root: &Path,
+    dict_id_hint: Option<&str>,
+) -> Result<Vec<SearchMode>> {
+    let resolvers = discover_ssed_sidecar_body_resolvers_with_candidates(root, dict_id_hint, &[])?;
+    if resolvers.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Partial sidecar title matching exists below the search layer, but the
+    // public partial cursor flow is still native-index-led.
+    Ok(vec![
+        SearchMode::Exact,
+        SearchMode::Forward,
+        SearchMode::Backward,
+        SearchMode::FullText,
+    ])
 }

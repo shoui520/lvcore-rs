@@ -1550,6 +1550,27 @@ fn dense_honmon_fulltext_searches_sidecar_body() {
 }
 
 #[test]
+fn sidecar_only_extensionless_dict_id_payload_advertises_search_modes() {
+    let dir = tempdir().unwrap();
+    let mut catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);
+    fs::rename(dir.path().join("body.db"), dir.path().join("DENSE")).unwrap();
+    fs::remove_file(dir.path().join("FHINDEX.DIC")).unwrap();
+    catalog
+        .components
+        .retain(|component| component.role != SsedComponentRole::Index);
+
+    assert!(ssed_search_modes(&catalog, dir.path()).is_empty());
+
+    let modes = ssed_sidecar_search_modes(dir.path(), Some("DENSE")).unwrap();
+
+    assert!(modes.contains(&SearchMode::Exact));
+    assert!(modes.contains(&SearchMode::Forward));
+    assert!(modes.contains(&SearchMode::Backward));
+    assert!(modes.contains(&SearchMode::FullText));
+    assert!(!modes.contains(&SearchMode::Partial));
+}
+
+#[test]
 fn dense_honmon_fulltext_sidecar_body_cursor_keeps_lookahead_hit() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::SharedBodyRows);

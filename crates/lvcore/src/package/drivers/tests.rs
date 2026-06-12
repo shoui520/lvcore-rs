@@ -14,7 +14,7 @@ use crate::ssed::SSEDINFO_MAGIC;
 use crate::target::TargetKind;
 
 use super::super::PackageDriver;
-use super::super::capabilities::ssed_search_modes;
+use super::super::capabilities::{ssed_search_modes, ssed_sidecar_search_modes};
 use super::super::ssed_detection::ssed_capabilities;
 use super::*;
 
