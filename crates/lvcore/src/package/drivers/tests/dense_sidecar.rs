@@ -2112,6 +2112,104 @@ fn ssed_sidecar_titles_still_fill_empty_non_dense_native_page() {
 }
 
 #[test]
+fn sidecar_backed_search_skips_missing_native_index_components() {
+    let dir = tempdir().unwrap();
+    let catalog = write_non_dense_native_with_sidecar_fixture(dir.path());
+    fs::remove_file(dir.path().join("FHINDEX.DIC")).unwrap();
+    let search_modes = ssed_sidecar_search_modes(dir.path(), None).unwrap();
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Sidecar only".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "sidecar".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "alpha sidecar");
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "1"
+    ));
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_sidecar_title_search")
+    );
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_index_component_missing")
+    );
+
+    let empty_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "absent".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert!(empty_page.hits.is_empty());
+    assert_eq!(empty_page.next_cursor, None);
+    assert!(
+        empty_page
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_index_component_missing")
+    );
+
+    let fulltext_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "sidecar body".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(fulltext_page.hits.len(), 1);
+    assert_eq!(fulltext_page.hits[0].title_text, "alpha sidecar");
+    assert!(
+        fulltext_page
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_index_component_missing")
+    );
+}
+
+#[test]
 fn title_only_sidecar_does_not_block_dense_body_sidecar() {
     let dir = tempdir().unwrap();
     let catalog =
