@@ -870,6 +870,228 @@ fn ssed_partial_physical_scan_limits_empty_prefilter_queries() {
 }
 
 #[test]
+fn ssed_partial_deferred_nonprefix_cursor_resumes_at_visible_physical_page() {
+    let dir = tempdir().unwrap();
+
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(
+            &[b"prefix body\0nonprefix one body\0nonprefix two body"],
+            100,
+            100,
+        ),
+    )
+    .unwrap();
+
+    let mut titles = Vec::new();
+    let prefix_title_offset = 0u16;
+    titles.extend_from_slice(b"002\x1f\x0a");
+    let nonprefix_one_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"x00-one\x1f\x0a");
+    let nonprefix_two_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"x00-two\x1f\x0a");
+    let title_chunks = titles.chunks(crate::ssed::CHUNK_SIZE).collect::<Vec<_>>();
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&title_chunks, 300, 300),
+    )
+    .unwrap();
+
+    let leaf_count = 320usize;
+    let nonprefix_leaf = 120usize;
+    let mut internal = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    internal[0..2].copy_from_slice(&0x0002u16.to_be_bytes());
+    internal[2..4].copy_from_slice(&u16::try_from(leaf_count).unwrap().to_be_bytes());
+    let mut internal_pos = 4usize;
+    for leaf_index in 0..leaf_count {
+        let key = if leaf_index == 0 {
+            b"002".as_slice()
+        } else {
+            b"x00".as_slice()
+        };
+        write_internal_index_row(
+            &mut internal,
+            &mut internal_pos,
+            key,
+            201 + u32::try_from(leaf_index).unwrap(),
+        );
+    }
+
+    let mut index_stream = Vec::new();
+    index_stream.extend_from_slice(&internal);
+    for leaf_index in 0..leaf_count {
+        let mut leaf = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+        leaf[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        let mut pos = 4usize;
+        if leaf_index == 0 {
+            leaf[2..4].copy_from_slice(&1u16.to_be_bytes());
+            write_simple_index_row(
+                &mut leaf,
+                &mut pos,
+                b"002",
+                100,
+                0,
+                300,
+                prefix_title_offset,
+            );
+        } else if leaf_index == nonprefix_leaf {
+            leaf[2..4].copy_from_slice(&2u16.to_be_bytes());
+            write_simple_index_row(
+                &mut leaf,
+                &mut pos,
+                b"x00-one",
+                100,
+                12,
+                300,
+                nonprefix_one_title_offset,
+            );
+            write_simple_index_row(
+                &mut leaf,
+                &mut pos,
+                b"x00-two",
+                100,
+                31,
+                300,
+                nonprefix_two_title_offset,
+            );
+        } else {
+            leaf[2..4].copy_from_slice(&0u16.to_be_bytes());
+        }
+        index_stream.extend_from_slice(&leaf);
+    }
+    let index_chunks = index_stream
+        .chunks(crate::ssed::CHUNK_SIZE)
+        .collect::<Vec<_>>();
+    let index_end_block = 200 + u32::try_from(leaf_count).unwrap();
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&index_chunks, 200, index_end_block),
+    )
+    .unwrap();
+
+    let catalog = SsedCatalog {
+        title: "Partial".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x91,
+                start_block: 200,
+                end_block: index_end_block,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    };
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Partial".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let first_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "00".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(first_page.hits.len(), 1);
+    assert_eq!(first_page.hits[0].title_text, "002");
+    let deferred_cursor = first_page.next_cursor.as_deref().unwrap();
+    assert!(deferred_cursor.starts_with("ssed-partial-nonprefix-index:2:"));
+    assert_ne!(deferred_cursor, "ssed-partial-nonprefix-index:2:0");
+
+    let second_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "00".to_owned(),
+            cursor: Some(deferred_cursor.to_owned()),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(second_page.hits.len(), 1);
+    assert_eq!(second_page.hits[0].title_text, "x00-one");
+    assert!(second_page.diagnostics.iter().all(|diagnostic| {
+        diagnostic.code != "ssed_index_empty_physical_pages_skipped"
+            && diagnostic.code != "ssed_index_empty_physical_scan_limited"
+    }));
+    let physical_offset_cursor = second_page.next_cursor.as_deref().unwrap();
+    assert!(physical_offset_cursor.starts_with("ssed-partial-nonprefix-physical-offset:2:"));
+
+    let third_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "00".to_owned(),
+            cursor: Some(physical_offset_cursor.to_owned()),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(third_page.hits.len(), 1);
+    assert_eq!(third_page.hits[0].title_text, "x00-two");
+    assert!(third_page.diagnostics.iter().all(|diagnostic| {
+        diagnostic.code != "ssed_index_empty_physical_pages_skipped"
+            && diagnostic.code != "ssed_index_empty_physical_scan_limited"
+    }));
+}
+
+#[test]
 fn ssed_partial_prefix_page_omits_empty_deferred_nonprefix_cursor() {
     let dir = tempdir().unwrap();
 
