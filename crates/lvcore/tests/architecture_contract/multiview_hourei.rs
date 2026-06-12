@@ -948,6 +948,7 @@ fn hourei_law_tree_search_body_links_and_sequence_are_backend_owned() {
             && surface.kind == NavigationSurfaceKind::Panel
             && surface.status == NavigationStatus::Available
             && surface.target.is_some()
+            && surface.diagnostics.is_empty()
     }));
     assert!(surfaces.iter().any(|surface| {
         surface.kind == NavigationSurfaceKind::LawTree

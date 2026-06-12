@@ -1552,10 +1552,15 @@ fn ssed_screen_menu_surface_exposes_backgrounds_and_hotspot_targets() {
             .capabilities
             .contains(&Capability::ScreenMenu)
     );
-    assert!(package.home_surfaces().unwrap().iter().any(|surface| {
-        surface.kind == NavigationSurfaceKind::ScreenMenu
-            && surface.status == NavigationStatus::Available
-    }));
+    let home = package.home_surfaces().unwrap();
+    let screen_home = home
+        .iter()
+        .find(|surface| surface.surface_id == "screen-menu")
+        .expect("screen menu should be advertised");
+    assert_eq!(screen_home.kind, NavigationSurfaceKind::ScreenMenu);
+    assert_eq!(screen_home.status, NavigationStatus::Available);
+    assert!(screen_home.target.is_some());
+    assert!(screen_home.diagnostics.is_empty());
     let surface = package.open_surface("screen-menu").unwrap();
     let NavigationSurface::ScreenMenu { screens, stats, .. } = surface else {
         panic!("expected screen-menu surface");
@@ -1639,10 +1644,18 @@ fn ssed_encyclopedia_index_opens_as_navigation_tree() {
             .capabilities
             .contains(&Capability::EncyclopediaIndex)
     );
-    assert!(package.home_surfaces().unwrap().iter().any(|surface| {
-        surface.kind == NavigationSurfaceKind::EncyclopediaIndex
-            && surface.status == NavigationStatus::Available
-    }));
+    let home = package.home_surfaces().unwrap();
+    let encyclopedia_home = home
+        .iter()
+        .find(|surface| surface.surface_id == "encyclopedia")
+        .expect("encyclopedia index should be advertised");
+    assert_eq!(
+        encyclopedia_home.kind,
+        NavigationSurfaceKind::EncyclopediaIndex
+    );
+    assert_eq!(encyclopedia_home.status, NavigationStatus::Available);
+    assert!(encyclopedia_home.target.is_some());
+    assert!(encyclopedia_home.diagnostics.is_empty());
     let surface = package.open_surface("encyclopedia").unwrap();
     let NavigationSurface::HierarchicalTree { nodes, .. } = surface else {
         panic!("expected encyclopedia navigation tree");
@@ -2316,6 +2329,9 @@ fn ssed_numeric_auxiliary_index_opens_without_exinfo() {
     assert!(home.iter().any(|surface| {
         surface.surface_id == "numeric-aux:0000015f.idx"
             && surface.kind == NavigationSurfaceKind::AuxiliaryIndex
+            && surface.status == NavigationStatus::Available
+            && surface.target.is_some()
+            && surface.diagnostics.is_empty()
     }));
     assert!(
         !home

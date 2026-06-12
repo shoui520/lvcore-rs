@@ -4,13 +4,15 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-navigation-diagnostic-cleanup.jsonl`
-- Produced after removing stale success-path SSED navigation diagnostics.
+- `/tmp/lvcore-all-corpora-validation-20260612-home-surface-diagnostic-cleanup.jsonl`
+- Produced after removing available home-surface success diagnostics.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
 Previous planning baseline:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-navigation-diagnostic-cleanup.jsonl`
+- Produced after removing stale success-path SSED navigation diagnostics.
 - `/tmp/lvcore-all-corpora-validation-20260612-gaiji-helper-tightened.jsonl`
 - Produced after tightening shared gaiji formatting-helper classification.
 - `/tmp/lvcore-all-corpora-validation-20260612-sidecar-start-cursor.jsonl`
@@ -48,7 +50,7 @@ Warning diagnostics in the baseline:
 
 | Diagnostic | Count | Classification |
 | --- | ---: | --- |
-| `hc_render_common_html_fallback` | 965 | Deferred HC visual rendering |
+| `hc_render_common_html_fallback` | 431 | Deferred HC visual rendering |
 | `ssed_loose_address_unresolved` | 0 | Closed by packed SSED link-address normalization |
 
 Important info/status classes from the latest gate:
@@ -69,6 +71,64 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0d. Available home-surface success diagnostic noise (resolved)
+
+Why this matters:
+
+- The previous full-corpus gate had 278 available home-surface info diagnostics
+  that duplicated `kind`, `status`, `surface_id`, and `target` metadata.
+- These were successful reader-facing navigation surfaces, not degraded
+  behavior.
+- Keeping them in `HomeSurface.diagnostics` made normal SSED/iOS/SIZK/Hourei
+  browse support look incomplete.
+
+Current status:
+
+- Available home surfaces no longer emit success-path diagnostics for menu,
+  encyclopedia, auxiliary, iOS plist/list/menu, EXINFO, SIZK read-aloud, and
+  Hourei kana-panel surfaces.
+- Empty/deferred/error diagnostics remain intact, including
+  `ssed_navigation_empty_sentinel`.
+- Focused tests passed:
+  - `cargo test -p lvcore ssed_exinfo_aux_html_idxinfo_exposes_package_html_surface -- --nocapture`
+  - `cargo test -p lvcore ssed_ios_extra_plist_surfaces_are_first_class_navigation -- --nocapture`
+  - `cargo test -p lvcore library_routes_ios_ssed_table_list_cross_book_addresses_through_sibling_aliases -- --nocapture`
+  - `cargo test -p lvcore ssed_sizk_read_aloud_surface_renders_playback_with_audio_resource -- --nocapture`
+  - `cargo test -p lvcore ssed_screen_menu_surface_exposes_backgrounds_and_hotspot_targets -- --nocapture`
+  - `cargo test -p lvcore ssed_encyclopedia_index_opens_as_navigation_tree -- --nocapture`
+  - `cargo test -p lvcore hourei_law_tree_search_body_links_and_sequence_are_backend_owned -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-home-surface-success-diagnostic-cleanup.jsonl`
+  - 10 affected package samples validated with package status 10 `ok`.
+  - Removed success diagnostics were zero across both home-surface and concrete
+    diagnostic checks; the only remaining home diagnostic was one expected
+    `ssed_navigation_empty_sentinel`.
+- Full-corpus home-surface diagnostic cleanup gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-home-surface-diagnostic-cleanup.jsonl`
+  - 334 packages validated with package status 334 `ok`.
+  - Surface diagnostics now contain only 18
+    `ssed_navigation_empty_sentinel` classifications.
+  - The removed success diagnostics are zero concrete diagnostics.
+
+Baseline evidence:
+
+- Previous full-corpus surface diagnostic counts:
+  - `ssed_auxiliary_index`: 113
+  - `ssed_ios_dictlist_other`: 35
+  - `ssed_auxiliary_html`: 34
+  - `ssed_sizk_read_aloud`: 30
+  - `ssed_ios_fulldb_list`: 27
+  - `ssed_ios_plist_panel`: 20
+  - `ssed_exinfo_index_url`: 7
+  - `ssed_numeric_auxiliary_index`: 4
+  - `ssed_ios_app_menu`: 2
+  - `ssed_ios_html_list`: 2
+  - `ssed_screen_menu`: 1
+  - `ssed_encyclopedia_index`: 1
+  - `hourei_kana_panel`: 1
+  - `ssed_ios_table_list`: 1
+  - `ssed_ios_table_list_cross_book`: 1
 
 ### 0c. SSED auxiliary virtual-selector success diagnostic noise (resolved)
 

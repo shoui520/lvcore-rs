@@ -172,13 +172,7 @@ impl ReaderBookPackage {
                 .is_some();
             stats.record(raw_block, raw_offset, block, offset, resolved);
             if resolved {
-                return Ok((
-                    NavigationStatus::Available,
-                    vec![Diagnostic::info(
-                        "ssed_ios_table_list",
-                        "iOS tableList.plist exposes table/index entry targets",
-                    )],
-                ));
+                return Ok((NavigationStatus::Available, Vec::new()));
             }
         }
         if stats.address_rows == 0 {
@@ -190,18 +184,11 @@ impl ReaderBookPackage {
                 )],
             ));
         }
-        if let Some(owner) = self.ssed_ios_table_list_cross_book_owner(source, rows)? {
-            return Ok((
-                NavigationStatus::Available,
-                vec![
-                    Diagnostic::info(
-                        "ssed_ios_table_list_cross_book",
-                        "iOS tableList.plist rows resolve to a sibling SSED dictionary in the same iOS package set",
-                    )
-                    .with_context("dict_code", owner.dict_code)
-                    .with_context("component", owner.component),
-                ],
-            ));
+        if self
+            .ssed_ios_table_list_cross_book_owner(source, rows)?
+            .is_some()
+        {
+            return Ok((NavigationStatus::Available, Vec::new()));
         }
         Ok((
             NavigationStatus::Deferred,

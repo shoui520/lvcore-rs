@@ -168,10 +168,7 @@ impl NavigationProvider for ReaderBookPackage {
                         surface_id: "screen-menu".to_owned(),
                         item_id: "root".to_owned(),
                     })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "ssed_screen_menu",
-                        "SCRMENU.DIC exposes a bitmap-backed screen-map navigation surface",
-                    )],
+                    diagnostics: Vec::new(),
                 });
             }
             if self.storage.exists(Path::new("encyclop.idx"))? {
@@ -186,10 +183,7 @@ impl NavigationProvider for ReaderBookPackage {
                         surface_id: "encyclopedia".to_owned(),
                         item_id: "root".to_owned(),
                     })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "ssed_encyclopedia_index",
-                        "encyclop.idx exposes an LVEDBRSR tab-indented multimedia navigation index",
-                    )],
+                    diagnostics: Vec::new(),
                 });
             }
             if has_britannica_whatday_files(&self.root)? {
@@ -255,10 +249,7 @@ impl NavigationProvider for ReaderBookPackage {
                             surface_id,
                             item_id: "root".to_owned(),
                         })?),
-                        diagnostics: vec![Diagnostic::info(
-                            "ssed_auxiliary_index",
-                            "EXINFO.INI declares a tab-indented auxiliary navigation index",
-                        )],
+                        diagnostics: Vec::new(),
                     });
                 } else if let Some(source) = aux_html_sources
                     .iter()
@@ -275,10 +266,7 @@ impl NavigationProvider for ReaderBookPackage {
                             surface_id: source.surface_id.clone(),
                             item_id: "root".to_owned(),
                         })?),
-                        diagnostics: vec![Diagnostic::info(
-                            "ssed_auxiliary_html",
-                            "EXINFO auxiliary IDXINFO exposes a package HTML page",
-                        )],
+                        diagnostics: Vec::new(),
                     });
                 }
             }
@@ -286,21 +274,18 @@ impl NavigationProvider for ReaderBookPackage {
                 let title = spec.info.clone();
                 let surface_id = format!("numeric-aux:{}", spec.info);
                 surfaces.push(HomeSurface {
-            href: None,
-                        surface_id: surface_id.clone(),
-                        kind: NavigationSurfaceKind::AuxiliaryIndex,
-                        status: NavigationStatus::Available,
-                        title_html: escape_plain_label_html(&title),
-                        title_text: title,
-                        target: Some(TargetToken::new(&InternalTarget::MenuItem {
-                            surface_id,
-                            item_id: "root".to_owned(),
-                        })?),
-                        diagnostics: vec![Diagnostic::info(
-                            "ssed_numeric_auxiliary_index",
-                            "Numeric tab-indented auxiliary index is present without an EXINFO declaration",
-                        )],
-                    });
+                    href: None,
+                    surface_id: surface_id.clone(),
+                    kind: NavigationSurfaceKind::AuxiliaryIndex,
+                    status: NavigationStatus::Available,
+                    title_html: escape_plain_label_html(&title),
+                    title_text: title,
+                    target: Some(TargetToken::new(&InternalTarget::MenuItem {
+                        surface_id,
+                        item_id: "root".to_owned(),
+                    })?),
+                    diagnostics: Vec::new(),
+                });
             }
             if self.has_ssed_hanrei_surface()? {
                 surfaces.push(HomeSurface {
@@ -365,10 +350,7 @@ impl NavigationProvider for ReaderBookPackage {
                         surface_id: source.surface_id,
                         item_id: "root".to_owned(),
                     })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "ssed_ios_plist_panel",
-                        "iOS plist navigation is available as a panel-style surface",
-                    )],
+                    diagnostics: Vec::new(),
                 });
             }
             for source in self.ssed_ios_html_list_sources()? {
@@ -383,10 +365,7 @@ impl NavigationProvider for ReaderBookPackage {
                         surface_id: source.surface_id,
                         item_id: "root".to_owned(),
                     })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "ssed_ios_html_list",
-                        "iOS HTMLList.plist exposes preserved info pages",
-                    )],
+                    diagnostics: Vec::new(),
                 });
             }
             if !self.ssed_ios_dictlist_other_items()?.is_empty() {
@@ -403,10 +382,7 @@ impl NavigationProvider for ReaderBookPackage {
                         surface_id,
                         item_id: "root".to_owned(),
                     })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "ssed_ios_dictlist_other",
-                        "iOS DictList.plist Other entries expose preserved info pages",
-                    )],
+                    diagnostics: Vec::new(),
                 });
             }
             for source in self.ssed_ios_app_menu_xml_sources()? {
@@ -421,10 +397,7 @@ impl NavigationProvider for ReaderBookPackage {
                         surface_id: source.surface_id,
                         item_id: "root".to_owned(),
                     })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "ssed_ios_app_menu",
-                        "iOS app-menu XML exposes package HTML info pages",
-                    )],
+                    diagnostics: Vec::new(),
                 });
             }
             if let Some(source) = self.ssed_exinfo_index_url_source()? {
@@ -442,10 +415,7 @@ impl NavigationProvider for ReaderBookPackage {
                                 .to_owned(),
                         item_id: "root".to_owned(),
                     })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "ssed_exinfo_index_url",
-                        "EXINFO.INI INDEXURL exposes a package HTML start page",
-                    )],
+                    diagnostics: Vec::new(),
                 });
             }
             for source in self.ssed_ios_table_list_sources()? {
@@ -481,10 +451,7 @@ impl NavigationProvider for ReaderBookPackage {
                         surface_id: source.surface_id,
                         item_id: "root".to_owned(),
                     })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "ssed_ios_fulldb_list",
-                        "iOS DictFULLDB exposes ordered title/body rows as a browse surface",
-                    )],
+                    diagnostics: Vec::new(),
                 });
             }
             if self
@@ -548,10 +515,7 @@ impl NavigationProvider for ReaderBookPackage {
                         surface_id,
                         item_id: "root".to_owned(),
                     })?),
-                    diagnostics: vec![Diagnostic::info(
-                        "hourei_kana_panel",
-                        "Hourei kana panel is available as a first-class browse surface",
-                    )],
+                    diagnostics: Vec::new(),
                 });
             }
             surfaces.push(HomeSurface {

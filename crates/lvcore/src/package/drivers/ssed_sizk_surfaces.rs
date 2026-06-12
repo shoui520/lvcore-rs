@@ -60,10 +60,7 @@ impl ReaderBookPackage {
                 surface_id: SSED_SIZK_SURFACE_ID.to_owned(),
                 item_id: "root".to_owned(),
             })?),
-            diagnostics: vec![Diagnostic::info(
-                "ssed_sizk_read_aloud",
-                "SIZK read-aloud package sidecars expose template pages and synchronized audio",
-            )],
+            diagnostics: Vec::new(),
         }))
     }
 

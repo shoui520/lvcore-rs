@@ -125,6 +125,8 @@ fn ssed_sizk_read_aloud_surface_renders_playback_with_audio_resource() {
         surface.surface_id == super::super::ssed_sizk_surfaces::SSED_SIZK_SURFACE_ID
             && surface.kind == NavigationSurfaceKind::Info
             && surface.status == NavigationStatus::Available
+            && surface.target.is_some()
+            && surface.diagnostics.is_empty()
     }));
     assert_eq!(
         package.metadata().search_modes,

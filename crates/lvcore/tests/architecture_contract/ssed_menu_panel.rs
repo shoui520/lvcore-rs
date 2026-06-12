@@ -324,6 +324,8 @@ fn ssed_exinfo_index_url_exposes_package_html_surface() {
     assert_eq!(surface.kind, NavigationSurfaceKind::Info);
     assert_eq!(surface.status, NavigationStatus::Available);
     assert_eq!(surface.title_text, "Start Page");
+    assert!(surface.target.is_some());
+    assert!(surface.diagnostics.is_empty());
 
     let NavigationSurface::InfoPages { pages, .. } =
         package.open_surface("ssed-exinfo-index-url").unwrap()
@@ -418,13 +420,14 @@ fn ssed_exinfo_aux_html_idxinfo_exposes_package_html_surface() {
 
     let package = DriverRegistry::default().open_best(&package_root).unwrap();
     let surfaces = package.home_surfaces().unwrap();
-    assert!(
-        surfaces
-            .iter()
-            .any(|surface| surface.surface_id == "aux-index:0"
-                && surface.kind == NavigationSurfaceKind::AuxiliaryIndex),
-        "the normal IDX auxiliary surface should still be advertised"
-    );
+    let aux_index = surfaces
+        .iter()
+        .find(|surface| surface.surface_id == "aux-index:0")
+        .expect("the normal IDX auxiliary surface should still be advertised");
+    assert_eq!(aux_index.kind, NavigationSurfaceKind::AuxiliaryIndex);
+    assert_eq!(aux_index.status, NavigationStatus::Available);
+    assert!(aux_index.target.is_some());
+    assert!(aux_index.diagnostics.is_empty());
     let surface = surfaces
         .iter()
         .find(|surface| surface.surface_id == "aux-html:1")
@@ -433,6 +436,8 @@ fn ssed_exinfo_aux_html_idxinfo_exposes_package_html_surface() {
     assert_eq!(surface.kind, NavigationSurfaceKind::Info);
     assert_eq!(surface.status, NavigationStatus::Available);
     assert_eq!(surface.title_text, "Bibliography");
+    assert!(surface.target.is_some());
+    assert!(surface.diagnostics.is_empty());
 
     let NavigationSurface::InfoPages { pages, .. } = package.open_surface("aux-html:1").unwrap()
     else {
@@ -1367,16 +1372,15 @@ fn ssed_ios_extra_plist_surfaces_are_first_class_navigation() {
         surface.surface_id == "ios-table-list:tableList.plist"
             && surface.kind == NavigationSurfaceKind::TitleIndexBrowse
             && surface.status == NavigationStatus::Available
+            && surface.diagnostics.is_empty()
     }));
     let full_db_surface_id = "ios-fulldb-list:DICT/DICT_Full.sql";
     assert!(home.iter().any(|surface| {
         surface.surface_id == full_db_surface_id
             && surface.kind == NavigationSurfaceKind::TitleIndexBrowse
             && surface.status == NavigationStatus::Available
-            && surface
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "ssed_ios_fulldb_list")
+            && surface.target.is_some()
+            && surface.diagnostics.is_empty()
     }));
 
     let root_panel = package.open_surface("ios-plist:indexSearch.plist").unwrap();

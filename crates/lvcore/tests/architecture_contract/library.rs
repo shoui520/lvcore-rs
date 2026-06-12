@@ -1339,10 +1339,9 @@ fn library_routes_ios_ssed_table_list_cross_book_addresses_through_sibling_alias
     assert!(source_home.iter().any(|surface| {
         surface.surface_id == "ios-table-list:tableList.plist"
             && surface.status == NavigationStatus::Available
-            && surface
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "ssed_ios_table_list_cross_book")
+            && surface.kind == NavigationSurfaceKind::TitleIndexBrowse
+            && surface.target.is_some()
+            && surface.diagnostics.is_empty()
     }));
 
     let source_surface = library
