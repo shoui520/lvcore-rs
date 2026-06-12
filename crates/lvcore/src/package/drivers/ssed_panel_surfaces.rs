@@ -366,8 +366,7 @@ impl ReaderBookPackage {
             return Ok(SsedPanelPlistLoadStatus::Missing);
         };
         let label = format!("Panel plist {}", data_ref.filename);
-        let plist = parse_xml_plist(&data, &label)?;
-        let parsed = parse_panel_plist_value_for_panel(&plist, None)?;
+        let parsed = self.cached_ssed_panel_plist_panel(&data, &label, None)?;
         let root_panel_id = parsed
             .inline_cells
             .first()
@@ -896,8 +895,8 @@ impl SsedPanelMetadata {
                 .cached_ssed_panel_xml(&self.bytes, &self.label)
                 .cloned(),
             SsedPanelMetadataFormat::Plist => package
-                .cached_ssed_panel_plist(&self.bytes, &self.label)
-                .and_then(|value| parse_panel_plist_value_for_panel(&value, requested_panel_id)),
+                .cached_ssed_panel_plist_panel(&self.bytes, &self.label, requested_panel_id)
+                .map(|value| value.as_ref().clone()),
         }
     }
 }
@@ -942,6 +941,46 @@ impl ReaderBookPackage {
         cache.insert(cache_key, parsed.clone());
         parsed.map_err(Error::Driver)
     }
+
+    fn cached_ssed_panel_plist_panel(
+        &self,
+        bytes: &[u8],
+        label: &str,
+        requested_panel_id: Option<&str>,
+    ) -> Result<Arc<crate::ssed_panel::SsedPanelXml>> {
+        let cache_key = ssed_panel_parsed_cache_key(label, requested_panel_id);
+        {
+            let cache = self.ssed_panel_parsed.lock().map_err(|_| {
+                Error::Driver("parsed panel plist cache lock was poisoned".to_owned())
+            })?;
+            if let Some(cached) = cache.get(&cache_key) {
+                return cached
+                    .as_ref()
+                    .map(Arc::clone)
+                    .map_err(|error| Error::Driver(error.clone()));
+            }
+        }
+
+        let parsed = self
+            .cached_ssed_panel_plist(bytes, label)
+            .and_then(|value| parse_panel_plist_value_for_panel(&value, requested_panel_id))
+            .map(Arc::new)
+            .map_err(|error| error.to_string());
+        let mut cache = self
+            .ssed_panel_parsed
+            .lock()
+            .map_err(|_| Error::Driver("parsed panel plist cache lock was poisoned".to_owned()))?;
+        let cached = cache.entry(cache_key).or_insert_with(|| parsed.clone());
+        cached
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(|error| Error::Driver(error.clone()))
+    }
+}
+
+fn ssed_panel_parsed_cache_key(label: &str, requested_panel_id: Option<&str>) -> String {
+    let panel_id = requested_panel_id.unwrap_or("<root>");
+    format!("{}|{panel_id}", label.to_ascii_lowercase())
 }
 
 fn panel_metadata_format(path: &str) -> SsedPanelMetadataFormat {

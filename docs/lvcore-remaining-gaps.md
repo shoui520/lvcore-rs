@@ -4,6 +4,17 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-ios-panel-cache.jsonl`
+- Produced after caching parsed SSED plist panel projections by source label and
+  requested panel id, avoiding repeated iOS panel projection work during
+  surface/render/window validation.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260612-lved-fts-rowid-order.jsonl`
 - Produced after changing LVED_SQLITE3 FTS list joins to order by the FTS
   virtual-table rowid instead of the joined `list.id`, avoiding temp B-tree
@@ -11,8 +22,6 @@ Latest full-corpus gate:
 - 336 packages validated with package status 336 `ok`.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260612-body-offset-cursor-skip.jsonl`
 - Produced after bounding native SSED full-text body continuation validation:
@@ -98,6 +107,58 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0i. iOS SSED plist panel projection latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate had no non-HC correctness failures, but it exposed
+  a concrete iOS SSED panel latency gap in `Other/iOS/HABGESPA/HABGESPA`.
+- The `ios-plist:sakuin.plist` `surface_first_target` exercise took about
+  4.5s while opening the `Ａ` panel target, even though the row had no HC
+  diagnostics and produced a normal panel surface.
+- The package already cached the raw plist XML, but each requested panel id was
+  re-projected into a fresh `SsedPanelXml` during surface open, render, and
+  panel-window checks.
+
+Current status:
+
+- Parsed plist panel projections are now cached per package by plist source
+  label and requested panel id.
+- Callers still receive an owned `SsedPanelXml`, so iOS panel open can attach
+  inferred BIN refs without mutating cached state.
+- Referenced child plist panels use the same parsed-projection cache.
+- Focused tests passed:
+  - `cargo test -p lvcore ssed_panel -- --nocapture`
+  - `cargo test -p lvcore ssed_ios -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-habgespa-panel-cache.jsonl`
+  - `HABGESPA` package status `ok`.
+  - Package elapsed dropped from the baseline about 7.9s to about 4.6s.
+  - `ios-plist:sakuin.plist` `surface_first_target` elapsed dropped from about
+    4.5s to about 0.8s.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-ios-panel-cache.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback`.
+  - Total gate wall time was about 574s.
+  - In the full gate, `Other/iOS/HABGESPA/HABGESPA`
+    `ios-plist:sakuin.plist` `surface_first_target` elapsed about 0.65s, and
+    package elapsed was about 4.0s.
+
+Baseline evidence:
+
+- Baseline full-corpus JSONL:
+  - `/tmp/lvcore-all-corpora-validation-20260612-lved-fts-rowid-order.jsonl`
+- Baseline symptom:
+  - `Other/iOS/HABGESPA/HABGESPA` `ios-plist:sakuin.plist`
+    `surface_first_target` label `Ａ` elapsed about 4.5s.
+
+Changed code area:
+
+- `crates/lvcore/src/package/drivers.rs`
+- `crates/lvcore/src/package/drivers/ssed_panel_surfaces.rs`
 
 ### 0h. LVED SQLCipher broad CJK full-text latency (resolved)
 

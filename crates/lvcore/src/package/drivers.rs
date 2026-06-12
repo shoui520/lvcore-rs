@@ -278,6 +278,8 @@ type SsedNavigationSurfaceCache = BTreeMap<String, Arc<NavigationSurface>>;
 type SsedTitleTextCache = BTreeMap<(u32, u32), Option<Arc<str>>>;
 type SsedTitleReaderCache = BTreeMap<String, std::result::Result<SsedDataFile, String>>;
 type SsedHonmonBodyScanPlanCache = std::result::Result<SsedHonmonBodyScanPlan, String>;
+type SsedPanelPlistCache = BTreeMap<String, std::result::Result<Arc<PlistValue>, String>>;
+type SsedPanelParsedCache = BTreeMap<String, std::result::Result<Arc<SsedPanelXml>, String>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SsedHonmonBodyScanPlan {
@@ -328,7 +330,8 @@ pub struct ReaderBookPackage {
     ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
     ssed_color_sample_table: OnceLock<std::result::Result<Option<ColorSampleTable>, String>>,
     ssed_panel_xml: OnceLock<std::result::Result<Option<SsedPanelXml>, String>>,
-    ssed_panel_plists: Mutex<BTreeMap<String, std::result::Result<Arc<PlistValue>, String>>>,
+    ssed_panel_plists: Mutex<SsedPanelPlistCache>,
+    ssed_panel_parsed: Mutex<SsedPanelParsedCache>,
 }
 
 #[derive(Debug, Default)]
@@ -453,6 +456,7 @@ impl ReaderBookPackage {
             ssed_color_sample_table: OnceLock::new(),
             ssed_panel_xml: OnceLock::new(),
             ssed_panel_plists: Mutex::new(BTreeMap::new()),
+            ssed_panel_parsed: Mutex::new(BTreeMap::new()),
         }
     }
 
