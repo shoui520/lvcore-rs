@@ -99,25 +99,33 @@ impl ReaderBookPackage {
         let byte_len = self
             .lved_store
             .as_ref()
-            .and_then(|lved_store| lved_store.media_blob_len(store, key).ok().flatten());
+            .map(|lved_store| lved_store.media_blob_len(store, key))
+            .transpose()?
+            .flatten();
+        let mut diagnostics = Vec::new();
+        let href = if self.lved_store.is_none() {
+            diagnostics.push(Diagnostic::info(
+                "resource_deferred",
+                "media blob resource resolution is not implemented yet for this package",
+            ));
+            None
+        } else if byte_len.is_some() {
+            Some(format!("lvcore://resource/{}", token.as_str()))
+        } else {
+            diagnostics.push(Diagnostic::warning(
+                "resource_missing",
+                format!("media blob not found: {store}:{key}"),
+            ));
+            None
+        };
         Ok(ResourceRef {
             token: token.clone(),
             kind: resource_kind,
             label: Some(key.to_owned()),
-            href: self
-                .lved_store
-                .is_some()
-                .then(|| format!("lvcore://resource/{}", token.as_str())),
+            href,
             mime_type: resource_mime_type(resource_kind, Some(key)).map(str::to_owned),
             byte_len,
-            diagnostics: if self.lved_store.is_some() {
-                Vec::new()
-            } else {
-                vec![Diagnostic::info(
-                    "resource_deferred",
-                    "media blob resource resolution is not implemented yet for this package",
-                )]
-            },
+            diagnostics,
         })
     }
 

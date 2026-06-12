@@ -752,6 +752,54 @@ fn lved_search_hits_resolve_to_preserved_content_html() {
 }
 
 #[test]
+fn lved_missing_media_blob_resource_is_not_advertised_as_readable() {
+    let dir = tempdir().unwrap();
+    write_lved_search_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        apply_sqlcipher_key(&connection, "test-key").unwrap();
+        connection
+            .execute(
+                r#"insert into content values (
+                  103,
+                  1,
+                  '<article><h1>Missing Media</h1><img src="lved.image:missing.png"></article>',
+                  ''
+                )"#,
+                [],
+            )
+            .unwrap();
+    }
+
+    let package = LvedSqliteDriver.open(dir.path()).unwrap();
+    let target = TargetToken::new(&InternalTarget::LvedRow {
+        table: "content".to_owned(),
+        row_id: 103,
+        anchor: None,
+        query: None,
+    })
+    .unwrap();
+    let view = package
+        .render_target(&target, &RenderOptions::default())
+        .unwrap();
+
+    assert_eq!(view.kind, ResolvedTargetKind::EntryBody);
+    assert_eq!(view.resources.len(), 1);
+    let resource = &view.resources[0];
+    assert_eq!(resource.kind, ResourceKind::Image);
+    assert_eq!(resource.label.as_deref(), Some("missing.png"));
+    assert!(resource.href.is_none());
+    assert_eq!(resource.byte_len, None);
+    assert!(
+        resource
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "resource_missing")
+    );
+    assert!(package.read_resource(&resource.token).is_err());
+}
+
+#[test]
 fn lved_search_and_list_labels_are_sanitized_for_app_chrome() {
     let dir = tempdir().unwrap();
     write_lved_search_fixture(dir.path());
