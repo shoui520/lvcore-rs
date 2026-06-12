@@ -104,9 +104,19 @@ pub struct SsedSidecarBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsedSidecarBodyCursor {
+    pub sidecar_name: String,
+    pub table: String,
+    pub id_column: String,
+    pub id_rule: SsedSidecarIdRule,
+    pub order_value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SsedSidecarSearchHit {
     pub anchor_id: String,
     pub body: SsedSidecarBody,
+    pub cursor: Option<SsedSidecarBodyCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,6 +369,7 @@ pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
     resolvers: &[SsedSidecarBodyResolver],
     query: &str,
     offset: usize,
+    cursor: Option<&SsedSidecarBodyCursor>,
     limit: usize,
 ) -> Result<SsedSidecarSearchPage> {
     let needle = normalize_sidecar_search_text(query);
@@ -372,13 +383,14 @@ pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
 
     if sidecar_sql_prefilter_is_authoritative(query) {
         return search_ssed_dense_sidecar_bodies_prefiltered(
-            resolvers, query, &needle, offset, limit,
+            resolvers, query, &needle, offset, cursor, limit,
         );
     }
 
-    if offset == 0 {
-        let prefiltered =
-            search_ssed_dense_sidecar_bodies_prefiltered(resolvers, query, &needle, 0, limit)?;
+    if offset == 0 || cursor.is_some() {
+        let prefiltered = search_ssed_dense_sidecar_bodies_prefiltered(
+            resolvers, query, &needle, 0, cursor, limit,
+        )?;
         if prefiltered.hits.len() >= limit {
             return Ok(prefiltered);
         }
@@ -386,20 +398,36 @@ pub fn search_ssed_dense_sidecar_bodies_with_resolvers(
 
     let mut hits = Vec::new();
     let mut matched = 0usize;
+    let mut waiting_for_cursor = cursor.is_some();
     for resolver in resolvers {
+        let row_cursor = if let Some(cursor) = cursor {
+            if waiting_for_cursor {
+                if !sidecar_body_cursor_matches_resolver(resolver, cursor) {
+                    continue;
+                }
+                waiting_for_cursor = false;
+                Some(cursor)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
-        let mut statement = connection.prepare(&search_sql_for_resolver(resolver))?;
-        let rows = statement.query_map([], |row| {
-            let anchor_id = anchor_id_from_search_row(resolver, row)?;
-            let body = sidecar_body_from_row(resolver, row)?;
-            Ok(SsedSidecarSearchHit { anchor_id, body })
-        })?;
-        for row in rows {
-            let hit = row?;
+        let (sql, parameters) = search_sql_for_resolver_after_cursor(resolver, row_cursor);
+        let mut statement = connection.prepare(&sql)?;
+        let mut rows = if parameters.is_empty() {
+            statement.query([])?
+        } else {
+            let parameters = parameters.iter().map(String::as_str).collect::<Vec<_>>();
+            statement.query(params_from_iter(parameters))?
+        };
+        while let Some(row) = rows.next()? {
+            let hit = sidecar_search_hit_from_row(resolver, row)?;
             if !sidecar_search_hit_matches(&hit, &needle) {
                 continue;
             }
-            if matched < offset {
+            if row_cursor.is_none() && matched < offset {
                 matched = matched.saturating_add(1);
                 continue;
             }
@@ -467,7 +495,11 @@ pub fn search_ssed_dense_sidecar_titles_with_resolvers(
         while let Some(row) = rows.next()? {
             let anchor_id = anchor_id_from_search_row(resolver, row)?;
             let body = sidecar_body_from_row(resolver, row)?;
-            let hit = SsedSidecarSearchHit { anchor_id, body };
+            let hit = SsedSidecarSearchHit {
+                anchor_id,
+                body,
+                cursor: None,
+            };
             if !sidecar_title_matches(&hit.body.title, mode, &needle) {
                 continue;
             }
@@ -498,6 +530,7 @@ fn search_ssed_dense_sidecar_bodies_prefiltered(
     query: &str,
     needle: &str,
     offset: usize,
+    cursor: Option<&SsedSidecarBodyCursor>,
     limit: usize,
 ) -> Result<SsedSidecarSearchPage> {
     let pattern = sqlite_like_contains_pattern(query);
@@ -510,24 +543,36 @@ fn search_ssed_dense_sidecar_bodies_prefiltered(
     }
     let mut hits = Vec::new();
     let mut matched = 0usize;
+    let mut waiting_for_cursor = cursor.is_some();
     for resolver in resolvers {
-        let Some(sql) = search_prefilter_sql_for_resolver(resolver) else {
+        let row_cursor = if let Some(cursor) = cursor {
+            if waiting_for_cursor {
+                if !sidecar_body_cursor_matches_resolver(resolver, cursor) {
+                    continue;
+                }
+                waiting_for_cursor = false;
+                Some(cursor)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let Some((sql, parameters)) =
+            search_prefilter_sql_for_resolver(resolver, row_cursor, &pattern)
+        else {
             continue;
         };
         let connection = open_sidecar_connection(&resolver.path, resolver.storage)?;
-        let parameters = vec![pattern.as_str(); sidecar_search_column_count(resolver)];
         let mut statement = connection.prepare(&sql)?;
-        let rows = statement.query_map(params_from_iter(parameters), |row| {
-            let anchor_id = anchor_id_from_search_row(resolver, row)?;
-            let body = sidecar_body_from_row(resolver, row)?;
-            Ok(SsedSidecarSearchHit { anchor_id, body })
-        })?;
-        for row in rows {
-            let hit = row?;
+        let parameters = parameters.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut rows = statement.query(params_from_iter(parameters))?;
+        while let Some(row) = rows.next()? {
+            let hit = sidecar_search_hit_from_row(resolver, row)?;
             if !sidecar_search_hit_matches(&hit, needle) {
                 continue;
             }
-            if matched < offset {
+            if row_cursor.is_none() && matched < offset {
                 matched = matched.saturating_add(1);
                 continue;
             }
@@ -728,11 +773,25 @@ pub fn lookup_ssed_sidecar_media(
     Ok(None)
 }
 
-fn search_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> String {
-    search_select_sql_for_resolver(resolver, None)
+fn search_sql_for_resolver_after_cursor(
+    resolver: &SsedSidecarBodyResolver,
+    cursor: Option<&SsedSidecarBodyCursor>,
+) -> (String, Vec<String>) {
+    let Some(cursor) = cursor else {
+        return (search_select_sql_for_resolver(resolver, None), Vec::new());
+    };
+    let order_sql = resolver.id_rule.sql_where_identifier(&resolver.id_column);
+    (
+        search_select_sql_for_resolver(resolver, Some(&format!(" where {order_sql} > ?"))),
+        vec![cursor.order_value.clone()],
+    )
 }
 
-fn search_prefilter_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> Option<String> {
+fn search_prefilter_sql_for_resolver(
+    resolver: &SsedSidecarBodyResolver,
+    cursor: Option<&SsedSidecarBodyCursor>,
+    pattern: &str,
+) -> Option<(String, Vec<String>)> {
     let clauses = sidecar_search_columns(resolver)
         .into_iter()
         .map(|column| format!("{} like ? escape '\\'", quote_sql_identifier(column)))
@@ -740,9 +799,17 @@ fn search_prefilter_sql_for_resolver(resolver: &SsedSidecarBodyResolver) -> Opti
     if clauses.is_empty() {
         return None;
     }
-    Some(search_select_sql_for_resolver(
-        resolver,
-        Some(&format!(" where {}", clauses.join(" or "))),
+    let mut parameters = vec![pattern.to_owned(); clauses.len()];
+    let where_sql = if let Some(cursor) = cursor {
+        parameters.push(cursor.order_value.clone());
+        let order_sql = resolver.id_rule.sql_where_identifier(&resolver.id_column);
+        format!(" where ({}) and {order_sql} > ?", clauses.join(" or "))
+    } else {
+        format!(" where {}", clauses.join(" or "))
+    };
+    Some((
+        search_select_sql_for_resolver(resolver, Some(&where_sql)),
+        parameters,
     ))
 }
 
@@ -899,10 +966,6 @@ fn sidecar_search_columns(resolver: &SsedSidecarBodyResolver) -> Vec<&str> {
     .collect()
 }
 
-fn sidecar_search_column_count(resolver: &SsedSidecarBodyResolver) -> usize {
-    sidecar_search_columns(resolver).len()
-}
-
 fn sqlite_like_contains_pattern(query: &str) -> String {
     sqlite_like_pattern(query, true, true)
 }
@@ -978,6 +1041,43 @@ fn anchor_id_from_search_row(
             Ok(rowid.saturating_mul(5).to_string())
         }
     }
+}
+
+fn sidecar_search_hit_from_row(
+    resolver: &SsedSidecarBodyResolver,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SsedSidecarSearchHit> {
+    let anchor_id = anchor_id_from_search_row(resolver, row)?;
+    let cursor = sidecar_body_cursor_from_search_row(resolver, row)?;
+    let body = sidecar_body_from_row(resolver, row)?;
+    Ok(SsedSidecarSearchHit {
+        anchor_id,
+        body,
+        cursor: Some(cursor),
+    })
+}
+
+fn sidecar_body_cursor_from_search_row(
+    resolver: &SsedSidecarBodyResolver,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SsedSidecarBodyCursor> {
+    Ok(SsedSidecarBodyCursor {
+        sidecar_name: display_name(&resolver.path),
+        table: resolver.table.clone(),
+        id_column: resolver.id_column.clone(),
+        id_rule: resolver.id_rule,
+        order_value: sqlite_value_to_string(row.get_ref(resolver.id_column.as_str())?)?,
+    })
+}
+
+fn sidecar_body_cursor_matches_resolver(
+    resolver: &SsedSidecarBodyResolver,
+    cursor: &SsedSidecarBodyCursor,
+) -> bool {
+    display_name(&resolver.path).casefold() == cursor.sidecar_name.casefold()
+        && resolver.table.casefold() == cursor.table.casefold()
+        && resolver.id_column.casefold() == cursor.id_column.casefold()
+        && resolver.id_rule == cursor.id_rule
 }
 
 fn sidecar_search_hit_matches(hit: &SsedSidecarSearchHit, needle: &str) -> bool {

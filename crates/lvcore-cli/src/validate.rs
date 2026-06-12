@@ -2891,6 +2891,10 @@ mod tests {
         ));
         assert!(should_probe_search_cursor(
             &SearchMode::FullText,
+            "sidecar-body-row:626f64792e6462:745f636f6e74656e7473:665f446174614964:direct:32"
+        ));
+        assert!(should_probe_search_cursor(
+            &SearchMode::FullText,
             "title:ssed-partial-index:2:126"
         ));
         assert!(should_probe_search_cursor(

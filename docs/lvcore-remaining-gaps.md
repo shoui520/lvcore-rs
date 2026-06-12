@@ -2,12 +2,17 @@
 
 Date: 2026-06-12
 
-Baseline artifact:
+Latest full-corpus gate:
+
+- `/tmp/lvcore-all-corpora-validation-20260612-sidecar-row-cursor.jsonl`
+- Produced after the sidecar/body-phase cursor fixes in this working tree.
+- 334 packages validated.
+- Package-level status: 334 `ok`.
+
+Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260612-body-cursor.jsonl`
 - Produced after commit `386b714` (`Resume SSED fulltext body cursors physically`)
-- 334 packages validated
-- Package-level status: 334 `ok`
 
 This is a working backlog, not a claim that lvcore is complete.
 
@@ -42,13 +47,14 @@ Warning diagnostics in the baseline:
 | `hc_render_common_html_fallback` | 965 | Deferred HC visual rendering |
 | `ssed_loose_address_unresolved` | 6 | Non-HC candidate, needs triage |
 
-Important info/status classes:
+Important info/status classes from the latest gate:
 
 | Marker | Count | Classification |
 | --- | ---: | --- |
-| `sidecar-body:*` cursor `not_probed` | 181 | Real SSED performance/cursor candidate |
-| `ssed_fulltext_body_window_scan` | 5 | Real SSED full-text performance candidate |
-| `ssed_index_empty_physical_pages_skipped` | 2 | Real SSED/iOS partial-search candidate |
+| `sidecar-body-row:*` cursor probed `ok` | 27 | Dense sidecar body cursor fix verified |
+| `sidecar-body:0` cursor `not_probed` | 154 | Legacy title-prepass phase cursor, not a physical body cursor |
+| `ssed_fulltext_body_window_scan` | 3 | Real SSED full-text performance candidate |
+| `ssed_index_empty_physical_pages_skipped` | 1 | Real SSED/iOS partial-search candidate |
 | `lved_viewer_hook_deferred` | 188 info diagnostics plus deferred samples | Intentional external viewer policy |
 | `ssed_navigation_empty_sentinel` | 18 | Expected sentinel classification |
 | `skipped_large_view` | 38 | Validator cap for large native HTML alternate mode |
@@ -60,26 +66,50 @@ Important info/status classes:
 
 Why this matters:
 
-- Full-text sidecar cursors are currently blanket skipped by validation as
+- Legacy full-text sidecar cursors were blanket skipped by validation as
   `not_probed`.
-- Most sampled cursor probes are cheap, but broad ASCII queries can be very
-  expensive.
-- A direct probe of `_DCT_EJJE100` query `co`, cursor `sidecar-body:0`, did not
-  finish within roughly two minutes before the interrupted turn.
+- `sidecar-body:N` was a matched-result offset, not a physical resolver/row
+  cursor.
+- For non-authoritative prefilter queries, continuation could rescan a large
+  sidecar table from the beginning to skip matched rows.
+
+Current status:
+
+- LVCore now emits physical `sidecar-body-row:*` cursors for dense sidecar body
+  hits.
+- Legacy `sidecar-body:N` cursors are still accepted and convert to physical
+  cursors after the next body hit.
+- Validator cursor policy now probes physical `sidecar-body-row:*` cursors while
+  continuing to skip legacy matched-offset `sidecar-body:*` cursors.
+- Full-corpus gate
+  `/tmp/lvcore-all-corpora-validation-20260612-sidecar-row-cursor.jsonl`
+  validated 334 packages with package status 334 `ok`.
+- The gate found 27 `sidecar-body-row:*` cursors, all with cursor probe status
+  `ok`.
+- The old `sidecar-body:1` `not_probed` bucket is gone; only 154 legacy
+  `sidecar-body:0` title-prepass phase cursors remain skipped.
+- Focused real-package probes passed:
+  - `_DCT_PROYAL53`, query `ひゃ`: first page and physical continuation returned
+    quickly with `ssed_fulltext_sidecar_scan`.
+  - iOS `IBIO5`, query `亜-`: first page and physical continuation returned
+    quickly with `ssed_fulltext_sidecar_scan`.
+  - iOS `KENCOLLO`, query `ab`: sidecar-title prepass returned legacy
+    `sidecar-body:0`; continuation returned a physical `sidecar-body-row:*`
+    cursor quickly.
 
 Baseline evidence:
 
 - 181 `not_probed` sidecar body cursors:
   - 154 `sidecar-body:0`
   - 27 `sidecar-body:1`
-- Slow first-page examples from the baseline, all returning a sidecar body
-  cursor:
-  - `_DCT_EJJE100`, query `co`, elapsed 516 ms in validation, direct cursor
-    probe was much worse.
-  - `_DCT_HKDKSR13`, query `FU`/fullwidth FU, elapsed around 1204 ms.
-  - `_DCT_HKDKSR30`, query fullwidth FU, elapsed around 1144 ms.
-  - `_DCT_YHOUGO3`, query from validator, elapsed around 1255 ms.
-  - iOS `IBIO5`, cursor `sidecar-body:1`, elapsed around 387 ms.
+- The old cursor prefix was overloaded:
+  - `ssed_fulltext_sidecar_scan` rows are true dense-sidecar body cursor work.
+  - `ssed_fulltext_sidecar_title_prepass` rows are sidecar-title prepass
+    continuations that enter the sidecar body phase.
+  - `ssed_fulltext_title_index_prepass` rows are native title/index prepass
+    continuations; these belong to the native full-text body-scan gap below.
+- `_DCT_EJJE100`, query `co`, is now classified as native title/index
+  prepass-to-body-phase work, not a dense-sidecar continuation issue.
 
 Likely code area:
 
@@ -89,34 +119,25 @@ Likely code area:
 - `crates/lvcore/src/package/drivers/search_ssed.rs`
 - `crates/lvcore-cli/src/validate.rs`
 
-Hypothesis:
-
-- `sidecar-body:N` is a matched-result offset, not a physical resolver/row
-  cursor.
-- For non-authoritative prefilter queries, continuation can rescan a large
-  sidecar table from the beginning to skip matched rows.
-
-Done criteria:
-
-- Introduce a physical sidecar body cursor that can resume by resolver identity
-  and row position or stable row id.
-- Keep existing `sidecar-body:N` accepted for compatibility.
-- Validate with focused real packages:
-  - `_DCT_EJJE100`
-  - `_DCT_HKDKSR13`
-  - `_DCT_YHOUGO3`
-  - iOS `IBIO5`
-- Update validator policy so physical sidecar cursors are probed.
-- Do not run full corpus until the commit gate.
-
 ### 2. SSED native full-text first-page body scan cost
 
 Why this matters:
 
 - Commit `386b714` fixed native HONMON continuation cursor cost for KENE7J5.
 - The first page can still require a broad body-window scan.
+- Native title/index prepass continuations still use the legacy
+  `sidecar-body:0` phase cursor even when no dense body sidecar exists.
 - A correct search page taking tens of seconds is not acceptable reader UX if it
   appears in common workflows.
+
+Current status:
+
+- Legacy `sidecar-body:*` phase cursors now allow the existing bounded
+  row-driven native body prefetch before falling through to broad HONMON
+  body-window scanning.
+- Focused `_DCT_EJJE100` probe, query `co`, cursor `sidecar-body:0`, now returns
+  quickly with `ssed_fulltext_row_driven_body_prefetch` and a `row:1`
+  continuation instead of entering `ssed_fulltext_body_window_scan`.
 
 Baseline packages with `ssed_fulltext_body_window_scan`:
 

@@ -1196,6 +1196,8 @@ impl ReaderBookPackage {
         let label_policy = query.label_gaiji_policy();
         let title_cursor = decode_ssed_fulltext_title_cursor(query.cursor.as_deref());
         let sidecar_body_cursor = decode_ssed_fulltext_sidecar_body_cursor(query.cursor.as_deref());
+        let sidecar_body_physical_cursor =
+            decode_ssed_fulltext_sidecar_body_physical_cursor(query.cursor.as_deref());
         let chronology_cursor = decode_ssed_fulltext_chronology_cursor(query.cursor.as_deref());
         let row_cursor = decode_ssed_fulltext_row_cursor(query.cursor.as_deref());
         let body_physical_cursor =
@@ -1254,11 +1256,7 @@ impl ReaderBookPackage {
         }
 
         let mut hits = Vec::new();
-        let sidecar_limit = if query.cursor.is_none() {
-            query.limit
-        } else {
-            page_limit
-        };
+        let sidecar_limit = query.limit;
         let body_cursor_explicit = query.cursor.as_deref().is_some_and(|cursor| {
             cursor.starts_with("body:") || cursor.starts_with(SSED_FULLTEXT_BODY_CURSOR_PREFIX)
         });
@@ -1271,6 +1269,7 @@ impl ReaderBookPackage {
                 self.ssed_sidecar_body_resolvers()?,
                 &query.query,
                 sidecar_offset,
+                sidecar_body_physical_cursor.as_ref(),
                 sidecar_limit,
             )?
         } else {
@@ -1286,12 +1285,14 @@ impl ReaderBookPackage {
                 "SSED full-text search included renderable dense HONMON sidecar bodies",
             ));
         }
+        let mut next_sidecar_body_cursor = None::<SsedSidecarBodyCursor>;
         for hit in sidecar_page.hits {
             let title = if hit.body.title.trim().is_empty() {
                 hit.body.text.chars().take(80).collect::<String>()
             } else {
                 hit.body.title.clone()
             };
+            next_sidecar_body_cursor = hit.cursor.clone();
             let label = self.ssed_rich_label_with_policy(&title, &label_policy);
             let resolver_hint = hit
                 .body
@@ -1320,13 +1321,30 @@ impl ReaderBookPackage {
                 break;
             }
         }
+        let next_sidecar_cursor = || {
+            next_sidecar_body_cursor
+                .as_ref()
+                .map(encode_ssed_fulltext_sidecar_body_physical_cursor)
+                .unwrap_or_else(|| {
+                    encode_ssed_fulltext_sidecar_body_cursor(
+                        sidecar_offset.saturating_add(query.limit),
+                    )
+                })
+        };
         if query.cursor.is_none() && hits.len() >= query.limit && !sidecar_page.exhausted {
             hits.truncate(query.limit);
             return Ok(SearchPage {
                 hits,
-                next_cursor: Some(encode_ssed_fulltext_sidecar_body_cursor(
-                    sidecar_offset.saturating_add(query.limit),
-                )),
+                next_cursor: Some(next_sidecar_cursor()),
+                result_sequence: None,
+                diagnostics,
+            });
+        }
+        if query.cursor.is_some() && hits.len() >= query.limit && !sidecar_page.exhausted {
+            hits.truncate(query.limit);
+            return Ok(SearchPage {
+                hits,
+                next_cursor: Some(next_sidecar_cursor()),
                 result_sequence: None,
                 diagnostics,
             });
@@ -1335,9 +1353,7 @@ impl ReaderBookPackage {
             hits.truncate(query.limit);
             return Ok(SearchPage {
                 hits,
-                next_cursor: Some(encode_ssed_fulltext_sidecar_body_cursor(
-                    sidecar_offset.saturating_add(query.limit),
-                )),
+                next_cursor: Some(next_sidecar_cursor()),
                 result_sequence: None,
                 diagnostics,
             });
@@ -1419,11 +1435,13 @@ impl ReaderBookPackage {
             }
         }
         let byte_candidates = ssed_body_search_byte_candidates(&query.query);
-        let row_driven_search_allowed = query.cursor.is_none() || row_cursor.is_some();
+        let sidecar_body_phase_cursor =
+            sidecar_body_cursor.is_some() || sidecar_body_physical_cursor.is_some();
+        let row_driven_search_allowed =
+            query.cursor.is_none() || row_cursor.is_some() || sidecar_body_phase_cursor;
         if honmon_body_window_scan_needed
             && has_readable_ssed_indexes
             && row_driven_search_allowed
-            && (query.cursor.is_none() || row_cursor.is_some())
             && hits.len() < page_limit
         {
             let previous_hits = hits.len();
@@ -2820,12 +2838,16 @@ fn decode_ssed_fulltext_body_cursor(cursor: Option<&str>) -> usize {
 }
 
 const SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX: &str = "sidecar-body:";
+const SSED_FULLTEXT_SIDECAR_BODY_PHYSICAL_CURSOR_PREFIX: &str = "sidecar-body-row:";
 const SSED_FULLTEXT_BODY_CURSOR_PREFIX: &str = "body-offset:";
 
 fn decode_ssed_fulltext_sidecar_body_cursor(cursor: Option<&str>) -> Option<usize> {
     let cursor = cursor?;
     if let Some(value) = cursor.strip_prefix(SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX) {
         return value.parse::<usize>().ok();
+    }
+    if cursor.starts_with(SSED_FULLTEXT_SIDECAR_BODY_PHYSICAL_CURSOR_PREFIX) {
+        return None;
     }
     if cursor.starts_with("title:")
         || cursor.starts_with("body:")
@@ -2839,6 +2861,52 @@ fn decode_ssed_fulltext_sidecar_body_cursor(cursor: Option<&str>) -> Option<usiz
 
 fn encode_ssed_fulltext_sidecar_body_cursor(offset: usize) -> String {
     format!("{SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX}{offset}")
+}
+
+fn decode_ssed_fulltext_sidecar_body_physical_cursor(
+    cursor: Option<&str>,
+) -> Option<SsedSidecarBodyCursor> {
+    let value = cursor?.strip_prefix(SSED_FULLTEXT_SIDECAR_BODY_PHYSICAL_CURSOR_PREFIX)?;
+    let mut parts = value.split(':');
+    let sidecar_name = decode_hex_string(parts.next()?)?;
+    let table = decode_hex_string(parts.next()?)?;
+    let id_column = decode_hex_string(parts.next()?)?;
+    let id_rule = match parts.next()? {
+        "direct" => SsedSidecarIdRule::DirectColumn,
+        "rowid-times-five" => SsedSidecarIdRule::RowIdTimesFive,
+        _ => return None,
+    };
+    let order_value = decode_hex_string(parts.next()?)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(SsedSidecarBodyCursor {
+        sidecar_name,
+        table,
+        id_column,
+        id_rule,
+        order_value,
+    })
+}
+
+fn encode_ssed_fulltext_sidecar_body_physical_cursor(cursor: &SsedSidecarBodyCursor) -> String {
+    let id_rule = match cursor.id_rule {
+        SsedSidecarIdRule::DirectColumn => "direct",
+        SsedSidecarIdRule::RowIdTimesFive => "rowid-times-five",
+    };
+    format!(
+        "{}{}:{}:{}:{}:{}",
+        SSED_FULLTEXT_SIDECAR_BODY_PHYSICAL_CURSOR_PREFIX,
+        hex::encode(cursor.sidecar_name.as_bytes()),
+        hex::encode(cursor.table.as_bytes()),
+        hex::encode(cursor.id_column.as_bytes()),
+        id_rule,
+        hex::encode(cursor.order_value.as_bytes())
+    )
+}
+
+fn decode_hex_string(value: &str) -> Option<String> {
+    String::from_utf8(hex::decode(value).ok()?).ok()
 }
 
 fn decode_ssed_fulltext_body_physical_cursor(

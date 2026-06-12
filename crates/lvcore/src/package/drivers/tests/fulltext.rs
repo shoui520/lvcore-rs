@@ -181,6 +181,33 @@ fn ssed_fulltext_searches_native_title_labels_before_body_rows() {
             .iter()
             .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
     );
+
+    let continuation = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "本文".to_owned(),
+            cursor: page.next_cursor.clone(),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(continuation.hits.len(), 1);
+    assert!(
+        continuation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+    );
+    assert!(
+        continuation
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_fulltext_body_window_scan")
+    );
 }
 
 #[test]

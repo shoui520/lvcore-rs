@@ -219,10 +219,11 @@ use crate::ssed_screen_menu::{
     SsedScreenMenuHotspot, SsedScreenMenuParse, parse_screen_menu_stream,
 };
 use crate::ssed_sidecar::{
-    SsedSidecarBody, SsedSidecarBodyResolver, SsedSidecarKind, SsedSidecarLookup,
-    SsedSidecarMediaResolver, SsedSidecarRangeResolver, SsedSidecarSearchPage,
-    SsedSidecarTitleSearchMode, discover_ssed_sidecar_body_resolvers_with_candidates,
-    discover_ssed_sidecar_media_resolvers, discover_ssed_sidecar_range_resolvers_with_candidates,
+    SsedSidecarBody, SsedSidecarBodyCursor, SsedSidecarBodyResolver, SsedSidecarIdRule,
+    SsedSidecarKind, SsedSidecarLookup, SsedSidecarMediaResolver, SsedSidecarRangeResolver,
+    SsedSidecarSearchPage, SsedSidecarTitleSearchMode,
+    discover_ssed_sidecar_body_resolvers_with_candidates, discover_ssed_sidecar_media_resolvers,
+    discover_ssed_sidecar_range_resolvers_with_candidates,
     lookup_ssed_dense_sidecar_body_with_resolvers, lookup_ssed_ordered_honbun_body_by_row,
     lookup_ssed_sidecar_body_by_address_with_resolvers, lookup_ssed_sidecar_media,
     lookup_ssed_sidecar_range_bound_with_resolvers,

@@ -1612,7 +1612,12 @@ fn dense_honmon_fulltext_sidecar_body_cursor_keeps_lookahead_hit() {
         first.hits[0].target.decode().unwrap(),
         InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "2"
     ));
-    assert_eq!(first.next_cursor.as_deref(), Some("sidecar-body:1"));
+    assert!(
+        first
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("sidecar-body-row:"))
+    );
 
     let second = query_page(first.next_cursor.clone());
     assert_eq!(second.hits.len(), 1);
@@ -1620,7 +1625,25 @@ fn dense_honmon_fulltext_sidecar_body_cursor_keeps_lookahead_hit() {
         second.hits[0].target.decode().unwrap(),
         InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "3"
     ));
-    assert_eq!(second.next_cursor.as_deref(), Some("sidecar-body:2"));
+    assert!(
+        second
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("sidecar-body-row:"))
+    );
+
+    let legacy_second = query_page(Some("sidecar-body:1".to_owned()));
+    assert_eq!(legacy_second.hits.len(), 1);
+    assert!(matches!(
+        legacy_second.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "3"
+    ));
+    assert!(
+        legacy_second
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("sidecar-body-row:"))
+    );
 
     let third = query_page(second.next_cursor.clone());
     assert_eq!(third.hits.len(), 1);
@@ -1628,7 +1651,16 @@ fn dense_honmon_fulltext_sidecar_body_cursor_keeps_lookahead_hit() {
         third.hits[0].target.decode().unwrap(),
         InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "4"
     ));
-    assert_eq!(third.next_cursor, None);
+    assert!(
+        third
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("sidecar-body-row:"))
+    );
+
+    let fourth = query_page(third.next_cursor.clone());
+    assert!(fourth.hits.is_empty());
+    assert_eq!(fourth.next_cursor, None);
 }
 
 #[test]
@@ -1689,7 +1721,7 @@ fn dense_honmon_fulltext_searches_sidecar_titles_before_bodies() {
             mode: SearchMode::FullText,
             query: "beta".to_owned(),
             cursor: page.next_cursor.clone(),
-            limit: 10,
+            limit: 1,
             gaiji_policy: None,
         })
         .unwrap();
@@ -1712,6 +1744,28 @@ fn dense_honmon_fulltext_searches_sidecar_titles_before_bodies() {
             .iter()
             .all(|diagnostic| diagnostic.code != "ssed_fulltext_body_window_scan")
     );
+    assert!(
+        continuation
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("sidecar-body-row:"))
+    );
+
+    let after_body = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "beta".to_owned(),
+            cursor: continuation.next_cursor.clone(),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert!(after_body.hits.is_empty());
+    assert_eq!(after_body.next_cursor, None);
 }
 
 #[test]
