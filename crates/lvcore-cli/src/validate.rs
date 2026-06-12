@@ -2894,6 +2894,10 @@ mod tests {
             "title:ssed-partial-index:2:126"
         ));
         assert!(should_probe_search_cursor(
+            &SearchMode::FullText,
+            "body-offset:484f4e4d4f4e2e444943:1000"
+        ));
+        assert!(should_probe_search_cursor(
             &SearchMode::Partial,
             "ssed-partial-nonprefix-index:0:0"
         ));

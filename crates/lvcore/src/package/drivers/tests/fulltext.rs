@@ -553,6 +553,78 @@ fn ssed_fulltext_body_cursor_uses_bounded_honmon_scan() {
 }
 
 #[test]
+fn ssed_fulltext_native_body_scan_uses_physical_continuation_cursor() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_physical_cursor_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic fulltext cursor".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+    let query_page = |cursor: Option<String>| {
+        package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
+                mode: SearchMode::FullText,
+                query: "cursor needle".to_owned(),
+                cursor,
+                limit: 1,
+                gaiji_policy: None,
+            })
+            .unwrap()
+    };
+
+    let first = query_page(None);
+    assert_eq!(first.hits.len(), 1);
+    assert_eq!(first.hits[0].title_text, "row0530");
+    assert!(
+        first
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("body-offset:")),
+        "unexpected cursor: {:?}",
+        first.next_cursor
+    );
+    assert!(
+        first
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
+    );
+
+    let second = query_page(first.next_cursor.clone());
+    assert_eq!(second.hits.len(), 1);
+    assert_eq!(second.hits[0].title_text, "row0531");
+    assert_eq!(second.next_cursor, None);
+    assert!(
+        second
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_cursor_scan")
+    );
+    assert!(
+        !second
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
+    );
+}
+
+#[test]
 fn ssed_fulltext_searches_britannica_chronology_before_honmon_scan() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
@@ -920,6 +992,136 @@ fn write_ssed_fulltext_multi_body_fixture(root: &Path) -> SsedCatalog {
                 component_type: 0x71,
                 start_block: 200,
                 end_block: 200,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    }
+}
+
+fn write_ssed_fulltext_physical_cursor_fixture(root: &Path) -> SsedCatalog {
+    let mut body_pages = Vec::new();
+    let mut titles = Vec::new();
+    let mut rows = Vec::new();
+    for index in 0..532u32 {
+        let (title, body_text) = match index {
+            530 => (
+                "late body one".to_owned(),
+                "first cursor needle body".to_owned(),
+            ),
+            531 => (
+                "late body two".to_owned(),
+                "second cursor needle body".to_owned(),
+            ),
+            _ => (
+                format!("filler body {index:03}"),
+                format!("ordinary filler body {index:03}"),
+            ),
+        };
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01, 0x1f, 0x41]);
+        body.extend_from_slice(&body_jis(&body_text));
+        body.extend_from_slice(&[0x1f, 0x61, 0x1f, 0x0a]);
+        body.resize(crate::ssed::BLOCK_SIZE as usize, 0);
+        body_pages.push(body);
+
+        let title_offset = u16::try_from(titles.len()).unwrap();
+        titles.extend_from_slice(&cp932(&title));
+        titles.extend_from_slice(&[0x1f, 0x0a]);
+
+        rows.push((
+            body_jis(&format!("row{index:04}")),
+            100 + index,
+            title_offset,
+        ));
+    }
+    let body_chunks = body_pages
+        .chunks(16)
+        .map(|pages| {
+            let mut chunk = Vec::new();
+            for page in pages {
+                chunk.extend_from_slice(page);
+            }
+            chunk
+        })
+        .collect::<Vec<_>>();
+    let body_chunk_refs = body_chunks.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    fs::write(
+        root.join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&body_chunk_refs, 100, 631),
+    )
+    .unwrap();
+    fs::write(
+        root.join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[&titles], 700, 700),
+    )
+    .unwrap();
+
+    let mut index_pages = Vec::new();
+    for chunk in rows.chunks(64) {
+        let mut page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+        page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        page[2..4].copy_from_slice(&(chunk.len() as u16).to_be_bytes());
+        let mut pos = 4usize;
+        for (key, body_block, title_offset) in chunk {
+            write_simple_index_row(&mut page, &mut pos, key, *body_block, 0, 700, *title_offset);
+        }
+        index_pages.push(page);
+    }
+    let index_chunks = index_pages
+        .chunks(16)
+        .map(|pages| {
+            let mut chunk = Vec::new();
+            for page in pages {
+                chunk.extend_from_slice(page);
+            }
+            chunk
+        })
+        .collect::<Vec<_>>();
+    let index_page_refs = index_chunks.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    fs::write(
+        root.join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&index_page_refs, 200, 208),
+    )
+    .unwrap();
+
+    SsedCatalog {
+        title: "Synthetic fulltext cursor".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 631,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 700,
+                end_block: 700,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x71,
+                start_block: 200,
+                end_block: 208,
                 data: [0; 4],
                 filename: "FHINDEX.DIC".to_owned(),
                 role: SsedComponentRole::Index,

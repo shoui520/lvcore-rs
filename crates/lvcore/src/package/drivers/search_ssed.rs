@@ -11,6 +11,7 @@ const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 2;
 const SSED_PARTIAL_NONPREFIX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 8;
 const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 16;
 const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
+const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
@@ -1197,6 +1198,8 @@ impl ReaderBookPackage {
         let sidecar_body_cursor = decode_ssed_fulltext_sidecar_body_cursor(query.cursor.as_deref());
         let chronology_cursor = decode_ssed_fulltext_chronology_cursor(query.cursor.as_deref());
         let row_cursor = decode_ssed_fulltext_row_cursor(query.cursor.as_deref());
+        let body_physical_cursor =
+            decode_ssed_fulltext_body_physical_cursor(query.cursor.as_deref());
         let body_offset = decode_ssed_fulltext_body_cursor(query.cursor.as_deref());
         let mut diagnostics = Vec::new();
         let has_readable_ssed_indexes = has_readable_ssed_index_payload(catalog, &self.storage);
@@ -1232,6 +1235,23 @@ impl ReaderBookPackage {
         {
             return Ok(page);
         }
+        if let Some(body_cursor) = body_physical_cursor {
+            if !honmon_body_window_scan_needed || !has_readable_ssed_indexes {
+                return Ok(SearchPage {
+                    hits: Vec::new(),
+                    next_cursor: None,
+                    result_sequence: None,
+                    diagnostics,
+                });
+            }
+            return self.ssed_fulltext_body_physical_cursor_page(
+                catalog,
+                query,
+                &needle,
+                &body_cursor,
+                diagnostics,
+            );
+        }
 
         let mut hits = Vec::new();
         let sidecar_limit = if query.cursor.is_none() {
@@ -1239,10 +1259,9 @@ impl ReaderBookPackage {
         } else {
             page_limit
         };
-        let body_cursor_explicit = query
-            .cursor
-            .as_deref()
-            .is_some_and(|cursor| cursor.starts_with("body:"));
+        let body_cursor_explicit = query.cursor.as_deref().is_some_and(|cursor| {
+            cursor.starts_with("body:") || cursor.starts_with(SSED_FULLTEXT_BODY_CURSOR_PREFIX)
+        });
         let row_cursor_explicit = row_cursor.is_some();
         let run_sidecar =
             chronology_cursor.is_none() && !body_cursor_explicit && !row_cursor_explicit;
@@ -1457,6 +1476,7 @@ impl ReaderBookPackage {
             ),
         ));
         let mut matched_count = 0usize;
+        let mut next_physical_body_cursor = None::<SsedFulltextBodyCursor>;
         let body_hit_ranges_by_component = self.ssed_fulltext_body_hit_ranges(
             catalog,
             &needle,
@@ -1642,14 +1662,239 @@ impl ReaderBookPackage {
                     sequence_hint: None,
                     diagnostics: label.diagnostics,
                 });
+                if hits.len() <= query.limit {
+                    next_physical_body_cursor = Some(SsedFulltextBodyCursor {
+                        component: component_name.clone(),
+                        offset: candidate.offset,
+                    });
+                }
                 matched_count = matched_count.saturating_add(1);
                 if hits.len() >= page_limit {
                     break 'components;
                 }
             }
         }
-        let next_cursor =
-            (hits.len() > query.limit).then(|| format!("body:{}", body_offset + query.limit));
+        let next_cursor = (hits.len() > query.limit).then(|| {
+            next_physical_body_cursor
+                .as_ref()
+                .map(encode_ssed_fulltext_body_physical_cursor)
+                .unwrap_or_else(|| format!("body:{}", body_offset + query.limit))
+        });
+        hits.truncate(query.limit);
+
+        Ok(SearchPage {
+            hits,
+            next_cursor,
+            result_sequence: None,
+            diagnostics,
+        })
+    }
+
+    fn ssed_fulltext_body_physical_cursor_page(
+        &self,
+        catalog: &SsedCatalog,
+        query: &SearchQuery,
+        needle: &str,
+        cursor: &SsedFulltextBodyCursor,
+        mut diagnostics: Vec<Diagnostic>,
+    ) -> Result<SearchPage> {
+        let page_limit = query.limit.saturating_add(1);
+        let byte_candidates = ssed_body_search_byte_candidates(&query.query);
+        let label_policy = query.label_gaiji_policy();
+        let has_forward_index_component =
+            catalog
+                .components_by_role(SsedComponentRole::Index)
+                .any(|component| {
+                    is_supported_index_type(component.component_type)
+                        && !ssed_index_component_name_is_backward(&component.filename)
+                });
+        let mut rows_by_component: BTreeMap<String, Vec<SsedFulltextRow>> = BTreeMap::new();
+        let mut seen_offsets: BTreeSet<(String, u64)> = BTreeSet::new();
+        let scan_diagnostics = self.scan_ssed_simple_index_rows_with_filters(
+            None,
+            |component| {
+                !has_forward_index_component
+                    || !ssed_index_component_name_is_backward(&component.filename)
+            },
+            |_, _| true,
+            |row| {
+                if looks_like_raw_anchor_label(&row.key) {
+                    return Ok(true);
+                }
+                let Some(component) = catalog.component_for_address(row.body.block) else {
+                    return Ok(true);
+                };
+                if component.role != SsedComponentRole::Honmon {
+                    return Ok(true);
+                }
+                let Some(component_offset) =
+                    component.relative_offset(row.body.block, row.body.offset)
+                else {
+                    return Ok(true);
+                };
+                if !ssed_fulltext_body_cursor_precedes(
+                    cursor,
+                    &component.filename,
+                    component_offset,
+                ) {
+                    return Ok(true);
+                }
+                if !seen_offsets.insert((component.filename.clone(), component_offset)) {
+                    return Ok(true);
+                }
+                rows_by_component
+                    .entry(component.filename.clone())
+                    .or_default()
+                    .push(SsedFulltextRow {
+                        offset: component_offset,
+                        body: row.body,
+                        title: row.title,
+                        key: row.key,
+                    });
+                Ok(true)
+            },
+        )?;
+        diagnostics.extend(scan_diagnostics);
+        for rows in rows_by_component.values_mut() {
+            rows.sort_by_key(|row| row.offset);
+        }
+
+        let mut hits = Vec::new();
+        let mut checked_rows = 0usize;
+        let mut byte_candidate_rows = 0usize;
+        let mut decoded_candidate_rows = 0usize;
+        let mut stopped_for_budget = false;
+        let mut next_cursor_after_returned = None::<SsedFulltextBodyCursor>;
+        let mut next_cursor_after_checked = None::<SsedFulltextBodyCursor>;
+
+        'components: for (component_name, rows) in rows_by_component {
+            let Some(component) = catalog.component_named(&component_name) else {
+                continue;
+            };
+            let path = match self.resolve_readable_ssed_component_path(component) {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_fulltext_body_component_missing",
+                            format!("{} is declared but not present on disk", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_fulltext_body_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+            };
+            let mut reader = match SsedDataFile::open(&path) {
+                Ok(reader) => reader,
+                Err(error) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_fulltext_body_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+            };
+            for (candidate_index, candidate) in rows.iter().enumerate() {
+                if checked_rows >= SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS {
+                    stopped_for_budget = true;
+                    break 'components;
+                }
+                checked_rows = checked_rows.saturating_add(1);
+                next_cursor_after_checked = Some(SsedFulltextBodyCursor {
+                    component: component_name.clone(),
+                    offset: candidate.offset,
+                });
+                let body_window_len = ssed_fulltext_body_window_len(&rows, candidate_index);
+                let body_data = reader.read_range(
+                    usize::try_from(candidate.offset).map_err(|_| {
+                        Error::Driver("SSED body offset does not fit in usize".to_owned())
+                    })?,
+                    body_window_len,
+                )?;
+                if !ssed_body_window_may_contain_query(&body_data, &byte_candidates) {
+                    continue;
+                }
+                byte_candidate_rows = byte_candidate_rows.saturating_add(1);
+                let body_text = decode_ssed_body_search_text(&body_data);
+                if !normalize_search_match_text(&body_text).contains(needle) {
+                    continue;
+                }
+                decoded_candidate_rows = decoded_candidate_rows.saturating_add(1);
+                let target = match self.ssed_target_for_index_pointer(candidate.body)? {
+                    Ok(target) => target,
+                    Err(diagnostic) => {
+                        diagnostics.push(diagnostic);
+                        continue;
+                    }
+                };
+                let title =
+                    self.ssed_display_text_for_index_title_or_key(candidate.title, &candidate.key);
+                if looks_like_raw_anchor_label(&title) {
+                    continue;
+                }
+                let label = self.ssed_rich_label_with_policy(&title, &label_policy);
+                let href = target.href();
+                hits.push(SearchHit {
+                    href,
+                    book_id: self.metadata.book_id.clone(),
+                    target,
+                    title_html: label.html,
+                    title_text: label.text,
+                    snippet_html: ssed_fulltext_snippet_html(&body_text, &query.query),
+                    sequence_hint: None,
+                    diagnostics: label.diagnostics,
+                });
+                if hits.len() <= query.limit {
+                    next_cursor_after_returned = Some(SsedFulltextBodyCursor {
+                        component: component_name.clone(),
+                        offset: candidate.offset,
+                    });
+                }
+                if hits.len() >= page_limit {
+                    break 'components;
+                }
+            }
+        }
+
+        diagnostics.push(
+            Diagnostic::info(
+                "ssed_fulltext_body_cursor_scan",
+                "SSED full-text search resumed native HONMON body scanning from a physical cursor",
+            )
+            .with_context("checked_rows", checked_rows.to_string())
+            .with_context("byte_candidate_rows", byte_candidate_rows.to_string())
+            .with_context("decoded_candidate_rows", decoded_candidate_rows.to_string()),
+        );
+        let next_cursor = if hits.len() > query.limit {
+            next_cursor_after_returned
+                .as_ref()
+                .map(encode_ssed_fulltext_body_physical_cursor)
+        } else if stopped_for_budget {
+            next_cursor_after_checked
+                .as_ref()
+                .map(encode_ssed_fulltext_body_physical_cursor)
+        } else {
+            None
+        };
         hits.truncate(query.limit);
 
         Ok(SearchPage {
@@ -2371,6 +2616,12 @@ enum SsedFulltextTitleCursor {
     Physical(SsedPartialIndexScanCursor),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SsedFulltextBodyCursor {
+    component: String,
+    offset: u64,
+}
+
 #[derive(Debug)]
 struct SsedPartialNonprefixSearchPage {
     page: SearchPage,
@@ -2569,6 +2820,7 @@ fn decode_ssed_fulltext_body_cursor(cursor: Option<&str>) -> usize {
 }
 
 const SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX: &str = "sidecar-body:";
+const SSED_FULLTEXT_BODY_CURSOR_PREFIX: &str = "body-offset:";
 
 fn decode_ssed_fulltext_sidecar_body_cursor(cursor: Option<&str>) -> Option<usize> {
     let cursor = cursor?;
@@ -2587,6 +2839,34 @@ fn decode_ssed_fulltext_sidecar_body_cursor(cursor: Option<&str>) -> Option<usiz
 
 fn encode_ssed_fulltext_sidecar_body_cursor(offset: usize) -> String {
     format!("{SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX}{offset}")
+}
+
+fn decode_ssed_fulltext_body_physical_cursor(
+    cursor: Option<&str>,
+) -> Option<SsedFulltextBodyCursor> {
+    let value = cursor?.strip_prefix(SSED_FULLTEXT_BODY_CURSOR_PREFIX)?;
+    let (component_hex, offset_hex) = value.split_once(':')?;
+    let component = String::from_utf8(hex::decode(component_hex).ok()?).ok()?;
+    let offset = u64::from_str_radix(offset_hex, 16).ok()?;
+    Some(SsedFulltextBodyCursor { component, offset })
+}
+
+fn encode_ssed_fulltext_body_physical_cursor(cursor: &SsedFulltextBodyCursor) -> String {
+    format!(
+        "{}{}:{:x}",
+        SSED_FULLTEXT_BODY_CURSOR_PREFIX,
+        hex::encode(cursor.component.as_bytes()),
+        cursor.offset
+    )
+}
+
+fn ssed_fulltext_body_cursor_precedes(
+    cursor: &SsedFulltextBodyCursor,
+    component: &str,
+    offset: u64,
+) -> bool {
+    component > cursor.component.as_str()
+        || (component == cursor.component && offset > cursor.offset)
 }
 
 fn decode_ssed_fulltext_chronology_cursor(cursor: Option<&str>) -> Option<usize> {
