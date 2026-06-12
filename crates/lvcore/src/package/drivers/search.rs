@@ -21,6 +21,10 @@ impl SearchProvider for ReaderBookPackage {
                 result_sequence: None,
                 diagnostics: self.retained_ios_fts_deferred_diagnostics(),
             }
+        } else if self.metadata.search_modes.contains(&query.mode)
+            && self.has_ssed_sizk_surface()?
+        {
+            self.search_ssed_sizk(query)?
         } else if self.multiview_store.is_some()
             || self.metadata.format_family == FormatFamily::LvlMultiView
         {

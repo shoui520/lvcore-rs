@@ -20,7 +20,20 @@ fn ssed_sizk_read_aloud_surface_renders_playback_with_audio_resource() {
         ),
     )
     .unwrap();
+    fs::write(
+        dir.path().join("HTMLs").join("b122.html"),
+        cp932(
+            "<html><head><link rel=\"stylesheet\" type=\"text/css\" href=\"&cssPath;\"></head>\
+             <body><h1><!--&IND0011;--></h1><img src=\"<!--&IND0014;-->\"></body></html>",
+        ),
+    )
+    .unwrap();
     fs::write(dir.path().join("Templates").join("haikei.png"), b"png").unwrap();
+    fs::write(
+        dir.path().join("Templates").join("sousuke_natsume.jpg"),
+        b"jpg",
+    )
+    .unwrap();
     fs::write(dir.path().join("Templates").join("00000190.css"), b"h1{}").unwrap();
     fs::write(dir.path().join("shizuku.mp3"), b"ID3").unwrap();
     fs::write(
@@ -39,7 +52,13 @@ fn ssed_sizk_read_aloud_surface_renders_playback_with_audio_resource() {
         "b121",
         &[("0004", "Work"), ("0008", "Summary")],
     ));
-    honmon.extend_from_slice(&sizk_entry("b122", &[("0011", "Author")]));
+    honmon.extend_from_slice(&sizk_entry(
+        "b122",
+        &[
+            ("0011", "Author"),
+            ("0014", "ｓｏｕｓｕｋｅ＿ｎａｔｓｕｍｅ．ｊｐｇ"),
+        ],
+    ));
     honmon.extend_from_slice(&sizk_entry("b123", &[("0021", "Narrator")]));
     honmon.extend_from_slice(&sizk_entry(
         "b124",
@@ -71,6 +90,20 @@ fn ssed_sizk_read_aloud_surface_renders_playback_with_audio_resource() {
             trailing_bytes: 0,
         },
     };
+    let search_modes = ssed_sizk_search_modes(dir.path()).unwrap();
+    assert_eq!(
+        search_modes,
+        vec![
+            SearchMode::Exact,
+            SearchMode::Forward,
+            SearchMode::Backward,
+            SearchMode::Partial,
+            SearchMode::FullText
+        ]
+    );
+    let mut capabilities = ssed_capabilities(&catalog, dir.path());
+    capabilities.push(Capability::NativeSearch);
+    capabilities.push(Capability::FullTextSearch);
     let package = ReaderBookPackage::new(
         dir.path(),
         DetectedPackage {
@@ -80,9 +113,10 @@ fn ssed_sizk_read_aloud_surface_renders_playback_with_audio_resource() {
             title: Some("SIZK".to_owned()),
             evidence: Vec::new(),
         },
-        ssed_capabilities(&catalog, dir.path()),
+        capabilities,
         PackageStores {
             ssed_catalog: Some(catalog),
+            search_modes,
             ..Default::default()
         },
     );
@@ -92,6 +126,16 @@ fn ssed_sizk_read_aloud_surface_renders_playback_with_audio_resource() {
             && surface.kind == NavigationSurfaceKind::Info
             && surface.status == NavigationStatus::Available
     }));
+    assert_eq!(
+        package.metadata().search_modes,
+        &[
+            SearchMode::Exact,
+            SearchMode::Forward,
+            SearchMode::Backward,
+            SearchMode::Partial,
+            SearchMode::FullText
+        ]
+    );
 
     let surface = package
         .open_surface(super::super::ssed_sizk_surfaces::SSED_SIZK_SURFACE_ID)
@@ -118,6 +162,22 @@ fn ssed_sizk_read_aloud_surface_renders_playback_with_audio_resource() {
         b"png"
     );
 
+    let author = package
+        .render_target(&pages[1].target, &RenderOptions::default())
+        .unwrap();
+    assert!(
+        author
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_sidecar_direct_resource_missing")
+    );
+    let author_image = author
+        .resources
+        .iter()
+        .find(|resource| resource.kind == ResourceKind::Image)
+        .expect("fullwidth SIZK image placeholder should resolve to a package image");
+    assert_eq!(package.read_resource(&author_image.token).unwrap(), b"jpg");
+
     let playback = package
         .render_target(&pages[3].target, &RenderOptions::default())
         .unwrap();
@@ -133,6 +193,58 @@ fn ssed_sizk_read_aloud_surface_renders_playback_with_audio_resource() {
         .expect("playback should expose shizuku.mp3");
     assert_eq!(audio.mime_type.as_deref(), Some("audio/mpeg"));
     assert_eq!(package.read_resource(&audio.token).unwrap(), b"ID3");
+
+    let forward_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Forward,
+            query: "Ｗｏ".to_owned(),
+            cursor: None,
+            limit: 2,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(forward_page.hits.len(), 2);
+    assert!(
+        forward_page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_sizk_sidecar_search")
+    );
+    let first = package
+        .render_target(&forward_page.hits[0].target, &RenderOptions::default())
+        .unwrap();
+    assert_eq!(first.kind, ResolvedTargetKind::InfoPage);
+
+    let fulltext_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "line two".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(fulltext_page.hits.len(), 1);
+    assert_eq!(
+        fulltext_page.hits[0].title_text,
+        "Playback line 2: line two"
+    );
+    assert!(matches!(
+        fulltext_page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAuxRecord {
+            source,
+            key,
+            anchor: Some(anchor)
+        } if source == super::super::ssed_sizk_surfaces::SSED_SIZK_SOURCE_ID
+            && key == "playback"
+            && anchor == "line-2"
+    ));
 }
 
 fn sizk_entry(template_code: &str, sections: &[(&str, &str)]) -> Vec<u8> {

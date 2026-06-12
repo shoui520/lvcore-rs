@@ -159,3 +159,29 @@ fn ssed_aux_index_info_is_text_idx(value: &str) -> bool {
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("idx"))
 }
+
+pub(super) fn ssed_sizk_search_modes(root: &Path) -> Result<Vec<SearchMode>> {
+    if !ssed_sizk_has_searchable_sidecars(root)? {
+        return Ok(Vec::new());
+    }
+    Ok(standard_search_modes())
+}
+
+fn ssed_sizk_has_searchable_sidecars(root: &Path) -> Result<bool> {
+    let storage = DirectoryStorage::new(root.to_path_buf());
+    if storage.exists(Path::new("shizuku_honbun.txt"))?
+        && storage.exists(Path::new("shizuku_time.txt"))?
+        && storage.exists(Path::new("shizuku.mp3"))?
+    {
+        return Ok(true);
+    }
+    let exinfo = Path::new("EXINFO.INI");
+    if !storage.exists(exinfo)? {
+        return Ok(false);
+    }
+    let mp3 = crate::ssed_panel::exinfo_general_value(&storage.read(exinfo)?, "MP3NAME")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    Ok(mp3 == "shizuku.mp3")
+}

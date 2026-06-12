@@ -3,6 +3,7 @@ use super::*;
 pub(super) const SSED_SIZK_SURFACE_ID: &str = "sizk-read-aloud";
 pub(super) const SSED_SIZK_SOURCE_ID: &str = "sizk-read-aloud";
 
+const SSED_SIZK_SEARCH_CURSOR_PREFIX: &str = "sizk:";
 const SIZK_TEXT_PATH: &str = "shizuku_honbun.txt";
 const SIZK_TIME_PATH: &str = "shizuku_time.txt";
 const SIZK_AUDIO_PATH: &str = "shizuku.mp3";
@@ -21,6 +22,16 @@ struct SsedSizkPlaybackRow {
     index: usize,
     time_ms: Option<u64>,
     text: String,
+}
+
+#[derive(Debug, Clone)]
+struct SsedSizkSearchRow {
+    order: usize,
+    key: String,
+    anchor: Option<String>,
+    title: String,
+    snippet: Option<String>,
+    match_texts: Vec<String>,
 }
 
 impl ReaderBookPackage {
@@ -146,6 +157,83 @@ impl ReaderBookPackage {
         })
     }
 
+    pub(super) fn search_ssed_sizk(&self, query: &SearchQuery) -> Result<SearchPage> {
+        if query.limit == 0 {
+            return Ok(SearchPage {
+                hits: Vec::new(),
+                next_cursor: None,
+                result_sequence: None,
+                diagnostics: Vec::new(),
+            });
+        }
+        if !matches!(
+            query.mode,
+            SearchMode::Exact
+                | SearchMode::Forward
+                | SearchMode::Backward
+                | SearchMode::Partial
+                | SearchMode::FullText
+        ) {
+            return Ok(SearchPage::deferred(
+                "SIZK read-aloud search supports exact, forward, backward, partial, and full-text modes",
+            ));
+        }
+        let needle = normalize_search_match_text(&query.query);
+        if needle.is_empty() {
+            return Ok(SearchPage {
+                hits: Vec::new(),
+                next_cursor: None,
+                result_sequence: None,
+                diagnostics: vec![Diagnostic::info(
+                    "ssed_sizk_sidecar_search",
+                    "SIZK search used read-aloud sidecar labels and synchronized text",
+                )],
+            });
+        }
+
+        let start = decode_ssed_sizk_search_cursor(query.cursor.as_deref()).unwrap_or(0);
+        let mut rows = self.ssed_sizk_search_rows()?;
+        rows.sort_by_key(|row| row.order);
+        let matched = rows
+            .into_iter()
+            .filter(|row| ssed_sizk_search_row_matches(&query.mode, &needle, row))
+            .collect::<Vec<_>>();
+        let next_cursor = (matched.len() > start.saturating_add(query.limit))
+            .then(|| encode_ssed_sizk_search_cursor(start + query.limit));
+        let mut hits = Vec::new();
+        let mut seen_targets = HashSet::new();
+        for row in matched.into_iter().skip(start).take(query.limit) {
+            let target = TargetToken::new(&InternalTarget::SsedAuxRecord {
+                source: SSED_SIZK_SOURCE_ID.to_owned(),
+                key: row.key,
+                anchor: row.anchor,
+            })?;
+            if !seen_targets.insert(target.as_str().to_owned()) {
+                continue;
+            }
+            let href = target.href();
+            hits.push(SearchHit {
+                href,
+                book_id: self.metadata.book_id.clone(),
+                target,
+                title_html: escape_plain_label_html(&row.title),
+                title_text: row.title,
+                snippet_html: row.snippet.as_deref().map(escape_plain_label_html),
+                sequence_hint: None,
+                diagnostics: Vec::new(),
+            });
+        }
+        Ok(SearchPage {
+            hits,
+            next_cursor,
+            result_sequence: None,
+            diagnostics: vec![Diagnostic::info(
+                "ssed_sizk_sidecar_search",
+                "SIZK search used read-aloud sidecar labels and synchronized text",
+            )],
+        })
+    }
+
     fn is_ssed_sizk_package(&self) -> Result<bool> {
         let has_sidecars = self.resolve_package_file_path(SIZK_AUDIO_PATH)?.is_some()
             && self.resolve_package_file_path(SIZK_TEXT_PATH)?.is_some()
@@ -202,6 +290,40 @@ impl ReaderBookPackage {
             });
         }
         Ok(entries)
+    }
+
+    fn ssed_sizk_search_rows(&self) -> Result<Vec<SsedSizkSearchRow>> {
+        let entries = self.ssed_sizk_entries()?;
+        let mut rows = Vec::new();
+        for entry in &entries {
+            let label = ssed_sizk_entry_label(entry);
+            let mut match_texts = vec![label.clone(), entry.title.clone()];
+            match_texts.extend(entry.sections.values().cloned());
+            rows.push(SsedSizkSearchRow {
+                order: entry.index.saturating_mul(100_000),
+                key: entry.role.clone(),
+                anchor: None,
+                title: label,
+                snippet: None,
+                match_texts: normalize_unique_sizk_search_texts(match_texts),
+            });
+        }
+        if entries.iter().any(|entry| entry.role == "playback") {
+            for row in self.ssed_sizk_playback_rows()? {
+                if row.text.trim().is_empty() {
+                    continue;
+                }
+                rows.push(SsedSizkSearchRow {
+                    order: 400_000usize.saturating_add(row.index),
+                    key: "playback".to_owned(),
+                    anchor: Some(format!("line-{}", row.index)),
+                    title: format!("Playback line {}: {}", row.index, row.text),
+                    snippet: Some(row.text.clone()),
+                    match_texts: normalize_unique_sizk_search_texts(vec![row.text]),
+                });
+            }
+        }
+        Ok(rows)
     }
 
     fn ssed_sizk_template_path(&self, template_code: &str) -> Result<Option<String>> {
@@ -309,6 +431,38 @@ impl ReaderBookPackage {
             })
             .collect())
     }
+}
+
+fn decode_ssed_sizk_search_cursor(cursor: Option<&str>) -> Option<usize> {
+    cursor?
+        .strip_prefix(SSED_SIZK_SEARCH_CURSOR_PREFIX)?
+        .parse()
+        .ok()
+}
+
+fn encode_ssed_sizk_search_cursor(offset: usize) -> String {
+    format!("{SSED_SIZK_SEARCH_CURSOR_PREFIX}{offset}")
+}
+
+fn ssed_sizk_search_row_matches(mode: &SearchMode, needle: &str, row: &SsedSizkSearchRow) -> bool {
+    row.match_texts.iter().any(|text| match mode {
+        SearchMode::Exact => text == needle,
+        SearchMode::Forward => text.starts_with(needle),
+        SearchMode::Backward => text.ends_with(needle),
+        SearchMode::Partial | SearchMode::FullText => text.contains(needle),
+        SearchMode::Advanced(_) => false,
+    })
+}
+
+fn normalize_unique_sizk_search_texts(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = normalize_search_match_text(value.trim());
+        if !value.is_empty() && !normalized.iter().any(|seen| seen == &value) {
+            normalized.push(value);
+        }
+    }
+    normalized
 }
 
 fn ssed_sizk_entry_slices(data: &[u8]) -> Vec<&[u8]> {
@@ -468,7 +622,12 @@ fn role_label(role: &str) -> &'static str {
 fn ssed_sizk_apply_sections(html: &str, sections: &BTreeMap<String, String>) -> String {
     let mut output = html.to_owned();
     for (code, text) in sections {
-        let escaped = escape_plain_label_html(text).replace('\n', "<br>");
+        let replacement = if ssed_sizk_section_is_resource_ref(code) {
+            normalize_sizk_resource_ref_text(text)
+        } else {
+            text.to_owned()
+        };
+        let escaped = escape_plain_label_html(&replacement).replace('\n', "<br>");
         output = output.replace(
             &format!("<!--&IND{};-->", code.to_ascii_uppercase()),
             &escaped,
@@ -479,6 +638,22 @@ fn ssed_sizk_apply_sections(html: &str, sections: &BTreeMap<String, String>) -> 
         );
     }
     output
+}
+
+fn ssed_sizk_section_is_resource_ref(code: &str) -> bool {
+    matches!(code, "0014" | "0024" | "0031" | "0032" | "0033")
+}
+
+fn normalize_sizk_resource_ref_text(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|ch| match ch {
+            '\u{3000}' => ' ',
+            '\u{ff01}'..='\u{ff5e}' => char::from_u32((ch as u32) - 0xfee0).unwrap_or(ch),
+            _ => ch,
+        })
+        .collect()
 }
 
 fn ssed_sizk_fallback_template_html(entry: &SsedSizkEntry) -> String {
