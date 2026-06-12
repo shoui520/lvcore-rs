@@ -531,6 +531,68 @@ fn ssed_native_search_skips_out_of_catalog_index_body_pointers() {
 }
 
 #[test]
+fn ssed_fulltext_direct_body_scan_finds_late_body_hit() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_late_body_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic late fulltext".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "曙光".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert!(page.hits[0].title_text.contains("曙光"));
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedAddress { component, .. } if component == "HONMON.DIC"
+    ));
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_direct_scan")
+    );
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_fulltext_body_window_scan")
+    );
+
+    let view = package
+        .render_target(&page.hits[0].target, &RenderOptions::default())
+        .unwrap();
+    assert!(
+        view.basic_text
+            .as_deref()
+            .is_some_and(|text| text.contains("曙光"))
+    );
+}
+
+#[test]
 fn ssed_fulltext_body_cursor_uses_bounded_honmon_scan() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
@@ -569,7 +631,12 @@ fn ssed_fulltext_body_cursor_uses_bounded_honmon_scan() {
     assert!(
         page.diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_window_scan")
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_direct_scan")
+    );
+    assert!(
+        page.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_fulltext_body_window_scan")
     );
     assert!(
         !page
@@ -1019,6 +1086,121 @@ fn write_ssed_fulltext_multi_body_fixture(root: &Path) -> SsedCatalog {
                 component_type: 0x71,
                 start_block: 200,
                 end_block: 200,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    }
+}
+
+fn write_ssed_fulltext_late_body_fixture(root: &Path) -> SsedCatalog {
+    let mut body_pages = Vec::new();
+    let mut rows = Vec::new();
+    for index in 0..520u32 {
+        let mut body = Vec::new();
+        body.extend_from_slice(&SSED_ENTRY_MARKER);
+        let text = if index == 519 {
+            "late direct 曙光 body"
+        } else {
+            "irrelevant native fulltext body"
+        };
+        body.extend_from_slice(&body_jis(text));
+        body.extend_from_slice(&[0x1f, 0x0a]);
+        body.resize(crate::ssed::BLOCK_SIZE as usize, 0);
+        body_pages.push(body);
+        rows.push((body_jis(&format!("row{index:04}")), 100 + index));
+    }
+    let body_chunks = body_pages
+        .chunks(16)
+        .map(|pages| {
+            let mut chunk = Vec::new();
+            for page in pages {
+                chunk.extend_from_slice(page);
+            }
+            chunk
+        })
+        .collect::<Vec<_>>();
+    let body_chunk_refs = body_chunks.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let body_end_block = 100 + u32::try_from(body_pages.len()).unwrap() - 1;
+    fs::write(
+        root.join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&body_chunk_refs, 100, body_end_block),
+    )
+    .unwrap();
+
+    let title = cp932("late body title");
+    fs::write(
+        root.join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[&title], 300, 300),
+    )
+    .unwrap();
+
+    let mut index_pages = Vec::new();
+    for chunk in rows.chunks(64) {
+        let mut page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+        page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        page[2..4].copy_from_slice(&u16::try_from(chunk.len()).unwrap().to_be_bytes());
+        let mut pos = 4usize;
+        for (key, body_block) in chunk {
+            write_simple_index_row(&mut page, &mut pos, key, *body_block, 0, 300, 0);
+        }
+        index_pages.push(page);
+    }
+    let index_chunks = index_pages
+        .chunks(16)
+        .map(|pages| {
+            let mut chunk = Vec::new();
+            for page in pages {
+                chunk.extend_from_slice(page);
+            }
+            chunk
+        })
+        .collect::<Vec<_>>();
+    let index_chunk_refs = index_chunks.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let index_end_block = 200 + u32::try_from(index_pages.len()).unwrap() - 1;
+    fs::write(
+        root.join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&index_chunk_refs, 200, index_end_block),
+    )
+    .unwrap();
+
+    SsedCatalog {
+        title: "Synthetic late fulltext".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: body_end_block,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x71,
+                start_block: 200,
+                end_block: index_end_block,
                 data: [0; 4],
                 filename: "FHINDEX.DIC".to_owned(),
                 role: SsedComponentRole::Index,

@@ -4,8 +4,8 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260612-sidecar-row-cursor.jsonl`
-- Produced after the sidecar/body-phase cursor fixes in this working tree.
+- `/tmp/lvcore-all-corpora-validation-20260612-native-direct-scan.jsonl`
+- Produced after the direct native HONMON full-text body scan fallback.
 - 334 packages validated.
 - Package-level status: 334 `ok`.
 
@@ -53,16 +53,17 @@ Important info/status classes from the latest gate:
 | --- | ---: | --- |
 | `sidecar-body-row:*` cursor probed `ok` | 27 | Dense sidecar body cursor fix verified |
 | `sidecar-body:0` cursor `not_probed` | 154 | Legacy title-prepass phase cursor, not a physical body cursor |
-| `ssed_fulltext_body_window_scan` | 3 | Real SSED full-text performance candidate |
-| `ssed_index_empty_physical_pages_skipped` | 1 | Real SSED/iOS partial-search candidate |
+| `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
+| `ssed_fulltext_body_direct_scan` | 5 | Direct native HONMON fallback exercised |
+| `ssed_index_empty_physical_pages_skipped` | 1 package / 2 diagnostics | Real SSED/iOS partial-search candidate |
 | `lved_viewer_hook_deferred` | 188 info diagnostics plus deferred samples | Intentional external viewer policy |
 | `ssed_navigation_empty_sentinel` | 18 | Expected sentinel classification |
 | `skipped_large_view` | 38 | Validator cap for large native HTML alternate mode |
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
-## Fix-Now Candidates
+## Fix-Now / Recently Closed Candidates
 
-### 1. SSED dense sidecar full-text continuation performance
+### 1. SSED dense sidecar full-text continuation performance (resolved)
 
 Why this matters:
 
@@ -119,7 +120,7 @@ Likely code area:
 - `crates/lvcore/src/package/drivers/search_ssed.rs`
 - `crates/lvcore-cli/src/validate.rs`
 
-### 2. SSED native full-text first-page body scan cost
+### 2. SSED native full-text first-page body scan cost (resolved)
 
 Why this matters:
 
@@ -138,19 +139,36 @@ Current status:
 - Focused `_DCT_EJJE100` probe, query `co`, cursor `sidecar-body:0`, now returns
   quickly with `ssed_fulltext_row_driven_body_prefetch` and a `row:1`
   continuation instead of entering `ssed_fulltext_body_window_scan`.
+- LVCore now has a direct HONMON byte-window scan fallback for native full-text
+  first pages. When row-driven prefetch misses and a byte-window match can be
+  anchored to an SSED entry marker, it returns a renderable `SsedAddress` hit
+  without the expensive index-remap pass.
+- Focused probes after the direct-scan change:
+  - `_DCT_GEN2005`, query `曙光`: about 8.4s before, about 3.6s after; now uses
+    `ssed_fulltext_body_direct_scan`.
+  - `_DCT_KENE7J5`, query `は殺`: about 29.7s before, about 4.3s after; now uses
+    `ssed_fulltext_body_direct_scan` and preserves `body-offset:*`
+    continuation.
+  - `_DCT_NCOMP4`, query `1計`: about 7.0s before, about 5.1s after; no hit, now
+    exits through direct byte-window scan without index remap.
+- Residual tradeoff: direct body hits use body-derived labels rather than native
+  index titles when the expensive index-remap path is skipped.
+- Full-corpus gate
+  `/tmp/lvcore-all-corpora-validation-20260612-native-direct-scan.jsonl`
+  validated 334 packages with package status 334 `ok`.
+- The gate has no remaining `ssed_fulltext_body_window_scan` diagnostics.
 
-Baseline packages with `ssed_fulltext_body_window_scan`:
+Latest-gate packages with `ssed_fulltext_body_window_scan` before the direct
+scan change:
 
 - `_DCT_GEN2005`
 - `_DCT_KENE7J5`
-- `_DCT_KQDENTAL`
-- `_DCT_KQNEWEJ6`
 - `_DCT_NCOMP4`
 
 Known example:
 
-- `_DCT_KENE7J5`, query from validation, first page still takes roughly 30s.
-- Its continuation now uses `body-offset:*` and validates successfully.
+- `_DCT_KENE7J5`, query from validation, first page previously took roughly 30s.
+- Its continuation uses `body-offset:*` and validates successfully.
 
 Likely code area:
 
@@ -316,8 +334,6 @@ Current status:
 
 Known gaps:
 
-- SSED dense sidecar full-text continuation performance.
-- SSED native HONMON full-text first-page cost on a small package set.
 - iOS HKKIGAK6 sparse native partial-search cursor behavior.
 
 ### Browse/navigation surfaces

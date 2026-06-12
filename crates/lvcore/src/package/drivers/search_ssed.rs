@@ -1486,6 +1486,17 @@ impl ReaderBookPackage {
                 diagnostics,
             });
         }
+        if let Some(page) = self.ssed_fulltext_direct_body_scan_page(SsedDirectFulltextRequest {
+            catalog,
+            query,
+            needle: &needle,
+            byte_candidates: &byte_candidates,
+            gaiji_policy: &label_policy,
+            matched_offset: body_offset,
+            base_diagnostics: &diagnostics,
+        })? {
+            return Ok(page);
+        }
         diagnostics.push(Diagnostic::info(
             "ssed_fulltext_body_window_scan",
             format!(
@@ -2276,6 +2287,220 @@ impl ReaderBookPackage {
         })
     }
 
+    fn ssed_fulltext_direct_body_scan_page(
+        &self,
+        request: SsedDirectFulltextRequest<'_>,
+    ) -> Result<Option<SearchPage>> {
+        let SsedDirectFulltextRequest {
+            catalog,
+            query,
+            needle,
+            byte_candidates,
+            gaiji_policy,
+            matched_offset,
+            base_diagnostics,
+        } = request;
+        if byte_candidates.is_empty() {
+            return Ok(None);
+        }
+
+        let page_limit = query.limit.saturating_add(1);
+        let mut hits = Vec::new();
+        let mut diagnostics = base_diagnostics.to_vec();
+        let mut seen_entries = BTreeSet::new();
+        let mut scanned_windows = 0usize;
+        let mut byte_candidate_windows = 0usize;
+        let mut decoded_candidate_windows = 0usize;
+        let mut matched_count = 0usize;
+        let mut next_cursor_after_returned = None::<SsedFulltextBodyCursor>;
+        let mut needs_index_fallback = false;
+
+        'components: for component in catalog.components_by_role(SsedComponentRole::Honmon) {
+            if !component.has_positive_range() {
+                continue;
+            }
+            let path = match self.resolve_readable_ssed_component_path(component) {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_fulltext_body_component_missing",
+                            format!("{} is declared but not present on disk", component.filename),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_fulltext_body_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+            };
+            let mut reader = match SsedDataFile::open(&path) {
+                Ok(reader) => reader,
+                Err(error) => {
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            "ssed_fulltext_body_component_decode_failed",
+                            format!(
+                                "{} is not readable as SSEDDATA: {error}",
+                                component.filename
+                            ),
+                        )
+                        .with_context("component", &component.filename),
+                    );
+                    continue;
+                }
+            };
+            let expanded_size = reader.header().expanded_size();
+            let mut scan_offset = 0usize;
+            while scan_offset < expanded_size {
+                let read_start = scan_offset.saturating_sub(SSED_FULLTEXT_BODY_WINDOW_BYTES);
+                let read_end = expanded_size.min(
+                    scan_offset
+                        .saturating_add(SSED_FULLTEXT_SCAN_WINDOW_BYTES)
+                        .saturating_add(SSED_FULLTEXT_SCAN_OVERLAP_BYTES),
+                );
+                let read_size = read_end.saturating_sub(read_start);
+                let data = reader.read_range(read_start, read_size)?;
+                if data.is_empty() {
+                    break;
+                }
+                scanned_windows = scanned_windows.saturating_add(1);
+                let search_start = scan_offset.saturating_sub(read_start);
+                let Some(candidate_offset) =
+                    ssed_fulltext_first_byte_candidate_offset(&data, byte_candidates, search_start)
+                else {
+                    if scan_offset + SSED_FULLTEXT_SCAN_WINDOW_BYTES >= expanded_size {
+                        break;
+                    }
+                    scan_offset += SSED_FULLTEXT_SCAN_WINDOW_BYTES;
+                    continue;
+                };
+                byte_candidate_windows = byte_candidate_windows.saturating_add(1);
+
+                let Some(entry_start) =
+                    ssed_fulltext_entry_marker_before_offset(&data, candidate_offset)
+                else {
+                    needs_index_fallback = true;
+                    break 'components;
+                };
+                let absolute_entry_offset = read_start.saturating_add(entry_start);
+                if !seen_entries.insert((component.filename.clone(), absolute_entry_offset)) {
+                    if scan_offset + SSED_FULLTEXT_SCAN_WINDOW_BYTES >= expanded_size {
+                        break;
+                    }
+                    scan_offset += SSED_FULLTEXT_SCAN_WINDOW_BYTES;
+                    continue;
+                }
+
+                let entry_end = ssed_fulltext_next_entry_marker_offset(
+                    &data,
+                    entry_start.saturating_add(SSED_ENTRY_MARKER.len()),
+                )
+                .unwrap_or(data.len());
+                let body_data = &data[entry_start..entry_end];
+                let body_text = decode_ssed_body_search_text(body_data);
+                if !normalize_search_match_text(&body_text).contains(needle) {
+                    if scan_offset + SSED_FULLTEXT_SCAN_WINDOW_BYTES >= expanded_size {
+                        break;
+                    }
+                    scan_offset += SSED_FULLTEXT_SCAN_WINDOW_BYTES;
+                    continue;
+                }
+                decoded_candidate_windows = decoded_candidate_windows.saturating_add(1);
+                if matched_count < matched_offset {
+                    matched_count = matched_count.saturating_add(1);
+                    if scan_offset + SSED_FULLTEXT_SCAN_WINDOW_BYTES >= expanded_size {
+                        break;
+                    }
+                    scan_offset += SSED_FULLTEXT_SCAN_WINDOW_BYTES;
+                    continue;
+                }
+
+                let Some(pointer) = ssed_component_pointer_for_relative_offset(
+                    component,
+                    u64::try_from(absolute_entry_offset).unwrap_or(u64::MAX),
+                ) else {
+                    needs_index_fallback = true;
+                    break 'components;
+                };
+                let target = TargetToken::new(&InternalTarget::SsedAddress {
+                    component: component.filename.clone(),
+                    block: pointer.block,
+                    offset: pointer.offset,
+                })?;
+                let title = ssed_fulltext_direct_body_title(&body_text);
+                let label = self.ssed_rich_label_with_policy(&title, gaiji_policy);
+                let href = target.href();
+                hits.push(SearchHit {
+                    href,
+                    book_id: self.metadata.book_id.clone(),
+                    target,
+                    title_html: label.html,
+                    title_text: label.text,
+                    snippet_html: ssed_fulltext_snippet_html(&body_text, &query.query),
+                    sequence_hint: None,
+                    diagnostics: label.diagnostics,
+                });
+                if hits.len() <= query.limit {
+                    next_cursor_after_returned = Some(SsedFulltextBodyCursor {
+                        component: component.filename.clone(),
+                        offset: u64::try_from(absolute_entry_offset).unwrap_or(u64::MAX),
+                    });
+                }
+                matched_count = matched_count.saturating_add(1);
+                if hits.len() >= page_limit {
+                    break 'components;
+                }
+
+                if scan_offset + SSED_FULLTEXT_SCAN_WINDOW_BYTES >= expanded_size {
+                    break;
+                }
+                scan_offset += SSED_FULLTEXT_SCAN_WINDOW_BYTES;
+            }
+        }
+
+        if needs_index_fallback {
+            return Ok(None);
+        }
+
+        diagnostics.push(
+            Diagnostic::info(
+                "ssed_fulltext_body_direct_scan",
+                "SSED full-text search scanned HONMON byte windows for direct body-address hits",
+            )
+            .with_context("scanned_windows", scanned_windows.to_string())
+            .with_context("byte_candidate_windows", byte_candidate_windows.to_string())
+            .with_context(
+                "decoded_candidate_windows",
+                decoded_candidate_windows.to_string(),
+            ),
+        );
+        let next_cursor = (hits.len() > query.limit).then(|| {
+            next_cursor_after_returned
+                .as_ref()
+                .map(encode_ssed_fulltext_body_physical_cursor)
+                .unwrap_or_else(|| format!("body:{}", matched_offset.saturating_add(query.limit)))
+        });
+        hits.truncate(query.limit);
+        Ok(Some(SearchPage {
+            hits,
+            next_cursor,
+            result_sequence: None,
+            diagnostics,
+        }))
+    }
+
     fn ssed_fulltext_body_hit_ranges(
         &self,
         catalog: &SsedCatalog,
@@ -2571,6 +2796,16 @@ struct SsedRowDrivenFulltextPage {
     diagnostics: Vec<Diagnostic>,
 }
 
+struct SsedDirectFulltextRequest<'a> {
+    catalog: &'a SsedCatalog,
+    query: &'a SearchQuery,
+    needle: &'a str,
+    byte_candidates: &'a [Vec<u8>],
+    gaiji_policy: &'a GaijiPolicy,
+    matched_offset: usize,
+    base_diagnostics: &'a [Diagnostic],
+}
+
 fn push_ssed_fulltext_range(ranges: &mut Vec<(u64, u64)>, lower: u64, upper: u64) {
     if let Some(last) = ranges.last_mut()
         && lower <= last.1
@@ -2593,6 +2828,72 @@ fn ssed_fulltext_offset_in_ranges(ranges: &[(u64, u64)], offset: u64) -> bool {
             }
         })
         .is_ok()
+}
+
+fn ssed_fulltext_first_byte_candidate_offset(
+    data: &[u8],
+    byte_candidates: &[Vec<u8>],
+    start: usize,
+) -> Option<usize> {
+    let start = start.min(data.len());
+    byte_candidates
+        .iter()
+        .filter(|candidate| !candidate.is_empty())
+        .filter_map(|candidate| {
+            data[start..]
+                .windows(candidate.len())
+                .position(|window| window == candidate)
+                .map(|relative| start + relative)
+        })
+        .min()
+}
+
+fn ssed_fulltext_entry_marker_before_offset(data: &[u8], offset: usize) -> Option<usize> {
+    let end = offset.min(data.len());
+    data[..end]
+        .windows(SSED_ENTRY_MARKER.len())
+        .rposition(|window| window == SSED_ENTRY_MARKER)
+        .map(|marker| {
+            if marker >= 2 && data[marker - 2..marker] == [0x1f, 0x02] {
+                marker - 2
+            } else {
+                marker
+            }
+        })
+}
+
+fn ssed_fulltext_next_entry_marker_offset(data: &[u8], start: usize) -> Option<usize> {
+    let start = start.min(data.len());
+    data[start..]
+        .windows(SSED_ENTRY_MARKER.len())
+        .position(|window| window == SSED_ENTRY_MARKER)
+        .map(|relative| start + relative)
+}
+
+fn ssed_component_pointer_for_relative_offset(
+    component: &SsedComponent,
+    relative_offset: u64,
+) -> Option<SsedIndexPointer> {
+    let block_delta = u32::try_from(relative_offset / u64::from(BLOCK_SIZE)).ok()?;
+    let block = component.start_block.checked_add(block_delta)?;
+    let offset = u32::try_from(relative_offset % u64::from(BLOCK_SIZE)).ok()?;
+    component
+        .relative_offset(block, offset)
+        .is_some()
+        .then_some(SsedIndexPointer { block, offset })
+}
+
+fn ssed_fulltext_direct_body_title(body_text: &str) -> String {
+    let title = body_text
+        .split_whitespace()
+        .take(12)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.is_empty() {
+        "HONMON body match".to_owned()
+    } else {
+        title.chars().take(80).collect()
+    }
 }
 
 fn ssed_fulltext_body_hit_blocks(
