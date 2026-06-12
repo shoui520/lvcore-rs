@@ -1353,6 +1353,12 @@ fn library_routes_ios_ssed_table_list_cross_book_addresses_through_sibling_alias
     };
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].label_text, "Destination row");
+    assert!(
+        items[0]
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_ios_table_list_cross_book_address")
+    );
     assert!(matches!(
         items[0].target.decode().unwrap(),
         InternalTarget::SsedCrossBookAddress {

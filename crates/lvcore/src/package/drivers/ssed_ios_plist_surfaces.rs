@@ -350,29 +350,13 @@ impl ReaderBookPackage {
                 continue;
             };
             let rich_label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
-            let mut diagnostics = rich_label.diagnostics;
-            if let Some(owner) = &cross_book_owner
-                && matches!(
-                    target.decode()?,
-                    InternalTarget::SsedCrossBookAddress { .. }
-                )
-            {
-                diagnostics.push(
-                    Diagnostic::info(
-                        "ssed_ios_table_list_cross_book_address",
-                        "iOS tableList.plist row was exposed as a cross-book SSED address",
-                    )
-                    .with_context("dict_code", &owner.dict_code)
-                    .with_context("component", &owner.component),
-                );
-            }
             items.push(NavigationItem {
                 item_id: index.to_string(),
                 label_html: rich_label.html,
                 label_text: rich_label.text,
                 target,
                 href: String::new(),
-                diagnostics,
+                diagnostics: rich_label.diagnostics,
             });
         }
         if stats.address_rows > 0 && items.is_empty() {
