@@ -41,6 +41,34 @@ pub(super) fn has_decodable_ssed_index_rows(
         })
 }
 
+pub(super) fn has_readable_ssed_index_payload(
+    catalog: &SsedCatalog,
+    storage: &DirectoryStorage,
+) -> bool {
+    catalog
+        .components_by_role(SsedComponentRole::Index)
+        .filter(|component| {
+            component.has_positive_range() && is_supported_index_type(component.component_type)
+        })
+        .any(|component| index_component_has_readable_payload(storage, component).unwrap_or(false))
+}
+
+fn index_component_has_readable_payload(
+    storage: &DirectoryStorage,
+    component: &SsedComponent,
+) -> Result<bool> {
+    for path in component_candidate_paths_casefolded(storage, component)? {
+        let Some(readable) = materialize_readable_component_for_probe(storage, component, &path)?
+        else {
+            continue;
+        };
+        if SsedDataFile::open(&readable).is_ok() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn index_component_has_decodable_target_row(
     catalog: &SsedCatalog,
     storage: &DirectoryStorage,

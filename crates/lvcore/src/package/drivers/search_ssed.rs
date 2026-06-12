@@ -59,14 +59,14 @@ impl ReaderBookPackage {
                 title_label_row_offset,
             );
         }
-        let has_decodable_ssed_indexes = self
+        let has_readable_ssed_indexes = self
             .ssed_catalog
             .as_ref()
-            .is_some_and(|catalog| has_decodable_ssed_index_rows(catalog, &self.storage));
-        if !has_decodable_ssed_indexes && self.has_searchable_ssed_aux_index()? {
+            .is_some_and(|catalog| has_readable_ssed_index_payload(catalog, &self.storage));
+        if !has_readable_ssed_indexes && self.has_searchable_ssed_aux_index()? {
             return self.search_ssed_aux_index_labels(query, &needle, 0);
         }
-        if !has_decodable_ssed_indexes {
+        if !has_readable_ssed_indexes {
             return if matches!(
                 query.mode,
                 SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
@@ -430,7 +430,8 @@ impl ReaderBookPackage {
             let remaining = query.limit.saturating_sub(page.hits.len());
             if remaining > 0 {
                 if !page.hits.is_empty() && self.ssed_partial_nonprefix_fill_should_defer() {
-                    page.next_cursor = Some(encode_ssed_partial_nonprefix_cursor(None, true));
+                    page.next_cursor = self
+                        .ssed_deferred_partial_nonprefix_cursor_if_visible(query, needle, true)?;
                 } else {
                     let mut nonprefix_query = query.clone();
                     nonprefix_query.limit = remaining;
@@ -445,7 +446,8 @@ impl ReaderBookPackage {
                     page.next_cursor = nonprefix_page.next_cursor;
                 }
             } else {
-                page.next_cursor = Some(encode_ssed_partial_nonprefix_cursor(None, true));
+                page.next_cursor =
+                    self.ssed_deferred_partial_nonprefix_cursor_if_visible(query, needle, true)?;
             }
         }
         page.diagnostics.insert(
@@ -456,6 +458,25 @@ impl ReaderBookPackage {
             ),
         );
         Ok(Some(page))
+    }
+
+    fn ssed_deferred_partial_nonprefix_cursor_if_visible(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        skip_prefix_rows: bool,
+    ) -> Result<Option<String>> {
+        let mut probe_query = query.clone();
+        probe_query.limit = 1;
+        let probe_page =
+            self.search_ssed_partial_nonprefix_page(&probe_query, needle, None, skip_prefix_rows)?;
+        if probe_page.hits.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(encode_ssed_partial_nonprefix_cursor(
+            None,
+            skip_prefix_rows,
+        )))
     }
 
     fn ssed_partial_nonprefix_fill_should_defer(&self) -> bool {
@@ -1075,7 +1096,7 @@ impl ReaderBookPackage {
         let row_cursor = decode_ssed_fulltext_row_cursor(query.cursor.as_deref());
         let body_offset = decode_ssed_fulltext_body_cursor(query.cursor.as_deref());
         let mut diagnostics = Vec::new();
-        let has_decodable_ssed_indexes = has_decodable_ssed_index_rows(catalog, &self.storage);
+        let has_readable_ssed_indexes = has_readable_ssed_index_payload(catalog, &self.storage);
         if query.cursor.is_none()
             && ssed_fulltext_sidecar_title_prepass_is_bounded(&query.query)
             && let Some(page) = self.ssed_fulltext_sidecar_title_prepass(query)?
@@ -1085,7 +1106,7 @@ impl ReaderBookPackage {
         let honmon_body_window_scan_needed =
             self.ssed_honmon_body_window_scan_is_needed(catalog, &mut diagnostics)?;
         if honmon_body_window_scan_needed
-            && has_decodable_ssed_indexes
+            && has_readable_ssed_indexes
             && query.cursor.is_none()
             && let Some(page) =
                 self.ssed_fulltext_initial_title_index_prepass(query, &needle, page_limit)?
@@ -1093,7 +1114,7 @@ impl ReaderBookPackage {
             return Ok(page);
         }
         if honmon_body_window_scan_needed
-            && has_decodable_ssed_indexes
+            && has_readable_ssed_indexes
             && query.cursor.is_none()
             && let Some(page) =
                 self.ssed_fulltext_initial_partial_title_index_prepass(query, &needle, page_limit)?
@@ -1101,7 +1122,7 @@ impl ReaderBookPackage {
             return Ok(page);
         }
         if honmon_body_window_scan_needed
-            && has_decodable_ssed_indexes
+            && has_readable_ssed_indexes
             && let Some(title_cursor) = title_cursor
             && let Some(page) =
                 self.ssed_fulltext_title_index_prepass(query, &needle, title_cursor, page_limit)?
@@ -1278,7 +1299,7 @@ impl ReaderBookPackage {
         let byte_candidates = ssed_body_search_byte_candidates(&query.query);
         let row_driven_search_allowed = query.cursor.is_none() || row_cursor.is_some();
         if honmon_body_window_scan_needed
-            && has_decodable_ssed_indexes
+            && has_readable_ssed_indexes
             && row_driven_search_allowed
             && (query.cursor.is_none() || row_cursor.is_some())
             && hits.len() < page_limit
@@ -1316,7 +1337,7 @@ impl ReaderBookPackage {
             }
             diagnostics.extend(row_page.diagnostics);
         }
-        if !honmon_body_window_scan_needed || !has_decodable_ssed_indexes {
+        if !honmon_body_window_scan_needed || !has_readable_ssed_indexes {
             hits.truncate(query.limit);
             return Ok(SearchPage {
                 hits,
@@ -1615,7 +1636,7 @@ impl ReaderBookPackage {
                 diagnostics: Vec::new(),
             });
         }
-        if !has_decodable_ssed_index_rows(catalog, &self.storage) {
+        if !has_readable_ssed_index_payload(catalog, &self.storage) {
             return Ok(SsedHonmonBodyScanPlan {
                 decision: SsedHonmonBodyScanDecision::ScanNativeHonmon,
                 diagnostics: Vec::new(),
