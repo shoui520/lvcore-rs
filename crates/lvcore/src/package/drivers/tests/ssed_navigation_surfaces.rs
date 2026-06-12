@@ -927,6 +927,25 @@ fn ssed_visible_title_label_fallback_does_not_return_empty_no_hit_cursor() {
         fixture_sseddata_literal_chunks(&index_chunks, 200, 200 + leaf_count as u32),
     )
     .unwrap();
+    let connection = Connection::open(dir.path().join("body.db")).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table t_contents (
+              f_DataId integer primary key,
+              f_Title text,
+              f_Html text,
+              f_Plane text
+            );
+            insert into t_contents values (
+              1,
+              'missing',
+              '<div>missing html</div>',
+              'missing body'
+            );
+            ",
+        )
+        .unwrap();
 
     let catalog = SsedCatalog {
         title: "No hit label".to_owned(),
@@ -994,7 +1013,7 @@ fn ssed_visible_title_label_fallback_does_not_return_empty_no_hit_cursor() {
                 book_id: package.metadata().book_id.clone(),
             },
             mode: SearchMode::Exact,
-            query: "missing".to_owned(),
+            query: "absent".to_owned(),
             cursor: None,
             limit: 10,
             gaiji_policy: None,
@@ -1004,6 +1023,31 @@ fn ssed_visible_title_label_fallback_does_not_return_empty_no_hit_cursor() {
     assert!(page.hits.is_empty());
     assert_eq!(page.next_cursor, None);
     assert!(page.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "ssed_title_label_search_fallback_no_hit_limited"
+    }));
+
+    let sidecar_page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "missing".to_owned(),
+            cursor: None,
+            limit: 10,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(sidecar_page.hits.len(), 1);
+    assert_eq!(sidecar_page.hits[0].title_text, "missing");
+    assert!(
+        sidecar_page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "ssed_sidecar_title_search" })
+    );
+    assert!(!sidecar_page.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "ssed_title_label_search_fallback_no_hit_limited"
     }));
 }

@@ -1868,17 +1868,24 @@ fn search_probe_candidate_queries(
     mode: &SearchMode,
     labels: &[String],
 ) -> Vec<String> {
-    let prioritized_labels = labels
-        .iter()
-        .filter(|label| !is_default_search_probe_label(label))
-        .chain(
-            labels
-                .iter()
-                .filter(|label| is_default_search_probe_label(label)),
-        );
     let mut candidates = Vec::new();
     if search_probe_prefers_real_labels(metadata.format_family, mode) {
-        for label in prioritized_labels {
+        for label in labels.iter().filter(|label| {
+            !is_default_search_probe_label(label)
+                && search_probe_label_is_preferred_for_mode(label, mode)
+        }) {
+            push_search_probe_candidate(&mut candidates, label, mode);
+        }
+        for label in labels.iter().filter(|label| {
+            !is_default_search_probe_label(label)
+                && !search_probe_label_is_preferred_for_mode(label, mode)
+        }) {
+            push_search_probe_candidate(&mut candidates, label, mode);
+        }
+        for label in labels
+            .iter()
+            .filter(|label| is_default_search_probe_label(label))
+        {
             push_search_probe_candidate(&mut candidates, label, mode);
         }
     } else {
@@ -1887,6 +1894,15 @@ fn search_probe_candidate_queries(
         }
     }
     candidates
+}
+
+fn search_probe_label_is_preferred_for_mode(label: &str, mode: &SearchMode) -> bool {
+    match mode {
+        SearchMode::Partial => search_probe_lookup_text(label)
+            .and_then(|lookup| lookup.chars().next())
+            .is_some_and(|ch| ch.is_alphanumeric()),
+        _ => true,
+    }
 }
 
 fn push_search_probe_candidate(candidates: &mut Vec<String>, label: &str, mode: &SearchMode) {
@@ -1909,10 +1925,10 @@ fn select_validation_search_probe_query(
         candidates.push("a".to_owned());
     }
     let query = candidates[0].clone();
-    if mode != &SearchMode::Forward {
+    if !validation_search_probe_should_hit_check(mode) {
         return query;
     }
-    for label in validation_forward_search_probe_labels(metadata) {
+    for label in validation_search_probe_fallback_labels(metadata, mode) {
         push_search_probe_candidate(&mut candidates, label, mode);
     }
     for (index, candidate) in candidates.iter().enumerate() {
@@ -1926,9 +1942,19 @@ fn select_validation_search_probe_query(
     query
 }
 
-fn validation_forward_search_probe_labels(metadata: &BookMetadata) -> &'static [&'static str] {
-    match metadata.format_family {
-        FormatFamily::LvedSqlite3 => &["a", "あ", "お", "結", "祝"],
+fn validation_search_probe_should_hit_check(mode: &SearchMode) -> bool {
+    matches!(
+        mode,
+        SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+    )
+}
+
+fn validation_search_probe_fallback_labels(
+    metadata: &BookMetadata,
+    mode: &SearchMode,
+) -> &'static [&'static str] {
+    match (metadata.format_family, mode) {
+        (FormatFamily::LvedSqlite3, SearchMode::Forward) => &["a", "あ", "お", "結", "祝"],
         _ => default_search_probe_labels(metadata),
     }
 }
@@ -2495,6 +2521,34 @@ mod tests {
             &SearchMode::Advanced("advanced1".to_owned())
         ));
         assert!(is_default_search_probe_label("新"));
+    }
+
+    #[test]
+    fn validation_partial_probe_prefers_headword_labels_over_leading_punctuation() {
+        let metadata = BookMetadata {
+            book_id: BookId("SSED:TEST".to_owned()),
+            format_family: FormatFamily::Ssed,
+            format_label: "SSED".to_owned(),
+            package_root: PathBuf::from("test"),
+            title: Some("現代用語".to_owned()),
+            root_fingerprint: "test".to_owned(),
+            capabilities: Vec::new(),
+            search_modes: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let labels = vec![
+            "a".to_owned(),
+            "あ".to_owned(),
+            "――曙光が".to_owned(),
+            "キャッシュバランス型企業年金".to_owned(),
+        ];
+
+        let partial = search_probe_candidate_queries(&metadata, &SearchMode::Partial, &labels);
+        assert_eq!(partial[0], "キャ");
+        assert_eq!(partial[1], "曙光");
+
+        let exact = search_probe_candidate_queries(&metadata, &SearchMode::Exact, &labels);
+        assert_eq!(exact[0], "――曙光が");
     }
 
     #[test]

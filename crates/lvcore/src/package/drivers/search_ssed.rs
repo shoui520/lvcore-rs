@@ -115,6 +115,7 @@ impl ReaderBookPackage {
         };
         let page_limit = query.limit.saturating_add(1);
         let gaiji_policy = query.label_gaiji_policy();
+        let mut pending_empty_title_label_fallback_diagnostics = Vec::new();
         let mut collector = SsedIndexSearchCollector::new(
             self,
             &query.mode,
@@ -219,7 +220,15 @@ impl ReaderBookPackage {
                 let mut fallback_page =
                     self.search_ssed_title_label_fallback_page(query, &needle, 0)?;
                 if fallback_page.hits.is_empty() && fallback_page.next_cursor.is_none() {
-                    collector.extend_diagnostics(fallback_page.diagnostics);
+                    let mut immediate_diagnostics = Vec::new();
+                    for diagnostic in fallback_page.diagnostics {
+                        if diagnostic.code == "ssed_title_label_search_fallback_no_hit_limited" {
+                            pending_empty_title_label_fallback_diagnostics.push(diagnostic);
+                        } else {
+                            immediate_diagnostics.push(diagnostic);
+                        }
+                    }
+                    collector.extend_diagnostics(immediate_diagnostics);
                 } else {
                     if fallback_page.next_cursor.is_none()
                         && fallback_page.hits.len() < query.limit
@@ -256,6 +265,10 @@ impl ReaderBookPackage {
             )?
         {
             self.append_ssed_sidecar_title_hits(query, &mut page, 0)?;
+        }
+        if page.hits.is_empty() {
+            page.diagnostics
+                .extend(pending_empty_title_label_fallback_diagnostics);
         }
         Ok(page)
     }

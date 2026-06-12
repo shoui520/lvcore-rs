@@ -837,6 +837,43 @@ fn validate_forward_search_probe_falls_back_when_navigation_label_misses() {
 }
 
 #[test]
+fn validate_exact_search_probe_falls_back_when_navigation_label_misses() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lved_cli_fixture(dir.path());
+    {
+        let connection = Connection::open(dir.path().join("main.data")).unwrap();
+        apply_sqlcipher_key(&connection, "test-key").unwrap();
+        connection
+            .execute(
+                "update list set title = '<b>zzzz</b>', titlesub = '' where id in (1, 2)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "update search set forward = 'a', filter = '∥a∥' where rowid = 1",
+                [],
+            )
+            .unwrap();
+    }
+
+    let output = validate_package_json(
+        &DriverRegistry::default(),
+        dir.path(),
+        ValidateOptions { deep: true },
+    );
+    let exercises = output["exercises"].as_array().unwrap();
+    let exact = exercises
+        .iter()
+        .find(|exercise| exercise["kind"] == "search_exact")
+        .expect("missing exact validation row");
+
+    assert_eq!(exact["query"], "a");
+    assert_eq!(exact["hit_count"], 1);
+    assert!(!validate_row_has_failure(&output));
+}
+
+#[test]
 fn validate_forward_search_probe_falls_back_to_lved_reading_key() {
     let dir = tempfile::tempdir().unwrap();
     write_lved_cli_fixture(dir.path());
