@@ -481,6 +481,7 @@ struct SurfaceTargetProbe {
     resource_targets: Vec<NavigationTarget>,
     pages_scanned: usize,
     remaining_cursor: Option<String>,
+    cursor_probe: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -536,6 +537,9 @@ fn targetless_surface_probe_row(
             json!("surface opened but has no actionable entry/resource target to render"),
         );
     }
+    if let Some(cursor_probe) = &probe.cursor_probe {
+        insert_named_value(&mut row, "cursor_probe", cursor_probe.clone());
+    }
     insert_diagnostic_fields(&mut row, &targetless.diagnostics);
     row
 }
@@ -550,6 +554,10 @@ fn surface_probe_targets(
     let mut resource_targets = first_surface.actionable_targets();
     let mut remaining_cursor = navigation_surface_next_cursor(first_surface).map(str::to_owned);
     let mut child_cursor = navigation_surface_first_child_cursor(first_surface).map(str::to_owned);
+    let cursor_probe =
+        navigation_surface_probe_cursor(first_surface).map(|(cursor_kind, cursor)| {
+            surface_cursor_probe(library, book_id, surface_id, cursor_kind, &cursor)
+        });
 
     while resource_targets.is_empty()
         && (remaining_cursor.is_some() || child_cursor.is_some())
@@ -573,7 +581,53 @@ fn surface_probe_targets(
         resource_targets,
         pages_scanned,
         remaining_cursor,
+        cursor_probe,
     })
+}
+
+fn navigation_surface_probe_cursor(surface: &NavigationSurface) -> Option<(&'static str, String)> {
+    if let Some(cursor) = navigation_surface_first_child_cursor(surface) {
+        return Some(("child", cursor.to_owned()));
+    }
+    navigation_surface_next_cursor(surface).map(|cursor| ("page", cursor.to_owned()))
+}
+
+fn surface_cursor_probe(
+    library: &BookLibrary,
+    book_id: &BookId,
+    surface_id: &str,
+    cursor_kind: &'static str,
+    cursor: &str,
+) -> serde_json::Value {
+    let started = Instant::now();
+    let mut row = match library.open_surface_page(
+        book_id,
+        surface_id,
+        Some(cursor),
+        VALIDATE_SURFACE_PROBE_PAGE_LIMIT,
+    ) {
+        Ok(page) => {
+            let mut row = json!({
+                "status": "ok",
+                "cursor": cursor,
+                "cursor_kind": cursor_kind,
+                "opened_kind": navigation_surface_kind_name(&page),
+                "visible_item_count": surface_visible_item_count(&page),
+                "actionable_target_count": page.actionable_targets().len(),
+                "remaining_cursor": navigation_surface_next_cursor(&page),
+            });
+            insert_diagnostic_fields(&mut row, &surface_diagnostic_sample(&page));
+            row
+        }
+        Err(error) => json!({
+            "status": "surface_cursor_error",
+            "cursor": cursor,
+            "cursor_kind": cursor_kind,
+            "error": error.to_string(),
+        }),
+    };
+    insert_elapsed_ms(&mut row, started);
+    row
 }
 
 fn navigation_surface_next_cursor(surface: &NavigationSurface) -> Option<&str> {
@@ -739,6 +793,9 @@ fn insert_surface_page_probe_fields(row: &mut serde_json::Value, probe: &Surface
             "remaining_cursor".to_owned(),
             json!(probe.remaining_cursor.clone()),
         );
+        if let Some(cursor_probe) = &probe.cursor_probe {
+            object.insert("cursor_probe".to_owned(), cursor_probe.clone());
+        }
     }
 }
 
@@ -2795,6 +2852,10 @@ mod tests {
         assert_eq!(lved_list["status"], "ok");
         assert_eq!(lved_list["pages_scanned"], 1);
         assert_eq!(lved_list["remaining_cursor"], "16");
+        assert_eq!(lved_list["cursor_probe"]["status"], "ok");
+        assert_eq!(lved_list["cursor_probe"]["cursor_kind"], "page");
+        assert_eq!(lved_list["cursor_probe"]["cursor"], "16");
+        assert_eq!(lved_list["cursor_probe"]["visible_item_count"], 4);
     }
 
     #[test]
