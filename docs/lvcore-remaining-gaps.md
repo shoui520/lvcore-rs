@@ -4,7 +4,7 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260613-tagged-nonprefix-prefilter-v2.jsonl`
+- `/tmp/lvcore-all-corpora-validation-20260613-tagged-nonprefix-prefilter-v3.jsonl`
 - Produced after adding a state-aware SSED tagged-leaf page prefilter, scoped to
   large non-prefix title scans. The prefilter tracks inherited tagged group
   keys so continuation pages remain complete, while avoiding broad title-prepass
@@ -15,8 +15,9 @@ Latest full-corpus gate:
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
 - `_DCT_NCOMP4` `search_full_text` `1計` dropped from 2056 ms in the previous
-  full gate to 570 ms. `_DCT_KENE7J5` remained on its prior native body-scan
-  path at 605 ms after the tagged optimization was scoped to non-prefix scans.
+  full gate to 545 ms. `_DCT_KQNEWEJ6` stayed on its fast title-prepass path at
+  406 ms, and `_DCT_KENE7J5` remained on its prior native body-scan path at
+  607 ms after the page-prefilter extensions were scoped to non-prefix scans.
 
 Previous planning baseline:
 
@@ -321,25 +322,22 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- `_DCT_KQNEWEJ6`, `search_full_text` query `画像`: 1395 ms, native title
-  prepass. Inspect directly before deciding whether this is index traversal,
-  title rendering, or validator sampling.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 802 ms, direct native
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 807 ms, direct native
   HONMON scan plus row-driven prefetch.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 775 ms, native title/index
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 769 ms, native title/index
   prepass.
-- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 622 ms, native title
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 637 ms, native title
   prepass with deferred body continuation.
-- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 605 ms, direct native
+- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 607 ms, direct native
   HONMON scan plus row-driven prefetch after the JIS prefilter improvement.
-- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 594 ms, native title
+- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 573 ms, native title
   prepass with deferred body continuation.
 - `_DCT_NCOMP4`, `search_full_text` query `1計`: resolved from 2056 ms to
-  570 ms by the scoped tagged non-prefix page prefilter; remaining continuation
+  545 ms by the scoped tagged non-prefix page prefilter; remaining continuation
   proof is intentionally deferred behind `title-nonprefix-unverified:*`.
-- `_DCT_GEN2005`, `search_full_text` query `曙光`: 510 ms, direct native
+- `_DCT_GEN2005`, `search_full_text` query `曙光`: 506 ms, direct native
   HONMON scan plus row-driven prefetch.
-- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 480 ms.
+- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 531 ms.
   Directly inspect before treating it as a code gap.
 - `Other/iOS/IBIO5/IBIO5`, title/full-text query `亜-`: resolved in 0ad and
   verified by the latest full gate.
@@ -371,10 +369,11 @@ Why this matters:
 
 Current status:
 
-- Large non-prefix title scans now opt into a tagged-leaf page prefilter that
-  tracks whether the inherited tagged group key can match the query. Simple
-  page filtering and body search semantics are unchanged, and broader title
-  prepasses keep the previous conservative tagged behavior.
+- Large non-prefix title scans now opt into page-prefilter extensions: a
+  tagged-leaf state prefilter that tracks whether the inherited tagged group
+  key can match the query, and an in-memory candidate-page jump for bounded
+  simple index components. Broader title prepasses keep the previous
+  conservative streaming behavior.
 - Focused tests passed:
   - `cargo fmt --check`
   - `cargo test -p lvcore package::drivers::ssed_index::tests -- --nocapture`
@@ -382,19 +381,23 @@ Current status:
   - `cargo test -p lvcore package::drivers::tests::fulltext -- --nocapture`
   - `cargo build -p lvcore-cli`
 - Focused real-package validation passed:
-  - `/tmp/lvcore-focused-validate-ncomp4-tagged-nonprefix-v2.jsonl`
-  - `_DCT_NCOMP4` `search_full_text` `1計`: 540 ms, hit_count 1.
-  - `_DCT_KENE7J5` `search_full_text` `は殺`: 583 ms, hit_count 1, retained
+  - `/tmp/lvcore-focused-validate-tagged-nonprefix-scope-v3.jsonl`
+  - `_DCT_KQNEWEJ6` `search_full_text` `画像`: 422 ms, hit_count 1, retained
+    the prior fast title-prepass path.
+  - `_DCT_NCOMP4` `search_full_text` `1計`: 547 ms, hit_count 1.
+  - `_DCT_KENE7J5` `search_full_text` `は殺`: 634 ms, hit_count 1, retained
     the prior native body-scan path.
 - Full-corpus regression gate passed:
-  - `/tmp/lvcore-all-corpora-validation-20260613-tagged-nonprefix-prefilter-v2.jsonl`
+  - `/tmp/lvcore-all-corpora-validation-20260613-tagged-nonprefix-prefilter-v3.jsonl`
   - 336 packages validated with package status 336 `ok`.
   - The previous 336-package baseline path set is fully covered, including the
     two `Other/Android` rows.
   - Warning diagnostics remain only the explicitly deferred HC common HTML
     fallback.
-  - `_DCT_NCOMP4` `search_full_text` `1計`: 570 ms, down from 2056 ms.
-  - `_DCT_KENE7J5` `search_full_text` `は殺`: 605 ms, matching the previous
+  - `_DCT_KQNEWEJ6` `search_full_text` `画像`: 406 ms, matching the previous
+    fast title-prepass path rather than the broader in-memory prefilter.
+  - `_DCT_NCOMP4` `search_full_text` `1計`: 545 ms, down from 2056 ms.
+  - `_DCT_KENE7J5` `search_full_text` `は殺`: 607 ms, matching the previous
     body-scan path rather than the broader tagged-title prepass.
 
 ### 0ae. SSED sidecar-body cursor phase deferral (resolved, full gate)

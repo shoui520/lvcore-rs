@@ -747,7 +747,7 @@ impl ReaderBookPackage {
         cursor: Option<SsedPartialIndexScanCursor>,
         leaf_page_budget: usize,
         prefiltered_leaf_page_budget: usize,
-        allow_tagged_page_prefilter: bool,
+        allow_nonprefix_page_prefilter_extensions: bool,
         mut on_row: impl FnMut(SsedPartialIndexScanCursor, SsedIndexRow) -> Result<bool>,
     ) -> Result<SsedPartialIndexScanResult> {
         let Some(catalog) = &self.ssed_catalog else {
@@ -834,7 +834,8 @@ impl ReaderBookPackage {
             } else {
                 Vec::new()
             };
-            if !page_prefilter_anchors.is_empty()
+            if allow_nonprefix_page_prefilter_extensions
+                && !page_prefilter_anchors.is_empty()
                 && SsedDataHeader::parse_file(&path).is_ok_and(|header| {
                     header.expanded_size() <= SSED_INDEX_PAGE_PREFILTER_IN_MEMORY_MAX_EXPANDED_BYTES
                 })
@@ -928,7 +929,7 @@ impl ReaderBookPackage {
                     true
                 } else if page_prefilter_is_safe {
                     ssed_body_window_may_contain_query(page, page_candidates)
-                } else if allow_tagged_page_prefilter {
+                } else if allow_nonprefix_page_prefilter_extensions {
                     ssed_tagged_leaf_page_may_contain_query(
                         component.component_type,
                         page,
