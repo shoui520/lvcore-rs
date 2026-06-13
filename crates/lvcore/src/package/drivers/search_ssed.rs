@@ -1551,8 +1551,7 @@ impl ReaderBookPackage {
         if honmon_body_window_scan_needed
             && has_readable_ssed_indexes
             && query.cursor.is_none()
-            && let Some(page) =
-                self.ssed_fulltext_initial_title_index_prepass(query, &needle, page_limit)?
+            && let Some(page) = self.ssed_fulltext_initial_title_index_prepass(query, &needle)?
         {
             return Ok(page);
         }
@@ -3033,17 +3032,17 @@ impl ReaderBookPackage {
         &self,
         query: &SearchQuery,
         needle: &str,
-        page_limit: usize,
     ) -> Result<Option<SearchPage>> {
         let mut collector = SsedIndexSearchCollector::new(
             self,
             &SearchMode::Forward,
             needle,
             0,
-            page_limit,
+            query.limit,
             query.label_gaiji_policy(),
         )
-        .with_display_label_matching();
+        .with_display_label_matching()
+        .with_pending_page_limit_stop();
         let candidate_has_hits = Cell::new(false);
         let scan_result = self.scan_ssed_simple_leaf_index_rows_near_key(
             &SearchMode::Forward,
