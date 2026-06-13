@@ -10,6 +10,23 @@ impl ReaderBookPackage {
         &self,
         mode: &SearchMode,
         needle: &str,
+        on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+        candidate_satisfied: impl FnMut() -> bool,
+    ) -> Result<SsedNearKeyScanResult> {
+        self.scan_ssed_simple_leaf_index_rows_near_key_with_leaf_budget(
+            mode,
+            needle,
+            SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT,
+            on_row,
+            candidate_satisfied,
+        )
+    }
+
+    pub(super) fn scan_ssed_simple_leaf_index_rows_near_key_with_leaf_budget(
+        &self,
+        mode: &SearchMode,
+        needle: &str,
+        max_leaf_pages_per_component: usize,
         mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
         mut candidate_satisfied: impl FnMut() -> bool,
     ) -> Result<SsedNearKeyScanResult> {
@@ -168,7 +185,7 @@ impl ReaderBookPackage {
                                 break 'pages;
                             }
                         }
-                        if scanned_leaf_pages >= SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT {
+                        if scanned_leaf_pages >= max_leaf_pages_per_component {
                             break 'pages;
                         }
                     }

@@ -212,9 +212,7 @@ impl SsedDataFile {
         let first_chunk = offset / CHUNK_SIZE;
         let last_chunk = (end - 1) / CHUNK_SIZE;
         let requested_len = end.saturating_sub(offset);
-        let capacity_hint = requested_len
-            .min(CHUNK_SIZE)
-            .min(usize::try_from(self.file_len).unwrap_or(usize::MAX));
+        let capacity_hint = requested_len.min(usize::try_from(self.file_len).unwrap_or(usize::MAX));
         let mut out = Vec::with_capacity(capacity_hint);
 
         for chunk_index in first_chunk..=last_chunk {

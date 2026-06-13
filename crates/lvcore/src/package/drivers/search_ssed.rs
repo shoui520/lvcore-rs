@@ -1677,6 +1677,7 @@ impl ReaderBookPackage {
         if honmon_body_window_scan_needed
             && has_readable_ssed_indexes
             && query.cursor.is_none()
+            && self.ssed_fulltext_initial_forward_title_prepass_should_run(query, &needle)?
             && let Some(page) = self.ssed_fulltext_initial_title_index_prepass(query, &needle)?
         {
             return Ok(page);
@@ -3202,6 +3203,42 @@ impl ReaderBookPackage {
         Ok(Some(page))
     }
 
+    fn ssed_fulltext_initial_forward_title_prepass_should_run(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+    ) -> Result<bool> {
+        if !ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(query) {
+            return Ok(true);
+        }
+        let mut collector = SsedIndexSearchCollector::new(
+            self,
+            &SearchMode::Forward,
+            needle,
+            0,
+            query.limit.max(1),
+            query.label_gaiji_policy(),
+        )
+        .with_display_label_matching()
+        .with_pending_page_limit_stop();
+        let candidate_has_hits = Cell::new(false);
+        let scan_result = self.scan_ssed_simple_leaf_index_rows_near_key_with_leaf_budget(
+            &SearchMode::Forward,
+            needle,
+            1,
+            |row| {
+                let keep_scanning = collector.push_row(row)?;
+                if collector.has_hits() {
+                    candidate_has_hits.set(true);
+                }
+                Ok(keep_scanning)
+            },
+            || candidate_has_hits.get(),
+        )?;
+        collector.extend_diagnostics(scan_result.diagnostics);
+        Ok(collector.has_hits())
+    }
+
     fn ssed_fulltext_initial_partial_title_index_prepass(
         &self,
         query: &SearchQuery,
@@ -3620,24 +3657,18 @@ fn ssed_fulltext_first_byte_candidate_offset(
 
 fn ssed_fulltext_entry_marker_before_offset(data: &[u8], offset: usize) -> Option<usize> {
     let end = offset.min(data.len());
-    data[..end]
-        .windows(SSED_ENTRY_MARKER.len())
-        .rposition(|window| window == SSED_ENTRY_MARKER)
-        .map(|marker| {
-            if marker >= 2 && data[marker - 2..marker] == [0x1f, 0x02] {
-                marker - 2
-            } else {
-                marker
-            }
-        })
+    memchr::memmem::rfind(&data[..end], &SSED_ENTRY_MARKER).map(|marker| {
+        if marker >= 2 && data[marker - 2..marker] == [0x1f, 0x02] {
+            marker - 2
+        } else {
+            marker
+        }
+    })
 }
 
 fn ssed_fulltext_next_entry_marker_offset(data: &[u8], start: usize) -> Option<usize> {
     let start = start.min(data.len());
-    data[start..]
-        .windows(SSED_ENTRY_MARKER.len())
-        .position(|window| window == SSED_ENTRY_MARKER)
-        .map(|relative| start + relative)
+    memchr::memmem::find(&data[start..], &SSED_ENTRY_MARKER).map(|relative| start + relative)
 }
 
 fn ssed_component_pointer_for_relative_offset(
@@ -4476,6 +4507,16 @@ fn ssed_fulltext_sidecar_title_prepass_is_bounded(query: &str) -> bool {
         && query.bytes().any(|byte| byte.is_ascii_alphabetic())
 }
 
+fn ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(query: &SearchQuery) -> bool {
+    let raw_query = query.query.trim();
+    if raw_query.is_empty() || raw_query.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let has_ascii_digit = raw_query.bytes().any(|byte| byte.is_ascii_digit());
+    let has_ascii_alpha = raw_query.bytes().any(|byte| byte.is_ascii_alphabetic());
+    has_ascii_digit && !has_ascii_alpha
+}
+
 fn ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
     query: &SearchQuery,
     needle: &str,
@@ -4527,6 +4568,7 @@ mod tests {
         encode_ssed_partial_nonprefix_physical_offset_cursor,
         encode_ssed_partial_unverified_nonprefix_cursor, encode_ssed_unverified_title_label_cursor,
         ssed_fulltext_first_byte_candidate_offset,
+        ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe,
         ssed_fulltext_partial_nonprefix_title_prepass_is_bounded,
         ssed_fulltext_row_driven_body_search_allowed,
         ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_partial_prefix_prepass_is_bounded,
@@ -4587,6 +4629,40 @@ mod tests {
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("two words"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("犬"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("ｉｎ"));
+    }
+
+    #[test]
+    fn fulltext_initial_forward_title_prepass_fast_probe_is_limited_to_digit_tokens() {
+        assert!(
+            ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(
+                &current_book_fulltext_query("01", 1)
+            )
+        );
+        assert!(
+            ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(
+                &current_book_fulltext_query("1計", 1)
+            )
+        );
+        assert!(
+            ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(
+                &current_book_fulltext_query("0歳", 1)
+            )
+        );
+        assert!(
+            !ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(
+                &current_book_fulltext_query("co", 1)
+            )
+        );
+        assert!(
+            !ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(
+                &current_book_fulltext_query("3D", 1)
+            )
+        );
+        assert!(
+            !ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(
+                &current_book_fulltext_query("two words", 1)
+            )
+        );
     }
 
     #[test]
