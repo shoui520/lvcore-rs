@@ -406,6 +406,84 @@ fn ssed_fulltext_partial_title_prepass_returns_physical_continuation_cursor() {
 }
 
 #[test]
+fn ssed_fulltext_searches_late_nonprefix_title_before_body_scan() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_late_nonprefix_title_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic fulltext".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "1計".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "０－１計画法");
+    let title_cursor = page.next_cursor.clone().unwrap();
+    assert!(title_cursor.starts_with("title-nonprefix:"));
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_partial_nonprefix_title_prepass")
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_direct_scan")
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+    );
+
+    let continuation = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "1計".to_owned(),
+            cursor: Some(title_cursor.clone()),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert!(
+        continuation
+            .hits
+            .iter()
+            .all(|hit| hit.title_text != "０－１計画法")
+    );
+}
+
+#[test]
 fn ssed_fulltext_matches_fullwidth_ascii_body_text() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
@@ -1525,6 +1603,184 @@ fn write_ssed_fulltext_physical_cursor_fixture(root: &Path) -> SsedCatalog {
             record_start: 0,
             record_size: 0x30,
             component_count: 3,
+            trailing_bytes: 0,
+        },
+    }
+}
+
+fn write_ssed_fulltext_late_nonprefix_title_fixture(root: &Path) -> SsedCatalog {
+    let mut body_one = Vec::new();
+    body_one.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01, 0x1f, 0x41]);
+    body_one.extend_from_slice(&body_jis("body without the first title-only query"));
+    body_one.extend_from_slice(&[0x1f, 0x61, 0x1f, 0x0a]);
+    let mut body_two = Vec::new();
+    body_two.extend_from_slice(&[0x1f, 0x09, 0x00, 0x01, 0x1f, 0x41]);
+    body_two.extend_from_slice(&body_jis("body without the second title-only query"));
+    body_two.extend_from_slice(&[0x1f, 0x61, 0x1f, 0x0a]);
+    fs::write(
+        root.join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[&body_one, &body_two], 100, 101),
+    )
+    .unwrap();
+
+    let title_one = body_jis("0-1計画法");
+    let title_two = body_jis("追加1計画法");
+    fs::write(
+        root.join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[&title_one, &title_two], 300, 301),
+    )
+    .unwrap();
+
+    const FIRST_INDEX_PAGE_COUNT: usize = 1000;
+    const FIRST_TITLE_PAGE_INDEX: usize = 946;
+    let mut first_pages = Vec::with_capacity(FIRST_INDEX_PAGE_COUNT);
+    for page_index in 0..FIRST_INDEX_PAGE_COUNT {
+        let mut page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+        page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        if page_index == FIRST_TITLE_PAGE_INDEX {
+            page[2..4].copy_from_slice(&1u16.to_be_bytes());
+            let mut pos = 4usize;
+            write_simple_index_row(&mut page, &mut pos, &body_jis("0-1計画法"), 100, 0, 300, 0);
+        } else {
+            page[2..4].copy_from_slice(&0u16.to_be_bytes());
+        }
+        first_pages.push(page);
+    }
+    let first_index_chunks: Vec<Vec<u8>> = first_pages
+        .chunks(16)
+        .map(|chunk_pages| {
+            let mut chunk = Vec::new();
+            for page in chunk_pages {
+                chunk.extend_from_slice(page);
+            }
+            chunk
+        })
+        .collect();
+    let first_index_chunk_refs: Vec<&[u8]> = first_index_chunks.iter().map(Vec::as_slice).collect();
+    let first_index_end_block = 200 + u32::try_from(FIRST_INDEX_PAGE_COUNT).unwrap() - 1;
+    fs::write(
+        root.join("FKINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&first_index_chunk_refs, 200, first_index_end_block),
+    )
+    .unwrap();
+
+    let mut duplicate_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    duplicate_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    duplicate_page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    let mut duplicate_pos = 4usize;
+    write_simple_index_row(
+        &mut duplicate_page,
+        &mut duplicate_pos,
+        &body_jis("0-1計画法"),
+        100,
+        0,
+        300,
+        0,
+    );
+    let mut distinct_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    distinct_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    distinct_page[2..4].copy_from_slice(&1u16.to_be_bytes());
+    let mut distinct_pos = 4usize;
+    write_simple_index_row(
+        &mut distinct_page,
+        &mut distinct_pos,
+        &body_jis("追加1計画法"),
+        101,
+        0,
+        301,
+        0,
+    );
+    fs::write(
+        root.join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&duplicate_page, &distinct_page], 1200, 1201),
+    )
+    .unwrap();
+
+    const EMPTY_INDEX_PAGE_COUNT: usize = 1300;
+    let empty_index_page = {
+        let mut page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+        page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        page[2..4].copy_from_slice(&0u16.to_be_bytes());
+        page
+    };
+    let empty_pages = vec![empty_index_page; EMPTY_INDEX_PAGE_COUNT];
+    let empty_index_chunks: Vec<Vec<u8>> = empty_pages
+        .chunks(16)
+        .map(|chunk_pages| {
+            let mut chunk = Vec::new();
+            for page in chunk_pages {
+                chunk.extend_from_slice(page);
+            }
+            chunk
+        })
+        .collect();
+    let empty_index_chunk_refs: Vec<&[u8]> = empty_index_chunks.iter().map(Vec::as_slice).collect();
+    let empty_index_end_block = 1300 + u32::try_from(EMPTY_INDEX_PAGE_COUNT).unwrap() - 1;
+    fs::write(
+        root.join("EXINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&empty_index_chunk_refs, 1300, empty_index_end_block),
+    )
+    .unwrap();
+
+    SsedCatalog {
+        title: "Synthetic late nonprefix fulltext title".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x71,
+                start_block: 200,
+                end_block: first_index_end_block,
+                data: [0; 4],
+                filename: "FKINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+            SsedComponent {
+                index: 3,
+                multi: 0,
+                component_type: 0x71,
+                start_block: 1200,
+                end_block: 1201,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+            SsedComponent {
+                index: 4,
+                multi: 0,
+                component_type: 0x71,
+                start_block: 1300,
+                end_block: empty_index_end_block,
+                data: [0; 4],
+                filename: "EXINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 5,
             trailing_bytes: 0,
         },
     }

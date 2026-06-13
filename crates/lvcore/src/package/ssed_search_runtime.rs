@@ -105,8 +105,10 @@ pub(super) struct SsedIndexSearchCollector<'a> {
     page_limit: usize,
     matched_count: usize,
     hits: Vec<SearchHit>,
+    hit_target_keys: Vec<String>,
     diagnostics: Vec<Diagnostic>,
     seen_targets: HashSet<String>,
+    offset_seen_targets: HashSet<String>,
     pending_row: Option<SsedIndexRow>,
     gaiji_policy: GaijiPolicy,
     match_display_label: bool,
@@ -130,13 +132,21 @@ impl<'a> SsedIndexSearchCollector<'a> {
             page_limit,
             matched_count: 0,
             hits: Vec::new(),
+            hit_target_keys: Vec::new(),
             diagnostics: Vec::new(),
             seen_targets: HashSet::new(),
+            offset_seen_targets: HashSet::new(),
             pending_row: None,
             gaiji_policy,
             match_display_label: false,
             stop_on_pending_page_limit: false,
         }
+    }
+
+    pub(super) fn with_seen_targets(mut self, seen_targets: HashSet<String>) -> Self {
+        self.offset_seen_targets = seen_targets.clone();
+        self.seen_targets = seen_targets;
+        self
     }
 
     pub(super) fn with_display_label_matching(mut self) -> Self {
@@ -171,11 +181,15 @@ impl<'a> SsedIndexSearchCollector<'a> {
             return Ok(true);
         }
         let body_key = ssed_index_body_key(row.body);
-        if !self.seen_targets.insert(body_key) {
+        let already_seen = !self.seen_targets.insert(body_key.clone());
+        let count_for_offset = !already_seen || self.offset_seen_targets.remove(&body_key);
+        if self.matched_count < self.offset {
+            if count_for_offset {
+                self.matched_count = self.matched_count.saturating_add(1);
+            }
             return Ok(true);
         }
-        if self.matched_count < self.offset {
-            self.matched_count = self.matched_count.saturating_add(1);
+        if already_seen {
             return Ok(true);
         }
         self.pending_row = Some(row);
@@ -243,6 +257,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
     }
 
     fn emit_hit(&mut self, row: SsedIndexRow) -> Result<()> {
+        let body_key = ssed_index_body_key(row.body);
         let target = match self.package.ssed_target_for_search_index_row(&row)? {
             Ok(target) => target,
             Err(diagnostic) => {
@@ -265,6 +280,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
             sequence_hint: None,
             diagnostics: label.diagnostics,
         });
+        self.hit_target_keys.push(body_key);
         Ok(())
     }
 
@@ -280,8 +296,16 @@ impl<'a> SsedIndexSearchCollector<'a> {
         self.diagnostics.extend(diagnostics);
     }
 
-    pub(super) fn into_search_page(mut self, limit: usize) -> SearchPage {
+    pub(super) fn into_search_page(self, limit: usize) -> SearchPage {
+        self.into_search_page_with_hit_target_keys(limit).0
+    }
+
+    pub(super) fn into_search_page_with_hit_target_keys(
+        mut self,
+        limit: usize,
+    ) -> (SearchPage, Vec<String>) {
         if let Some(row) = self.pending_row.take() {
+            let body_key = ssed_index_body_key(row.body);
             match self.package.ssed_target_for_search_index_row(&row) {
                 Ok(Ok(target)) => {
                     let title = self.package.ssed_display_text_for_index_row(&row);
@@ -299,6 +323,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
                         sequence_hint: None,
                         diagnostics: label.diagnostics,
                     });
+                    self.hit_target_keys.push(body_key);
                 }
                 Ok(Err(diagnostic)) => self.diagnostics.push(diagnostic),
                 Err(error) => self.diagnostics.push(Diagnostic::warning(
@@ -309,12 +334,16 @@ impl<'a> SsedIndexSearchCollector<'a> {
         }
         let next_cursor = (self.hits.len() > limit).then(|| (self.offset + limit).to_string());
         self.hits.truncate(limit);
-        SearchPage {
-            hits: self.hits,
-            next_cursor,
-            result_sequence: None,
-            diagnostics: self.diagnostics,
-        }
+        self.hit_target_keys.truncate(limit);
+        (
+            SearchPage {
+                hits: self.hits,
+                next_cursor,
+                result_sequence: None,
+                diagnostics: self.diagnostics,
+            },
+            self.hit_target_keys,
+        )
     }
 }
 

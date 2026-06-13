@@ -4,6 +4,8 @@ use super::*;
 use crate::package::drivers::ssed_navigation::{
     ssed_aux_bound_target_row, ssed_aux_index_row_target,
 };
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS: usize = 256;
 const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 20_480;
@@ -612,6 +614,23 @@ impl ReaderBookPackage {
         cursor: Option<SsedPartialNonprefixCursor>,
         skip_prefix_rows: bool,
     ) -> Result<SsedPartialNonprefixSearchPage> {
+        self.search_ssed_partial_nonprefix_page_inner_with_seen_targets(
+            query,
+            needle,
+            cursor,
+            skip_prefix_rows,
+            HashSet::new(),
+        )
+    }
+
+    fn search_ssed_partial_nonprefix_page_inner_with_seen_targets(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        cursor: Option<SsedPartialNonprefixCursor>,
+        skip_prefix_rows: bool,
+        seen_targets: HashSet<String>,
+    ) -> Result<SsedPartialNonprefixSearchPage> {
         let page_limit = query.limit.saturating_add(1);
         let skip_prefix_rows = cursor
             .as_ref()
@@ -655,7 +674,8 @@ impl ReaderBookPackage {
             page_limit,
             query.label_gaiji_policy(),
         )
-        .with_display_label_matching();
+        .with_display_label_matching()
+        .with_seen_targets(seen_targets);
         let physical_scan = self.scan_ssed_partial_nonprefix_index_rows_paged_until_visible(
             needle,
             physical_cursor,
@@ -664,7 +684,8 @@ impl ReaderBookPackage {
         )?;
         let visible_start_cursor = physical_scan.visible_start_cursor;
         let matched_offset_physical_start = offset_cursor_physical_start.or(visible_start_cursor);
-        let mut page = collector.into_search_page(query.limit);
+        let (mut page, hit_target_keys) =
+            collector.into_search_page_with_hit_target_keys(query.limit);
         page.next_cursor = page
             .next_cursor
             .take()
@@ -683,6 +704,7 @@ impl ReaderBookPackage {
         Ok(SsedPartialNonprefixSearchPage {
             page,
             visible_start_cursor,
+            hit_target_keys,
         })
     }
 
@@ -1392,6 +1414,8 @@ impl ReaderBookPackage {
         let sidecar_body_physical_cursor =
             decode_ssed_fulltext_sidecar_body_physical_cursor(query.cursor.as_deref());
         let chronology_cursor = decode_ssed_fulltext_chronology_cursor(query.cursor.as_deref());
+        let nonprefix_title_cursor =
+            decode_ssed_fulltext_nonprefix_title_cursor(query.cursor.as_deref());
         let row_cursor = decode_ssed_fulltext_row_cursor(query.cursor.as_deref());
         let body_physical_cursor =
             decode_ssed_fulltext_body_physical_cursor(query.cursor.as_deref());
@@ -1418,7 +1442,26 @@ impl ReaderBookPackage {
             && has_readable_ssed_indexes
             && query.cursor.is_none()
             && let Some(page) =
+                self.ssed_fulltext_initial_partial_nonprefix_title_index_prepass(query, &needle)?
+        {
+            return Ok(page);
+        }
+        if honmon_body_window_scan_needed
+            && has_readable_ssed_indexes
+            && query.cursor.is_none()
+            && let Some(page) =
                 self.ssed_fulltext_initial_partial_title_index_prepass(query, &needle, page_limit)?
+        {
+            return Ok(page);
+        }
+        if honmon_body_window_scan_needed
+            && has_readable_ssed_indexes
+            && let Some(nonprefix_title_cursor) = nonprefix_title_cursor
+            && let Some(page) = self.ssed_fulltext_partial_nonprefix_title_index_prepass(
+                query,
+                &needle,
+                Some(nonprefix_title_cursor),
+            )?
         {
             return Ok(page);
         }
@@ -3007,6 +3050,58 @@ impl ReaderBookPackage {
         Ok(Some(page))
     }
 
+    fn ssed_fulltext_initial_partial_nonprefix_title_index_prepass(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+    ) -> Result<Option<SearchPage>> {
+        if !ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(query, needle) {
+            return Ok(None);
+        }
+        self.ssed_fulltext_partial_nonprefix_title_index_prepass(query, needle, None)
+    }
+
+    fn ssed_fulltext_partial_nonprefix_title_index_prepass(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        cursor: Option<SsedFulltextNonprefixTitleCursor>,
+    ) -> Result<Option<SearchPage>> {
+        let mut title_query = query.clone();
+        title_query.mode = SearchMode::Partial;
+        title_query.cursor = None;
+        title_query.limit = query.limit;
+        let (partial_cursor, mut seen_targets) = cursor
+            .map(|cursor| (Some(cursor.cursor), cursor.seen_targets))
+            .unwrap_or_default();
+        let nonprefix_page = self.search_ssed_partial_nonprefix_page_inner_with_seen_targets(
+            &title_query,
+            needle,
+            partial_cursor,
+            true,
+            seen_targets.clone(),
+        )?;
+        let mut page = nonprefix_page.page;
+        if page.hits.is_empty() {
+            return Ok(None);
+        }
+        seen_targets.extend(nonprefix_page.hit_target_keys);
+        let post_title_prepass_cursor = self.ssed_fulltext_post_title_prepass_cursor(query)?;
+        page.next_cursor = page
+            .next_cursor
+            .take()
+            .map(|cursor| encode_ssed_fulltext_nonprefix_title_cursor(&cursor, &seen_targets))
+            .or(Some(post_title_prepass_cursor));
+        page.diagnostics.insert(
+            0,
+            Diagnostic::info(
+                "ssed_fulltext_partial_nonprefix_title_prepass",
+                "SSED full-text search returned non-prefix native title/index matches before scanning HONMON bodies",
+            ),
+        );
+        Ok(Some(page))
+    }
+
     fn ssed_fulltext_post_title_prepass_cursor(&self, query: &SearchQuery) -> Result<String> {
         let sidecar_resolvers = self.ssed_sidecar_body_resolvers()?;
         if sidecar_resolvers.is_empty() {
@@ -3243,6 +3338,13 @@ enum SsedSidecarTitleCursor {
 struct SsedPartialNonprefixSearchPage {
     page: SearchPage,
     visible_start_cursor: Option<SsedPartialIndexScanCursor>,
+    hit_target_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SsedFulltextNonprefixTitleCursor {
+    cursor: SsedPartialNonprefixCursor,
+    seen_targets: HashSet<String>,
 }
 
 #[derive(Debug, Default)]
@@ -3486,6 +3588,40 @@ fn decode_ssed_fulltext_title_physical_offset_cursor(
         },
         offset,
     })
+}
+
+const SSED_FULLTEXT_NONPREFIX_TITLE_CURSOR_PREFIX: &str = "title-nonprefix:";
+
+fn decode_ssed_fulltext_nonprefix_title_cursor(
+    cursor: Option<&str>,
+) -> Option<SsedFulltextNonprefixTitleCursor> {
+    let payload = cursor?.strip_prefix(SSED_FULLTEXT_NONPREFIX_TITLE_CURSOR_PREFIX)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload.as_bytes()).ok()?;
+    let decoded = String::from_utf8(decoded).ok()?;
+    let (partial_cursor, seen_targets) = decoded.split_once('\n')?;
+    let cursor = decode_ssed_partial_nonprefix_cursor(Some(partial_cursor))?;
+    let seen_targets = seen_targets
+        .split(',')
+        .filter(|target| !target.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    Some(SsedFulltextNonprefixTitleCursor {
+        cursor,
+        seen_targets,
+    })
+}
+
+fn encode_ssed_fulltext_nonprefix_title_cursor(
+    cursor: &str,
+    seen_targets: &HashSet<String>,
+) -> String {
+    let mut seen_targets = seen_targets.iter().map(String::as_str).collect::<Vec<_>>();
+    seen_targets.sort_unstable();
+    let payload = format!("{cursor}\n{}", seen_targets.join(","));
+    format!(
+        "{SSED_FULLTEXT_NONPREFIX_TITLE_CURSOR_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(payload.as_bytes())
+    )
 }
 
 fn encode_ssed_fulltext_title_physical_offset_cursor(
@@ -3882,13 +4018,39 @@ fn ssed_fulltext_sidecar_title_prepass_is_bounded(query: &str) -> bool {
         && query.bytes().any(|byte| byte.is_ascii_alphabetic())
 }
 
+fn ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
+    query: &SearchQuery,
+    needle: &str,
+) -> bool {
+    if query.cursor.is_some() || query.limit == 0 {
+        return false;
+    }
+    let raw_query = query.query.trim();
+    if raw_query.is_empty() || raw_query.chars().any(char::is_whitespace) {
+        return false;
+    }
+    if !raw_query.chars().any(|ch| !ch.is_ascii())
+        || !raw_query
+            .bytes()
+            .any(|byte| byte.is_ascii_digit() || byte.is_ascii_punctuation())
+    {
+        return false;
+    }
+    let needle_len = needle.chars().count();
+    (2..=8).contains(&needle_len) && !ssed_index_page_prefilter_candidates(needle).is_empty()
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::{
         SsedFulltextTitleCursor, SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
-        decode_ssed_fulltext_title_cursor, decode_ssed_partial_nonprefix_cursor,
-        decode_ssed_title_label_cursor, encode_ssed_fulltext_title_physical_offset_cursor,
-        encode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_offset_cursor,
+        decode_ssed_fulltext_nonprefix_title_cursor, decode_ssed_fulltext_title_cursor,
+        decode_ssed_partial_nonprefix_cursor, decode_ssed_title_label_cursor,
+        encode_ssed_fulltext_nonprefix_title_cursor,
+        encode_ssed_fulltext_title_physical_offset_cursor, encode_ssed_partial_nonprefix_cursor,
+        encode_ssed_partial_nonprefix_offset_cursor,
         encode_ssed_partial_nonprefix_physical_offset_cursor,
         encode_ssed_partial_unverified_nonprefix_cursor, encode_ssed_unverified_title_label_cursor,
         ssed_fulltext_first_byte_candidate_offset, ssed_fulltext_sidecar_title_prepass_is_bounded,
@@ -4064,6 +4226,34 @@ mod tests {
             decode_ssed_fulltext_title_cursor(Some("title:17")),
             Some(SsedFulltextTitleCursor::MatchedOffset(17))
         );
+    }
+
+    #[test]
+    fn fulltext_nonprefix_title_cursor_preserves_seen_targets() {
+        let partial_cursor = encode_ssed_partial_nonprefix_cursor(
+            Some(SsedPartialIndexScanCursor {
+                component_index: 6,
+                page_index: 946,
+            }),
+            true,
+        );
+        let seen_targets = HashSet::from(["00001d85:02a8".to_owned(), "00001538:0374".to_owned()]);
+
+        let cursor = encode_ssed_fulltext_nonprefix_title_cursor(&partial_cursor, &seen_targets);
+        assert!(cursor.starts_with("title-nonprefix:"));
+
+        let decoded = decode_ssed_fulltext_nonprefix_title_cursor(Some(&cursor)).unwrap();
+        assert_eq!(
+            decoded.cursor,
+            SsedPartialNonprefixCursor::Physical {
+                cursor: SsedPartialIndexScanCursor {
+                    component_index: 6,
+                    page_index: 946,
+                },
+                skip_prefix_rows: true,
+            }
+        );
+        assert_eq!(decoded.seen_targets, seen_targets);
     }
 
     #[test]
