@@ -639,6 +639,12 @@ impl ReaderBookPackage {
         let use_bounded_native_prefix_probe = cursor_is_none
             && !ssed_index_page_prefilter_candidates(needle).is_empty()
             && self.ssed_can_scan_all_title_indexes();
+        if use_bounded_native_prefix_probe
+            && ssed_partial_prefix_native_probe_needs_fast_hit_probe(query)
+            && !self.ssed_native_forward_prefix_fast_hit_probe(query, needle, 1)?
+        {
+            return Ok(None);
+        }
         if use_bounded_native_prefix_probe {
             if let Some(page) = self.search_ssed_partial_native_prefix_page(query, needle)? {
                 return Ok(Some(ssed_native_partial_prefix_page(page)));
@@ -3272,6 +3278,15 @@ impl ReaderBookPackage {
         if !ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(query) {
             return Ok(true);
         }
+        self.ssed_native_forward_prefix_fast_hit_probe(query, needle, 1)
+    }
+
+    fn ssed_native_forward_prefix_fast_hit_probe(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        leaf_budget: usize,
+    ) -> Result<bool> {
         let mut collector = SsedIndexSearchCollector::new(
             self,
             &SearchMode::Forward,
@@ -3286,7 +3301,7 @@ impl ReaderBookPackage {
         let scan_result = self.scan_ssed_simple_leaf_index_rows_near_key_with_leaf_budget(
             &SearchMode::Forward,
             needle,
-            1,
+            leaf_budget,
             |row| {
                 let keep_scanning = collector.push_row(row)?;
                 if collector.has_hits() {
@@ -4602,7 +4617,17 @@ fn ssed_fulltext_sidecar_title_prepass_is_bounded(query: &str) -> bool {
 }
 
 fn ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe(query: &SearchQuery) -> bool {
-    let raw_query = query.query.trim();
+    ssed_query_is_single_token_ascii_digit_without_ascii_alpha(&query.query)
+}
+
+fn ssed_partial_prefix_native_probe_needs_fast_hit_probe(query: &SearchQuery) -> bool {
+    query.cursor.is_none()
+        && query.mode == SearchMode::Partial
+        && ssed_query_is_single_token_ascii_digit_without_ascii_alpha(&query.query)
+}
+
+fn ssed_query_is_single_token_ascii_digit_without_ascii_alpha(query: &str) -> bool {
+    let raw_query = query.trim();
     if raw_query.is_empty() || raw_query.chars().any(char::is_whitespace) {
         return false;
     }
@@ -4668,6 +4693,7 @@ mod tests {
         ssed_fulltext_sidecar_title_prepass_is_bounded,
         ssed_initial_partial_native_prefix_prepass_query_is_bounded,
         ssed_initial_title_label_fallback_prepass_should_run, ssed_native_partial_prefix_page,
+        ssed_partial_prefix_native_probe_needs_fast_hit_probe,
         ssed_partial_prefix_prepass_is_bounded,
         ssed_sidecar_title_authoritative_prepass_is_bounded,
         ssed_sidecar_title_auto_append_is_bounded, ssed_sidecar_title_query_is_kana_only,
@@ -4825,6 +4851,31 @@ mod tests {
                 .map(|diagnostic| diagnostic.code.as_str()),
             Some("ssed_partial_prefix_prepass")
         );
+    }
+
+    #[test]
+    fn partial_prefix_native_probe_uses_fast_hit_probe_for_digit_tokens() {
+        assert!(ssed_partial_prefix_native_probe_needs_fast_hit_probe(
+            &current_book_query(SearchMode::Partial, "10", 1)
+        ));
+        assert!(ssed_partial_prefix_native_probe_needs_fast_hit_probe(
+            &current_book_query(SearchMode::Partial, "0歳", 1)
+        ));
+        assert!(!ssed_partial_prefix_native_probe_needs_fast_hit_probe(
+            &current_book_query(SearchMode::Partial, "3D", 1)
+        ));
+        assert!(!ssed_partial_prefix_native_probe_needs_fast_hit_probe(
+            &current_book_query(SearchMode::Forward, "10", 1)
+        ));
+        assert!(!ssed_partial_prefix_native_probe_needs_fast_hit_probe(
+            &current_book_query(SearchMode::Partial, "しめ", 1)
+        ));
+
+        let mut cursor_query = current_book_query(SearchMode::Partial, "10", 1);
+        cursor_query.cursor = Some("ssed-partial-prefix:1".to_owned());
+        assert!(!ssed_partial_prefix_native_probe_needs_fast_hit_probe(
+            &cursor_query
+        ));
     }
 
     #[test]
