@@ -4,6 +4,25 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-circle-marker-row-prefetch-v1.jsonl`
+- Produced after two scoped SSED provider changes: keeping KOJIEN7 native
+  circle-marker title queries on the native index path, and skipping redundant
+  initial row-driven SSED full-text body prefetch when byte-candidate direct
+  HONMON scanning is available.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path-set hash is unchanged:
+  `f57adc5dfa92d5aecabfd02579639a34e311fbc3edcda62883717489479d5b82`.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+- Windows `_DCT_KOJIEN7` exact
+  `◯に滅せずんば炎炎を若何いかんせん` is 45 ms and forward `◯に` is 67 ms.
+  iOS `KOJIEN7` exact is 54 ms and forward `◯に` is 60 ms.
+- Initial SSED full-text row prefetch no longer appears in the gate.
+  `_DCT_NMEDEJ12` `search_full_text` `01` is now a pure direct HONMON scan at
+  621 ms, `_DCT_GEN2005` `曙光` is 101 ms, and `_DCT_KENE7J5` `は殺` is 276 ms.
+
+Previous full-corpus gates:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-hkkigak6-partial-title-prepass-v1.jsonl`
 - Produced after making initial bounded SSED partial search avoid the slow
   prefix fallback when the fast native prefix probe is empty, then satisfy the
@@ -20,26 +39,6 @@ Latest full-corpus gate:
 - `Other/iOS/RDRSP2/RDRSP2` `ios-plist:indexSearch.plist` now records
   `mode_invariant_surface` render-mode skips in the full gate and is 1001 ms,
   down from 2073 ms in the previous full gate.
-
-Subsequent focused validation since the latest full-corpus gate:
-
-- `/tmp/lvcore-focused-validate-kojien7-circle-native-title-v1.jsonl`
-- Produced after keeping native SSED exact/forward title search authoritative
-  for KOJIEN7 circle-marker queries instead of first probing dense sidecar
-  title rows.
-- Windows `_DCT_KOJIEN7` and iOS `KOJIEN7` validated with package status 2
-  `ok`.
-- This focused run does not replace the latest full-corpus gate; it records the
-  scoped proof for 0ak.
-- `/tmp/lvcore-focused-validate-direct-body-skip-initial-row-prefetch-v1.jsonl`
-- Produced after skipping the initial row-driven SSED full-text body prefetch
-  when byte-candidate direct HONMON scanning is available.
-- `_DCT_NMEDEJ12`, `_DCT_GEN2005`, and `_DCT_KENE7J5` validated with package
-  status 3 `ok`.
-- This focused run records the scoped proof for 0al; it does not replace the
-  latest full-corpus gate.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-title-prepass-filled-page-stop-v1.jsonl`
 - Produced after making the initial SSED full-text title/index prepass stop at
@@ -387,24 +386,24 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- Windows `_DCT_KOJIEN7` and iOS `KOJIEN7`, exact query
-  `◯に滅せずんば炎炎を若何いかんせん` and forward query `◯に`: resolved in
-  0ak with focused validation. The latest full-corpus gate still predates that
-  change.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 663 ms in the latest full
-  gate, direct native HONMON scan plus row-driven prefetch. 0al removes the
-  useless initial row prefetch in focused validation, but the row remains a
-  direct HONMON scan performance candidate at 655 ms focused.
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 618 ms. It remains behind
-  intentionally deferred `title-nonprefix-unverified:*` continuation proof.
-- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 613 ms,
-  `_DCT_KQDENTAL`, `search_full_text` query `01`: 579 ms, and
-  `_DCT_HKDKSR10`, `search_full_text` query `FU`: 427 ms. The avoidable
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 621 ms in the latest full
+  gate, now a pure direct native HONMON scan with one byte-candidate window.
+  0al removed the useless initial row prefetch; remaining time should be
+  inspected as direct body scan-window/decompression cost before more code
+  changes.
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 607 ms,
+  `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 598 ms, and
+  `_DCT_HKDKSR10`, `search_full_text` query `FU`: 396 ms. The avoidable
   filled-page title-prepass overfetch is resolved in 0ah; remaining time should
   be inspected as direct title/index scan or package-open cost before more code
   changes.
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 593 ms. It remains behind
+  intentionally deferred `title-nonprefix-unverified:*` continuation proof.
+- Windows `_DCT_KOJIEN7` and iOS `KOJIEN7`, exact query
+  `◯に滅せずんば炎炎を若何いかんせん` and forward query `◯に`: resolved in
+  0ak and verified in the latest full-corpus gate.
 - `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: resolved in
-  0aj and verified in the latest full-corpus gate at 293 ms.
+  0aj and verified in the latest full-corpus gate at 288 ms.
 - `Other/iOS/RDRSP2/RDRSP2` `ios-plist:indexSearch.plist` and
   `SINMEI7` menu/plist panel rows were inspected after the previous gate. The
   mode-invariant render-mode validation overwork is resolved in 0ai and is now
@@ -427,7 +426,7 @@ gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
 
-### 0al. SSED full-text direct body prefetch gate (resolved, focused)
+### 0al. SSED full-text direct body prefetch gate (resolved, full gate)
 
 Why this matters:
 
@@ -463,8 +462,18 @@ Current status:
 - This does not close the remaining `_DCT_NMEDEJ12` direct-scan cost. Further
   improvement likely requires direct HONMON scan-window sizing or streaming
   changes and should be evaluated across all direct-scan rows before editing.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-circle-marker-row-prefetch-v1.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - Path-set hash matched the previous 336-row baseline.
+  - Warning diagnostics remained only the explicitly deferred HC common HTML
+    fallback.
+  - Initial row-driven full-text body prefetch no longer appears in the gate.
+  - `_DCT_NMEDEJ12` `search_full_text` `01`: 621 ms.
+  - `_DCT_GEN2005` `search_full_text` `曙光`: 101 ms.
+  - `_DCT_KENE7J5` `search_full_text` `は殺`: 276 ms.
 
-### 0ak. KOJIEN7 native circle-marker title search (resolved, focused)
+### 0ak. KOJIEN7 native circle-marker title search (resolved, full gate)
 
 Why this matters:
 
@@ -502,9 +511,17 @@ Current status:
   - Windows `_DCT_KOJIEN7` forward `◯に`: 43 ms.
   - iOS `KOJIEN7` exact `◯に滅せずんば炎炎を若何いかんせん`: 50 ms.
   - iOS `KOJIEN7` forward `◯に`: 49 ms.
-- No full-corpus gate has been run for 0ak yet. The next full gate should be
-  before push if this shared SSED provider change is committed immediately, or
-  after the next similarly scoped provider change if batching is preferred.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-circle-marker-row-prefetch-v1.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - Path-set hash matched the previous 336-row baseline.
+  - Warning diagnostics remained only the explicitly deferred HC common HTML
+    fallback.
+  - Windows `_DCT_KOJIEN7` exact
+    `◯に滅せずんば炎炎を若何いかんせん`: 45 ms.
+  - Windows `_DCT_KOJIEN7` forward `◯に`: 67 ms.
+  - iOS `KOJIEN7` exact `◯に滅せずんば炎炎を若何いかんせん`: 54 ms.
+  - iOS `KOJIEN7` forward `◯に`: 60 ms.
 
 ### 0aj. HKKIGAK6 bounded partial-title first page (resolved, focused)
 
