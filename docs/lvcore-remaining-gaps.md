@@ -4,6 +4,16 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-cjk-sidecar-prefix-v1.jsonl`
+- Produced after adding an authoritative CJK SSED partial-prefix sidecar-title
+  fast path and making dense sidecar block ranges lazy during discovery.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-nonprefix-title-fulltext-v4.jsonl`
 - Produced after adding a bounded SSED full-text non-prefix native-title
   prepass and an opaque `title-nonprefix:*` continuation cursor carrying
@@ -12,8 +22,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-title-physical-offset.jsonl`
 - Produced after adding physical-offset cursors for large SSED full-text title
@@ -205,7 +213,7 @@ Warning diagnostics in the baseline:
 
 | Diagnostic | Count | Classification |
 | --- | ---: | --- |
-| `hc_render_common_html_fallback` | 1936 | Deferred HC visual rendering |
+| `hc_render_common_html_fallback` | 1924 | Deferred HC visual rendering |
 | `ssed_loose_address_unresolved` | 0 | Closed by packed SSED link-address normalization |
 
 Important info/status classes from the latest gate:
@@ -233,35 +241,96 @@ Important info/status classes from the latest gate:
 
 Latest concrete non-HC performance candidates from the full gate:
 
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 4907 ms validation
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 5072 ms validation
   exercise elapsed, now hit_count 1 with a `title-nonprefix:*` cursor; the
-  cursor probe is `ok` and returns the next distinct title in 2506 ms.
-- `_DCT_GENKANA5`, `search_partial` query `アル`: 914 ms, sidecar title search
-  after partial-prefix prepass.
-- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 867 ms, direct native
-  HONMON scan plus row-driven prefetch.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 838 ms, direct native
+  cursor probe is `ok` and returns the next distinct title in 2576 ms.
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 911 ms, direct native
   HONMON scan plus row-driven prefetch; this intentionally stays out of the
   mixed digit/non-ASCII title prepass gate.
-- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 803 ms, native title
+- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 854 ms, direct native
+  HONMON scan plus row-driven prefetch.
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 802 ms, native title
   prepass with deferred body continuation.
-- `Other/iOS/IBIO5/IBIO5`, `search_full_text` query `亜-`: 796 ms, sidecar
-  body row cursor with fast cursor probe.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 770 ms, native title prepass
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 800 ms, native title prepass
   with a physical-offset title cursor, followed by direct HONMON scan on
   continuation.
-- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 638 ms,
-  non-prefix physical-offset partial cursor.
-- `_DCT_GEN2005`, `search_full_text` query `曙光`: 621 ms, direct native HONMON
+- `Other/iOS/IBIO5/IBIO5`, `search_full_text` query `亜-`: 791 ms, sidecar
+  body row cursor with fast cursor probe.
+- `_DCT_DAIJIRN4`, `search_exact` query `あ`: 701 ms, sidecar title search
+  with a slow sidecar title-row cursor probe.
+- `Other/iOS/KQNEWJE5/KQNEWJE5`, `search_forward` query `和英`: 671 ms, native
+  offset continuation intentionally deferred.
+- `_DCT_GEN2005`, `search_full_text` query `曙光`: 640 ms, direct native HONMON
   scan plus row-driven prefetch.
-- `Other/iOS/IBIO5/IBIO5`, `search_exact` query `亜-`: 590 ms, sidecar title
-  search.
+- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 595 ms,
+  non-prefix physical-offset partial cursor.
+- `Other/iOS/IBIO5/IBIO5`, `search_exact`/`search_backward` query `亜-`:
+  581/550 ms, sidecar title search.
 
 Rows such as `_DCT_GKKNJPZL` `search_forward` query `00` and `_DCT_IWKOKU7N`
 `search_forward` query `3D` include HC fallback rendering diagnostics and
 should not drive LVCore-only work while HC remains deferred.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0y. SSED CJK partial sidecar-prefix fast path (resolved, full gate)
+
+Why this matters:
+
+- The previous full-corpus gate exposed `_DCT_GENKANA5` partial search for
+  `アル` as a concrete non-HC first-page latency gap: validation spent 914 ms
+  before returning the visible sidecar title
+  `アルカーイダ【Al-Qaeda；Al-Qaida】`.
+- The cursor probe was already fast, so the gap was first-page orchestration,
+  not continuation correctness.
+- Direct inspection showed the relevant `vlpljbl` sidecar stores visual titles
+  in `TEXT` columns; direct sidecar-title cursor search returned the same hit
+  in about 0.07s, while the ordinary first page paid native prefix routing work
+  first.
+
+Current status:
+
+- Partial-prefix search now tries authoritative CJK sidecar title prefixes
+  before native prefix scanning.
+- The returned cursor remains wrapped as
+  `ssed-partial-prefix:sidecar-title-row:*`, preserving the existing partial
+  prefix continuation shape.
+- Dense sidecar discovery no longer eagerly scans every block/offset table for
+  min/max block ranges. Address lookup still uses exact block/offset matching
+  when ranges are unknown, but title search no longer pays that setup cost.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore ssed_sidecar::tests::sidecar_body_discovery_leaves_block_ranges_lazy -- --nocapture`
+  - `cargo test -p lvcore package::drivers::tests::dense_sidecar -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-genkana5-cjk-sidecar-prefix-v2.jsonl`
+  - `_DCT_GENKANA5` package status remained `ok`.
+  - `search_partial` `アル` dropped from 914 ms in the previous full-gate
+    baseline to 13 ms, with hit_count 1 and diagnostics
+    `ssed_partial_prefix_prepass` plus `ssed_sidecar_title_search`.
+  - The cursor probe remained `ok` at 5 ms and returned the next sidecar title
+    row cursor.
+- Direct real-package probe:
+  - `lvcore search .../_DCT_GENKANA5 アル --mode partial --limit 1` now returns
+    the same `アルカーイダ【Al-Qaeda；Al-Qaida】` hit in about 0.04s locally.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-cjk-sidecar-prefix-v1.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1924),
+    which is deferred HC work.
+  - `_DCT_GENKANA5` `search_partial` `アル` remains at 13 ms, with an `ok`
+    cursor probe at 5 ms.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_GENKANA5`
+- Observed row in the previous full gate
+  `/tmp/lvcore-all-corpora-validation-20260613-nonprefix-title-fulltext-v4.jsonl`:
+  - `_DCT_GENKANA5`, `search_partial`, query `アル`, 914 ms, hit_count 1,
+    diagnostics `ssed_partial_prefix_prepass` and `ssed_sidecar_title_search`.
 
 ### 0x. SSED full-text non-prefix native-title prepass (resolved, full gate)
 

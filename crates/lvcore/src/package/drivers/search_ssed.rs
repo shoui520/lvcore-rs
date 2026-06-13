@@ -507,6 +507,20 @@ impl ReaderBookPackage {
         let mut prefix_query = query.clone();
         prefix_query.mode = SearchMode::Forward;
         prefix_query.cursor = cursor;
+        if prefix_query.cursor.is_none() && sidecar_sql_prefilter_is_authoritative(&query.query) {
+            let mut page = self.search_ssed_sidecar_title_page(
+                &prefix_query,
+                SsedSidecarTitleCursor::Offset(0),
+                Vec::new(),
+            )?;
+            if !page.hits.is_empty() || page.next_cursor.is_some() {
+                page.next_cursor = page
+                    .next_cursor
+                    .take()
+                    .map(encode_ssed_partial_prefix_cursor);
+                return Ok(Some(ssed_partial_prefix_page(page)));
+            }
+        }
         let mut page = self.search_ssed_simple_indexes(&prefix_query)?;
         if page.hits.is_empty() && page.next_cursor.is_none() {
             return Ok(None);
@@ -541,14 +555,7 @@ impl ReaderBookPackage {
                     self.ssed_deferred_partial_nonprefix_cursor_if_visible(query, needle, true)?;
             }
         }
-        page.diagnostics.insert(
-            0,
-            Diagnostic::info(
-                "ssed_partial_prefix_prepass",
-                "SSED partial search returned native prefix/title-index matches before scanning non-prefix contains matches",
-            ),
-        );
-        Ok(Some(page))
+        Ok(Some(ssed_partial_prefix_page(page)))
     }
 
     fn ssed_deferred_partial_nonprefix_cursor_if_visible(
@@ -3421,6 +3428,17 @@ fn decode_ssed_partial_prefix_cursor(cursor: Option<&str>) -> Option<String> {
 
 fn encode_ssed_partial_prefix_cursor(cursor: String) -> String {
     format!("{SSED_PARTIAL_PREFIX_CURSOR_PREFIX}{cursor}")
+}
+
+fn ssed_partial_prefix_page(mut page: SearchPage) -> SearchPage {
+    page.diagnostics.insert(
+        0,
+        Diagnostic::info(
+            "ssed_partial_prefix_prepass",
+            "SSED partial search returned native prefix/title-index matches before scanning non-prefix contains matches",
+        ),
+    );
+    page
 }
 
 fn decode_ssed_partial_nonprefix_cursor(

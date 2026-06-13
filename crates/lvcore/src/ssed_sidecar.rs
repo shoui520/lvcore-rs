@@ -653,16 +653,11 @@ pub fn discover_ssed_sidecar_body_resolvers_with_candidates(
         let tables = sqlite_table_names(&connection)?;
         for table in tables {
             let columns = sqlite_columns(&connection, &table)?;
-            let Some(mut resolver) =
+            let Some(resolver) =
                 resolver_for_table(candidate.clone(), storage, &table, &columns, dict_id_hint)
             else {
                 continue;
             };
-            if resolver.has_block_offset_body_address() {
-                let (block_min, block_max) = block_range_for_resolver(&connection, &resolver)?;
-                resolver.block_min = block_min;
-                resolver.block_max = block_max;
-            }
             resolvers.push(resolver);
         }
     }
@@ -1706,28 +1701,6 @@ fn resolver_for_table(
     })
 }
 
-fn block_range_for_resolver(
-    connection: &Connection,
-    resolver: &SsedSidecarBodyResolver,
-) -> Result<(Option<u32>, Option<u32>)> {
-    let Some(block_column) = &resolver.block_column else {
-        return Ok((None, None));
-    };
-    let sql = format!(
-        "select min({}), max({}) from {}",
-        quote_sql_identifier(block_column),
-        quote_sql_identifier(block_column),
-        quote_sql_identifier(&resolver.table),
-    );
-    let range = connection.query_row(&sql, [], |row| {
-        Ok((
-            sqlite_value_to_optional_u32(row.get_ref(0)?)?,
-            sqlite_value_to_optional_u32(row.get_ref(1)?)?,
-        ))
-    })?;
-    Ok(range)
-}
-
 fn media_resolver_for_table(
     path: PathBuf,
     storage: SsedSidecarStorage,
@@ -2160,22 +2133,6 @@ fn sqlite_value_to_u32(value: ValueRef<'_>) -> rusqlite::Result<u32> {
     Ok(u32::try_from(value).unwrap_or(0))
 }
 
-fn sqlite_value_to_optional_u32(value: ValueRef<'_>) -> rusqlite::Result<Option<u32>> {
-    let value = match value {
-        ValueRef::Null => return Ok(None),
-        ValueRef::Integer(value) => value,
-        ValueRef::Real(value) => value as i64,
-        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => match std::str::from_utf8(bytes)
-            .ok()
-            .and_then(|value| value.trim().parse::<i64>().ok())
-        {
-            Some(value) => value,
-            None => return Ok(None),
-        },
-    };
-    Ok(u32::try_from(value).ok())
-}
-
 fn decode_sqlite_text(bytes: &[u8]) -> String {
     if let Ok(text) = std::str::from_utf8(bytes) {
         return text.to_owned();
@@ -2476,5 +2433,33 @@ mod tests {
                 "abaisser",
             )
         );
+    }
+
+    #[test]
+    fn sidecar_body_discovery_leaves_block_ranges_lazy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("body.sqlite");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "create table HONBUN(
+                        No integer primary key not null,
+                        Block integer,
+                        Offset integer,
+                        Title text,
+                        Body text
+                    );
+                    insert into HONBUN(No, Block, Offset, Title, Body)
+                    values (1, 10, 20, 'alpha', 'body');",
+                )
+                .unwrap();
+        }
+
+        let resolvers = discover_ssed_sidecar_body_resolvers(dir.path(), None).unwrap();
+        assert_eq!(resolvers.len(), 1);
+        assert!(resolvers[0].has_block_offset_body_address());
+        assert_eq!(resolvers[0].block_min, None);
+        assert_eq!(resolvers[0].block_max, None);
     }
 }
