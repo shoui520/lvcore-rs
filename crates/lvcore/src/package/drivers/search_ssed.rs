@@ -18,6 +18,7 @@ const SSED_NATIVE_INITIAL_OFFSET_OVERFETCH_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_SIDECAR_TITLE_LOOKAHEAD_DEFER_MIN_BYTES: u64 = 64 * 1024 * 1024;
+const SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES: u64 = 8 * 1024 * 1024;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 const SSED_TITLE_LABEL_UNVERIFIED_CURSOR_PREFIX: &str = "ssed-title-label-unverified:";
@@ -95,6 +96,24 @@ impl ReaderBookPackage {
         }
         let mut dense_sidecar_titles_preferred = None;
         let mut sidecar_title_prepass_exhausted_empty = false;
+        if query.cursor.is_none()
+            && matches!(
+                query.mode,
+                SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+            )
+            && sidecar_sql_prefilter_is_authoritative(&query.query)
+            && query.query.trim().chars().any(|ch| !ch.is_ascii())
+        {
+            let page = self.search_ssed_sidecar_title_page(
+                query,
+                SsedSidecarTitleCursor::Offset(0),
+                Vec::new(),
+            )?;
+            if !page.hits.is_empty() || page.next_cursor.is_some() {
+                return Ok(page);
+            }
+            sidecar_title_prepass_exhausted_empty = true;
+        }
         if query.cursor.is_none() && ssed_sidecar_title_auto_append_is_bounded(&query.query) {
             let mut diagnostics = Vec::new();
             let prefers_dense_sidecar_titles =
@@ -1364,16 +1383,29 @@ impl ReaderBookPackage {
         query: &str,
         resolvers: &[SsedSidecarBodyResolver],
     ) -> bool {
-        mode == SsedSidecarTitleSearchMode::Exact
-            && sidecar_sql_prefilter_is_authoritative(query)
-            && resolvers.iter().any(|resolver| {
+        if !sidecar_sql_prefilter_is_authoritative(query) {
+            return false;
+        }
+        let has_sized_title_resolver = |min_bytes| {
+            resolvers.iter().any(|resolver| {
                 resolver.title_column.is_some()
                     && std::fs::metadata(&resolver.path)
-                        .map(|metadata| {
-                            metadata.len() >= SSED_SIDECAR_TITLE_LOOKAHEAD_DEFER_MIN_BYTES
-                        })
+                        .map(|metadata| metadata.len() >= min_bytes)
                         .unwrap_or(false)
             })
+        };
+        if mode == SsedSidecarTitleSearchMode::Exact
+            && has_sized_title_resolver(SSED_SIDECAR_TITLE_LOOKAHEAD_DEFER_MIN_BYTES)
+        {
+            return true;
+        }
+        matches!(
+            mode,
+            SsedSidecarTitleSearchMode::Exact
+                | SsedSidecarTitleSearchMode::Forward
+                | SsedSidecarTitleSearchMode::Backward
+        ) && query.trim().chars().any(|ch| !ch.is_ascii())
+            && has_sized_title_resolver(SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES)
     }
 
     fn ssed_should_append_sidecar_titles_after_native_page(
@@ -1480,6 +1512,30 @@ impl ReaderBookPackage {
         let body_offset = decode_ssed_fulltext_body_cursor(query.cursor.as_deref());
         let mut diagnostics = Vec::new();
         let has_readable_ssed_indexes = has_readable_ssed_index_payload(catalog, &self.storage);
+        let mut precomputed_sidecar_page = None;
+        if query.cursor.is_none()
+            && sidecar_sql_prefilter_is_authoritative(&query.query)
+            && query.query.chars().any(|ch| !ch.is_ascii())
+            && !self.ssed_sidecar_body_resolvers()?.is_empty()
+        {
+            let sidecar_page = search_ssed_dense_sidecar_bodies_with_resolvers(
+                self.ssed_sidecar_body_resolvers()?,
+                &query.query,
+                0,
+                None,
+                query.limit,
+            )?;
+            let page = self.ssed_fulltext_sidecar_body_page_from_search(
+                query,
+                &label_policy,
+                0,
+                sidecar_page.clone(),
+            )?;
+            if page.hits.len() >= query.limit {
+                return Ok(page);
+            }
+            precomputed_sidecar_page = Some(sidecar_page);
+        }
         if query.cursor.is_none()
             && ssed_fulltext_sidecar_title_prepass_is_bounded(&query.query)
             && let Some(page) = self.ssed_fulltext_sidecar_title_prepass(query)?
@@ -1559,13 +1615,16 @@ impl ReaderBookPackage {
             chronology_cursor.is_none() && !body_cursor_explicit && !row_cursor_explicit;
         let sidecar_offset = sidecar_body_cursor.unwrap_or(0);
         let sidecar_page = if run_sidecar {
-            search_ssed_dense_sidecar_bodies_with_resolvers(
-                self.ssed_sidecar_body_resolvers()?,
-                &query.query,
-                sidecar_offset,
-                sidecar_body_physical_cursor.as_ref(),
-                sidecar_limit,
-            )?
+            match precomputed_sidecar_page.take() {
+                Some(page) => page,
+                None => search_ssed_dense_sidecar_bodies_with_resolvers(
+                    self.ssed_sidecar_body_resolvers()?,
+                    &query.query,
+                    sidecar_offset,
+                    sidecar_body_physical_cursor.as_ref(),
+                    sidecar_limit,
+                )?,
+            }
         } else {
             SsedSidecarSearchPage {
                 hits: Vec::new(),
@@ -1573,81 +1632,21 @@ impl ReaderBookPackage {
                 exhausted: true,
             }
         };
-        if !sidecar_page.hits.is_empty() || sidecar_page.matched_count > 0 {
-            diagnostics.push(Diagnostic::info(
-                "ssed_fulltext_sidecar_scan",
-                "SSED full-text search included renderable dense HONMON sidecar bodies",
-            ));
-        }
-        let mut next_sidecar_body_cursor = None::<SsedSidecarBodyCursor>;
-        for hit in sidecar_page.hits {
-            let title = if hit.body.title.trim().is_empty() {
-                hit.body.text.chars().take(80).collect::<String>()
-            } else {
-                hit.body.title.clone()
-            };
-            next_sidecar_body_cursor = hit.cursor.clone();
-            let label = self.ssed_rich_label_with_policy(&title, &label_policy);
-            let resolver_hint = hit
-                .body
-                .resolver
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string());
-            let mut hit_diagnostics = label.diagnostics;
-            hit_diagnostics.extend(hit.body.diagnostics);
-            let target = TargetToken::new(&InternalTarget::SsedDenseAnchor {
-                anchor: hit.anchor_id,
-                resolver_hint,
-            })?;
-            let href = target.href();
-            hits.push(SearchHit {
-                href,
-                book_id: self.metadata.book_id.clone(),
-                target,
-                title_html: label.html,
-                title_text: label.text,
-                snippet_html: ssed_fulltext_snippet_html(&hit.body.text, &query.query),
-                sequence_hint: None,
-                diagnostics: hit_diagnostics,
-            });
-            if hits.len() >= page_limit {
-                break;
-            }
-        }
-        let next_sidecar_cursor = || {
-            next_sidecar_body_cursor
-                .as_ref()
-                .map(encode_ssed_fulltext_sidecar_body_physical_cursor)
-                .unwrap_or_else(|| {
-                    encode_ssed_fulltext_sidecar_body_cursor(
-                        sidecar_offset.saturating_add(query.limit),
-                    )
-                })
-        };
-        if query.cursor.is_none() && hits.len() >= query.limit && !sidecar_page.exhausted {
+        let mut sidecar_search_page = self.ssed_fulltext_sidecar_body_page_from_search(
+            query,
+            &label_policy,
+            sidecar_offset,
+            sidecar_page,
+        )?;
+        diagnostics.append(&mut sidecar_search_page.diagnostics);
+        hits.append(&mut sidecar_search_page.hits);
+        if hits.len() >= query.limit
+            && let Some(next_cursor) = sidecar_search_page.next_cursor
+        {
             hits.truncate(query.limit);
             return Ok(SearchPage {
                 hits,
-                next_cursor: Some(next_sidecar_cursor()),
-                result_sequence: None,
-                diagnostics,
-            });
-        }
-        if query.cursor.is_some() && hits.len() >= query.limit && !sidecar_page.exhausted {
-            hits.truncate(query.limit);
-            return Ok(SearchPage {
-                hits,
-                next_cursor: Some(next_sidecar_cursor()),
-                result_sequence: None,
-                diagnostics,
-            });
-        }
-        if hits.len() >= page_limit && !sidecar_page.exhausted {
-            hits.truncate(query.limit);
-            return Ok(SearchPage {
-                hits,
-                next_cursor: Some(next_sidecar_cursor()),
+                next_cursor: Some(next_cursor),
                 result_sequence: None,
                 diagnostics,
             });
@@ -2008,6 +2007,76 @@ impl ReaderBookPackage {
         });
         hits.truncate(query.limit);
 
+        Ok(SearchPage {
+            hits,
+            next_cursor,
+            result_sequence: None,
+            diagnostics,
+        })
+    }
+
+    fn ssed_fulltext_sidecar_body_page_from_search(
+        &self,
+        query: &SearchQuery,
+        label_policy: &GaijiPolicy,
+        sidecar_offset: usize,
+        sidecar_page: SsedSidecarSearchPage,
+    ) -> Result<SearchPage> {
+        let mut diagnostics = Vec::new();
+        if !sidecar_page.hits.is_empty() || sidecar_page.matched_count > 0 {
+            diagnostics.push(Diagnostic::info(
+                "ssed_fulltext_sidecar_scan",
+                "SSED full-text search included renderable dense HONMON sidecar bodies",
+            ));
+        }
+        let exhausted = sidecar_page.exhausted;
+        let mut hits = Vec::new();
+        let mut next_sidecar_body_cursor = None::<SsedSidecarBodyCursor>;
+        for hit in sidecar_page.hits {
+            let title = if hit.body.title.trim().is_empty() {
+                hit.body.text.chars().take(80).collect::<String>()
+            } else {
+                hit.body.title.clone()
+            };
+            next_sidecar_body_cursor = hit.cursor.clone();
+            let label = self.ssed_rich_label_with_policy(&title, label_policy);
+            let resolver_hint = hit
+                .body
+                .resolver
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string());
+            let mut hit_diagnostics = label.diagnostics;
+            hit_diagnostics.extend(hit.body.diagnostics);
+            let target = TargetToken::new(&InternalTarget::SsedDenseAnchor {
+                anchor: hit.anchor_id,
+                resolver_hint,
+            })?;
+            let href = target.href();
+            hits.push(SearchHit {
+                href,
+                book_id: self.metadata.book_id.clone(),
+                target,
+                title_html: label.html,
+                title_text: label.text,
+                snippet_html: ssed_fulltext_snippet_html(&hit.body.text, &query.query),
+                sequence_hint: None,
+                diagnostics: hit_diagnostics,
+            });
+        }
+        let next_cursor = if hits.len() >= query.limit && !exhausted {
+            next_sidecar_body_cursor
+                .as_ref()
+                .map(encode_ssed_fulltext_sidecar_body_physical_cursor)
+                .or_else(|| {
+                    Some(encode_ssed_fulltext_sidecar_body_cursor(
+                        sidecar_offset.saturating_add(query.limit),
+                    ))
+                })
+        } else {
+            None
+        };
+        hits.truncate(query.limit);
         Ok(SearchPage {
             hits,
             next_cursor,

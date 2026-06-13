@@ -4,6 +4,20 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-nonascii-sidecar-prepass-v1.jsonl`
+- Produced after adding authoritative non-ASCII SSED sidecar title/body
+  prepasses for iOS dense sidecars, broadening non-ASCII sidecar-title
+  continuation deferral to exact/forward/backward searches, and making SSED
+  navigation detection probe only the first menu page when checking whether a
+  menu surface exists.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered, including the
+  two `Other/Android` rows.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-ssed-jis-prefilter-memmem-v2.jsonl`
 - Produced after making the SSED separator-aware JIS byte prefilter seek to
   occurrences of the first JIS pair before verifying separator-skipped pair
@@ -15,8 +29,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-ios-table-list-cross-book-shortcut-v1.jsonl`
 - Produced after making iOS SSED `tableList.plist` cross-book rows skip
@@ -259,11 +271,11 @@ Important info/status classes from the latest gate:
 
 | Marker | Count | Classification |
 | --- | ---: | --- |
-| `sidecar-body-row:*` cursor probed `ok` | 28 | Dense sidecar body cursor fix verified |
-| `sidecar-title-unverified-row:*` cursor `not_probed` | 6 | Large exact CJK sidecar-title continuation intentionally deferred |
+| `sidecar-body-row:*` cursor probed `ok` | 47 | Dense sidecar body cursor fix verified |
+| `sidecar-title-unverified-row:*` cursor `not_probed` | 60 | Large/medium authoritative non-ASCII sidecar-title continuation intentionally deferred |
 | `title-nonprefix-unverified:*` cursor `not_probed` | 1 | Large full-text non-prefix title continuation intentionally deferred |
 | `body:0`/`body-offset:*` full-text cursor `not_probed` | 124 | Post-title native body continuation intentionally deferred |
-| `sidecar-body-start` cursor probed `ok` | 33 | Sidecar body phase start cursor fix verified |
+| `sidecar-body-start` cursor probed `ok` | 15 | Sidecar body phase start cursor fix verified |
 | `title-nonprefix:*` cursor probed `ok` | 0 | Replaced by explicit unverified continuation for the remaining large case |
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
@@ -271,9 +283,9 @@ Important info/status classes from the latest gate:
 | `ssed_fulltext_partial_nonprefix_title_prepass` | 1 | NCOMP4 first page exercised; cursor probe intentionally deferred |
 | `ssed_index_empty_physical_pages_skipped` | 1 | Sparse physical scan advances exercised by NCOMP4 non-prefix title search |
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 23 | Large-index partial-search continuation intentionally deferred |
-| `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 220 | Native offset next-page proof intentionally deferred |
-| `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 16 | Title-label fallback next-page proof intentionally deferred |
-| `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
+| `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 204 | Native offset next-page proof intentionally deferred |
+| `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 15 | Title-label fallback next-page proof intentionally deferred |
+| `lved_viewer_hook_deferred` | 0 in counted exercise diagnostics | Intentional external viewer policy |
 | `gaiji_formatting_helper_candidate` | 6 | Observed helper code candidates |
 | `ssed_navigation_empty_sentinel` | 19 | Expected sentinel classification |
 | `skipped_large_view` | 39 | Validator cap for large alternate render probes |
@@ -284,32 +296,29 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 2262 ms validation
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 2075 ms validation
   exercise elapsed, hit_count 1. The residual cost is finding the late first
   non-prefix title across sparse native index pages, not proving the
   continuation.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 850 ms, native title/index
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 808 ms, native title/index
   prepass.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 781 ms, direct native
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 791 ms, direct native
   HONMON scan plus row-driven prefetch.
-- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 633 ms, direct native
+- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 664 ms, direct native
   HONMON scan plus row-driven prefetch after the JIS prefilter improvement.
-- `Other/iOS/IBIO5/IBIO5`, `search_full_text` query `亜-`: 791 ms, sidecar
-  body row cursor with a 5 ms cursor probe.
-- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 770 ms, native title
+- `LogoVistaAndroid/SSED/.MEIKYO2R` and `.MEIKYO2R_renew`,
+  `search_full_text` query `仝`: 1173/1160 ms, sidecar body scan. This is the
+  next concrete non-HC sidecar candidate after the IBIO5 fix.
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 634 ms, native title
   prepass with deferred body continuation.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 749 ms, native title prepass
-  with a physical-offset title cursor and a 344 ms cursor probe.
-- `Other/iOS/HAIKSAIJ/HAIKSAIJ`, `search_partial` query `陽春`: 646 ms,
-  partial non-prefix index cursor.
+- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 585 ms.
+  Directly inspect before treating it as a code gap.
 - `_DCT_GEN2005`, `search_full_text` query `曙光`: 619 ms, direct native HONMON
   scan plus row-driven prefetch.
-- `Other/iOS/IBIO5/IBIO5`, `search_exact`/`search_backward` query `亜-`:
-  592/564 ms, sidecar title search.
-- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 528 ms, native title prepass
+- `Other/iOS/IBIO5/IBIO5`, title/full-text query `亜-`: resolved in 0ad and
+  verified by the latest full gate.
+- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 550 ms, native title prepass
   with deferred body continuation.
-- `Other/iOS/KQNEWEJ6/KQNEWEJ6`, `search_full_text` query `eɪ`: 527 ms,
-  sidecar body row cursor with a 23 ms cursor probe.
 
 Rows such as `_DCT_GKKNJPZL` `search_forward` query `00` and `_DCT_IWKOKU7N`
 `search_forward` query `3D` include HC fallback rendering diagnostics and
@@ -325,6 +334,89 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0ad. iOS SSED non-ASCII sidecar title/body prepass (resolved, full gate)
+
+Why this matters:
+
+- The latest full-corpus gate exposed
+  `/home/shoui/Agents/CodexMax/LogoVista/Other/iOS/IBIO5/IBIO5` as a concrete
+  non-HC iOS SSED sidecar latency cluster for query `亜-`:
+  - `search_exact`: 585 ms.
+  - `search_forward`: 496 ms.
+  - `search_backward`: 543 ms.
+  - `search_full_text`: 622 ms.
+  - Package validation elapsed: 6054 ms.
+- Direct package inspection showed `IBIO5.sql` stores renderable titles and
+  bodies in sidecar tables such as
+  `IBIO5_1(No, Block, Offset, Title, Body, TitleJIS)`, with the first `亜-`
+  hit available as sidecar row `No = 1`.
+- Raw SQLite probes were effectively instant, so the cost was LVCore control
+  flow: title search ran the dense-sidecar/native preference probe before
+  returning the sidecar title page, and full-text search sampled native
+  HONMON/index payloads before using the sidecar body row that could fill the
+  page.
+
+Current status:
+
+- Exact/forward/backward SSED title search now tries an authoritative
+  non-ASCII sidecar title page before the dense-sidecar/native preference
+  probe. If the sidecar page has visible hits, the search returns directly.
+- Full-text SSED search now tries an authoritative non-ASCII sidecar body page
+  before computing whether native HONMON body-window scanning is needed. If the
+  sidecar page fills the requested limit, the search returns directly.
+- Medium/large authoritative non-ASCII sidecar title searches defer
+  exact/forward/backward continuation proof behind the existing
+  `sidecar-title-unverified-row:*` cursor path.
+- SSED navigation detection now checks only the first parsed menu page when it
+  only needs to know whether a menu component has a non-empty surface.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore package::drivers::tests::dense_sidecar -- --nocapture`
+  - `cargo test -p lvcore package::drivers::tests::fulltext -- --nocapture`
+  - `cargo test -p lvcore package::drivers::tests::ssed_navigation_surfaces:: -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ibio5-nonascii-sidecar-prepass-v1.jsonl`
+  - Package status `ok`, elapsed 1844 ms.
+  - `search_exact` `亜-`: 2 ms, hit_count 1, cursor
+    `sidecar-title-unverified-row:*`.
+  - `search_forward` `亜-`: 18 ms, hit_count 1.
+  - `search_backward` `亜-`: 2 ms, hit_count 1, cursor
+    `sidecar-title-unverified-row:*`.
+  - `search_full_text` `亜-`: 9 ms, hit_count 1, cursor
+    `sidecar-body-row:*`.
+- Direct real-package probes:
+  - `lvcore search .../IBIO5 '亜-' --mode exact --limit 1`: about 0.04s after
+    warmup.
+  - `lvcore search .../IBIO5 '亜-' --mode forward --limit 1`: about 0.05s.
+  - `lvcore search .../IBIO5 '亜-' --mode backward --limit 1`: about 0.04s.
+  - `lvcore search .../IBIO5 '亜-' --mode full-text --limit 1`: about 0.06s.
+  - `lvcore home .../IBIO5`: about 1.19s after the first-page menu probe
+    change.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-nonascii-sidecar-prepass-v1.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered, including the
+    two `Other/Android` rows.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (261),
+    which is deferred HC work.
+  - IBIO5 package status remained `ok`, elapsed 1778 ms.
+  - `search_exact` `亜-`: 2 ms.
+  - `search_forward` `亜-`: 21 ms.
+  - `search_backward` `亜-`: 2 ms.
+  - `search_full_text` `亜-`: 9 ms.
+
+Baseline evidence:
+
+- Latest full-corpus JSONL:
+  `/tmp/lvcore-all-corpora-validation-20260613-ssed-jis-prefilter-memmem-v2.jsonl`
+- Observed IBIO5 rows in that baseline:
+  - `search_exact` `亜-`: 585 ms, diagnostic `ssed_sidecar_title_search`.
+  - `search_forward` `亜-`: 496 ms, diagnostic `ssed_sidecar_title_search`.
+  - `search_backward` `亜-`: 543 ms, diagnostic `ssed_sidecar_title_search`.
+  - `search_full_text` `亜-`: 622 ms, diagnostic
+    `ssed_fulltext_sidecar_scan`, cursor `sidecar-body-row:*`.
 
 ### 0ac. SSED separator-aware JIS prefilter seek (resolved, full gate)
 

@@ -22,7 +22,7 @@ use crate::ssed::{
     SsedComponentRole, SsedDataHeader,
 };
 use crate::ssed_aux_index::{is_numeric_aux_index_filename, parse_aux_index_specs_from_exinfo};
-use crate::ssed_menu::parse_menu_stream;
+use crate::ssed_menu::parse_menu_stream_page;
 use crate::ssed_panel::exinfo_panel_metadata_name;
 use crate::storage::{DirectoryStorage, StorageBackend, regular_file_inside_root};
 
@@ -530,7 +530,7 @@ fn ssed_navigation_component_has_non_empty_surface(
         let Ok(Some(data)) = read_ssed_navigation_detection_bytes(&path) else {
             continue;
         };
-        let parsed = parse_menu_stream(&data);
+        let parsed = parse_menu_stream_page(&data, 0, 1);
         if !parsed.records.is_empty() {
             return true;
         }
