@@ -187,7 +187,9 @@ impl ReaderBookPackage {
                 return self.search_ssed_initial_partial_nonprefix_page(query, &needle, false);
             }
         }
-        if ssed_initial_title_label_fallback_prepass_should_run(query, &needle) {
+        if ssed_initial_title_label_fallback_prepass_should_run(query, &needle)
+            && self.ssed_initial_title_label_fast_prepass_native_probe_allows(query, &needle)?
+        {
             let mut title_label_page = self.search_ssed_title_label_fallback_page_inner(
                 query,
                 &needle,
@@ -519,6 +521,17 @@ impl ReaderBookPackage {
             }
         }
         Ok(false)
+    }
+
+    fn ssed_initial_title_label_fast_prepass_native_probe_allows(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+    ) -> Result<bool> {
+        if !ssed_initial_title_label_fast_prepass_needs_native_miss_probe(query) {
+            return Ok(true);
+        }
+        Ok(!self.ssed_native_forward_prefix_fast_hit_probe(query, needle, 1)?)
     }
 
     fn search_ssed_aux_index_labels(
@@ -4484,16 +4497,30 @@ fn ssed_title_label_fallback_is_reasonable(mode: &SearchMode, needle: &str) -> b
 }
 
 fn ssed_initial_title_label_fallback_prepass_should_run(query: &SearchQuery, needle: &str) -> bool {
-    if query.cursor.is_some()
-        || query.mode != SearchMode::Exact
-        || !ssed_title_label_fallback_is_reasonable(&query.mode, needle)
-    {
+    if query.cursor.is_some() || !ssed_title_label_fallback_is_reasonable(&query.mode, needle) {
         return false;
     }
     let raw_query = query.query.trim();
-    !raw_query.is_empty()
-        && !raw_query.chars().any(char::is_whitespace)
-        && raw_query.chars().any(|ch| !ch.is_ascii())
+    match query.mode {
+        SearchMode::Exact => {
+            !raw_query.is_empty()
+                && !raw_query.chars().any(char::is_whitespace)
+                && raw_query.chars().any(|ch| !ch.is_ascii())
+        }
+        SearchMode::Forward => {
+            ssed_query_is_single_token_ascii_digit_without_ascii_alpha(raw_query)
+        }
+        SearchMode::Backward
+        | SearchMode::Partial
+        | SearchMode::FullText
+        | SearchMode::Advanced(_) => false,
+    }
+}
+
+fn ssed_initial_title_label_fast_prepass_needs_native_miss_probe(query: &SearchQuery) -> bool {
+    query.cursor.is_none()
+        && query.mode == SearchMode::Forward
+        && ssed_query_is_single_token_ascii_digit_without_ascii_alpha(&query.query)
 }
 
 fn ssed_initial_partial_native_prefix_prepass_query_is_bounded(
@@ -4764,7 +4791,9 @@ mod tests {
         ssed_fulltext_row_driven_body_search_allowed,
         ssed_fulltext_sidecar_title_prepass_is_bounded,
         ssed_initial_partial_native_prefix_prepass_query_is_bounded,
-        ssed_initial_title_label_fallback_prepass_should_run, ssed_native_partial_prefix_page,
+        ssed_initial_title_label_fallback_prepass_should_run,
+        ssed_initial_title_label_fast_prepass_needs_native_miss_probe,
+        ssed_native_partial_prefix_page,
         ssed_partial_prefix_empty_initial_page_should_fall_through,
         ssed_partial_prefix_native_probe_needs_fast_hit_probe,
         ssed_partial_prefix_prepass_is_bounded,
@@ -4842,11 +4871,33 @@ mod tests {
     }
 
     #[test]
-    fn title_label_fast_prepass_is_limited_to_exact_non_ascii_single_tokens() {
+    fn title_label_fast_prepass_is_limited_to_bounded_title_label_queries() {
         assert!(ssed_initial_title_label_fallback_prepass_should_run(
             &current_book_query(SearchMode::Exact, "画像一覧", 1),
             "画像一覧"
         ));
+        assert!(ssed_initial_title_label_fallback_prepass_should_run(
+            &current_book_query(SearchMode::Forward, "10", 1),
+            "10"
+        ));
+        assert!(
+            ssed_initial_title_label_fast_prepass_needs_native_miss_probe(&current_book_query(
+                SearchMode::Forward,
+                "10",
+                1
+            ))
+        );
+        assert!(ssed_initial_title_label_fallback_prepass_should_run(
+            &current_book_query(SearchMode::Forward, "0歳", 1),
+            "0歳"
+        ));
+        assert!(
+            ssed_initial_title_label_fast_prepass_needs_native_miss_probe(&current_book_query(
+                SearchMode::Forward,
+                "0歳",
+                1
+            ))
+        );
         assert!(!ssed_initial_title_label_fallback_prepass_should_run(
             &current_book_query(SearchMode::Exact, "alpha", 1),
             "alpha"
@@ -4855,6 +4906,28 @@ mod tests {
             &current_book_query(SearchMode::Forward, "画像", 1),
             "画像"
         ));
+        assert!(!ssed_initial_title_label_fallback_prepass_should_run(
+            &current_book_query(SearchMode::Forward, "3D", 1),
+            "3d"
+        ));
+        assert!(
+            !ssed_initial_title_label_fast_prepass_needs_native_miss_probe(&current_book_query(
+                SearchMode::Forward,
+                "3D",
+                1
+            ))
+        );
+        assert!(!ssed_initial_title_label_fallback_prepass_should_run(
+            &current_book_query(SearchMode::Backward, "10", 1),
+            "10"
+        ));
+        assert!(
+            !ssed_initial_title_label_fast_prepass_needs_native_miss_probe(&current_book_query(
+                SearchMode::Backward,
+                "10",
+                1
+            ))
+        );
         assert!(!ssed_initial_title_label_fallback_prepass_should_run(
             &current_book_query(SearchMode::Exact, "画像 一覧", 1),
             "画像 一覧"
@@ -4865,6 +4938,10 @@ mod tests {
             &cursor_query,
             "画像一覧"
         ));
+
+        let mut cursor_query = current_book_query(SearchMode::Forward, "10", 1);
+        cursor_query.cursor = Some("ssed-title-label-unverified:1".to_owned());
+        assert!(!ssed_initial_title_label_fast_prepass_needs_native_miss_probe(&cursor_query));
     }
 
     #[test]

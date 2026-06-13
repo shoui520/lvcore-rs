@@ -1,16 +1,15 @@
 # LVCore Remaining Gaps
 
-Date: 2026-06-13
+Date: 2026-06-14
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260613-ncomp4-partial-prefix-fast-miss-gate-v1.jsonl`
-- Produced after the focused `_DCT_NCOMP4` partial `1計` fix. The fix keeps
-  empty initial partial-prefix pages from surfacing to callers, defers large
-  initial non-prefix partial continuation proof behind an explicit unverified
-  physical-offset cursor, and applies the existing digit/no-ASCII-letter
-  one-leaf prefix-hit probe before expensive fallback prefix scans on large
-  packages.
+- `/tmp/lvcore-all-corpora-validation-20260614-gkbusine-forward-title-label-fast-prepass-v1.jsonl`
+- Produced after making no-cursor SSED forward digit/no-ASCII-letter title
+  queries eligible for the bounded title-label fast prepass when a cheap
+  one-leaf native forward-hit probe misses. Real native prefix hits keep the
+  existing native path; empty native prefix probes can return early visible
+  title-label hits without paying for the full native miss and broad fallback.
 - 335 reconstructed package paths validated with package status 335 `ok`.
   The gate used the 333 currently discovered documented-root package paths plus
   the two explicit `Other/Android` package rows.
@@ -22,6 +21,11 @@ Latest full-corpus gate:
   `b3c7c347c4587d6e3b29db8767748f2ebd9402b17f712dd5ae980d45cc5a601a`.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback, 949 occurrences.
+- `_DCT_GKBUSINE` `search_forward` `10` is 83 ms, down from 439 ms in the
+  previous full gate and about 0.70s in direct probes before the fix. It
+  preserves the same first three hits and continuation
+  `ssed-title-label-unverified:3`, now through
+  `ssed_title_label_fast_prepass`.
 - `_DCT_NCOMP4` `search_full_text` `1計` remains stable at 446 ms with the
   same `0-1計画法` first hit and deferred `title-nonprefix-unverified:*`
   continuation. The standard deep validator does not currently exercise the
@@ -39,23 +43,41 @@ Latest full-corpus gate:
 - Existing exact visible-title and digit/no-alpha full-text improvements
   remained stable: `_DCT_KQNEWEJ6` exact `画像一覧` is 12 ms,
   `_DCT_KQNEWJE5` exact `外字一覧` is 12 ms, and `_DCT_GKBUSINE` full-text
-  `10` is 27 ms.
+  `10` is 28 ms.
 
 Focused validation for the latest full-corpus gate:
 
 - Focused validation:
-  `/tmp/lvcore-focused-validate-ncomp4-partial-prefix-fast-miss-gate-v1.jsonl`
-  covered `_DCT_NCOMP4`, `_DCT_GKBUSINE`, `_DCT_GEN2011`, `_DCT_GEN2009`,
-  and `_DCT_KENROWA` with package status 5 `ok`.
-- The focused validation controls stayed stable: `_DCT_GKBUSINE` partial `10`
-  is 36 ms with cursor probe `ok`, `_DCT_GEN2011` partial `01` is 13 ms,
-  `_DCT_GEN2009` partial `0` is 121 ms with cursor probe `ok`, and
-  `_DCT_KENROWA` partial `しめ` is 20 ms through the native prefix fast path.
-- Direct `_DCT_NCOMP4` `search_partial` `1計 --limit 1` now returns
-  `0-1計画法` in about 0.49s with
-  `ssed-partial-nonprefix-noskip-unverified-physical-offset:8:121:1`.
+  `/tmp/lvcore-focused-validate-gkbusine-forward-title-label-fast-prepass-v1.jsonl`
+  covered `_DCT_GKBUSINE`, `_DCT_GEN2011`, `_DCT_GEN2009`, iOS `NANMED20`,
+  and `_DCT_NCOMP4` with package status 5 `ok`.
+- Target row improved as expected: `_DCT_GKBUSINE` forward `10` is 81 ms
+  through `ssed_title_label_fast_prepass`, down from 439 ms in the previous
+  full gate.
+- Native-hit digit controls stayed on their expected native path:
+  `_DCT_GEN2011` forward `01` is 59 ms without title-label diagnostics, and
+  `_DCT_GEN2009` forward `0` is 189 ms with cursor probe `ok`.
+- Other controls stayed stable: `_DCT_GKBUSINE` partial `10` is 37 ms with
+  cursor probe `ok`, `_DCT_GKBUSINE` full-text `10` is 27 ms, and direct
+  `_DCT_NCOMP4` partial `1計 --limit 1` still returns `0-1計画法` in about
+  0.47s with `ssed-partial-nonprefix-noskip-unverified-physical-offset:8:121:1`.
 
 Previous full-corpus gates:
+
+- `/tmp/lvcore-all-corpora-validation-20260613-ncomp4-partial-prefix-fast-miss-gate-v1.jsonl`
+- Produced after the focused `_DCT_NCOMP4` partial `1計` fix. The fix keeps
+  empty initial partial-prefix pages from surfacing to callers, defers large
+  initial non-prefix partial continuation proof behind an explicit unverified
+  physical-offset cursor, and applies the existing digit/no-ASCII-letter
+  one-leaf prefix-hit probe before expensive fallback prefix scans on large
+  packages.
+- 335 reconstructed package paths validated with package status 335 `ok`.
+- Warning diagnostics remained only the explicitly deferred HC common HTML
+  fallback, 949 occurrences.
+- `_DCT_NCOMP4` `search_full_text` `1計` was 446 ms with the same
+  `0-1計画法` first hit and deferred `title-nonprefix-unverified:*`
+  continuation.
+- `_DCT_GKBUSINE` forward `10` remained a concrete candidate at 439 ms.
 
 - `/tmp/lvcore-all-corpora-validation-20260613-partial-digit-prefix-fast-probe-v1.jsonl`
 - Produced after making SSED partial-search native prefix probing conditional
@@ -524,7 +546,7 @@ Important info/status classes from the latest gate:
 | `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 38 | Title-label fallback next-page proof intentionally deferred |
 | `ssed-partial-prefix:*` cursor probed `ok` | 48 | Partial prefix continuation pages remain probeable |
 | `ssed_partial_native_prefix_fast_prepass` | 8 | Bounded pure-kana partial native-prefix prepass exercised |
-| `ssed_title_label_fast_prepass` | 28 | Bounded exact non-ASCII visible title-label prepass exercised |
+| `ssed_title_label_fast_prepass` | 29 | Bounded exact non-ASCII and forward digit/no-alpha visible title-label prepass exercised |
 | `lved_viewer_hook_deferred` | 260 | Intentional external viewer policy |
 | `gaiji_formatting_helper_candidate` | 24 | Observed helper code candidates |
 | `ssed_navigation_empty_sentinel` | 19 | Expected sentinel classification |
@@ -536,34 +558,35 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- `_DCT_PROYAL53`, `search_full_text` query `ひゃ`: 652 ms in the latest full
-  gate through `ssed_fulltext_sidecar_scan`, with cursor probe `ok` at 288 ms.
-  The previous full gate was 213 ms and a direct post-gate probe was about
-  0.15s, so treat this as validation/run variance unless it reproduces in
-  direct search.
-- `_DCT_GKBUSINE`, `search_forward` query `10`: 439 ms in the latest full
-  gate and direct no-render search remains around 650 ms. The row includes HC
-  fallback rendering in validation, but the direct search latency means this is
-  still a separate simple-search/title-label candidate. Its `search_partial`
-  and `search_full_text` `10` paths are resolved.
-- `Other/iOS/NANMED20/NANMED20`, `search_forward` query `0歳`: 426 ms in the
-  full gate. Direct search probes were fast, so measure validation/render
-  context before changing search code.
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 446 ms, improved from 545 ms
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 457 ms, improved from 545 ms
   but still behind intentionally deferred `title-nonprefix-unverified:*`
   continuation proof in the latest full baseline. Direct focused probing also
   exposed a related `search_partial` `1計` first-page gap; that partial gap is
   resolved by the focused NCOMP4 partial-prefix fallthrough/fast-miss fix
   below.
-- `_DCT_EJJE100`, `search_full_text` query `co`: 484 ms through
+- `Other/iOS/NANMED20/NANMED20`, `search_forward` query `0歳`: 422 ms in the
+  full gate. Direct search probes were fast, so measure validation/render
+  context before changing search code.
+- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 387 ms through
   `ssed_fulltext_title_index_prepass`, with native body continuation deferred
   behind `body:0`.
-- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 369 ms through
+- `_DCT_EJJE100`, `search_full_text` query `co`: 371 ms through
   `ssed_fulltext_title_index_prepass`, with native body continuation deferred
   behind `body:0`.
+- `_DCT_HKDKSR10`, `search_partial` query `AB`: 314 ms through
+  `ssed_partial_prefix_prepass`; direct forward/partial probes are similar, so
+  this may be package/open or native prefix setup rather than partial-only
+  behavior.
+- `_DCT_HKKIGAK6`, `search_partial` query `Ab`: 290 ms through
+  `ssed_partial_title_index_prepass`; direct probing reproduced roughly
+  0.4s, making it a possible future scoped partial-title candidate.
 - `_DCT_GKBUSINE`, `search_partial` query `10`: resolved in the latest full
   gate at 37 ms, down from 428 ms, by using a one-leaf fast-hit probe before
   the expensive native partial-prefix probe.
+- `_DCT_GKBUSINE`, `search_forward` query `10`: resolved in the latest full
+  gate at 83 ms, down from 439 ms, by running the bounded title-label fast
+  prepass after a cheap one-leaf native forward probe proves there is no native
+  prefix hit.
 - `_DCT_NCOMP4`, direct `search_partial` query `1計`: resolved by focused
   direct probing. It now returns `0-1計画法` in about 0.49s instead of exposing
   an empty initial prefix page or spending about 2.6s proving a non-prefix
@@ -621,6 +644,82 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0as. GKBUSINE forward digit title-label fast prepass (resolved, full gate)
+
+Why this matters:
+
+- The latest baseline left `_DCT_GKBUSINE` `search_forward` query `10` at
+  439 ms in the full gate, and direct no-render probes reproduced about
+  0.70s.
+- The first page did not need HC or body rendering. It returned visible title
+  labels such as `10000YENPERSETISOURROCKBOTTOMPRICE`, but only after the
+  forward native-key path missed and the broader title-label fallback ran.
+- Exact lookup for the full first title was already about 0.01s, and
+  `_DCT_GKBUSINE` partial/full-text `10` were already resolved, so this was a
+  narrow forward title-label routing gap.
+
+Current status:
+
+- No-cursor SSED forward queries that are single-token digit/no-ASCII-letter
+  strings can now use the existing bounded title-label fast prepass.
+- The fast prepass is guarded by the existing one-leaf native forward hit
+  probe. If the native prefix probe finds a real native hit, the query keeps
+  the existing native forward path and cursor behavior. If the probe misses,
+  the first page can be satisfied from the bounded title-label scan before the
+  expensive native miss and fallback path.
+- Cursor pages still use the existing title-label fallback cursor handling.
+
+Verification:
+
+- Focused tests passed:
+  - `cargo test -p lvcore search_ssed -- --nocapture`
+  - `cargo check -p lvcore`
+  - `cargo build -p lvcore-cli`
+- Direct real-package probes:
+  - `_DCT_GKBUSINE` forward `10 --limit 1`: about 0.04s, hit
+    `10000YENPERSETISOURROCKBOTTOMPRICE`, cursor
+    `ssed-title-label-unverified:1`, diagnostic
+    `ssed_title_label_fast_prepass`.
+  - `_DCT_GKBUSINE` forward `10 --limit 3`: about 0.05s, same first three
+    hits as before, cursor `ssed-title-label-unverified:3`, diagnostic
+    `ssed_title_label_fast_prepass`.
+  - Native-hit controls stayed native: `_DCT_GEN2011` forward `01 --limit 1`
+    has no title-label diagnostic, and `_DCT_GEN2009` forward `0 --limit 3`
+    keeps cursor `3` with no title-label diagnostic.
+  - `_DCT_GKBUSINE` partial `10` and full-text `10` stayed on their previous
+    fast paths.
+- Focused package validation passed:
+  - `/tmp/lvcore-focused-validate-gkbusine-forward-title-label-fast-prepass-v1.jsonl`
+  - Package status 5 `ok` across `_DCT_GKBUSINE`, `_DCT_GEN2011`,
+    `_DCT_GEN2009`, iOS `NANMED20`, and `_DCT_NCOMP4`.
+  - `_DCT_GKBUSINE` forward `10` is 81 ms through
+    `ssed_title_label_fast_prepass`.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260614-gkbusine-forward-title-label-fast-prepass-v1.jsonl`
+  - 335 package statuses `ok`.
+  - Warning diagnostics remain the explicitly deferred HC common HTML fallback
+    only, 949 occurrences.
+  - `_DCT_GKBUSINE` forward `10` is 83 ms, down from 439 ms in the previous
+    full gate.
+  - Native-hit digit controls stayed stable: `_DCT_GEN2011` forward `01` is
+    61 ms with no title-label diagnostic, and `_DCT_GEN2009` forward `0` is
+    185 ms with cursor probe `ok`.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_GKBUSINE`
+- Previous full-gate row:
+  - `_DCT_GKBUSINE`, `search_forward`, query `10`, 439 ms, hit_count 3,
+    cursor `ssed-title-label-unverified:3`.
+- Direct pre-fix probes:
+  - `search_forward` `10 --limit 1`: about 0.70s, first hit
+    `10000YENPERSETISOURROCKBOTTOMPRICE`, cursor
+    `ssed-title-label-unverified:1`.
+  - `search_forward` `10000 --limit 1`: about 0.68s, same first title.
+  - `search_exact` `10000YENPERSETISOURROCKBOTTOMPRICE --limit 1`: about
+    0.01s.
 
 ### 0ar. NCOMP4 partial `1計` empty prefix fallthrough (resolved, focused)
 
