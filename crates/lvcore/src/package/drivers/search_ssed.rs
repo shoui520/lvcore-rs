@@ -780,6 +780,88 @@ impl ReaderBookPackage {
         }
     }
 
+    fn scan_ssed_partial_index_rows_paged_until_first_visible(
+        &self,
+        needle: &str,
+        cursor: Option<SsedPartialIndexScanCursor>,
+        collector: &mut SsedIndexSearchCollector<'_>,
+    ) -> Result<SsedFulltextInitialPartialTitleScan> {
+        let mut current_cursor = cursor;
+        let mut advanced_empty_pages = 0usize;
+        let mut use_empty_scan_budget = false;
+        let mut first_visible_row_cursor = None;
+        loop {
+            let scan_start_cursor = current_cursor;
+            let leaf_page_budget = if use_empty_scan_budget {
+                SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET
+            } else {
+                SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET
+            };
+            let scan_result = self.scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
+                needle,
+                current_cursor,
+                leaf_page_budget,
+                SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET,
+                |row_cursor, row| {
+                    let had_hits = collector.has_hits();
+                    let keep_scanning = collector.push_row(row)?;
+                    if !had_hits && collector.has_hits() && first_visible_row_cursor.is_none() {
+                        first_visible_row_cursor = Some(row_cursor);
+                    }
+                    Ok(keep_scanning)
+                },
+            )?;
+            let next_cursor = scan_result.next_cursor;
+            collector.extend_diagnostics(scan_result.diagnostics);
+            if collector.has_hits() || next_cursor.is_none() {
+                self.record_ssed_empty_physical_scan_advances(
+                    collector,
+                    advanced_empty_pages,
+                    next_cursor.as_deref(),
+                    false,
+                );
+                let visible_start_cursor = if collector.has_hits() {
+                    first_visible_row_cursor.or(scan_start_cursor)
+                } else {
+                    None
+                };
+                return Ok(SsedFulltextInitialPartialTitleScan {
+                    next_cursor,
+                    visible_start_cursor,
+                });
+            }
+            if advanced_empty_pages >= SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT {
+                self.record_ssed_empty_physical_scan_advances(
+                    collector,
+                    advanced_empty_pages,
+                    next_cursor.as_deref(),
+                    true,
+                );
+                return Ok(SsedFulltextInitialPartialTitleScan {
+                    next_cursor,
+                    visible_start_cursor: None,
+                });
+            }
+            advanced_empty_pages = advanced_empty_pages.saturating_add(1);
+            use_empty_scan_budget = true;
+            let decoded = decode_ssed_partial_index_scan_cursor(next_cursor.as_deref());
+            if decoded.is_none() {
+                collector.extend_diagnostics(vec![
+                    Diagnostic::warning(
+                        "ssed_index_physical_cursor_decode_failed",
+                        "SSED partial index scan produced an unreadable continuation cursor",
+                    )
+                    .with_context("next_cursor", next_cursor.clone().unwrap_or_default()),
+                ]);
+                return Ok(SsedFulltextInitialPartialTitleScan {
+                    next_cursor,
+                    visible_start_cursor: None,
+                });
+            }
+            current_cursor = decoded;
+        }
+    }
+
     fn scan_ssed_partial_nonprefix_index_rows_paged_until_visible(
         &self,
         needle: &str,
@@ -2772,22 +2854,34 @@ impl ReaderBookPackage {
         needle: &str,
         page_limit: usize,
     ) -> Result<Option<SearchPage>> {
+        let bounded_page_limit = if self.ssed_fulltext_can_scan_all_title_indexes() {
+            page_limit
+        } else {
+            query.limit
+        };
         let mut collector = SsedIndexSearchCollector::new(
             self,
             &SearchMode::Partial,
             needle,
             0,
-            page_limit,
+            bounded_page_limit,
             query.label_gaiji_policy(),
         )
         .with_display_label_matching();
-        let physical_next_cursor = if self.ssed_fulltext_can_scan_all_title_indexes() {
+        if !self.ssed_fulltext_can_scan_all_title_indexes() {
+            collector = collector.with_pending_page_limit_stop();
+        }
+        let partial_scan = if self.ssed_fulltext_can_scan_all_title_indexes() {
             let scan_diagnostics =
                 self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
             collector.extend_diagnostics(scan_diagnostics);
-            None
+            SsedFulltextInitialPartialTitleScan::default()
         } else {
-            self.scan_ssed_partial_index_rows_paged_until_visible(needle, None, &mut collector)?
+            self.scan_ssed_partial_index_rows_paged_until_first_visible(
+                needle,
+                None,
+                &mut collector,
+            )?
         };
         if !collector.has_hits() {
             return Ok(None);
@@ -2798,7 +2892,19 @@ impl ReaderBookPackage {
             .next_cursor
             .as_deref()
             .map(|cursor| format!("title:{cursor}"))
-            .or_else(|| physical_next_cursor.map(|cursor| format!("title:{cursor}")))
+            .or_else(|| {
+                partial_scan
+                    .next_cursor
+                    .map(|cursor| format!("title:{cursor}"))
+            })
+            .or_else(|| {
+                (query.limit > 0 && page.hits.len() >= query.limit)
+                    .then_some(partial_scan.visible_start_cursor)
+                    .flatten()
+                    .map(|cursor| {
+                        encode_ssed_fulltext_title_physical_offset_cursor(cursor, page.hits.len())
+                    })
+            })
             .or(Some(post_title_prepass_cursor));
         page.diagnostics.insert(
             0,
@@ -2848,14 +2954,18 @@ impl ReaderBookPackage {
         title_cursor: SsedFulltextTitleCursor,
         page_limit: usize,
     ) -> Result<Option<SearchPage>> {
+        let (offset, physical_cursor) = match title_cursor {
+            SsedFulltextTitleCursor::MatchedOffset(offset) => (offset, None),
+            SsedFulltextTitleCursor::Physical(cursor) => (0, Some(cursor)),
+            SsedFulltextTitleCursor::MatchedPhysicalOffset { cursor, offset } => {
+                (offset, Some(cursor))
+            }
+        };
         let mut collector = SsedIndexSearchCollector::new(
             self,
             &SearchMode::Partial,
             needle,
-            match title_cursor {
-                SsedFulltextTitleCursor::MatchedOffset(offset) => offset,
-                SsedFulltextTitleCursor::Physical(_) => 0,
-            },
+            offset,
             page_limit,
             query.label_gaiji_policy(),
         )
@@ -2867,10 +2977,11 @@ impl ReaderBookPackage {
                 collector.extend_diagnostics(scan_diagnostics);
                 None
             }
-            SsedFulltextTitleCursor::Physical(cursor) => self
+            SsedFulltextTitleCursor::Physical(_)
+            | SsedFulltextTitleCursor::MatchedPhysicalOffset { .. } => self
                 .scan_ssed_partial_index_rows_paged_until_visible_with_prefilter_budget(
                     needle,
-                    Some(cursor),
+                    physical_cursor,
                     &mut collector,
                     SSED_FULLTEXT_TITLE_CURSOR_PREFILTERED_LEAF_PAGE_BUDGET,
                 )?,
@@ -3109,6 +3220,10 @@ fn ssed_index_page_may_point_to_body_blocks(page: &[u8], body_blocks: &HashSet<u
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SsedFulltextTitleCursor {
     MatchedOffset(usize),
+    MatchedPhysicalOffset {
+        cursor: SsedPartialIndexScanCursor,
+        offset: usize,
+    },
     Physical(SsedPartialIndexScanCursor),
 }
 
@@ -3127,6 +3242,12 @@ enum SsedSidecarTitleCursor {
 #[derive(Debug)]
 struct SsedPartialNonprefixSearchPage {
     page: SearchPage,
+    visible_start_cursor: Option<SsedPartialIndexScanCursor>,
+}
+
+#[derive(Debug, Default)]
+struct SsedFulltextInitialPartialTitleScan {
+    next_cursor: Option<String>,
     visible_start_cursor: Option<SsedPartialIndexScanCursor>,
 }
 
@@ -3333,6 +3454,9 @@ fn encode_ssed_partial_nonprefix_physical_offset_cursor(
 
 fn decode_ssed_fulltext_title_cursor(cursor: Option<&str>) -> Option<SsedFulltextTitleCursor> {
     let value = cursor?.strip_prefix("title:")?;
+    if let Some(cursor) = decode_ssed_fulltext_title_physical_offset_cursor(value) {
+        return Some(cursor);
+    }
     if let Some(cursor) = decode_ssed_partial_index_scan_cursor(Some(value)) {
         return Some(SsedFulltextTitleCursor::Physical(cursor));
     }
@@ -3340,6 +3464,38 @@ fn decode_ssed_fulltext_title_cursor(cursor: Option<&str>) -> Option<SsedFulltex
         .parse::<usize>()
         .ok()
         .map(SsedFulltextTitleCursor::MatchedOffset)
+}
+
+const SSED_FULLTEXT_TITLE_PHYSICAL_OFFSET_CURSOR_PREFIX: &str = "ssed-partial-index-offset:";
+
+fn decode_ssed_fulltext_title_physical_offset_cursor(
+    value: &str,
+) -> Option<SsedFulltextTitleCursor> {
+    let value = value.strip_prefix(SSED_FULLTEXT_TITLE_PHYSICAL_OFFSET_CURSOR_PREFIX)?;
+    let mut parts = value.split(':');
+    let component_index = parts.next()?.parse().ok()?;
+    let page_index = parts.next()?.parse().ok()?;
+    let offset = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(SsedFulltextTitleCursor::MatchedPhysicalOffset {
+        cursor: SsedPartialIndexScanCursor {
+            component_index,
+            page_index,
+        },
+        offset,
+    })
+}
+
+fn encode_ssed_fulltext_title_physical_offset_cursor(
+    cursor: SsedPartialIndexScanCursor,
+    offset: usize,
+) -> String {
+    format!(
+        "title:{SSED_FULLTEXT_TITLE_PHYSICAL_OFFSET_CURSOR_PREFIX}{}:{}:{offset}",
+        cursor.component_index, cursor.page_index
+    )
 }
 
 fn decode_ssed_fulltext_body_cursor(cursor: Option<&str>) -> usize {
@@ -3729,8 +3885,9 @@ fn ssed_fulltext_sidecar_title_prepass_is_bounded(query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
-        decode_ssed_partial_nonprefix_cursor, decode_ssed_title_label_cursor,
+        SsedFulltextTitleCursor, SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
+        decode_ssed_fulltext_title_cursor, decode_ssed_partial_nonprefix_cursor,
+        decode_ssed_title_label_cursor, encode_ssed_fulltext_title_physical_offset_cursor,
         encode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_offset_cursor,
         encode_ssed_partial_nonprefix_physical_offset_cursor,
         encode_ssed_partial_unverified_nonprefix_cursor, encode_ssed_unverified_title_label_cursor,
@@ -3871,6 +4028,41 @@ mod tests {
                 offset: 17,
                 skip_prefix_rows: true,
             })
+        );
+    }
+
+    #[test]
+    fn fulltext_title_cursors_preserve_physical_offset() {
+        let cursor = encode_ssed_fulltext_title_physical_offset_cursor(
+            SsedPartialIndexScanCursor {
+                component_index: 2,
+                page_index: 1181,
+            },
+            1,
+        );
+        assert_eq!(cursor, "title:ssed-partial-index-offset:2:1181:1");
+        assert_eq!(
+            decode_ssed_fulltext_title_cursor(Some(&cursor)),
+            Some(SsedFulltextTitleCursor::MatchedPhysicalOffset {
+                cursor: SsedPartialIndexScanCursor {
+                    component_index: 2,
+                    page_index: 1181,
+                },
+                offset: 1,
+            })
+        );
+        assert_eq!(
+            decode_ssed_fulltext_title_cursor(Some("title:ssed-partial-index:2:1181")),
+            Some(SsedFulltextTitleCursor::Physical(
+                SsedPartialIndexScanCursor {
+                    component_index: 2,
+                    page_index: 1181,
+                }
+            ))
+        );
+        assert_eq!(
+            decode_ssed_fulltext_title_cursor(Some("title:17")),
+            Some(SsedFulltextTitleCursor::MatchedOffset(17))
         );
     }
 

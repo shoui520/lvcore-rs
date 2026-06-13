@@ -1858,6 +1858,12 @@ fn dense_honmon_exact_search_uses_sidecar_titles() {
         InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "3"
     ));
     assert!(
+        page.hits[0]
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "ssed_dense_sidecar_body_resolved")
+    );
+    assert!(
         page.diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "ssed_sidecar_title_search")

@@ -374,7 +374,7 @@ fn ssed_fulltext_partial_title_prepass_returns_physical_continuation_cursor() {
     assert!(
         page.next_cursor
             .as_deref()
-            .is_some_and(|cursor| cursor.starts_with("title:ssed-partial-index:2:")),
+            .is_some_and(|cursor| cursor.starts_with("title:ssed-partial-index-offset:2:")),
         "unexpected cursor: {:?}",
         page.next_cursor
     );
@@ -383,6 +383,25 @@ fn ssed_fulltext_partial_title_prepass_returns_physical_continuation_cursor() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+    );
+
+    let continuation = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "tail".to_owned(),
+            cursor: page.next_cursor.clone(),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert!(
+        continuation
+            .hits
+            .first()
+            .is_none_or(|hit| hit.title_text != "本文見出し")
     );
 }
 

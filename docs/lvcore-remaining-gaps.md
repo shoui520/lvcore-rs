@@ -4,6 +4,17 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-title-physical-offset.jsonl`
+- Produced after adding physical-offset cursors for large SSED full-text title
+  prepass continuations and after making dense sidecar title search project only
+  id/title-like columns.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-main-wordlist-jtext.jsonl`
 - Produced after treating `K_text`/`J_text` pairs in dense SSED `main`
   wordlist sidecars as bidirectional title columns.
@@ -11,8 +22,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-initial-native-offset-mode-sized.jsonl`
 - Produced after changing large SSED native exact/forward/backward first pages
@@ -213,26 +222,141 @@ Important info/status classes from the latest gate:
 
 Latest concrete non-HC performance candidates from the full gate:
 
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 1502 ms, no hit, direct
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 1440 ms, no hit, direct
   native HONMON scan plus row-driven prefetch.
-- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 846 ms, direct native
-  HONMON scan plus row-driven prefetch.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 827 ms, direct native HONMON
-  scan plus row-driven prefetch.
-- `_DCT_GENKANA5`, `search_partial` query `アル`: 822 ms, sidecar title search
+- `_DCT_GENKANA5`, `search_partial` query `アル`: 852 ms, sidecar title search
   after partial-prefix prepass.
-- `_DCT_KQNEWEJ6`, `search_full_text` query `画像`: 804 ms, native title
-  prepass plus direct HONMON scan.
-- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 803 ms, native title
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 843 ms, direct native HONMON
+  scan plus row-driven prefetch.
+- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 832 ms, direct native
+  HONMON scan plus row-driven prefetch.
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 758 ms, native title
   prepass with deferred body continuation.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 779 ms, native title
-  prepass plus direct HONMON scan.
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 752 ms, native title prepass
+  with a physical-offset title cursor, followed by direct HONMON scan on
+  continuation.
+- `_DCT_GEN2005`, `search_full_text` query `曙光`: 613 ms, direct native HONMON
+  scan plus row-driven prefetch.
+- `Other/iOS/IBIO5/IBIO5`, `search_exact` query `亜-`: 567 ms, sidecar title
+  search.
 
 Rows such as `_DCT_GKKNJPZL` `search_forward` query `00` and `_DCT_IWKOKU7N`
 `search_forward` query `3D` include HC fallback rendering diagnostics and
 should not drive LVCore-only work while HC remains deferred.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0w. SSED full-text title prepass physical-offset cursor (resolved, full gate)
+
+Why this matters:
+
+- The previous full-corpus gate exposed `_DCT_KQNEWEJ6` full-text search for
+  `画像` and `_DCT_KQDENTAL` full-text search for `01` as concrete non-HC
+  title-prepass latency rows.
+- Both rows found a native title/index hit first, then spent first-page time
+  proving or locating the next native title continuation before body scanning.
+- This made the first visible page slower even though the next phase can be
+  resumed lazily.
+
+Current status:
+
+- Large SSED full-text partial title prepass now stops once it has a visible
+  title hit instead of scanning to the broader leaf-page budget.
+- It returns a physical-offset title cursor:
+  `title:ssed-partial-index-offset:<component>:<page>:<matched>`.
+- The continuation resumes at the same physical title-index page while skipping
+  the already-returned matched title rows, preserving title-before-body ordering
+  without first-page overfetch.
+- Direct real-package probes:
+  - `_DCT_KQNEWEJ6` full-text `画像 --limit 1`: about 0.24s; the returned
+    cursor continued into direct body scan in about 0.37s without repeating
+    `画像一覧`.
+  - `_DCT_KQDENTAL` full-text `01 --limit 1`: about 0.46s; the returned cursor
+    continued into direct body scan in about 0.37s without repeating
+    `0.01規定の...`.
+- Focused tests passed:
+  - `cargo test -p lvcore package::drivers::search_ssed::tests -- --nocapture`
+  - `cargo test -p lvcore package::drivers::tests::fulltext -- --nocapture`
+  - `cargo test -p lvcore package::drivers::tests::dense_sidecar -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-kqnewej6-title-physical-offset.jsonl`
+    - package status `ok`
+    - `search_full_text` `画像`: 466 ms, cursor
+      `title:ssed-partial-index-offset:2:156:1`
+    - cursor probe status `ok`, 301 ms, direct body scan
+  - `/tmp/lvcore-focused-validate-kqdental-title-physical-offset.jsonl`
+    - package status `ok`
+    - `search_full_text` `01`: 731 ms, cursor
+      `title:ssed-partial-index-offset:2:48:1`
+    - cursor probe status `ok`, 332 ms, direct body scan
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-title-physical-offset.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1936),
+    which is deferred HC work.
+  - `_DCT_KQNEWEJ6` `search_full_text` `画像` is 469 ms, down from 804 ms in
+    the previous full gate, with cursor probe status `ok`.
+  - `_DCT_KQDENTAL` `search_full_text` `01` is 752 ms, down only slightly from
+    779 ms; it now returns the physical-offset title cursor and remains a
+    current performance candidate.
+
+Baseline evidence:
+
+- Packages:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_KQNEWEJ6`
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_KQDENTAL`
+- Observed rows in the previous full gate
+  `/tmp/lvcore-all-corpora-validation-20260613-main-wordlist-jtext.jsonl`:
+  - `_DCT_KQNEWEJ6`, `search_full_text`, query `画像`, 804 ms
+  - `_DCT_KQDENTAL`, `search_full_text`, query `01`, 779 ms
+
+### 0v. Dense sidecar title search title-only projection (resolved, full gate)
+
+Why this matters:
+
+- Dense SSED sidecar title search only needs anchor/id and title-like columns,
+  but it was materializing full body/html columns through the same row builder
+  used for body full-text search.
+- Search hits also inherited `ssed_dense_sidecar_body_resolved` diagnostics even
+  though title search had not resolved body content.
+- The previous full-corpus gate still showed sidecar-title latency candidates
+  such as `_DCT_GENKANA5` partial `アル` and iOS `IBIO5` exact `亜-`.
+
+Current status:
+
+- Dense sidecar title search now selects only the resolver id column and
+  title-like columns.
+- Body/html columns are still resolved when opening/rendering the dense anchor.
+- Title search hits no longer claim `ssed_dense_sidecar_body_resolved`.
+- Direct real-package probes:
+  - `_DCT_GENKANA5` partial `アル --limit 1`: about 0.92s locally; output still
+    returns `アルカーイダ【Al-Qaeda；Al-Qaida】` with a sidecar title cursor.
+  - iOS `IBIO5` exact `亜- --limit 1`: about 1.10s locally; output still
+    returns `亜-`.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-genkana5-title-only-sidecar.jsonl`
+  - `/tmp/lvcore-focused-validate-ibio5-title-only-sidecar.jsonl`
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-title-physical-offset.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1936),
+    which is deferred HC work.
+- This is primarily a semantic/search-surface cleanup; the remaining
+  `_DCT_GENKANA5` first-use time appears dominated by sidecar initialization and
+  search orchestration, not SQLite title-row projection.
+
+Baseline evidence:
+
+- Packages:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_GENKANA5`
+  - `/home/shoui/Agents/CodexMax/LogoVista/Other/iOS/IBIO5/IBIO5`
+- Observed rows in the previous full gate
+  `/tmp/lvcore-all-corpora-validation-20260613-main-wordlist-jtext.jsonl`:
+  - `_DCT_GENKANA5`, `search_partial`, query `アル`, 822 ms
+  - `Other/iOS/IBIO5/IBIO5`, `search_exact`, query `亜-`, 566 ms
 
 ### 0u. SSED main wordlist bidirectional sidecar titles (resolved)
 

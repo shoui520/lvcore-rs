@@ -527,14 +527,7 @@ pub fn search_ssed_dense_sidecar_titles_with_resolvers(
             statement.query(params_from_iter(parameters))?
         };
         while let Some(row) = rows.next()? {
-            let anchor_id = anchor_id_from_search_row(resolver, row)?;
-            let body = sidecar_body_from_row(resolver, row)?;
-            let cursor = sidecar_body_cursor_from_search_row(resolver, row)?;
-            let mut hit = SsedSidecarSearchHit {
-                anchor_id,
-                body,
-                cursor: Some(cursor),
-            };
+            let mut hit = sidecar_title_search_hit_from_row(resolver, row)?;
             if !sidecar_title_hit_matches(&mut hit, resolver, mode, &needle) {
                 continue;
             }
@@ -856,10 +849,11 @@ fn sidecar_title_prefilter_sql_for_resolver(
     query: &str,
     cursor: Option<&SsedSidecarBodyCursor>,
 ) -> Result<Option<(String, Vec<String>)>> {
+    let search_title_columns = sidecar_title_search_columns(resolver, title_column);
     let mut available_title_columns = Vec::new();
-    for column in sidecar_title_search_columns(resolver, title_column) {
+    for column in &search_title_columns {
         if sidecar_title_sql_prefilter_is_available(connection, resolver, column, query)? {
-            available_title_columns.push(column);
+            available_title_columns.push(*column);
         }
     }
     let (where_sql, mut parameters) = if !available_title_columns.is_empty() {
@@ -880,7 +874,7 @@ fn sidecar_title_prefilter_sql_for_resolver(
         where_sql
     };
     Ok(Some((
-        search_select_sql_for_resolver(resolver, where_sql.as_deref()),
+        title_search_select_sql_for_resolver(resolver, &search_title_columns, where_sql.as_deref()),
         parameters,
     )))
 }
@@ -1015,6 +1009,37 @@ fn search_select_sql_for_resolver(
     )
 }
 
+fn title_search_select_sql_for_resolver(
+    resolver: &SsedSidecarBodyResolver,
+    title_columns: &[&str],
+    where_sql: Option<&str>,
+) -> String {
+    let mut select_columns = vec![resolver.id_column.clone()];
+    let mut select_expressions = match resolver.id_rule {
+        SsedSidecarIdRule::DirectColumn => vec![quote_sql_identifier(&resolver.id_column)],
+        SsedSidecarIdRule::RowIdTimesFive => vec![format!(
+            "rowid as {}",
+            quote_sql_identifier(&resolver.id_column)
+        )],
+    };
+    for column in title_columns {
+        if !select_columns
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(column))
+        {
+            select_columns.push((*column).to_owned());
+            select_expressions.push(quote_sql_identifier(column));
+        }
+    }
+    let select_sql = select_expressions.join(", ");
+    let order_sql = resolver.id_rule.sql_where_identifier(&resolver.id_column);
+    let where_sql = where_sql.unwrap_or_default();
+    format!(
+        "select {select_sql} from {}{where_sql} order by {order_sql}",
+        quote_sql_identifier(&resolver.table)
+    )
+}
+
 fn sidecar_search_columns(resolver: &SsedSidecarBodyResolver) -> Vec<&str> {
     [
         resolver.title_column.as_deref(),
@@ -1129,6 +1154,37 @@ fn sidecar_search_hit_from_row(
     Ok(SsedSidecarSearchHit {
         anchor_id,
         body,
+        cursor: Some(cursor),
+    })
+}
+
+fn sidecar_title_search_hit_from_row(
+    resolver: &SsedSidecarBodyResolver,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SsedSidecarSearchHit> {
+    let anchor_id = anchor_id_from_search_row(resolver, row)?;
+    let cursor = sidecar_body_cursor_from_search_row(resolver, row)?;
+    let title = match &resolver.title_column {
+        Some(column) => sqlite_value_to_string(row.get_ref(column.as_str())?)?,
+        None => String::new(),
+    };
+    let text = if sidecar_plain_column_is_title_like(resolver) {
+        match &resolver.plain_column {
+            Some(column) => sqlite_value_to_string(row.get_ref(column.as_str())?)?,
+            None => String::new(),
+        }
+    } else {
+        String::new()
+    };
+    Ok(SsedSidecarSearchHit {
+        anchor_id,
+        body: SsedSidecarBody {
+            title: strip_html_tags(&title),
+            text: strip_html_tags(&text),
+            html: None,
+            resolver: resolver.clone(),
+            diagnostics: Vec::new(),
+        },
         cursor: Some(cursor),
     })
 }
