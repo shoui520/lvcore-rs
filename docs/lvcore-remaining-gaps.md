@@ -1,8 +1,18 @@
 # LVCore Remaining Gaps
 
-Date: 2026-06-12
+Date: 2026-06-13
 
 Latest full-corpus gate:
+
+- `/tmp/lvcore-all-corpora-validation-20260613-ssed-multi-near-key.jsonl`
+- Produced after caching SSED MULTI descriptors/selector menus and adding a
+  simple-leaf near-key fast path for filtered MULTI browse surfaces.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260612-native-offset-cursor.jsonl`
 - Produced after changing native SSED exact/forward/backward numeric offset
@@ -12,8 +22,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260612-generic-html-resource-byte-cap.jsonl`
 - Produced after capping deep-validation alternate `GenericHtml` probes by
@@ -143,6 +151,60 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0n. SSED MULTI filtered selector browse latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate exposed `_DCT_EJJE100` `multi:MULTI1.DIC` as a
+  concrete non-HC navigation-surface latency row.
+- The slow target was the first MULTI selector child, `ビジネス・経済`, which
+  opens a filtered MULTI record browse.
+- The previous implementation found filtered rows by linearly scanning the
+  referenced index component until `limit + 1` selector matches were seen.
+  For `_DCT_EJJE100`, that meant scanning a large `0x91` MULTI index even
+  though the index has native internal pages that can locate the exact selector
+  key.
+
+Current status:
+
+- SSED MULTI descriptors and selector menu parses are cached per package
+  instance, avoiding repeated descriptor/menu reads across home-surface,
+  surface-render, and window paths.
+- Filtered MULTI browse now uses a component-specific near-key scan for simple
+  leaf index components. It seeks to candidate leaf pages for the exact
+  normalized selector key, and falls back to the previous linear scan if the
+  component is not a simple leaf index, candidate pages are unavailable, or row
+  order looks unsafe.
+- Focused tests passed:
+  - `cargo test -p lvcore ssed_multi_descriptor_and_selector_menu_are_cached -- --nocapture`
+  - `cargo test -p lvcore ssed_native_offset_continuation_defers_overfetch_after_first_page -- --nocapture`
+  - `cargo fmt --check`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ejje100-multi-near-key.jsonl`
+  - `_DCT_EJJE100` package status remained `ok`.
+  - The `multi:MULTI1.DIC` row dropped from the latest full-gate baseline
+    1936 ms to 35 ms in focused validation.
+  - Package focused validation wall time dropped from 3.20s before the near-key
+    fast path to 1.66s after it.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260613-ssed-multi-near-key.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - Path set matched the previous baseline.
+  - Warning diagnostics remained only the explicitly deferred HC common HTML
+    fallback.
+  - The `_DCT_EJJE100` `multi:MULTI1.DIC` row was 31 ms in the full gate, down
+    from 1936 ms in the previous full-gate baseline.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_EJJE100`
+- Observed row:
+  - `surface_id`: `multi:MULTI1.DIC`
+  - label: `ビジネス・経済`
+  - opened kind: `hierarchical_tree`
+  - view kind: `navigation_surface`
 
 ### 0m. SSED native offset continuation overfetch latency (resolved)
 

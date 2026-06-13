@@ -200,7 +200,8 @@ use crate::ssed_loose_media::{
     resolve_pcmu_record, resolve_ziptomedia_file, search_britannica_chronology_records,
 };
 use crate::ssed_menu::{
-    SsedMenuDestination, SsedMenuLink, SsedMenuRecord, parse_menu_stream, parse_menu_stream_page,
+    SsedMenuDestination, SsedMenuLink, SsedMenuParse, SsedMenuRecord, parse_menu_stream,
+    parse_menu_stream_page,
 };
 use crate::ssed_multi::{
     SsedMultiComponentRef, SsedMultiDescriptor, SsedMultiRecord, parse_multi_descriptor,
@@ -278,6 +279,9 @@ type SsedNavigationSurfaceCache = BTreeMap<String, Arc<NavigationSurface>>;
 type SsedTitleTextCache = BTreeMap<(u32, u32), Option<Arc<str>>>;
 type SsedTitleReaderCache = BTreeMap<String, std::result::Result<SsedDataFile, String>>;
 type SsedHonmonBodyScanPlanCache = std::result::Result<SsedHonmonBodyScanPlan, String>;
+type SsedMultiDescriptorCache =
+    BTreeMap<String, std::result::Result<Arc<SsedMultiDescriptor>, String>>;
+type SsedMultiMenuCache = BTreeMap<String, std::result::Result<Arc<SsedMenuParse>, String>>;
 type SsedPanelPlistCache = BTreeMap<String, std::result::Result<Arc<PlistValue>, String>>;
 type SsedPanelParsedCache = BTreeMap<String, std::result::Result<Arc<SsedPanelXml>, String>>;
 
@@ -326,6 +330,8 @@ pub struct ReaderBookPackage {
     ssed_title_reader_cache: Mutex<SsedTitleReaderCache>,
     ssed_navigation_component_data: Mutex<SsedNavigationDataCache>,
     ssed_navigation_surface_pages: Mutex<SsedNavigationSurfaceCache>,
+    ssed_multi_descriptors: Mutex<SsedMultiDescriptorCache>,
+    ssed_multi_menus: Mutex<SsedMultiMenuCache>,
     ssed_pdfspread_database: OnceLock<std::result::Result<Option<PathBuf>, String>>,
     ssed_sounddata_index: OnceLock<std::result::Result<Option<SoundDataIndex>, String>>,
     ssed_color_sample_table: OnceLock<std::result::Result<Option<ColorSampleTable>, String>>,
@@ -451,6 +457,8 @@ impl ReaderBookPackage {
             ssed_title_reader_cache: Mutex::new(BTreeMap::new()),
             ssed_navigation_component_data: Mutex::new(BTreeMap::new()),
             ssed_navigation_surface_pages: Mutex::new(BTreeMap::new()),
+            ssed_multi_descriptors: Mutex::new(BTreeMap::new()),
+            ssed_multi_menus: Mutex::new(BTreeMap::new()),
             ssed_pdfspread_database: OnceLock::new(),
             ssed_sounddata_index: OnceLock::new(),
             ssed_color_sample_table: OnceLock::new(),

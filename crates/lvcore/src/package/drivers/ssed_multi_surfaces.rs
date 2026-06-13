@@ -116,20 +116,77 @@ impl ReaderBookPackage {
     pub(super) fn read_ssed_multi_descriptor(
         &self,
         component: &SsedComponent,
-    ) -> Result<SsedMultiDescriptor> {
-        let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
-            return Err(Error::Driver(format!(
-                "{} is declared but not present on disk",
-                component.filename
-            )));
-        };
-        let mut reader = SsedDataFile::open(path)?;
-        let read_len = reader
-            .header()
-            .expanded_size()
-            .min(SSED_NAVIGATION_DETECTION_MAX_BYTES);
-        let data = reader.read_range(0, read_len)?;
-        parse_multi_descriptor(&data)
+    ) -> Result<Arc<SsedMultiDescriptor>> {
+        let cache_key = ssed_multi_component_cache_key(component);
+        {
+            let cache = self.ssed_multi_descriptors.lock().map_err(|_| {
+                Error::Driver("SSED MULTI descriptor cache was poisoned".to_owned())
+            })?;
+            if let Some(cached) = cache.get(&cache_key) {
+                return cached
+                    .as_ref()
+                    .map(Arc::clone)
+                    .map_err(|error| Error::Driver(error.clone()));
+            }
+        }
+
+        let decoded = (|| {
+            let Some(path) = self.resolve_readable_ssed_component_path(component)? else {
+                return Err(Error::Driver(format!(
+                    "{} is declared but not present on disk",
+                    component.filename
+                )));
+            };
+            let mut reader = SsedDataFile::open(path)?;
+            let read_len = reader
+                .header()
+                .expanded_size()
+                .min(SSED_NAVIGATION_DETECTION_MAX_BYTES);
+            let data = reader.read_range(0, read_len)?;
+            parse_multi_descriptor(&data).map(Arc::new)
+        })()
+        .map_err(|error| error.to_string());
+
+        let mut cache = self
+            .ssed_multi_descriptors
+            .lock()
+            .map_err(|_| Error::Driver("SSED MULTI descriptor cache was poisoned".to_owned()))?;
+        let cached = cache.entry(cache_key).or_insert_with(|| decoded);
+        cached
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(|error| Error::Driver(error.clone()))
+    }
+
+    fn read_ssed_multi_menu(&self, component: &SsedComponent) -> Result<Arc<SsedMenuParse>> {
+        let cache_key = ssed_multi_component_cache_key(component);
+        {
+            let cache = self
+                .ssed_multi_menus
+                .lock()
+                .map_err(|_| Error::Driver("SSED MULTI menu cache was poisoned".to_owned()))?;
+            if let Some(cached) = cache.get(&cache_key) {
+                return cached
+                    .as_ref()
+                    .map(Arc::clone)
+                    .map_err(|error| Error::Driver(error.clone()));
+            }
+        }
+
+        let parsed = self
+            .read_ssed_component_expanded_bytes(component)
+            .map(|data| Arc::new(parse_menu_stream(&data)))
+            .map_err(|error| error.to_string());
+
+        let mut cache = self
+            .ssed_multi_menus
+            .lock()
+            .map_err(|_| Error::Driver("SSED MULTI menu cache was poisoned".to_owned()))?;
+        let cached = cache.entry(cache_key).or_insert_with(|| parsed);
+        cached
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(|error| Error::Driver(error.clone()))
     }
     pub(super) fn open_ssed_multi_selector_surface(
         &self,
@@ -302,19 +359,54 @@ impl ReaderBookPackage {
         let filter_normalized = filter.map(normalize_search_match_text);
         let mut seen = 0usize;
         let mut rows = Vec::new();
-        let mut diagnostics =
-            self.scan_ssed_index_component_rows(&index_component, None, |row| {
-                let row_matches = filter_normalized
-                    .as_ref()
-                    .is_none_or(|filter| normalize_search_match_text(&row.key) == *filter);
-                if row_matches {
-                    if seen >= offset {
-                        rows.push(row);
+        let mut diagnostics = Vec::new();
+        let needs_linear_scan = if let Some(filter) = filter_normalized.as_deref()
+            && is_simple_leaf_index_type(index_component.component_type)
+        {
+            let mut optimized_seen = 0usize;
+            let mut optimized_rows = Vec::new();
+            let optimized_row_count = std::cell::Cell::new(0usize);
+            let (optimized_diagnostics, needs_linear_scan) = self
+                .scan_ssed_simple_leaf_index_component_rows_near_exact_key(
+                    &index_component,
+                    filter,
+                    |row| {
+                        if optimized_seen >= offset {
+                            optimized_rows.push(row);
+                            optimized_row_count.set(optimized_rows.len());
+                        }
+                        optimized_seen = optimized_seen.saturating_add(1);
+                        Ok(optimized_row_count.get() < limit.saturating_add(1))
+                    },
+                    || optimized_row_count.get() >= limit.saturating_add(1),
+                )?;
+            diagnostics.extend(optimized_diagnostics);
+            if !needs_linear_scan {
+                seen = optimized_seen;
+                rows = optimized_rows;
+            }
+            needs_linear_scan
+        } else {
+            true
+        };
+        if needs_linear_scan {
+            diagnostics.extend(self.scan_ssed_index_component_rows(
+                &index_component,
+                None,
+                |row| {
+                    let row_matches = filter_normalized
+                        .as_ref()
+                        .is_none_or(|filter| normalize_search_match_text(&row.key) == *filter);
+                    if row_matches {
+                        if seen >= offset {
+                            rows.push(row);
+                        }
+                        seen = seen.saturating_add(1);
                     }
-                    seen = seen.saturating_add(1);
-                }
-                Ok(rows.len() < limit.saturating_add(1))
-            })?;
+                    Ok(rows.len() < limit.saturating_add(1))
+                },
+            )?);
+        }
         let next_cursor = (rows.len() > limit).then(|| (offset + limit).to_string());
         rows.truncate(limit);
         if rows.is_empty() && !diagnostics.is_empty() {
@@ -538,8 +630,8 @@ impl ReaderBookPackage {
             ));
             return Ok(Vec::new());
         };
-        let data = match self.read_ssed_component_expanded_bytes(&menu_component) {
-            Ok(data) => data,
+        let parsed = match self.read_ssed_multi_menu(&menu_component) {
+            Ok(parsed) => parsed,
             Err(error) => {
                 diagnostics.push(
                     Diagnostic::warning(
@@ -551,7 +643,6 @@ impl ReaderBookPackage {
                 return Ok(Vec::new());
             }
         };
-        let parsed = parse_menu_stream(&data);
         if parsed.records.is_empty() {
             diagnostics.push(
                 Diagnostic::info(
@@ -675,6 +766,16 @@ impl ReaderBookPackage {
         }
         None
     }
+}
+
+fn ssed_multi_component_cache_key(component: &SsedComponent) -> String {
+    format!(
+        "{}\0{:02x}\0{}\0{}",
+        component.filename.to_ascii_lowercase(),
+        component.component_type,
+        component.start_block,
+        component.end_block
+    )
 }
 
 fn ssed_multi_ref_component_role(component_type: u8) -> SsedComponentRole {

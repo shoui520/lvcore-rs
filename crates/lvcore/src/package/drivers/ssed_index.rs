@@ -183,6 +183,141 @@ impl ReaderBookPackage {
         })
     }
 
+    pub(super) fn scan_ssed_simple_leaf_index_component_rows_near_exact_key(
+        &self,
+        component: &SsedComponent,
+        needle: &str,
+        mut on_row: impl FnMut(SsedIndexRow) -> Result<bool>,
+        mut candidate_satisfied: impl FnMut() -> bool,
+    ) -> Result<(Vec<Diagnostic>, bool)> {
+        let mut diagnostics = Vec::new();
+        if !is_simple_leaf_index_type(component.component_type) {
+            return Ok((diagnostics, true));
+        }
+        let needle_keys = ssed_index_search_key_candidates(needle);
+        if needle_keys.is_empty() && !needle.is_empty() {
+            return Ok((diagnostics, true));
+        }
+        let path = match self.resolve_readable_ssed_component_path(component) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                diagnostics.push(
+                    Diagnostic::info(
+                        "ssed_index_component_missing",
+                        format!("{} is declared but not present on disk", component.filename),
+                    )
+                    .with_context("component", &component.filename),
+                );
+                return Ok((diagnostics, false));
+            }
+            Err(error) => {
+                diagnostics.push(
+                    Diagnostic::warning(
+                        "ssed_index_component_decode_failed",
+                        format!(
+                            "{} is not readable as SSEDDATA: {error}",
+                            component.filename
+                        ),
+                    )
+                    .with_context("component", &component.filename),
+                );
+                return Ok((diagnostics, false));
+            }
+        };
+        let mut reader = SsedDataFile::open(&path)?;
+        let component_read_base = ssed_component_read_base(component, &reader);
+        let page_count = component.block_count() as usize;
+        let mut needs_linear_fallback = false;
+        let mut seen_rows = BTreeSet::<(String, u32, u32)>::new();
+        for needle_key in needle_keys {
+            let start_pages = self.ssed_simple_index_candidate_leaf_pages(
+                &SearchMode::Exact,
+                component,
+                &mut reader,
+                component_read_base,
+                &needle_key,
+            )?;
+            if start_pages.is_empty() {
+                needs_linear_fallback = true;
+                continue;
+            }
+            for start_page in start_pages {
+                let mut last_key = None::<Vec<u8>>;
+                let mut scan_state = SsedIndexScanState::default();
+                'pages: for page_index in start_page..page_count {
+                    let page = read_index_page(&mut reader, component_read_base, page_index)?;
+                    if page.len() < 4 {
+                        break;
+                    }
+                    let word = u16::from_be_bytes([page[0], page[1]]);
+                    if !is_leaf_page(word) {
+                        continue;
+                    }
+                    let logical_block = component.start_block + page_index as u32;
+                    let (rows, unknown) = parse_supported_leaf_page(
+                        &component.filename,
+                        component.component_type,
+                        page,
+                        page_index as u32,
+                        logical_block,
+                        &mut scan_state,
+                    );
+                    if rows.windows(2).any(|pair| {
+                        ssed_index_row_order_key(&pair[1]) < ssed_index_row_order_key(&pair[0])
+                    }) {
+                        needs_linear_fallback = true;
+                    }
+                    if unknown > 0 {
+                        diagnostics.push(
+                            Diagnostic::warning(
+                                "ssed_index_unknown_leaf_bytes",
+                                format!(
+                                    "{} had {unknown} unknown index leaf row(s)",
+                                    component.filename
+                                ),
+                            )
+                            .with_context("component", &component.filename),
+                        );
+                    }
+                    for row in rows {
+                        let key = ssed_index_row_match_text(&row);
+                        let key_bytes = ssed_index_row_order_key(&row);
+                        if last_key
+                            .as_ref()
+                            .is_some_and(|last_key| key_bytes.as_slice() < last_key.as_slice())
+                        {
+                            needs_linear_fallback = true;
+                        }
+                        last_key = Some(key_bytes.clone());
+                        let row_matches = key == needle;
+                        let passed_match_region =
+                            !needs_linear_fallback && key_bytes.as_slice() > needle_key.as_slice();
+                        if row_matches
+                            && seen_rows.insert((
+                                row.component.clone(),
+                                row.page_index,
+                                row.row_index,
+                            ))
+                            && !on_row(row)?
+                        {
+                            return Ok((diagnostics, needs_linear_fallback));
+                        }
+                        if !row_matches && passed_match_region {
+                            break 'pages;
+                        }
+                    }
+                    if candidate_satisfied() {
+                        return Ok((diagnostics, needs_linear_fallback));
+                    }
+                }
+                if candidate_satisfied() {
+                    return Ok((diagnostics, needs_linear_fallback));
+                }
+            }
+        }
+        Ok((diagnostics, needs_linear_fallback))
+    }
+
     fn ssed_simple_index_candidate_leaf_pages(
         &self,
         mode: &SearchMode,
