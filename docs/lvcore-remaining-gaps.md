@@ -4,6 +4,16 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-ssed-title-cursor-budget.jsonl`
+- Produced after reducing the empty physical-title continuation prefilter budget
+  for SSED full-text title cursors.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-ssed-direct-scan-chunk-cache.jsonl`
 - Produced after adding a small MRU cache for expanded `SsedDataFile` chunks and
   widening SSED direct full-text scan windows from 256 KiB to 1 MiB.
@@ -11,8 +21,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-lved-direct-fts-variants.jsonl`
 - Produced after routing guarded multi-variant LVED FTS searches through direct
@@ -168,6 +176,63 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0q. SSED full-text title continuation prefilter churn (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate exposed `_DCT_KQNEWEJ6` full-text search for
+  `画像` as a concrete non-HC continuation latency row.
+- The first page correctly returned the native title/index hit `画像一覧` with
+  cursor `title:ssed-partial-index:2:1181`.
+- Direct probes showed the follow-up page was not slow because of HONMON body
+  scanning. `body:0` returned the same direct body hit in about 0.2s, while the
+  title cursor spent about 1.2s proving enough empty partial-title index pages
+  before falling through to body results.
+
+Current status:
+
+- Partial-index scanning keeps the existing default prefilter budget for normal
+  partial search and initial title prepasses.
+- Full-text physical title continuation cursors now use a smaller
+  prefiltered-leaf budget before falling through to HONMON body search. This
+  preserves the existing bounded title-prepass policy while avoiding thousands
+  of raw leaf-page prefilter reads on large SSED indexes.
+- Direct real-package probes:
+  - `_DCT_KQNEWEJ6` full-text `画像 --limit 1` still returns `画像一覧` with
+    cursor `title:ssed-partial-index:2:1181`.
+  - Continuing from `title:ssed-partial-index:2:1181` returns the same
+    `a・ cu・ tance...` body hit and `body-offset:*` cursor, but dropped from
+    about 1.2s in the latest full gate to about 0.34s locally.
+- Focused tests passed:
+  - `cargo test -p lvcore package::drivers::search_ssed::tests -- --nocapture`
+  - `cargo test -p lvcore package::drivers::ssed_index::tests -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-kqnewej6-title-cursor-budget.jsonl`
+  - `_DCT_KQNEWEJ6` package status remained `ok`.
+  - The `search_full_text` `画像` row dropped from 1716 ms in the latest full
+    gate to 826 ms focused.
+  - The cursor probe dropped from 1202 ms in the latest full gate to 302 ms
+    focused, still returning one hit and the same direct-body diagnostic shape.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-ssed-title-cursor-budget.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous full-gate path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1936),
+    which is deferred HC work.
+  - `_DCT_KQNEWEJ6` package elapsed time dropped from 6633 ms in the previous
+    full gate to 5732 ms.
+  - The `search_full_text` `画像` row dropped from 1716 ms to 842 ms.
+  - The title-cursor probe dropped from 1202 ms to 312 ms and still returned
+    one hit with `body-offset:484f4e4d4f4e2e444943:1c6f5c`.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_KQNEWEJ6`
+- Observed row:
+  - `kind`: `search_full_text`, query: `画像`
 
 ### 0p. SSED direct full-text scan range-read churn (resolved)
 

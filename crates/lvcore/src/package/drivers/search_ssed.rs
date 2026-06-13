@@ -629,21 +629,56 @@ impl ReaderBookPackage {
         cursor: Option<SsedPartialIndexScanCursor>,
         collector: &mut SsedIndexSearchCollector<'_>,
     ) -> Result<Option<String>> {
+        self.scan_ssed_partial_index_rows_paged_until_visible_with_prefilter_budget(
+            needle,
+            cursor,
+            collector,
+            SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET,
+        )
+    }
+
+    fn scan_ssed_partial_index_rows_paged_until_visible_with_prefilter_budget(
+        &self,
+        needle: &str,
+        cursor: Option<SsedPartialIndexScanCursor>,
+        collector: &mut SsedIndexSearchCollector<'_>,
+        prefiltered_leaf_page_budget: usize,
+    ) -> Result<Option<String>> {
         let mut current_cursor = cursor;
         let mut advanced_empty_pages = 0usize;
         let mut use_empty_scan_budget = false;
         loop {
-            let scan_result = if use_empty_scan_budget {
-                self.scan_ssed_partial_index_rows_paged_with_leaf_budget(
+            let scan_result = if prefiltered_leaf_page_budget
+                == SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET
+            {
+                if use_empty_scan_budget {
+                    self.scan_ssed_partial_index_rows_paged_with_leaf_budget(
+                        needle,
+                        current_cursor,
+                        SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET,
+                        |row| collector.push_row(row),
+                    )?
+                } else {
+                    self.scan_ssed_partial_index_rows_paged(needle, current_cursor, |row| {
+                        collector.push_row(row)
+                    })?
+                }
+            } else if use_empty_scan_budget {
+                self.scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
                     needle,
                     current_cursor,
                     SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET,
-                    |row| collector.push_row(row),
+                    prefiltered_leaf_page_budget,
+                    |_, row| collector.push_row(row),
                 )?
             } else {
-                self.scan_ssed_partial_index_rows_paged(needle, current_cursor, |row| {
-                    collector.push_row(row)
-                })?
+                self.scan_ssed_partial_index_rows_paged_with_leaf_budget_and_cursor(
+                    needle,
+                    current_cursor,
+                    SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET,
+                    prefiltered_leaf_page_budget,
+                    |_, row| collector.push_row(row),
+                )?
             };
             let next_cursor = scan_result.next_cursor;
             collector.extend_diagnostics(scan_result.diagnostics);
@@ -710,6 +745,7 @@ impl ReaderBookPackage {
                 needle,
                 current_cursor,
                 leaf_page_budget,
+                SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET,
                 |row_cursor, row| {
                     if skip_prefix_rows
                         && ssed_title_label_fallback_row_matches(
@@ -2780,10 +2816,11 @@ impl ReaderBookPackage {
                 None
             }
             SsedFulltextTitleCursor::Physical(cursor) => self
-                .scan_ssed_partial_index_rows_paged_until_visible(
+                .scan_ssed_partial_index_rows_paged_until_visible_with_prefilter_budget(
                     needle,
                     Some(cursor),
                     &mut collector,
+                    SSED_FULLTEXT_TITLE_CURSOR_PREFILTERED_LEAF_PAGE_BUDGET,
                 )?,
         };
         let mut page = collector.into_search_page(query.limit);

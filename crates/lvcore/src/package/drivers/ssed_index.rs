@@ -733,6 +733,7 @@ impl ReaderBookPackage {
             needle,
             cursor,
             leaf_page_budget,
+            SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET,
             |_, row| on_row(row),
         )
     }
@@ -742,6 +743,7 @@ impl ReaderBookPackage {
         needle: &str,
         cursor: Option<SsedPartialIndexScanCursor>,
         leaf_page_budget: usize,
+        prefiltered_leaf_page_budget: usize,
         mut on_row: impl FnMut(SsedPartialIndexScanCursor, SsedIndexRow) -> Result<bool>,
     ) -> Result<SsedPartialIndexScanResult> {
         let Some(catalog) = &self.ssed_catalog else {
@@ -881,7 +883,7 @@ impl ReaderBookPackage {
                     }
                 } else {
                     prefiltered_leaf_pages = prefiltered_leaf_pages.saturating_add(1);
-                    if prefiltered_leaf_pages >= SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET {
+                    if prefiltered_leaf_pages >= prefiltered_leaf_page_budget {
                         let next_cursor = next_ssed_partial_index_scan_cursor(
                             catalog,
                             component.index,
