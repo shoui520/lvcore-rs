@@ -1611,6 +1611,8 @@ impl ReaderBookPackage {
             cursor.starts_with("body:") || cursor.starts_with(SSED_FULLTEXT_BODY_CURSOR_PREFIX)
         });
         let row_cursor_explicit = row_cursor.is_some();
+        let sidecar_body_phase_cursor =
+            sidecar_body_cursor.is_some() || sidecar_body_physical_cursor.is_some();
         let run_sidecar =
             chronology_cursor.is_none() && !body_cursor_explicit && !row_cursor_explicit;
         let sidecar_offset = sidecar_body_cursor.unwrap_or(0);
@@ -1640,13 +1642,24 @@ impl ReaderBookPackage {
         )?;
         diagnostics.append(&mut sidecar_search_page.diagnostics);
         hits.append(&mut sidecar_search_page.hits);
+        let next_sidecar_cursor = sidecar_search_page.next_cursor.take();
+        let sidecar_exhausted = next_sidecar_cursor.is_none();
         if hits.len() >= query.limit
-            && let Some(next_cursor) = sidecar_search_page.next_cursor
+            && let Some(next_cursor) = next_sidecar_cursor
         {
             hits.truncate(query.limit);
             return Ok(SearchPage {
                 hits,
                 next_cursor: Some(next_cursor),
+                result_sequence: None,
+                diagnostics,
+            });
+        }
+        if sidecar_body_phase_cursor && sidecar_exhausted {
+            return Ok(SearchPage {
+                hits,
+                next_cursor: honmon_body_window_scan_needed
+                    .then(|| encode_ssed_fulltext_body_cursor(0)),
                 result_sequence: None,
                 diagnostics,
             });
@@ -1728,8 +1741,6 @@ impl ReaderBookPackage {
             }
         }
         let byte_candidates = ssed_body_search_byte_candidates(&query.query);
-        let sidecar_body_phase_cursor =
-            sidecar_body_cursor.is_some() || sidecar_body_physical_cursor.is_some();
         let row_driven_search_allowed =
             query.cursor.is_none() || row_cursor.is_some() || sidecar_body_phase_cursor;
         if honmon_body_window_scan_needed

@@ -1722,6 +1722,77 @@ fn dense_honmon_fulltext_sidecar_body_cursor_keeps_lookahead_hit() {
 }
 
 #[test]
+fn dense_honmon_fulltext_exhausted_sidecar_body_cursor_defers_native_body_phase() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::MissingBetaRow);
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[b"plain native body"], 100, 100),
+    )
+    .unwrap();
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+    let query_page = |cursor: Option<String>| {
+        package
+            .search(&SearchQuery {
+                scope: crate::search::SearchScope::CurrentBook {
+                    book_id: package.metadata().book_id.clone(),
+                },
+                mode: SearchMode::FullText,
+                query: "alpha sidecar body".to_owned(),
+                cursor,
+                limit: 1,
+                gaiji_policy: None,
+            })
+            .unwrap()
+    };
+
+    let first = query_page(None);
+    assert_eq!(first.hits.len(), 1);
+    assert!(matches!(
+        first.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "1"
+    ));
+    assert!(
+        first
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("sidecar-body-row:"))
+    );
+
+    let second = query_page(first.next_cursor.clone());
+    assert!(second.hits.is_empty());
+    assert_eq!(second.next_cursor.as_deref(), Some("body:0"));
+    assert!(
+        !second
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_direct_scan")
+    );
+    assert!(
+        !second
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+    );
+}
+
+#[test]
 fn dense_honmon_fulltext_searches_sidecar_titles_before_bodies() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::BodyRows);

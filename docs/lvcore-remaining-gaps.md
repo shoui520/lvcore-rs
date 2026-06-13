@@ -4,6 +4,19 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-sidecar-body-phase-deferral-v1.jsonl`
+- Produced after making explicit SSED full-text `sidecar-body-row:*`
+  continuations stop at the sidecar phase boundary and return `body:0` when
+  native HONMON scanning remains eligible, instead of performing that native
+  body scan inside the sidecar cursor probe.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered, including the
+  two `Other/Android` rows.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-nonascii-sidecar-prepass-v1.jsonl`
 - Produced after adding authoritative non-ASCII SSED sidecar title/body
   prepasses for iOS dense sidecars, broadening non-ASCII sidecar-title
@@ -15,8 +28,6 @@ Latest full-corpus gate:
   two `Other/Android` rows.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-ssed-jis-prefilter-memmem-v2.jsonl`
 - Produced after making the SSED separator-aware JIS byte prefilter seek to
@@ -296,21 +307,18 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 2075 ms validation
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 2056 ms validation
   exercise elapsed, hit_count 1. The residual cost is finding the late first
   non-prefix title across sparse native index pages, not proving the
   continuation.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 808 ms, native title/index
-  prepass.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 791 ms, direct native
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 796 ms, direct native
   HONMON scan plus row-driven prefetch.
-- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 664 ms, direct native
-  HONMON scan plus row-driven prefetch after the JIS prefilter improvement.
-- `LogoVistaAndroid/SSED/.MEIKYO2R` and `.MEIKYO2R_renew`,
-  `search_full_text` query `仝`: 1173/1160 ms, sidecar body scan. This is the
-  next concrete non-HC sidecar candidate after the IBIO5 fix.
-- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 634 ms, native title
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 774 ms, native title/index
+  prepass.
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 638 ms, native title
   prepass with deferred body continuation.
+- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 593 ms, direct native
+  HONMON scan plus row-driven prefetch after the JIS prefilter improvement.
 - `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 585 ms.
   Directly inspect before treating it as a code gap.
 - `_DCT_GEN2005`, `search_full_text` query `曙光`: 619 ms, direct native HONMON
@@ -334,6 +342,75 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0ae. SSED sidecar-body cursor phase deferral (resolved, full gate)
+
+Why this matters:
+
+- The latest full-corpus gate exposed Android SSED `.MEIKYO2R` and
+  `.MEIKYO2R_renew` as concrete non-HC sidecar continuation latency rows:
+  - `.MEIKYO2R` `search_full_text` `仝`: 1173 ms.
+  - `.MEIKYO2R_renew` `search_full_text` `仝`: 1160 ms.
+- The first page returned the expected sidecar body hit quickly, but deep
+  validation followed the physical `sidecar-body-row:*` cursor. Once the
+  sidecar table was exhausted, LVCore immediately entered native HONMON
+  row-driven/direct body scanning and spent about 1.1s proving there were no
+  native body hits.
+- Direct package inspection showed `MEIKYO2R.db` has one body hit for `仝` at
+  `MEIKYO2R.No = 42631`; the raw SQLite continuation after that row is fast and
+  empty.
+
+Current status:
+
+- Explicit full-text sidecar-body continuation cursors now stop at the sidecar
+  phase boundary. If the sidecar phase is exhausted before filling the page,
+  LVCore returns the hits collected so far plus the existing `body:0`
+  continuation when native HONMON scanning is still eligible.
+- This preserves completeness for callers that continue searching, while
+  preventing sidecar cursor probes from doing native body scanning as hidden
+  follow-up work.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore package::drivers::tests::dense_sidecar -- --nocapture`
+  - `cargo test -p lvcore package::drivers::tests::fulltext -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-meikyo2r-sidecar-phase-deferral-v1.jsonl`
+  - `.MEIKYO2R` package status `ok`, elapsed 1531 ms.
+  - `.MEIKYO2R` `search_full_text` `仝`: 44 ms; cursor probe 16 ms,
+    hit_count 0, remaining cursor `body:0`.
+  - `.MEIKYO2R_renew` package status `ok`, elapsed 1680 ms.
+  - `.MEIKYO2R_renew` `search_full_text` `仝`: 44 ms; cursor probe 16 ms,
+    hit_count 0, remaining cursor `body:0`.
+- Direct real-package probes:
+  - `lvcore search .../.MEIKYO2R '仝' --mode full-text --limit 1`: about 0.04s.
+  - Following the returned `sidecar-body-row:*` cursor: about 0.05s, hit_count
+    0, remaining cursor `body:0`.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-sidecar-body-phase-deferral-v1.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered, including the
+    two `Other/Android` rows.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (261),
+    which is deferred HC work.
+  - `.MEIKYO2R` package status `ok`, elapsed 1574 ms.
+  - `.MEIKYO2R` `search_full_text` `仝`: 59 ms; cursor probe 29 ms,
+    hit_count 0, remaining cursor `body:0`.
+  - `.MEIKYO2R_renew` package status `ok`, elapsed 1669 ms.
+  - `.MEIKYO2R_renew` `search_full_text` `仝`: 42 ms; cursor probe 15 ms,
+    hit_count 0, remaining cursor `body:0`.
+
+Baseline evidence:
+
+- Latest full-corpus JSONL:
+  `/tmp/lvcore-all-corpora-validation-20260613-nonascii-sidecar-prepass-v1.jsonl`
+- Observed rows in that baseline:
+  - `.MEIKYO2R` `search_full_text` `仝`: 1173 ms, diagnostic
+    `ssed_fulltext_sidecar_scan`, cursor `sidecar-body-row:*`; cursor probe
+    1142 ms with native body diagnostics.
+  - `.MEIKYO2R_renew` `search_full_text` `仝`: 1160 ms, diagnostic
+    `ssed_fulltext_sidecar_scan`, cursor `sidecar-body-row:*`; cursor probe
+    1128 ms with native body diagnostics.
 
 ### 0ad. iOS SSED non-ASCII sidecar title/body prepass (resolved, full gate)
 
