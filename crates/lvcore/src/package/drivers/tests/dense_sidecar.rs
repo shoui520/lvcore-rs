@@ -1907,7 +1907,13 @@ fn dense_honmon_sidecar_title_cursor_keeps_lookahead_hit() {
         first.hits[0].target.decode().unwrap(),
         InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "2"
     ));
-    assert_eq!(first.next_cursor.as_deref(), Some("sidecar-title:1"));
+    let first_cursor = first.next_cursor.as_deref().unwrap();
+    assert!(first_cursor.starts_with("sidecar-title-row:"));
+    assert!(first_cursor.ends_with(":32"));
+
+    let legacy_second = query_page(Some("sidecar-title:1".to_owned()));
+    assert_eq!(legacy_second.hits.len(), 1);
+    assert_eq!(legacy_second.hits[0].title_text, "shared second");
 
     let second = query_page(first.next_cursor.clone());
     assert_eq!(second.hits.len(), 1);
@@ -1916,7 +1922,9 @@ fn dense_honmon_sidecar_title_cursor_keeps_lookahead_hit() {
         second.hits[0].target.decode().unwrap(),
         InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "3"
     ));
-    assert_eq!(second.next_cursor.as_deref(), Some("sidecar-title:2"));
+    let second_cursor = second.next_cursor.as_deref().unwrap();
+    assert!(second_cursor.starts_with("sidecar-title-row:"));
+    assert!(second_cursor.ends_with(":33"));
 
     let third = query_page(second.next_cursor.clone());
     assert_eq!(third.hits.len(), 1);

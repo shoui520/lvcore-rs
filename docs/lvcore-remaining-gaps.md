@@ -4,6 +4,16 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-sidecar-title-physical-cursor.jsonl`
+- Produced after changing dense SSED sidecar title continuations from logical
+  offset cursors to physical sidecar row cursors.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-ssed-title-cursor-budget.jsonl`
 - Produced after reducing the empty physical-title continuation prefilter budget
   for SSED full-text title cursors.
@@ -11,8 +21,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-ssed-direct-scan-chunk-cache.jsonl`
 - Produced after adding a small MRU cache for expanded `SsedDataFile` chunks and
@@ -176,6 +184,61 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0r. SSED dense sidecar title continuation rescans (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate exposed `_DCT_KJJK100` exact search for `新` as
+  the slowest remaining non-HC search row.
+- The package is backed by a 272 MB dense sidecar SQLite database with about
+  3.26 million rows and only the primary-key index on `ID`.
+- The exact `新` title query has only a few matches, but the old continuation
+  cursor was `sidecar-title:1`, so every continuation page repeated the same
+  large unindexed title scan and skipped by logical offset.
+
+Current status:
+
+- Dense sidecar title search now emits physical `sidecar-title-row:*` cursors
+  using the sidecar name, table, id column/rule, and last returned order value.
+- Continuation queries use the existing primary-key order column as a lower
+  bound, e.g. `ID > last_id`, while preserving the title prefilter and Rust
+  normalized-title verification.
+- Legacy `sidecar-title:N` cursors remain accepted and upgrade to physical
+  cursors after the next page.
+- Focused tests passed:
+  - `cargo test -p lvcore package::drivers::tests::dense_sidecar -- --nocapture`
+  - `cargo test -p lvcore package::drivers::search_ssed::tests -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Direct real-package probes:
+  - `_DCT_KJJK100` exact `新 --limit 1` now emits a physical
+    `sidecar-title-row:*` cursor.
+  - Continuing with that physical cursor returns the same next `新` hit and
+    drops from about 0.8s with `sidecar-title:1` to about 0.02s locally.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-kjjk100-sidecar-title-physical-cursor.jsonl`
+  - `_DCT_KJJK100` package status remained `ok`.
+  - The exact `新` cursor probe dropped from 797 ms in the latest full gate to
+    20 ms focused.
+  - Forward/backward sidecar-title cursor probes now also use physical cursors.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-sidecar-title-physical-cursor.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous full-gate path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1936),
+    which is deferred HC work.
+  - `_DCT_KJJK100` package elapsed time dropped from 5681 ms in the previous
+    full gate to 5402 ms.
+  - The exact `新` search row dropped from 1578 ms to 890 ms.
+  - The sidecar title cursor probe dropped from 797 ms to 18 ms and still
+    returned one `新` hit.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_KJJK100`
+- Observed row:
+  - `kind`: `search_exact`, query: `新`
 
 ### 0q. SSED full-text title continuation prefilter churn (resolved)
 

@@ -50,8 +50,8 @@ impl ReaderBookPackage {
         if let Some(aux_label_row_offset) = decode_ssed_aux_label_cursor(query.cursor.as_deref()) {
             return self.search_ssed_aux_index_labels(query, &needle, aux_label_row_offset);
         }
-        if let Some(sidecar_offset) = decode_ssed_sidecar_title_cursor(query.cursor.as_deref()) {
-            return self.search_ssed_sidecar_title_page(query, sidecar_offset, Vec::new());
+        if let Some(sidecar_cursor) = decode_ssed_sidecar_title_cursor(query.cursor.as_deref()) {
+            return self.search_ssed_sidecar_title_page(query, sidecar_cursor, Vec::new());
         }
         if let Some(title_label_row_offset) =
             decode_ssed_title_label_cursor(query.cursor.as_deref())
@@ -74,7 +74,11 @@ impl ReaderBookPackage {
                 query.mode,
                 SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
             ) {
-                self.search_ssed_sidecar_title_page(query, 0, Vec::new())
+                self.search_ssed_sidecar_title_page(
+                    query,
+                    SsedSidecarTitleCursor::Offset(0),
+                    Vec::new(),
+                )
             } else {
                 Ok(SearchPage {
                     hits: Vec::new(),
@@ -92,7 +96,11 @@ impl ReaderBookPackage {
                 self.ssed_simple_search_should_prefer_dense_sidecar_titles(&mut diagnostics)?;
             dense_sidecar_titles_preferred = Some(prefers_dense_sidecar_titles);
             if prefers_dense_sidecar_titles {
-                let page = self.search_ssed_sidecar_title_page(query, 0, diagnostics)?;
+                let page = self.search_ssed_sidecar_title_page(
+                    query,
+                    SsedSidecarTitleCursor::Offset(0),
+                    diagnostics,
+                )?;
                 if !page.hits.is_empty() || page.next_cursor.is_some() {
                     return Ok(page);
                 }
@@ -285,7 +293,11 @@ impl ReaderBookPackage {
                             dense_sidecar_titles_preferred,
                         )?
                     {
-                        self.append_ssed_sidecar_title_hits(query, &mut fallback_page, 0)?;
+                        self.append_ssed_sidecar_title_hits(
+                            query,
+                            &mut fallback_page,
+                            SsedSidecarTitleCursor::Offset(0),
+                        )?;
                     }
                     return Ok(fallback_page);
                 }
@@ -318,7 +330,11 @@ impl ReaderBookPackage {
                 dense_sidecar_titles_preferred,
             )?
         {
-            self.append_ssed_sidecar_title_hits(query, &mut page, 0)?;
+            self.append_ssed_sidecar_title_hits(
+                query,
+                &mut page,
+                SsedSidecarTitleCursor::Offset(0),
+            )?;
         }
         if page.hits.is_empty() {
             page.diagnostics
@@ -1077,7 +1093,7 @@ impl ReaderBookPackage {
     fn search_ssed_sidecar_title_page(
         &self,
         query: &SearchQuery,
-        sidecar_offset: usize,
+        sidecar_cursor: SsedSidecarTitleCursor,
         diagnostics: Vec<Diagnostic>,
     ) -> Result<SearchPage> {
         let mut page = SearchPage {
@@ -1086,7 +1102,7 @@ impl ReaderBookPackage {
             result_sequence: None,
             diagnostics,
         };
-        self.append_ssed_sidecar_title_hits(query, &mut page, sidecar_offset)?;
+        self.append_ssed_sidecar_title_hits(query, &mut page, sidecar_cursor)?;
         Ok(page)
     }
 
@@ -1094,7 +1110,7 @@ impl ReaderBookPackage {
         &self,
         query: &SearchQuery,
         page: &mut SearchPage,
-        sidecar_offset: usize,
+        sidecar_cursor: SsedSidecarTitleCursor,
     ) -> Result<()> {
         let Some(mode) = ssed_sidecar_title_search_mode(&query.mode) else {
             return Ok(());
@@ -1103,11 +1119,16 @@ impl ReaderBookPackage {
         if remaining == 0 {
             return Ok(());
         }
+        let (sidecar_offset, physical_cursor) = match sidecar_cursor {
+            SsedSidecarTitleCursor::Offset(offset) => (offset, None),
+            SsedSidecarTitleCursor::Physical(cursor) => (0, Some(cursor)),
+        };
         let sidecar_page = search_ssed_dense_sidecar_titles_with_resolvers(
             self.ssed_sidecar_body_resolvers()?,
             mode,
             &query.query,
             sidecar_offset,
+            physical_cursor.as_ref(),
             remaining.saturating_add(1),
         )?;
         if !sidecar_page.hits.is_empty() || sidecar_page.matched_count > sidecar_offset {
@@ -1122,8 +1143,10 @@ impl ReaderBookPackage {
             .map(|hit| normalize_search_match_text(&hit.title_text))
             .collect::<HashSet<_>>();
         let mut next_sidecar_offset = sidecar_offset;
+        let mut next_physical_cursor = None::<SsedSidecarBodyCursor>;
         for hit in sidecar_page.hits {
             next_sidecar_offset = next_sidecar_offset.saturating_add(1);
+            next_physical_cursor = hit.cursor.clone();
             let title = if hit.body.title.trim().is_empty() {
                 hit.body.text.chars().take(80).collect::<String>()
             } else {
@@ -1161,7 +1184,10 @@ impl ReaderBookPackage {
             }
         }
         if !sidecar_page.exhausted {
-            page.next_cursor = Some(encode_ssed_sidecar_title_cursor(next_sidecar_offset));
+            page.next_cursor = next_physical_cursor
+                .as_ref()
+                .map(encode_ssed_sidecar_title_physical_cursor)
+                .or_else(|| Some(encode_ssed_sidecar_title_cursor(next_sidecar_offset)));
         }
         Ok(())
     }
@@ -2774,7 +2800,11 @@ impl ReaderBookPackage {
             result_sequence: None,
             diagnostics: Vec::new(),
         };
-        self.append_ssed_sidecar_title_hits(&title_query, &mut page, 0)?;
+        self.append_ssed_sidecar_title_hits(
+            &title_query,
+            &mut page,
+            SsedSidecarTitleCursor::Offset(0),
+        )?;
         if page.hits.is_empty() {
             return Ok(None);
         }
@@ -3066,6 +3096,12 @@ struct SsedFulltextBodyCursor {
     offset: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SsedSidecarTitleCursor {
+    Offset(usize),
+    Physical(SsedSidecarBodyCursor),
+}
+
 #[derive(Debug)]
 struct SsedPartialNonprefixSearchPage {
     page: SearchPage,
@@ -3338,6 +3374,10 @@ fn decode_ssed_fulltext_sidecar_body_physical_cursor(
     cursor: Option<&str>,
 ) -> Option<SsedSidecarBodyCursor> {
     let value = cursor?.strip_prefix(SSED_FULLTEXT_SIDECAR_BODY_PHYSICAL_CURSOR_PREFIX)?;
+    decode_ssed_sidecar_row_cursor(value)
+}
+
+fn decode_ssed_sidecar_row_cursor(value: &str) -> Option<SsedSidecarBodyCursor> {
     let mut parts = value.split(':');
     let sidecar_name = decode_hex_string(parts.next()?)?;
     let table = decode_hex_string(parts.next()?)?;
@@ -3361,13 +3401,20 @@ fn decode_ssed_fulltext_sidecar_body_physical_cursor(
 }
 
 fn encode_ssed_fulltext_sidecar_body_physical_cursor(cursor: &SsedSidecarBodyCursor) -> String {
+    format!(
+        "{}{}",
+        SSED_FULLTEXT_SIDECAR_BODY_PHYSICAL_CURSOR_PREFIX,
+        encode_ssed_sidecar_row_cursor(cursor)
+    )
+}
+
+fn encode_ssed_sidecar_row_cursor(cursor: &SsedSidecarBodyCursor) -> String {
     let id_rule = match cursor.id_rule {
         SsedSidecarIdRule::DirectColumn => "direct",
         SsedSidecarIdRule::RowIdTimesFive => "rowid-times-five",
     };
     format!(
-        "{}{}:{}:{}:{}:{}",
-        SSED_FULLTEXT_SIDECAR_BODY_PHYSICAL_CURSOR_PREFIX,
+        "{}:{}:{}:{}:{}",
         hex::encode(cursor.sidecar_name.as_bytes()),
         hex::encode(cursor.table.as_bytes()),
         hex::encode(cursor.id_column.as_bytes()),
@@ -3424,15 +3471,27 @@ fn encode_ssed_fulltext_row_cursor(offset: usize) -> String {
     format!("row:{offset}")
 }
 
-fn decode_ssed_sidecar_title_cursor(cursor: Option<&str>) -> Option<usize> {
-    cursor?
-        .strip_prefix(SSED_SIDECAR_TITLE_CURSOR_PREFIX)?
-        .parse()
-        .ok()
+const SSED_SIDECAR_TITLE_PHYSICAL_CURSOR_PREFIX: &str = "sidecar-title-row:";
+
+fn decode_ssed_sidecar_title_cursor(cursor: Option<&str>) -> Option<SsedSidecarTitleCursor> {
+    let cursor = cursor?;
+    if let Some(value) = cursor.strip_prefix(SSED_SIDECAR_TITLE_CURSOR_PREFIX) {
+        return value.parse().ok().map(SsedSidecarTitleCursor::Offset);
+    }
+    decode_ssed_sidecar_row_cursor(cursor.strip_prefix(SSED_SIDECAR_TITLE_PHYSICAL_CURSOR_PREFIX)?)
+        .map(SsedSidecarTitleCursor::Physical)
 }
 
 fn encode_ssed_sidecar_title_cursor(offset: usize) -> String {
     format!("{SSED_SIDECAR_TITLE_CURSOR_PREFIX}{offset}")
+}
+
+fn encode_ssed_sidecar_title_physical_cursor(cursor: &SsedSidecarBodyCursor) -> String {
+    format!(
+        "{}{}",
+        SSED_SIDECAR_TITLE_PHYSICAL_CURSOR_PREFIX,
+        encode_ssed_sidecar_row_cursor(cursor)
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

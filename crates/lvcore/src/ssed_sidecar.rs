@@ -472,6 +472,7 @@ pub fn search_ssed_dense_sidecar_titles_with_resolvers(
     mode: SsedSidecarTitleSearchMode,
     query: &str,
     offset: usize,
+    cursor: Option<&SsedSidecarBodyCursor>,
     limit: usize,
 ) -> Result<SsedSidecarSearchPage> {
     let needle = normalize_sidecar_search_text(query);
@@ -485,7 +486,21 @@ pub fn search_ssed_dense_sidecar_titles_with_resolvers(
 
     let mut hits = Vec::new();
     let mut matched = 0usize;
+    let mut waiting_for_cursor = cursor.is_some();
     for resolver in resolvers {
+        let row_cursor = if let Some(cursor) = cursor {
+            if waiting_for_cursor {
+                if !sidecar_body_cursor_matches_resolver(resolver, cursor) {
+                    continue;
+                }
+                waiting_for_cursor = false;
+                Some(cursor)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let Some(title_column) = &resolver.title_column else {
             continue;
         };
@@ -496,6 +511,7 @@ pub fn search_ssed_dense_sidecar_titles_with_resolvers(
             title_column,
             mode,
             query,
+            row_cursor,
         )?
         else {
             continue;
@@ -513,15 +529,16 @@ pub fn search_ssed_dense_sidecar_titles_with_resolvers(
         while let Some(row) = rows.next()? {
             let anchor_id = anchor_id_from_search_row(resolver, row)?;
             let body = sidecar_body_from_row(resolver, row)?;
+            let cursor = sidecar_body_cursor_from_search_row(resolver, row)?;
             let hit = SsedSidecarSearchHit {
                 anchor_id,
                 body,
-                cursor: None,
+                cursor: Some(cursor),
             };
             if !sidecar_title_matches(&hit.body.title, mode, &needle) {
                 continue;
             }
-            if matched < offset {
+            if row_cursor.is_none() && matched < offset {
                 matched = matched.saturating_add(1);
                 continue;
             }
@@ -837,8 +854,9 @@ fn sidecar_title_prefilter_sql_for_resolver(
     title_column: &str,
     mode: SsedSidecarTitleSearchMode,
     query: &str,
+    cursor: Option<&SsedSidecarBodyCursor>,
 ) -> Result<Option<(String, Vec<String>)>> {
-    let (where_sql, parameters) =
+    let (where_sql, mut parameters) =
         if sidecar_title_sql_prefilter_is_available(connection, resolver, title_column, query)? {
             sidecar_title_prefilter_where_and_parameters(title_column, mode, query)
         } else if sidecar_title_decoded_fallback_is_bounded(resolver) {
@@ -846,6 +864,16 @@ fn sidecar_title_prefilter_sql_for_resolver(
         } else {
             return Ok(None);
         };
+    let where_sql = if let Some(cursor) = cursor {
+        parameters.push(cursor.order_value.clone());
+        let order_sql = resolver.id_rule.sql_where_identifier(&resolver.id_column);
+        Some(match where_sql {
+            Some(where_sql) => format!("{where_sql} and {order_sql} > ?"),
+            None => format!(" where {order_sql} > ?"),
+        })
+    } else {
+        where_sql
+    };
     Ok(Some((
         search_select_sql_for_resolver(resolver, where_sql.as_deref()),
         parameters,
