@@ -4,12 +4,12 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260613-native-first-kana-backward-v1.jsonl`
-- Produced after making large SSED sidecar packages try native
-  exact/forward/backward
-  title search first for pure-kana no-cursor queries of at least two
-  characters, avoiding empty sidecar title prepasses when native index hits are
-  already available.
+- `/tmp/lvcore-all-corpora-validation-20260613-mixed-japanese-nonprefix-fulltext-v2.jsonl`
+- Produced after allowing short CJK-leading mixed kana+CJK SSED full-text title
+  queries to use the existing bounded non-prefix native-title prepass, instead
+  of falling through to the slower all-title partial scan when the prefix probe
+  is empty. The gate also verifies that kana-leading mixed queries such as
+  `_DCT_KENE7J5` `は殺` stay on the direct HONMON body scan.
 - 335 reconstructed package paths validated with package status 335 `ok`.
   The original 336-row `/tmp` baseline JSONL was no longer present, so this
   gate used the 333 currently discovered documented-root package paths plus the
@@ -20,20 +20,55 @@ Latest full-corpus gate:
   `b3c7c347c4587d6e3b29db8767748f2ebd9402b17f712dd5ae980d45cc5a601a`.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-- Windows `_DCT_KENROWA` exact `しめ` is 53 ms, forward `しめ` is 27 ms, and
-  backward `しめ` is 10 ms. iOS `KENROWA` exact is 54 ms, forward is 30 ms,
-  and backward is 10 ms.
-- Windows `_DCT_JSSAURU2` exact `あぎと` is 33 ms, forward `あぎ` is 34 ms,
-  and backward `ぎと` is 14 ms. iOS `JSSAURU2` exact is 33 ms, forward is
-  34 ms, and backward is 14 ms.
-- Sidecar-first controls remain sidecar-backed: Windows `_DCT_DAIJIRN4`
-  forward `あ` and backward `あ` keep `ssed_sidecar_title_search`, Windows
-  `_DCT_IWKOKUG8` forward `さん` and backward `ィー` keep
-  `ssed_sidecar_title_search`, iOS `KQJCOLLO` forward `あい` and backward
-  `しい` keep `ssed_sidecar_title_search`, and Windows/iOS `NANMED20` forward
-  `0歳` and backward `余命` remain sidecar-backed.
+- Windows `_DCT_YHOUGO3` `search_full_text` `一ス` is 53 ms, down from 585 ms
+  in the previous full gate, and returns through
+  `ssed_fulltext_partial_nonprefix_title_prepass`.
+- iOS `HKKIGAK6` `search_full_text` `体の` is 177 ms, down from 369 ms in the
+  previous full gate, and returns through the same non-prefix title prepass.
+- `_DCT_KENE7J5` `search_full_text` `は殺` remains on
+  `ssed_fulltext_body_direct_scan` at 264 ms, avoiding the broader mixed-token
+  non-prefix title path.
+- Nearby controls stayed on their prior paths: `_DCT_NCOMP4` `1計` remains an
+  intentionally unverified non-prefix continuation case at 545 ms,
+  `_DCT_KQDENTAL` `01` remains on the title-index prepass at 546 ms, and
+  `_DCT_NMEDEJ12` `01` remains on the direct HONMON body scan at 556 ms.
+
+Focused validation for the latest full-corpus gate:
+
+- `/tmp/lvcore-focused-validate-mixed-japanese-nonprefix-fulltext-v2.jsonl`
+- Produced after allowing short CJK-leading mixed kana+CJK SSED full-text title
+  queries to use the existing bounded non-prefix native-title prepass, instead
+  of falling through to the slower all-title partial scan when the prefix probe
+  is empty.
+- Focused package validation covered 6 SSED packages with package status 6
+  `ok`: Windows `_DCT_YHOUGO3`, iOS `HKKIGAK6`, Windows `_DCT_KENE7J5`,
+  Windows `_DCT_NCOMP4`, Windows `_DCT_KQDENTAL`, and Windows `_DCT_NMEDEJ12`.
+- Windows `_DCT_YHOUGO3` `search_full_text` `一ス` is now 54 ms in focused
+  validation, down from 585 ms in the previous full gate, and returns the same
+  first title `二・一スト` through
+  `ssed_fulltext_partial_nonprefix_title_prepass`.
+- iOS `HKKIGAK6` `search_full_text` `体の` is now 176 ms in focused validation,
+  down from 369 ms in the previous full gate, and returns the same first title
+  `ＨＬＡＢ27と体の病気` through the same non-prefix title prepass.
+- Controls stayed on their prior paths: `_DCT_KENE7J5` `は殺` remains on the
+  direct HONMON body scan at 272 ms, `_DCT_NCOMP4` `1計` remains an
+  intentionally unverified non-prefix continuation case, `_DCT_KQDENTAL` `01`
+  remains on the title-index prepass, and `_DCT_NMEDEJ12` `01` remains on the
+  direct HONMON body scan.
 
 Previous full-corpus gates:
+
+- `/tmp/lvcore-all-corpora-validation-20260613-native-first-kana-backward-v1.jsonl`
+- Produced after making large SSED sidecar packages try native
+  exact/forward/backward title search first for pure-kana no-cursor queries of
+  at least two characters, avoiding empty sidecar title prepasses when native
+  index hits are already available.
+- 335 reconstructed package paths validated with package status 335 `ok`.
+- Warning diagnostics remained only the explicitly deferred HC common HTML
+  fallback.
+- Windows `_DCT_KENROWA` exact `しめ` was 53 ms, forward `しめ` was 27 ms, and
+  backward `しめ` was 10 ms. Windows `_DCT_JSSAURU2` exact `あぎと` was 33 ms,
+  forward `あぎ` was 34 ms, and backward `ぎと` was 14 ms.
 
 - `/tmp/lvcore-all-corpora-validation-20260613-circle-marker-row-prefetch-v1.jsonl`
 - Produced after two scoped SSED provider changes: keeping KOJIEN7 native
@@ -383,7 +418,7 @@ Warning diagnostics in the baseline:
 
 | Diagnostic | Count | Classification |
 | --- | ---: | --- |
-| `hc_render_common_html_fallback` | 261 | Deferred HC visual rendering |
+| `hc_render_common_html_fallback` | 949 | Deferred HC visual rendering |
 | `ssed_loose_address_unresolved` | 0 | Closed by packed SSED link-address normalization |
 
 Important info/status classes from the latest gate:
@@ -399,8 +434,8 @@ Important info/status classes from the latest gate:
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
 | `ssed_fulltext_body_direct_scan` | 3 | Direct native HONMON fallback exercised |
-| `ssed_fulltext_partial_nonprefix_title_prepass` | 1 | NCOMP4 first page exercised; cursor probe intentionally deferred |
-| `ssed_index_empty_physical_pages_skipped` | 1 | Sparse physical scan advances exercised by NCOMP4 non-prefix title search |
+| `ssed_fulltext_partial_nonprefix_title_prepass` | 4 | NCOMP4, YHOUGO3, and HKKIGAK6 title prepasses exercised; some cursor probes intentionally deferred |
+| `ssed_index_empty_physical_pages_skipped` | 5 | Sparse physical scan advances exercised by non-prefix title searches |
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 23 | Large-index partial-search continuation intentionally deferred |
 | `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 204 | Native offset next-page proof intentionally deferred |
 | `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 15 | Title-label fallback next-page proof intentionally deferred |
@@ -415,24 +450,30 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 621 ms in the latest full
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 556 ms in the latest full
   gate, now a pure direct native HONMON scan with one byte-candidate window.
   0al removed the useless initial row prefetch; remaining time should be
   inspected as direct body scan-window/decompression cost before more code
   changes.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 607 ms,
-  `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 598 ms, and
-  `_DCT_HKDKSR10`, `search_full_text` query `FU`: 396 ms. The avoidable
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 546 ms, and
+  `_DCT_HKDKSR10`, `search_full_text` query `FU`: 372 ms. The avoidable
   filled-page title-prepass overfetch is resolved in 0ah; remaining time should
   be inspected as direct title/index scan or package-open cost before more code
   changes.
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 593 ms. It remains behind
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: resolved after the latest
+  full gate by routing short CJK-leading mixed kana+CJK title queries through
+  the bounded non-prefix title prepass; latest full-gate validation is 53 ms,
+  down from 585 ms in the previous full gate.
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 545 ms. It remains behind
   intentionally deferred `title-nonprefix-unverified:*` continuation proof.
 - Windows `_DCT_KOJIEN7` and iOS `KOJIEN7`, exact query
   `◯に滅せずんば炎炎を若何いかんせん` and forward query `◯に`: resolved in
   0ak and verified in the latest full-corpus gate.
 - `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: resolved in
-  0aj and verified in the latest full-corpus gate at 288 ms.
+  0aj and verified in the latest full-corpus gate at 274 ms. Its
+  `search_full_text` query `体の` also uses the bounded CJK-leading mixed
+  Japanese non-prefix title prepass in the latest full gate; full-gate
+  validation is 177 ms, down from 369 ms.
 - `Other/iOS/RDRSP2/RDRSP2` `ios-plist:indexSearch.plist` and
   `SINMEI7` menu/plist panel rows were inspected after the previous gate. The
   mode-invariant render-mode validation overwork is resolved in 0ai and is now

@@ -4487,15 +4487,29 @@ fn ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
     if raw_query.is_empty() || raw_query.chars().any(char::is_whitespace) {
         return false;
     }
-    if !raw_query.chars().any(|ch| !ch.is_ascii())
-        || !raw_query
-            .bytes()
-            .any(|byte| byte.is_ascii_digit() || byte.is_ascii_punctuation())
-    {
+    let has_non_ascii = raw_query.chars().any(|ch| !ch.is_ascii());
+    let has_ascii_digit_or_punctuation = raw_query
+        .bytes()
+        .any(|byte| byte.is_ascii_digit() || byte.is_ascii_punctuation());
+    let mut chars = raw_query.chars();
+    let starts_with_cjk = chars.next().is_some_and(is_ssed_cjk_ideograph);
+    let has_mixed_japanese_title_token = starts_with_cjk && chars.any(is_ssed_japanese_kana);
+    if !has_non_ascii || !(has_ascii_digit_or_punctuation || has_mixed_japanese_title_token) {
         return false;
     }
     let needle_len = needle.chars().count();
     (2..=8).contains(&needle_len) && !ssed_index_page_prefilter_candidates(needle).is_empty()
+}
+
+fn is_ssed_japanese_kana(ch: char) -> bool {
+    matches!(ch as u32, 0x3040..=0x309f | 0x30a0..=0x30ff | 0x31f0..=0x31ff)
+}
+
+fn is_ssed_cjk_ideograph(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff
+    )
 }
 
 #[cfg(test)]
@@ -4512,11 +4526,28 @@ mod tests {
         encode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_offset_cursor,
         encode_ssed_partial_nonprefix_physical_offset_cursor,
         encode_ssed_partial_unverified_nonprefix_cursor, encode_ssed_unverified_title_label_cursor,
-        ssed_fulltext_first_byte_candidate_offset, ssed_fulltext_row_driven_body_search_allowed,
+        ssed_fulltext_first_byte_candidate_offset,
+        ssed_fulltext_partial_nonprefix_title_prepass_is_bounded,
+        ssed_fulltext_row_driven_body_search_allowed,
         ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_partial_prefix_prepass_is_bounded,
         ssed_sidecar_title_authoritative_prepass_is_bounded,
         ssed_sidecar_title_auto_append_is_bounded, ssed_sidecar_title_query_is_kana_only,
     };
+    use crate::package::BookId;
+    use crate::search::{SearchMode, SearchQuery, SearchScope};
+
+    fn current_book_fulltext_query(query: &str, limit: usize) -> SearchQuery {
+        SearchQuery {
+            scope: SearchScope::CurrentBook {
+                book_id: BookId("test".to_owned()),
+            },
+            mode: SearchMode::FullText,
+            query: query.to_owned(),
+            cursor: None,
+            limit,
+            gaiji_policy: None,
+        }
+    }
 
     #[test]
     fn sidecar_title_auto_append_accepts_bounded_single_token_queries() {
@@ -4556,6 +4587,46 @@ mod tests {
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("two words"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("犬"));
         assert!(!ssed_fulltext_sidecar_title_prepass_is_bounded("ｉｎ"));
+    }
+
+    #[test]
+    fn fulltext_nonprefix_title_prepass_accepts_mixed_japanese_tokens() {
+        let query = current_book_fulltext_query("一ス", 1);
+        assert!(ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
+            &query, "一す"
+        ));
+        let query = current_book_fulltext_query("体の", 1);
+        assert!(ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
+            &query, "体の"
+        ));
+        let query = current_book_fulltext_query("1計", 1);
+        assert!(ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
+            &query, "1計"
+        ));
+    }
+
+    #[test]
+    fn fulltext_nonprefix_title_prepass_rejects_unbounded_tokens() {
+        let query = current_book_fulltext_query("犬", 1);
+        assert!(!ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
+            &query, "犬"
+        ));
+        let query = current_book_fulltext_query("しい", 1);
+        assert!(!ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
+            &query, "しい"
+        ));
+        let query = current_book_fulltext_query("一 ス", 1);
+        assert!(!ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
+            &query, "一 す"
+        ));
+        let query = current_book_fulltext_query("は殺", 1);
+        assert!(!ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
+            &query, "は殺"
+        ));
+        let query = current_book_fulltext_query("体の", 0);
+        assert!(!ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
+            &query, "体の"
+        ));
     }
 
     #[test]
