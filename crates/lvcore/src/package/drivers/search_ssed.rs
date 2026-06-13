@@ -12,6 +12,7 @@ const SSED_PARTIAL_NONPREFIX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 8;
 const SSED_PARTIAL_NONPREFIX_PREFILTERED_LEAF_PAGE_BUDGET: usize = 128;
 const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 16;
 const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
+const SSED_NATIVE_INITIAL_OFFSET_OVERFETCH_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
@@ -159,11 +160,12 @@ impl ReaderBookPackage {
             0
         };
         let defer_native_offset_overfetch = uses_native_offset_cursor
-            && query.cursor.is_some()
             && matches!(
                 query.mode,
                 SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
-            );
+            )
+            && (query.cursor.is_some()
+                || self.ssed_native_initial_offset_overfetch_should_defer(&query.mode, &needle));
         let page_limit = if defer_native_offset_overfetch {
             query.limit
         } else {
@@ -180,6 +182,9 @@ impl ReaderBookPackage {
             gaiji_policy,
         )
         .with_display_label_matching();
+        if defer_native_offset_overfetch {
+            collector = collector.with_pending_page_limit_stop();
+        }
         let mut optimized_scan_components = 0usize;
         let mut scan_needs_prefilter_fallback = false;
         let mut optimized_diagnostics = Vec::new();
@@ -254,6 +259,9 @@ impl ReaderBookPackage {
                 query.label_gaiji_policy(),
             )
             .with_display_label_matching();
+            if defer_native_offset_overfetch {
+                fallback_collector = fallback_collector.with_pending_page_limit_stop();
+            }
             fallback_collector.extend_diagnostics(optimized_diagnostics);
             physical_next_cursor = self.scan_ssed_prefiltered_index_rows_paged_until_visible(
                 &query.mode,
@@ -342,6 +350,44 @@ impl ReaderBookPackage {
                 .extend(pending_empty_title_label_fallback_diagnostics);
         }
         Ok(page)
+    }
+
+    fn ssed_native_initial_offset_overfetch_should_defer(
+        &self,
+        mode: &SearchMode,
+        needle: &str,
+    ) -> bool {
+        if !matches!(
+            mode,
+            SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+        ) || needle.chars().count() > 2
+        {
+            return false;
+        }
+        let Some(catalog) = &self.ssed_catalog else {
+            return false;
+        };
+        let mut mode_block_count = 0u32;
+        let mut all_block_count = 0u32;
+        for component in catalog.components_by_role(SsedComponentRole::Index) {
+            if !is_supported_index_type(component.component_type) {
+                continue;
+            }
+            let component_blocks = component.block_count();
+            all_block_count = all_block_count.saturating_add(component_blocks);
+            if ssed_native_index_component_may_match_mode(mode, component) {
+                mode_block_count = mode_block_count.saturating_add(component_blocks);
+            }
+            let effective_block_count = if mode_block_count > 0 {
+                mode_block_count
+            } else {
+                all_block_count
+            };
+            if effective_block_count > SSED_NATIVE_INITIAL_OFFSET_OVERFETCH_MAX_INDEX_BLOCKS {
+                return true;
+            }
+        }
+        false
     }
 
     fn has_searchable_ssed_aux_index(&self) -> Result<bool> {
@@ -3527,6 +3573,18 @@ fn ssed_title_label_fallback_is_reasonable(mode: &SearchMode, needle: &str) -> b
         SearchMode::Exact | SearchMode::Backward => needle.chars().count() >= 2,
         SearchMode::Forward => true,
         SearchMode::Partial | SearchMode::FullText | SearchMode::Advanced(_) => false,
+    }
+}
+
+fn ssed_native_index_component_may_match_mode(
+    mode: &SearchMode,
+    component: &SsedComponent,
+) -> bool {
+    let is_backward_index = ssed_index_component_name_is_backward(&component.filename);
+    match mode {
+        SearchMode::Exact | SearchMode::Forward => !is_backward_index,
+        SearchMode::Backward => is_backward_index,
+        _ => true,
     }
 }
 

@@ -110,6 +110,7 @@ pub(super) struct SsedIndexSearchCollector<'a> {
     pending_row: Option<SsedIndexRow>,
     gaiji_policy: GaijiPolicy,
     match_display_label: bool,
+    stop_on_pending_page_limit: bool,
 }
 
 impl<'a> SsedIndexSearchCollector<'a> {
@@ -134,11 +135,17 @@ impl<'a> SsedIndexSearchCollector<'a> {
             pending_row: None,
             gaiji_policy,
             match_display_label: false,
+            stop_on_pending_page_limit: false,
         }
     }
 
     pub(super) fn with_display_label_matching(mut self) -> Self {
         self.match_display_label = true;
+        self
+    }
+
+    pub(super) fn with_pending_page_limit_stop(mut self) -> Self {
+        self.stop_on_pending_page_limit = true;
         self
     }
 
@@ -173,6 +180,9 @@ impl<'a> SsedIndexSearchCollector<'a> {
         }
         self.pending_row = Some(row);
         self.matched_count = self.matched_count.saturating_add(1);
+        if self.stop_on_pending_page_limit && !self.needs_more_hits() {
+            return Ok(false);
+        }
         Ok(true)
     }
 

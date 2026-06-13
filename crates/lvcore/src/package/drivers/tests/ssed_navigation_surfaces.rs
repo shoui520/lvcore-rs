@@ -318,6 +318,152 @@ fn ssed_native_offset_continuation_defers_overfetch_after_first_page() {
 }
 
 #[test]
+fn ssed_native_initial_offset_defers_overfetch_for_large_short_query() {
+    let dir = tempdir().unwrap();
+
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[b"alpha body\0beta body"], 100, 100),
+    )
+    .unwrap();
+
+    let mut titles = Vec::new();
+    let alpha_title_offset = 0u16;
+    titles.extend_from_slice(b"alpha matched\x1f\x0a");
+    let beta_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"beta matched\x1f\x0a");
+    fs::write(
+        dir.path().join("BHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[&titles], 300, 300),
+    )
+    .unwrap();
+
+    let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    index_page[2..4].copy_from_slice(&2u16.to_be_bytes());
+    let mut pos = 4usize;
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        b"dehctam ahpla",
+        100,
+        0,
+        300,
+        alpha_title_offset,
+    );
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        b"dehctam ateb",
+        100,
+        11,
+        300,
+        beta_title_offset,
+    );
+    fs::write(
+        dir.path().join("BHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+    )
+    .unwrap();
+
+    let catalog = SsedCatalog {
+        title: "Large backward".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "BHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x91,
+                start_block: 200,
+                end_block: 2305,
+                data: [0; 4],
+                filename: "BHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Large backward".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    let first = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "ed".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(first.hits.len(), 1);
+    assert_eq!(first.hits[0].title_text, "alpha matched");
+    assert_eq!(
+        first.next_cursor.as_deref(),
+        Some("ssed-offset-unverified:1")
+    );
+
+    let second = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "ed".to_owned(),
+            cursor: first.next_cursor.clone(),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(second.hits.len(), 1);
+    assert_eq!(second.hits[0].title_text, "beta matched");
+    assert_eq!(
+        second.next_cursor.as_deref(),
+        Some("ssed-offset-unverified:2")
+    );
+}
+
+#[test]
 fn ssed_multi_descriptor_and_selector_menu_are_cached() {
     let dir = tempdir().unwrap();
 

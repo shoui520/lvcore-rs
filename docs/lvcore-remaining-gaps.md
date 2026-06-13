@@ -4,6 +4,18 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-initial-native-offset-mode-sized.jsonl`
+- Produced after changing large SSED native exact/forward/backward first pages
+  to defer expensive next-page proof behind explicit
+  `ssed-offset-unverified:*` cursors, including nested
+  `ssed-partial-prefix:ssed-offset-unverified:*` validation handling.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-title-label-unverified-nested-skip.jsonl`
 - Produced after changing SSED title-label fallback continuation proof to
   explicit `ssed-title-label-unverified:*` cursors, including the nested
@@ -12,8 +24,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-sidecar-title-physical-cursor.jsonl`
 - Produced after changing dense SSED sidecar title continuations from logical
@@ -180,12 +190,12 @@ Important info/status classes from the latest gate:
 | `body:0` full-text cursor `not_probed` | 122 | Post-title native body continuation intentionally deferred |
 | `sidecar-body-start` cursor probed `ok` | 33 | Sidecar body phase start cursor fix verified |
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
-| `body-offset:*` cursor `not_probed` | 1 | Expensive native body continuation intentionally deferred |
+| `body-offset:*` cursor `not_probed` | 2 | Expensive native body continuation intentionally deferred |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
-| `ssed_fulltext_body_direct_scan` | 4 | Direct native HONMON fallback exercised |
+| `ssed_fulltext_body_direct_scan` | 6 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
-| `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 50 | Large-index partial-search continuation intentionally deferred |
-| `ssed-offset-unverified:*` continuation cursor | 225 | Native offset next-page proof intentionally deferred |
+| `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 24 | Large-index partial-search continuation intentionally deferred |
+| `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 227 | Native offset next-page proof intentionally deferred |
 | `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 17 | Title-label fallback next-page proof intentionally deferred |
 | `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
 | `gaiji_formatting_helper_candidate` | 36 | Observed OUKOKU11 `B947`/`B948` helper codes |
@@ -193,7 +203,94 @@ Important info/status classes from the latest gate:
 | `skipped_large_view` | 39 | Validator cap for large alternate render probes |
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
+Latest concrete non-HC performance candidates from the full gate:
+
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 1392 ms, no hit, direct
+  native HONMON scan plus row-driven prefetch.
+- `_DCT_GENKANA5`, `search_partial` query `アル`: 874 ms, sidecar title search
+  after partial-prefix prepass.
+- `_DCT_KQNEWEJ6`, `search_full_text` query `画像`: 867 ms, native title
+  prepass plus direct HONMON scan.
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 842 ms, direct native HONMON
+  scan plus row-driven prefetch.
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 819 ms, native title
+  prepass plus direct HONMON scan.
+- `_DCT_KJJK100`, `search_exact` query `新`: 810 ms, dense sidecar title
+  search.
+
+Rows such as `_DCT_GKKNJPZL` `search_forward` query `00` and `_DCT_IWKOKU7N`
+`search_forward` query `3D` include HC fallback rendering diagnostics and
+should not drive LVCore-only work while HC remains deferred.
+
 ## Fix-Now / Recently Closed Candidates
+
+### 0t. SSED large native initial offset proof latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus baseline exposed iOS `LMEDEJ12` native
+  exact/forward/backward searches for the short query `A` as concrete non-HC
+  cursor-latency rows.
+- The first exact page correctly returned one hit with cursor `1`, but the old
+  initial-page path still overfetched one extra visible hit to prove whether a
+  numeric continuation should exist. On large SSED native indexes, that proof
+  can scan far past the returned page.
+- The same native offset phase can be wrapped by partial search as
+  `ssed-partial-prefix:*`, so validator cursor probing needed to treat the
+  nested unverified form consistently.
+
+Current status:
+
+- Large SSED native exact/forward/backward initial pages for short queries now
+  emit `ssed-offset-unverified:*` when index size makes next-page proof
+  expensive. Small native-index packages keep verified first-page numeric
+  cursors.
+- Native offset collection can stop once the requested page is filled in this
+  deferred-proof mode; the pending row is still flushed into the returned
+  `SearchPage`.
+- Existing numeric cursors and existing `ssed-offset-unverified:*` cursors
+  still decode and continue normally.
+- The validator treats nested
+  `ssed-partial-prefix:ssed-offset-unverified:*` cursors as the same
+  intentionally unverified native offset class and does not probe them
+  speculatively.
+- Focused tests passed:
+  - `cargo test -p lvcore package::drivers::tests::ssed_navigation_surfaces::ssed_native_initial_offset_defers_overfetch_for_large_short_query -- --nocapture`
+  - `cargo test -p lvcore-cli validate_search_cursor_probe_skips_expensive_fulltext_body_cursors -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-initial-native-offset-mode-sized.jsonl`
+  - iOS `LMEDEJ12` package status remained `ok`.
+  - `search_exact` `A` reported `ssed-offset-unverified:1` as `not_probed`
+    and ran in 275 ms focused.
+  - `search_forward` `A` reported `ssed-offset-unverified:3` as
+    `not_probed` and ran in 65 ms focused.
+  - `search_backward` `A` reported `ssed-offset-unverified:1` as
+    `not_probed` and ran in 92 ms focused.
+  - `_DCT_SAIYOREI` package status remained `ok`; `search_partial` `〆を`
+    reported nested `ssed-partial-prefix:ssed-offset-unverified:1` as
+    `not_probed`.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-initial-native-offset-mode-sized.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous full-gate path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1936),
+    which is deferred HC work.
+  - iOS `LMEDEJ12` package elapsed time dropped from 8870 ms in the previous
+    full gate to 6068 ms.
+  - iOS `LMEDEJ12` `search_exact` `A` dropped from 545 ms plus a 272 ms cursor
+    probe to 281 ms with its native offset cursor intentionally not probed.
+  - Direct and nested native offset unverified cursors are intentionally not
+    probed 227 times in the gate.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/Other/iOS/LMEDEJ12/LMEDEJ12`
+- Observed rows:
+  - `kind`: `search_exact`, query: `A`
+  - `kind`: `search_forward`, query: `A`
+  - `kind`: `search_backward`, query: `A`
 
 ### 0s. SSED title-label fallback continuation proof latency (resolved)
 
