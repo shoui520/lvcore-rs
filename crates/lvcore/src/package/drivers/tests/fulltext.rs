@@ -453,6 +453,12 @@ fn ssed_fulltext_searches_late_nonprefix_title_before_body_scan() {
         !page
             .diagnostics
             .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_index_empty_physical_pages_skipped")
+    );
+    assert!(
+        !page
+            .diagnostics
+            .iter()
             .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_direct_scan")
     );
     assert!(

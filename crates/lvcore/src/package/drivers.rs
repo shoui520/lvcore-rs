@@ -114,7 +114,7 @@ use super::ssed_search::{
     ssed_body_search_byte_candidates, ssed_body_window_may_contain_query,
     ssed_display_label_match_texts, ssed_fulltext_snippet_html,
     ssed_index_page_prefilter_candidates, ssed_index_row_order_key,
-    ssed_index_search_key_candidates,
+    ssed_index_search_key_candidates, ssed_page_prefilter_anchor_candidates,
 };
 use super::ssed_search_runtime::{
     SSED_FULLTEXT_BODY_WINDOW_BYTES, SSED_FULLTEXT_SCAN_OVERLAP_BYTES,
@@ -170,7 +170,7 @@ use crate::search::{SearchHit, SearchMode, SearchPage, SearchProvider, SearchQue
 use crate::sequence::{SearchResultSequence, SequenceHint, SequenceProvider, TargetWindow};
 use crate::ssed::{
     BLOCK_SIZE, CHUNK_SIZE, SSEDDATA_MAGIC, SsedCatalog, SsedComponent, SsedComponentRole,
-    SsedDataFile, SsedDataHeader,
+    SsedDataFile, SsedDataHeader, SsedDataReader,
 };
 use crate::ssed_aux_index::{
     SsedAuxIndexRow, SsedAuxIndexSpec, is_numeric_aux_index_filename,
@@ -187,8 +187,9 @@ use crate::ssed_hc::{
 };
 use crate::ssed_index::{
     INDEX_PAGE_SIZE, SsedIndexPointer, SsedIndexRow, SsedIndexScanState, decode_title_text,
-    decode_title_text_with_gaiji_filter, is_body_only_simple_leaf_index_type, is_leaf_page,
-    is_simple_leaf_index_type, is_supported_index_type, parse_internal_page,
+    decode_title_text_with_gaiji_filter, is_body_only_simple_leaf_index_type,
+    is_body_only_tagged_leaf_index_type, is_leaf_page, is_simple_leaf_index_type,
+    is_supported_index_type, is_tagged_leaf_index_type, parse_internal_page,
     parse_supported_leaf_page, parse_supported_leaf_page_body_pointers,
 };
 use crate::ssed_loose_media::{

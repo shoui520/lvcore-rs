@@ -181,6 +181,19 @@ pub(super) fn ssed_body_window_may_contain_query(data: &[u8], candidates: &[Vec<
         })
 }
 
+pub(super) fn ssed_page_prefilter_anchor_candidates(candidates: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let mut anchors = Vec::new();
+    for candidate in candidates {
+        if is_jis_pair_sequence(candidate)
+            && let Some(first_pair) = candidate.get(..2)
+        {
+            push_unique_search_key(&mut anchors, first_pair.to_vec());
+        }
+        push_unique_search_key(&mut anchors, candidate.clone());
+    }
+    anchors
+}
+
 pub(super) fn ssed_fulltext_snippet_html(body_text: &str, query: &str) -> Option<String> {
     let body_text = collapse_search_whitespace(body_text);
     if body_text.is_empty() {
@@ -754,6 +767,8 @@ mod tests {
         ));
 
         let index_candidates = ssed_index_page_prefilter_candidates("前後");
+        let index_anchors = ssed_page_prefilter_anchor_candidates(&index_candidates);
+        assert!(index_anchors.iter().any(|anchor| anchor == &body_jis("前")));
         assert!(ssed_body_window_may_contain_query(
             &separated,
             &index_candidates

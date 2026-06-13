@@ -2,6 +2,8 @@ use super::*;
 
 const SSED_ADJACENT_INDEX_BODY_BOUND_MAX_BYTES: u64 = 256 * 1024;
 const SSED_NEAR_KEY_MAX_LEAF_PAGES_PER_COMPONENT: usize = 32;
+const SSED_INDEX_PAGE_PREFILTER_IN_MEMORY_MAX_EXPANDED_BYTES: usize = 32 * 1024 * 1024;
+const SSED_INDEX_PAGE_PREFILTER_ANCHOR_MIN_LEN: usize = 2;
 
 impl ReaderBookPackage {
     pub(super) fn scan_ssed_simple_leaf_index_rows_near_key(
@@ -734,6 +736,7 @@ impl ReaderBookPackage {
             cursor,
             leaf_page_budget,
             SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET,
+            false,
             |_, row| on_row(row),
         )
     }
@@ -744,6 +747,7 @@ impl ReaderBookPackage {
         cursor: Option<SsedPartialIndexScanCursor>,
         leaf_page_budget: usize,
         prefiltered_leaf_page_budget: usize,
+        allow_tagged_page_prefilter: bool,
         mut on_row: impl FnMut(SsedPartialIndexScanCursor, SsedIndexRow) -> Result<bool>,
     ) -> Result<SsedPartialIndexScanResult> {
         let Some(catalog) = &self.ssed_catalog else {
@@ -808,8 +812,6 @@ impl ReaderBookPackage {
                     continue;
                 }
             };
-            let mut reader = SsedDataFile::open(&path)?;
-            let component_read_base = ssed_component_read_base(component, &reader);
             let page_count = component.block_count() as usize;
             let start_page =
                 if cursor.is_some_and(|cursor| cursor.component_index == component.index) {
@@ -817,7 +819,102 @@ impl ReaderBookPackage {
                 } else {
                     0
                 };
+            let page_candidates = if ssed_index_component_name_is_backward(&component.filename) {
+                &reverse_candidates
+            } else {
+                &forward_candidates
+            };
+            let page_prefilter_is_safe =
+                ssed_index_page_prefilter_is_safe(component.component_type);
+            let page_prefilter_anchors = if use_page_prefilter && page_prefilter_is_safe {
+                ssed_page_prefilter_anchor_candidates(page_candidates)
+                    .into_iter()
+                    .filter(|anchor| anchor.len() >= SSED_INDEX_PAGE_PREFILTER_ANCHOR_MIN_LEN)
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            if !page_prefilter_anchors.is_empty()
+                && SsedDataHeader::parse_file(&path).is_ok_and(|header| {
+                    header.expanded_size() <= SSED_INDEX_PAGE_PREFILTER_IN_MEMORY_MAX_EXPANDED_BYTES
+                })
+                && let Ok(reader) = SsedDataReader::parse_file(&path)
+            {
+                let component_read_base =
+                    ssed_component_read_base_for_header(component, reader.header());
+                let mut scan_state = SsedIndexScanState::default();
+                let candidate_pages = ssed_candidate_pages_for_expanded_index(
+                    reader.expanded(),
+                    component_read_base,
+                    start_page,
+                    page_count,
+                    &page_prefilter_anchors,
+                );
+                for page_index in candidate_pages {
+                    let page = read_index_page_from_expanded(
+                        reader.expanded(),
+                        component_read_base,
+                        page_index,
+                    );
+                    if page.len() < 4 {
+                        break;
+                    }
+                    let word = u16::from_be_bytes([page[0], page[1]]);
+                    if !is_leaf_page(word)
+                        || !ssed_body_window_may_contain_query(page, page_candidates)
+                    {
+                        continue;
+                    }
+                    decoded_leaf_pages = decoded_leaf_pages.saturating_add(1);
+                    let logical_block = component.start_block + page_index as u32;
+                    let (page_rows, unknown) = parse_supported_leaf_page(
+                        &component.filename,
+                        component.component_type,
+                        page,
+                        page_index as u32,
+                        logical_block,
+                        &mut scan_state,
+                    );
+                    if unknown > 0 {
+                        diagnostics.push(
+                            Diagnostic::warning(
+                                "ssed_index_unknown_leaf_bytes",
+                                format!(
+                                    "{} had {unknown} unknown simple leaf row(s)",
+                                    component.filename
+                                ),
+                            )
+                            .with_context("component", &component.filename),
+                        );
+                    }
+                    let row_cursor = SsedPartialIndexScanCursor {
+                        component_index: component.index,
+                        page_index,
+                    };
+                    for row in page_rows {
+                        if !on_row(row_cursor, row)? {
+                            break 'components;
+                        }
+                    }
+                    if decoded_leaf_pages >= leaf_page_budget {
+                        let next_cursor = next_ssed_partial_index_scan_cursor(
+                            catalog,
+                            component.index,
+                            page_index.saturating_add(1),
+                        );
+                        return Ok(SsedPartialIndexScanResult {
+                            diagnostics,
+                            next_cursor: next_cursor.map(encode_ssed_partial_index_scan_cursor),
+                        });
+                    }
+                }
+                continue;
+            }
+
+            let mut reader = SsedDataFile::open(&path)?;
+            let component_read_base = ssed_component_read_base(component, &reader);
             let mut scan_state = SsedIndexScanState::default();
+            let mut tagged_prefilter_state = SsedTaggedLeafPagePrefilterState::default();
             for page_index in start_page..page_count {
                 let page = read_index_page(&mut reader, component_read_base, page_index)?;
                 if page.len() < 4 {
@@ -827,17 +924,21 @@ impl ReaderBookPackage {
                 if !is_leaf_page(word) {
                     continue;
                 }
-                let page_candidates = if ssed_index_component_name_is_backward(&component.filename)
-                {
-                    &reverse_candidates
+                let page_may_match = if !use_page_prefilter {
+                    true
+                } else if page_prefilter_is_safe {
+                    ssed_body_window_may_contain_query(page, page_candidates)
+                } else if allow_tagged_page_prefilter {
+                    ssed_tagged_leaf_page_may_contain_query(
+                        component.component_type,
+                        page,
+                        page_candidates,
+                        &mut tagged_prefilter_state,
+                    )
+                    .unwrap_or(true)
                 } else {
-                    &forward_candidates
+                    true
                 };
-                let page_prefilter_is_safe =
-                    ssed_index_page_prefilter_is_safe(component.component_type);
-                let page_may_match = !use_page_prefilter
-                    || !page_prefilter_is_safe
-                    || ssed_body_window_may_contain_query(page, page_candidates);
                 if page_may_match {
                     decoded_leaf_pages = decoded_leaf_pages.saturating_add(1);
                     let logical_block = component.start_block + page_index as u32;
@@ -1895,13 +1996,136 @@ fn ssed_index_pointer_distance(start: SsedIndexPointer, end: SsedIndexPointer) -
     end_abs.checked_sub(start_abs)
 }
 
-pub(super) fn ssed_component_read_base(component: &SsedComponent, reader: &SsedDataFile) -> usize {
-    if component.start_block >= reader.header().start_block
-        && component.end_block <= reader.header().end_block
-    {
-        return usize::try_from(component.start_block - reader.header().start_block).unwrap_or(0);
+fn ssed_component_read_base_for_header(
+    component: &SsedComponent,
+    header: &SsedDataHeader,
+) -> usize {
+    if component.start_block >= header.start_block && component.end_block <= header.end_block {
+        return usize::try_from(component.start_block - header.start_block).unwrap_or(0);
     }
     0
+}
+
+pub(super) fn ssed_component_read_base(component: &SsedComponent, reader: &SsedDataFile) -> usize {
+    ssed_component_read_base_for_header(component, reader.header())
+}
+
+#[derive(Default)]
+struct SsedTaggedLeafPagePrefilterState {
+    current_key_may_match: bool,
+}
+
+fn ssed_tagged_leaf_page_may_contain_query(
+    component_type: u8,
+    page: &[u8],
+    candidates: &[Vec<u8>],
+    state: &mut SsedTaggedLeafPagePrefilterState,
+) -> Option<bool> {
+    let pointer_len = if is_body_only_tagged_leaf_index_type(component_type) {
+        6
+    } else if is_tagged_leaf_index_type(component_type) {
+        12
+    } else {
+        return None;
+    };
+    if page.len() < 4 {
+        return Some(true);
+    }
+
+    let count = u16::from_be_bytes([page[2], page[3]]);
+    let mut pos = 4usize;
+    let mut subrecord = 0u16;
+    let mut page_may_match = false;
+    while subrecord < count && pos + 2 <= page.len() {
+        let tag = page[pos];
+        let key_len = page[pos + 1] as usize;
+        if tag == 0 && key_len == 0 {
+            break;
+        }
+        pos += 2;
+
+        match tag {
+            0x00 => {
+                if pos + key_len + pointer_len > page.len() {
+                    return Some(true);
+                }
+                if ssed_body_window_may_contain_query(&page[pos..pos + key_len], candidates) {
+                    page_may_match = true;
+                }
+                pos += key_len + pointer_len;
+            }
+            0x80 => {
+                if pos + 2 + key_len > page.len() {
+                    return Some(true);
+                }
+                pos += 2;
+                state.current_key_may_match =
+                    ssed_body_window_may_contain_query(&page[pos..pos + key_len], candidates);
+                pos += key_len;
+            }
+            0xc0 => {
+                if pos + key_len + pointer_len > page.len() {
+                    return Some(true);
+                }
+                if state.current_key_may_match
+                    || ssed_body_window_may_contain_query(&page[pos..pos + key_len], candidates)
+                {
+                    page_may_match = true;
+                }
+                pos += key_len + pointer_len;
+            }
+            _ => return Some(true),
+        }
+        subrecord = subrecord.saturating_add(1);
+    }
+    Some(page_may_match)
+}
+
+fn ssed_candidate_pages_for_expanded_index(
+    expanded: &[u8],
+    component_read_base: usize,
+    start_page: usize,
+    page_count: usize,
+    anchors: &[Vec<u8>],
+) -> BTreeSet<usize> {
+    let start_offset = component_page_offset(component_read_base, start_page);
+    let end_offset = component_page_offset(component_read_base, page_count).min(expanded.len());
+    if start_offset >= end_offset {
+        return BTreeSet::new();
+    }
+
+    let mut pages = BTreeSet::new();
+    let search_data = &expanded[start_offset..end_offset];
+    for anchor in anchors {
+        if anchor.is_empty() {
+            continue;
+        }
+        for relative_offset in memchr::memmem::find_iter(search_data, anchor) {
+            let absolute_offset = start_offset + relative_offset;
+            let physical_page = absolute_offset / INDEX_PAGE_SIZE;
+            if physical_page < component_read_base {
+                continue;
+            }
+            let page_index = physical_page - component_read_base;
+            if (start_page..page_count).contains(&page_index) {
+                pages.insert(page_index);
+            }
+        }
+    }
+    pages
+}
+
+fn read_index_page_from_expanded(
+    expanded: &[u8],
+    component_read_base: usize,
+    page_index: usize,
+) -> &[u8] {
+    let offset = component_page_offset(component_read_base, page_index);
+    if offset >= expanded.len() {
+        return &[];
+    }
+    let end = offset.saturating_add(INDEX_PAGE_SIZE).min(expanded.len());
+    &expanded[offset..end]
 }
 
 fn component_page_offset(component_read_base: usize, page_index: usize) -> usize {
@@ -1938,5 +2162,38 @@ mod tests {
         let sentinel = vec![0xff, 0xff];
         assert!(ssed_internal_key_is_ff_sentinel(&sentinel));
         assert!(!ssed_internal_key_is_ff_sentinel(&[0x23, b'z']));
+    }
+
+    #[test]
+    fn tagged_leaf_prefilter_carries_matching_group_key_to_continuation_page() {
+        let candidates = ssed_index_page_prefilter_candidates("needle");
+        let mut group_page = vec![0u8; INDEX_PAGE_SIZE];
+        group_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        group_page[2..4].copy_from_slice(&1u16.to_be_bytes());
+        group_page[4] = 0x80;
+        group_page[5] = 11;
+        group_page[6..8].copy_from_slice(&1u16.to_be_bytes());
+        group_page[8..19].copy_from_slice(b"groupneedle");
+
+        let mut continuation_page = vec![0u8; INDEX_PAGE_SIZE];
+        continuation_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        continuation_page[2..4].copy_from_slice(&1u16.to_be_bytes());
+        continuation_page[4] = 0xc0;
+        continuation_page[5] = 0;
+
+        let mut state = SsedTaggedLeafPagePrefilterState::default();
+        assert_eq!(
+            ssed_tagged_leaf_page_may_contain_query(0x90, &group_page, &candidates, &mut state),
+            Some(false)
+        );
+        assert_eq!(
+            ssed_tagged_leaf_page_may_contain_query(
+                0x90,
+                &continuation_page,
+                &candidates,
+                &mut state
+            ),
+            Some(true)
+        );
     }
 }

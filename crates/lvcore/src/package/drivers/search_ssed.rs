@@ -796,6 +796,7 @@ impl ReaderBookPackage {
                     current_cursor,
                     SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET,
                     prefiltered_leaf_page_budget,
+                    false,
                     |_, row| collector.push_row(row),
                 )?
             } else {
@@ -804,6 +805,7 @@ impl ReaderBookPackage {
                     current_cursor,
                     SSED_PARTIAL_INDEX_SCAN_LEAF_PAGE_BUDGET,
                     prefiltered_leaf_page_budget,
+                    false,
                     |_, row| collector.push_row(row),
                 )?
             };
@@ -866,6 +868,7 @@ impl ReaderBookPackage {
                 current_cursor,
                 leaf_page_budget,
                 SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET,
+                false,
                 |row_cursor, row| {
                     let had_hits = collector.has_hits();
                     let keep_scanning = collector.push_row(row)?;
@@ -955,6 +958,7 @@ impl ReaderBookPackage {
                 current_cursor,
                 leaf_page_budget,
                 SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET,
+                true,
                 |row_cursor, row| {
                     if skip_prefix_rows
                         && ssed_title_label_fallback_row_matches(
