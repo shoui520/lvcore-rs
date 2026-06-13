@@ -3068,6 +3068,102 @@ fn ssed_ios_table_list_window_uses_plist_order() {
     }));
 }
 
+#[test]
+fn ssed_ios_table_list_cross_book_window_uses_plist_order() {
+    let dir = tempdir().unwrap();
+    let source_wrapper = dir.path().join("SRC");
+    let destination_wrapper = dir.path().join("DST");
+    let source_root = source_wrapper.join("SRC");
+    let destination_root = destination_wrapper.join("DST");
+    fs::create_dir_all(&source_root).unwrap();
+    fs::create_dir_all(&destination_root).unwrap();
+
+    let table_list = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<array>
+  <dict><key>name</key><string>Alpha</string><key>block</key><integer>100</integer><key>offset</key><integer>0</integer></dict>
+  <dict><key>name</key><string>Beta</string><key>block</key><integer>101</integer><key>offset</key><integer>0</integer></dict>
+</array>
+</plist>
+"#;
+    fs::write(source_wrapper.join("tableList.plist"), table_list).unwrap();
+    fs::write(destination_wrapper.join("tableList.plist"), table_list).unwrap();
+    fs::write(
+        destination_root.join("DST.IDX"),
+        ssed_table_list_test_ssedinfo_with_honmon_range("Destination", 100, 101),
+    )
+    .unwrap();
+
+    let source_catalog = SsedCatalog {
+        title: "Source".to_owned(),
+        components: vec![SsedComponent {
+            index: 0,
+            multi: 0,
+            component_type: 0x00,
+            start_block: 1,
+            end_block: 10,
+            data: [0; 4],
+            filename: "HONMON.DIC".to_owned(),
+            role: SsedComponentRole::Honmon,
+        }],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 1,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        &source_root,
+        DetectedPackage {
+            root: source_root.clone(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Source".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&source_catalog, &source_root),
+        PackageStores {
+            ssed_catalog: Some(source_catalog),
+            ..Default::default()
+        },
+    );
+
+    let surface = package
+        .open_surface_page("ios-table-list:tableList.plist", None, 10)
+        .unwrap();
+    let targets = surface.actionable_targets();
+    assert_eq!(targets.len(), 2);
+    assert!(matches!(
+        targets[0].target.decode().unwrap(),
+        InternalTarget::SsedCrossBookAddress {
+            dict_code,
+            component,
+            block: 100,
+            offset: 0,
+        } if dict_code == "DST" && component == "HONMON.DIC"
+    ));
+
+    let window = package
+        .resolve_target_window(
+            &targets[0].target,
+            targets[0].sequence_hint.as_ref(),
+            0,
+            1,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(window.center.title.as_deref(), Some("Alpha"));
+    assert_eq!(window.after.len(), 1);
+    assert_eq!(window.after[0].title.as_deref(), Some("Beta"));
+    assert!(!window.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "sequence_target_not_in_ios_table_list"
+            || diagnostic.code == "sequence_deferred"
+            || diagnostic.code == "ssed_loose_address_unresolved"
+    }));
+}
+
 #[cfg(unix)]
 #[test]
 fn ssed_numeric_auxiliary_index_ignores_symlinked_escape() {
@@ -3137,4 +3233,40 @@ fn ssed_numeric_auxiliary_index_ignores_symlinked_escape() {
             .iter()
             .any(|surface| surface.surface_id == "numeric-aux:00000160.idx")
     );
+}
+
+fn ssed_table_list_test_ssedinfo_with_honmon_range(
+    title: &str,
+    start_block: u32,
+    end_block: u32,
+) -> Vec<u8> {
+    let record_start = 0x80;
+    let mut data = vec![0u8; record_start + 0x30];
+    data[..SSEDINFO_MAGIC.len()].copy_from_slice(SSEDINFO_MAGIC);
+    let title = title.as_bytes();
+    data[0x0c] = title.len() as u8;
+    data[0x0d..0x0d + title.len()].copy_from_slice(title);
+    data[0x4d] = 1;
+    ssed_table_list_test_write_ssedinfo_record(
+        &mut data[record_start..record_start + 0x30],
+        0x00,
+        start_block,
+        end_block,
+        "HONMON.DIC",
+    );
+    data
+}
+
+fn ssed_table_list_test_write_ssedinfo_record(
+    record: &mut [u8],
+    component_type: u8,
+    start_block: u32,
+    end_block: u32,
+    filename: &str,
+) {
+    record[3] = component_type;
+    record[4..8].copy_from_slice(&start_block.to_be_bytes());
+    record[8..12].copy_from_slice(&end_block.to_be_bytes());
+    record[0x10] = filename.len() as u8;
+    record[0x11..0x11 + filename.len()].copy_from_slice(filename.as_bytes());
 }

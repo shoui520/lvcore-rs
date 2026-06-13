@@ -4,6 +4,17 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-ios-table-list-cross-book-shortcut-v1.jsonl`
+- Produced after making iOS SSED `tableList.plist` cross-book rows skip
+  repeated local loose-address misses when a sibling owner is known, while
+  keeping mixed local/cross-book tableLists lazily fallback-capable.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-unverified-nonprefix-title-v1.jsonl`
 - Produced after deferring large SSED full-text non-prefix title continuation
   proof behind explicit `title-nonprefix-unverified:*` cursors and teaching
@@ -12,8 +23,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-unverified-sidecar-title-v1.jsonl`
 - Produced after deferring large exact CJK SSED sidecar-title continuation
@@ -264,8 +273,6 @@ Latest concrete non-HC performance candidates from the full gate:
   exercise elapsed, hit_count 1 with a `title-nonprefix-unverified:*` cursor;
   the residual cost is finding the late first non-prefix title across sparse
   native index pages, not proving the continuation.
-- `Other/iOS/KQNEWJE5/KQNEWJE5`, `search_forward` query `和英`: 1359 ms,
-  native offset continuation intentionally deferred.
 - `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 1227 ms,
   non-prefix physical-offset partial cursor.
 - `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_full_text` query `体の`: 927 ms,
@@ -296,7 +303,82 @@ Rows such as `_DCT_GKKNJPZL` `search_forward` query `00` and `_DCT_IWKOKU7N`
 `search_forward` query `3D` include HC fallback rendering diagnostics and
 should not drive LVCore-only work while HC remains deferred.
 
+`Other/iOS/KQNEWJE5/KQNEWJE5` `search_forward` query `和英` was reclassified
+after focused inspection: direct native search is fast, while the full-gate
+validation row includes HC fallback rendering for the first hit. It should not
+drive LVCore-only work while HC remains deferred.
+
+`Other/iOS/KQNEWJE5/KQNEWJE5` `ios-table-list:tableList.plist` was resolved in
+0ab: it dropped from 5462 ms with a 1883 ms cursor probe in the previous full
+gate to 927 ms with a 0 ms cursor probe in the current full gate.
+
 ## Fix-Now / Recently Closed Candidates
+
+### 0ab. iOS SSED tableList cross-book row shortcut (resolved, full gate)
+
+Why this matters:
+
+- The previous full-corpus gate exposed `Other/iOS/KQNEWJE5/KQNEWJE5`
+  `ios-table-list:tableList.plist` as a concrete non-HC navigation surface
+  latency row: 5462 ms total exercise time with a 1883 ms cursor probe.
+- Focused baseline validation reproduced the same path at 3415 ms for the
+  surface exercise and 1177 ms for the cursor probe.
+- Direct package timing isolated the non-HC cost: `home` took about 4.7s and
+  each tableList page took about 1.45s before rendering. The rows are
+  cross-book addresses owned by sibling `KQNEWEJ6`, but the source package was
+  trying local loose-address resolution for every row before falling back to
+  cross-book targets.
+
+Current status:
+
+- iOS `tableList.plist` cross-book owner resolution is cached per package and
+  source id.
+- tableList status/page/window handling now uses a cheap local catalog address
+  check. When no tableList rows are locally owned and a sibling owner is known,
+  lvcore emits cross-book targets directly instead of paying repeated local
+  loose-address misses.
+- Mixed local/cross-book tableLists still lazily fall back to owner detection
+  after a local miss.
+- Package-level tableList sequence windows now recognize cross-book tableList
+  targets instead of scanning the plist and reporting that the target is absent.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore package::drivers::tests::ssed_navigation_surfaces::ssed_ios_table_list -- --nocapture`
+  - `cargo test -p lvcore-cli tests::validate_deep_routes_ios_table_list_cross_book_sibling -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-kqnewje5-table-list-shortcut-v2.jsonl`
+  - `KQNEWJE5` package status remained `ok`.
+  - Package validation dropped from 20956 ms focused baseline to 6275 ms.
+  - `ios-table-list:tableList.plist` dropped from 3415 ms to 1044 ms.
+  - Its cursor probe dropped from 1172 ms to 0 ms.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-ios-table-list-cross-book-shortcut-v1.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1924),
+    which is deferred HC work.
+  - `Other/iOS/KQNEWJE5/KQNEWJE5` package validation dropped from 33538 ms to
+    6064 ms versus the previous full gate.
+  - `ios-table-list:tableList.plist` dropped from 5462 ms to 927 ms, and its
+    cursor probe dropped from 1883 ms to 0 ms.
+- Direct real-package timings:
+  - `lvcore home .../Other/iOS/KQNEWJE5/KQNEWJE5` dropped from about 4.7s to
+    about 0.07s locally.
+  - `lvcore surface --limit 16 ... ios-table-list:tableList.plist` dropped
+    from about 1.47s to about 0.03s locally.
+  - `lvcore surface --limit 16 --cursor 16 ... ios-table-list:tableList.plist`
+    dropped from about 1.44s to about 0.03s locally.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/Other/iOS/KQNEWJE5/KQNEWJE5`
+- Observed row in
+  `/tmp/lvcore-all-corpora-validation-20260613-unverified-nonprefix-title-v1.jsonl`:
+  - `surface_first_target`, `ios-table-list:tableList.plist`, 5462 ms, cursor
+    probe 1883 ms, routed to `SSED:KQNEWEJ6:*` with only
+    `ssed_cross_book_routed` info diagnostics.
 
 ### 0aa. SSED full-text non-prefix title continuation deferral (resolved, full gate)
 

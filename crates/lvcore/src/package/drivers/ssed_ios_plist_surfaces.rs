@@ -151,6 +151,14 @@ impl ReaderBookPackage {
     ) -> Result<(NavigationStatus, Vec<Diagnostic>)> {
         let plist = self.cached_ssed_panel_plist(&source.bytes, &source.label)?;
         let rows = plist.as_array().unwrap_or_default();
+        let rows_have_local_address = self.ssed_ios_table_list_rows_have_local_address(rows)?;
+        let mut cross_book_owner = None;
+        if !rows_have_local_address {
+            cross_book_owner = self.ssed_ios_table_list_cross_book_owner(source, rows)?;
+            if cross_book_owner.is_some() {
+                return Ok((NavigationStatus::Available, Vec::new()));
+            }
+        }
         let mut stats = SsedIosTableListResolutionStats::default();
         for row in rows {
             let Some(dict) = row.as_dict() else {
@@ -184,10 +192,10 @@ impl ReaderBookPackage {
                 )],
             ));
         }
-        if self
-            .ssed_ios_table_list_cross_book_owner(source, rows)?
-            .is_some()
-        {
+        if cross_book_owner.is_none() {
+            cross_book_owner = self.ssed_ios_table_list_cross_book_owner(source, rows)?;
+        }
+        if cross_book_owner.is_some() {
             return Ok((NavigationStatus::Available, Vec::new()));
         }
         Ok((
@@ -295,7 +303,12 @@ impl ReaderBookPackage {
         };
         let plist = self.cached_ssed_panel_plist(&source.bytes, &source.label)?;
         let rows = plist.as_array().unwrap_or_default();
-        let cross_book_owner = self.ssed_ios_table_list_cross_book_owner(&source, rows)?;
+        let rows_have_local_address = self.ssed_ios_table_list_rows_have_local_address(rows)?;
+        let mut cross_book_owner = if rows_have_local_address {
+            None
+        } else {
+            self.ssed_ios_table_list_cross_book_owner(&source, rows)?
+        };
         let offset = decode_offset_cursor(cursor);
         let mut items = Vec::new();
         let mut has_more = false;
@@ -318,23 +331,28 @@ impl ReaderBookPackage {
             let raw_block = block;
             let raw_offset = plist_u32(dict, "offset").unwrap_or(0);
             let (block, offset) = self.convert_ios_ssed_address(raw_block, raw_offset)?;
-            let mut row_diagnostics = Vec::new();
-            let local_target =
-                self.ssed_target_for_loose_address(block, offset, &mut row_diagnostics)?;
-            let target = if let Some(target) = local_target {
+            let address_is_local = self.ssed_ios_table_list_address_is_local(block, offset);
+            let target = if let Some(owner) =
+                cross_book_owner.as_ref().filter(|_| !address_is_local)
+            {
+                stats.record(raw_block, raw_offset, block, offset, true);
+                ssed_ios_table_list_cross_book_target(owner, raw_block, raw_offset)?
+            } else if let Some(target) =
+                self.ssed_target_for_loose_address(block, offset, &mut Vec::new())?
+            {
                 stats.record(raw_block, raw_offset, block, offset, true);
                 target
-            } else if let Some(owner) = &cross_book_owner {
-                stats.record(raw_block, raw_offset, block, offset, true);
-                TargetToken::new(&InternalTarget::SsedCrossBookAddress {
-                    dict_code: owner.dict_code.clone(),
-                    component: owner.component.clone(),
-                    block: raw_block,
-                    offset: raw_offset,
-                })?
             } else {
-                stats.record(raw_block, raw_offset, block, offset, false);
-                continue;
+                if cross_book_owner.is_none() {
+                    cross_book_owner = self.ssed_ios_table_list_cross_book_owner(&source, rows)?;
+                }
+                if let Some(owner) = &cross_book_owner {
+                    stats.record(raw_block, raw_offset, block, offset, true);
+                    ssed_ios_table_list_cross_book_target(owner, raw_block, raw_offset)?
+                } else {
+                    stats.record(raw_block, raw_offset, block, offset, false);
+                    continue;
+                }
             };
             let rich_label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
             items.push(NavigationItem {
@@ -421,18 +439,58 @@ impl ReaderBookPackage {
         diagnostic
     }
 
+    fn ssed_ios_table_list_rows_have_local_address(&self, rows: &[PlistValue]) -> Result<bool> {
+        for (raw_block, raw_offset) in rows.iter().filter_map(ssed_ios_table_list_raw_address) {
+            let (block, offset) = self.convert_ios_ssed_address(raw_block, raw_offset)?;
+            if self.ssed_ios_table_list_address_is_local(block, offset) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn ssed_ios_table_list_address_is_local(&self, block: u32, offset: u32) -> bool {
+        self.ssed_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.component_for_address(block))
+            .and_then(|component| component.relative_offset(block, offset))
+            .is_some()
+    }
+
     fn ssed_ios_table_list_cross_book_owner(
         &self,
         source: &SsedIosPlistSurfaceSource,
         rows: &[PlistValue],
     ) -> Result<Option<SsedIosTableListCrossBookOwner>> {
+        let cache_key = source.source_id.to_ascii_lowercase();
+        if let Some(cached) = self
+            .ssed_ios_table_list_cross_book_owners
+            .lock()
+            .map_err(|_| Error::Driver("iOS table list owner cache lock was poisoned".to_owned()))?
+            .get(&cache_key)
+            .cloned()
+        {
+            return Ok(
+                cached.map(|(dict_code, component)| SsedIosTableListCrossBookOwner {
+                    dict_code,
+                    component,
+                }),
+            );
+        }
         let addresses = rows
             .iter()
             .filter_map(ssed_ios_table_list_raw_address)
             .collect::<Vec<_>>();
         if addresses.is_empty() {
+            self.ssed_ios_table_list_cross_book_owners
+                .lock()
+                .map_err(|_| {
+                    Error::Driver("iOS table list owner cache lock was poisoned".to_owned())
+                })?
+                .insert(cache_key, None);
             return Ok(None);
         }
+        let mut owner = None;
         for candidate_root in self.ssed_ios_table_list_sibling_package_roots()? {
             let Some(candidate_bytes) =
                 ssed_ios_table_list_candidate_bytes(&candidate_root, &source.source_id)
@@ -457,12 +515,19 @@ impl ReaderBookPackage {
             let Some(dict_code) = ssed_ios_sibling_dict_code(&candidate_root) else {
                 continue;
             };
-            return Ok(Some(SsedIosTableListCrossBookOwner {
-                dict_code,
-                component: honmon.filename.clone(),
-            }));
+            owner = Some((dict_code, honmon.filename.clone()));
+            break;
         }
-        Ok(None)
+        self.ssed_ios_table_list_cross_book_owners
+            .lock()
+            .map_err(|_| Error::Driver("iOS table list owner cache lock was poisoned".to_owned()))?
+            .insert(cache_key, owner.clone());
+        Ok(
+            owner.map(|(dict_code, component)| SsedIosTableListCrossBookOwner {
+                dict_code,
+                component,
+            }),
+        )
     }
 
     fn ssed_ios_table_list_sibling_package_roots(&self) -> Result<Vec<PathBuf>> {
@@ -522,6 +587,16 @@ impl ReaderBookPackage {
         };
         let plist = self.cached_ssed_panel_plist(&source.bytes, &source.label)?;
         let rows = plist.as_array().unwrap_or_default();
+        let target_is_cross_book = matches!(
+            target.decode(),
+            Ok(InternalTarget::SsedCrossBookAddress { .. })
+        );
+        let cross_book_owner =
+            if self.ssed_ios_table_list_rows_have_local_address(rows)? && !target_is_cross_book {
+                None
+            } else {
+                self.ssed_ios_table_list_cross_book_owner(&source, rows)?
+            };
 
         if let Some(cursor_index) = cursor_hint.and_then(|value| value.parse::<usize>().ok())
             && let Some(window) = self.resolve_ssed_ios_table_list_window_from_cursor(
@@ -531,6 +606,7 @@ impl ReaderBookPackage {
                 before,
                 after,
                 options,
+                cross_book_owner.as_ref(),
             )?
         {
             return Ok(Some(window));
@@ -539,9 +615,12 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let mut ordered = Vec::new();
         for row in rows.iter() {
-            if let Some(item) =
-                self.ssed_ios_table_list_ordered_target_for_row(row, options, &mut diagnostics)?
-            {
+            if let Some(item) = self.ssed_ios_table_list_ordered_target_for_row(
+                row,
+                options,
+                &mut diagnostics,
+                cross_book_owner.as_ref(),
+            )? {
                 ordered.push(item);
             }
         }
@@ -568,13 +647,18 @@ impl ReaderBookPackage {
         before: usize,
         after: usize,
         options: &RenderOptions,
+        cross_book_owner: Option<&SsedIosTableListCrossBookOwner>,
     ) -> Result<Option<TargetWindow>> {
         let Some(row) = rows.get(cursor_index) else {
             return Ok(None);
         };
         let mut diagnostics = Vec::new();
-        let Some(center) =
-            self.ssed_ios_table_list_ordered_target_for_row(row, options, &mut diagnostics)?
+        let Some(center) = self.ssed_ios_table_list_ordered_target_for_row(
+            row,
+            options,
+            &mut diagnostics,
+            cross_book_owner,
+        )?
         else {
             return Ok(None);
         };
@@ -592,6 +676,7 @@ impl ReaderBookPackage {
                 &rows[index],
                 options,
                 &mut diagnostics,
+                cross_book_owner,
             )? {
                 before_items.push(item);
             }
@@ -603,9 +688,12 @@ impl ReaderBookPackage {
             if ordered.len() >= before.saturating_add(1).saturating_add(after) {
                 break;
             }
-            if let Some(item) =
-                self.ssed_ios_table_list_ordered_target_for_row(row, options, &mut diagnostics)?
-            {
+            if let Some(item) = self.ssed_ios_table_list_ordered_target_for_row(
+                row,
+                options,
+                &mut diagnostics,
+                cross_book_owner,
+            )? {
                 ordered.push(item);
             }
         }
@@ -630,6 +718,7 @@ impl ReaderBookPackage {
         row: &PlistValue,
         options: &RenderOptions,
         diagnostics: &mut Vec<Diagnostic>,
+        cross_book_owner: Option<&SsedIosTableListCrossBookOwner>,
     ) -> Result<Option<OrderedSequenceTarget>> {
         let Some(dict) = row.as_dict() else {
             return Ok(None);
@@ -641,11 +730,26 @@ impl ReaderBookPackage {
         let Some(block) = plist_u32(dict, "block").filter(|value| *value > 0) else {
             return Ok(None);
         };
-        let (block, offset) =
-            self.convert_ios_ssed_address(block, plist_u32(dict, "offset").unwrap_or(0))?;
-        let target = self.ssed_target_for_loose_address(block, offset, diagnostics)?;
-        let Some(target) = target else {
-            return Ok(None);
+        let raw_block = block;
+        let raw_offset = plist_u32(dict, "offset").unwrap_or(0);
+        let (block, offset) = self.convert_ios_ssed_address(raw_block, raw_offset)?;
+        let target = if let Some(owner) =
+            cross_book_owner.filter(|_| !self.ssed_ios_table_list_address_is_local(block, offset))
+        {
+            ssed_ios_table_list_cross_book_target(owner, raw_block, raw_offset)?
+        } else {
+            let mut row_diagnostics = Vec::new();
+            let local_target =
+                self.ssed_target_for_loose_address(block, offset, &mut row_diagnostics)?;
+            if let Some(target) = local_target {
+                diagnostics.extend(row_diagnostics);
+                target
+            } else if let Some(owner) = cross_book_owner {
+                ssed_ios_table_list_cross_book_target(owner, raw_block, raw_offset)?
+            } else {
+                diagnostics.extend(row_diagnostics);
+                return Ok(None);
+            }
         };
         let rich_label = self.ssed_rich_label_with_policy(&label, &options.gaiji_policy);
         diagnostics.extend(rich_label.diagnostics);
@@ -1003,6 +1107,19 @@ fn ssed_ios_table_list_raw_address(row: &PlistValue) -> Option<(u32, u32)> {
     let block = plist_u32(dict, "block").filter(|value| *value > 0)?;
     let offset = plist_u32(dict, "offset").unwrap_or(0);
     Some((block, offset))
+}
+
+fn ssed_ios_table_list_cross_book_target(
+    owner: &SsedIosTableListCrossBookOwner,
+    block: u32,
+    offset: u32,
+) -> Result<TargetToken> {
+    TargetToken::new(&InternalTarget::SsedCrossBookAddress {
+        dict_code: owner.dict_code.clone(),
+        component: owner.component.clone(),
+        block,
+        offset,
+    })
 }
 
 fn ssed_ios_table_list_candidate_bytes(candidate_root: &Path, source_id: &str) -> Option<Vec<u8>> {
