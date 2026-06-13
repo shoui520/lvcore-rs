@@ -2785,7 +2785,7 @@ impl ReaderBookPackage {
     fn ssed_fulltext_post_title_prepass_cursor(&self, query: &SearchQuery) -> Result<String> {
         let sidecar_resolvers = self.ssed_sidecar_body_resolvers()?;
         if sidecar_resolvers.is_empty() {
-            return Ok(encode_ssed_fulltext_row_cursor(0));
+            return Ok(encode_ssed_fulltext_body_cursor(0));
         }
         if sidecar_sql_prefilter_is_authoritative(&query.query) {
             let sidecar_page = search_ssed_dense_sidecar_bodies_with_resolvers(
@@ -2796,14 +2796,14 @@ impl ReaderBookPackage {
                 1,
             )?;
             if sidecar_page.hits.is_empty() && sidecar_page.exhausted {
-                return Ok(encode_ssed_fulltext_row_cursor(0));
+                return Ok(encode_ssed_fulltext_body_cursor(0));
             }
             return Ok(encode_ssed_fulltext_sidecar_body_start_cursor());
         }
         if self.ssed_fulltext_prefiltered_sidecar_body_has_initial_hit(query, sidecar_resolvers)? {
             return Ok(encode_ssed_fulltext_sidecar_body_start_cursor());
         }
-        Ok(encode_ssed_fulltext_sidecar_body_cursor(0))
+        Ok(encode_ssed_fulltext_body_cursor(0))
     }
 
     fn ssed_fulltext_post_sidecar_title_prepass_cursor(
@@ -3253,6 +3253,10 @@ fn decode_ssed_fulltext_sidecar_body_cursor(cursor: Option<&str>) -> Option<usiz
 
 fn encode_ssed_fulltext_sidecar_body_cursor(offset: usize) -> String {
     format!("{SSED_FULLTEXT_SIDECAR_BODY_CURSOR_PREFIX}{offset}")
+}
+
+fn encode_ssed_fulltext_body_cursor(offset: usize) -> String {
+    format!("body:{offset}")
 }
 
 fn encode_ssed_fulltext_sidecar_body_start_cursor() -> String {

@@ -169,7 +169,7 @@ fn ssed_fulltext_searches_native_title_labels_before_body_rows() {
 
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "本文見出し");
-    assert_eq!(page.next_cursor.as_deref(), Some("row:0"));
+    assert_eq!(page.next_cursor.as_deref(), Some("body:0"));
     assert!(
         page.diagnostics
             .iter()
@@ -200,7 +200,7 @@ fn ssed_fulltext_searches_native_title_labels_before_body_rows() {
         continuation
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "ssed_fulltext_row_driven_body_prefetch")
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_direct_scan")
     );
     assert!(
         continuation
@@ -247,7 +247,7 @@ fn ssed_fulltext_searches_partial_native_title_labels_before_body_rows() {
 
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "本文見出し");
-    assert_eq!(page.next_cursor.as_deref(), Some("row:0"));
+    assert_eq!(page.next_cursor.as_deref(), Some("body:0"));
     assert!(
         page.diagnostics
             .iter()

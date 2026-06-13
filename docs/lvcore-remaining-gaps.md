@@ -4,6 +4,16 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-ssed-fulltext-body-cursor.jsonl`
+- Produced after changing post-title-prepass SSED full-text continuation from
+  row-driven body cursors to the existing deferred native body cursor.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260612-ios-panel-cache.jsonl`
 - Produced after caching parsed SSED plist panel projections by source label and
   requested panel id, avoiding repeated iOS panel projection work during
@@ -12,8 +22,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260612-lved-fts-rowid-order.jsonl`
 - Produced after changing LVED_SQLITE3 FTS list joins to order by the FTS
@@ -92,12 +100,12 @@ Important info/status classes from the latest gate:
 | Marker | Count | Classification |
 | --- | ---: | --- |
 | `sidecar-body-row:*` cursor probed `ok` | 28 | Dense sidecar body cursor fix verified |
-| `row:0` full-text cursor probed `ok` | 122 | Native title-prepass row cursor fix verified |
+| `body:0` full-text cursor `not_probed` | 122 | Post-title native body continuation intentionally deferred |
 | `sidecar-body-start` cursor probed `ok` | 33 | Sidecar body phase start cursor fix verified |
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
 | `body-offset:*` cursor `not_probed` | 1 | Expensive native body continuation intentionally deferred |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
-| `ssed_fulltext_body_direct_scan` | 10 | Direct native HONMON fallback exercised |
+| `ssed_fulltext_body_direct_scan` | 3 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 51 | Large-index partial-search continuation intentionally deferred |
 | `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
@@ -107,6 +115,77 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0j. SSED full-text post-title continuation latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate had no non-HC correctness failures, but it exposed
+  a repeated SSED full-text latency pattern after title/index prepass hits.
+- Packages such as `_DCT_HKDKSR10`, `_DCT_KQJCOLLO`, and `_DCT_RPLUSREV`
+  returned a fast title/index hit first, then advertised `row:0`.
+- Deep validation probed that cursor and spent about 3.1-3.7s reading bounded
+  native body rows. In at least one sampled real package, the probed row page
+  returned no hits and only another `row:*` continuation.
+- This is both a validation latency issue and a user-visible continuation issue:
+  a reader following "more results" could get an empty, slow row page.
+
+Current status:
+
+- Post-title-prepass full-text continuation now uses `body:0` unless an
+  available dense sidecar body phase should run first.
+- Initial body-only full-text searches still use the row-driven prefetch path
+  where it is useful; the change is scoped to the continuation after a title
+  prepass page.
+- The validator already treats `body:0` as an expensive full-text body cursor
+  and records it as `not_probed` instead of turning continuation work back into
+  first-page validation time.
+- Focused tests passed:
+  - `cargo test -p lvcore ssed_fulltext -- --nocapture`
+  - `cargo test -p lvcore-cli validate_search_cursor_probe_skips_expensive_fulltext_body_cursors -- --nocapture`
+- Direct real-package probes after the change:
+  - `_DCT_HKDKSR10`, query `FU`, first page about 0.8s with next cursor
+    `body:0`.
+  - `_DCT_KQJCOLLO`, query `BE`, first page about 0.02s with next cursor
+    `body:0`.
+  - `_DCT_RPLUSREV`, query `O1`, first page about 0.04s with next cursor
+    `body:0`.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ssed-fulltext-body-cursor.jsonl`
+  - `_DCT_HKDKSR10` package status `ok`; `search_full_text` elapsed about
+    0.63s with `body:0` cursor status `not_probed`.
+  - `_DCT_KQJCOLLO` package status `ok`; `search_full_text` elapsed about
+    5ms with `body:0` cursor status `not_probed`.
+  - `_DCT_RPLUSREV` package status `ok`; `search_full_text` elapsed about
+    17ms with `body:0` cursor status `not_probed`.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-ssed-fulltext-body-cursor.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback`.
+  - Total gate wall time was about 491s.
+  - The gate has 122 `body:0` full-text cursors marked `not_probed` and no
+    remaining `row:0` full-text cursor probes.
+  - In the full gate, `_DCT_HKDKSR10` `search_full_text` query `FU` elapsed
+    about 0.64s, `_DCT_KQJCOLLO` query `BE` about 5ms, and `_DCT_RPLUSREV`
+    query `O1` about 17ms.
+
+Baseline evidence:
+
+- Baseline full-corpus JSONL:
+  - `/tmp/lvcore-all-corpora-validation-20260612-ios-panel-cache.jsonl`
+- Baseline symptoms:
+  - `_DCT_HKDKSR10` `search_full_text` query `FU` elapsed about 3.8s; cursor
+    probe `row:0` took about 3.1s.
+  - `_DCT_KQJCOLLO` `search_full_text` query `BE` elapsed about 3.7s; cursor
+    probe `row:0` took about 3.7s.
+  - `_DCT_RPLUSREV` `search_full_text` query `O1` elapsed about 3.5s; cursor
+    probe `row:0` took about 3.5s.
+
+Changed code area:
+
+- `crates/lvcore/src/package/drivers/search_ssed.rs`
+- `crates/lvcore/src/package/drivers/tests/fulltext.rs`
 
 ### 0i. iOS SSED plist panel projection latency (resolved)
 
