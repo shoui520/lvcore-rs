@@ -443,7 +443,7 @@ fn ssed_fulltext_searches_late_nonprefix_title_before_body_scan() {
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "０－１計画法");
     let title_cursor = page.next_cursor.clone().unwrap();
-    assert!(title_cursor.starts_with("title-nonprefix:"));
+    assert!(title_cursor.starts_with("title-nonprefix-unverified:"));
     assert!(
         page.diagnostics
             .iter()

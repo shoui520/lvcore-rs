@@ -628,6 +628,7 @@ impl ReaderBookPackage {
             cursor,
             skip_prefix_rows,
             HashSet::new(),
+            false,
         )
     }
 
@@ -638,8 +639,13 @@ impl ReaderBookPackage {
         cursor: Option<SsedPartialNonprefixCursor>,
         skip_prefix_rows: bool,
         seen_targets: HashSet<String>,
+        defer_next_page_proof: bool,
     ) -> Result<SsedPartialNonprefixSearchPage> {
-        let page_limit = query.limit.saturating_add(1);
+        let page_limit = if defer_next_page_proof {
+            query.limit
+        } else {
+            query.limit.saturating_add(1)
+        };
         let skip_prefix_rows = cursor
             .as_ref()
             .map(SsedPartialNonprefixCursor::skip_prefix_rows)
@@ -684,6 +690,9 @@ impl ReaderBookPackage {
         )
         .with_display_label_matching()
         .with_seen_targets(seen_targets);
+        if defer_next_page_proof {
+            collector = collector.with_pending_page_limit_stop();
+        }
         let physical_scan = self.scan_ssed_partial_nonprefix_index_rows_paged_until_visible(
             needle,
             physical_cursor,
@@ -694,6 +703,11 @@ impl ReaderBookPackage {
         let matched_offset_physical_start = offset_cursor_physical_start.or(visible_start_cursor);
         let (mut page, hit_target_keys) =
             collector.into_search_page_with_hit_target_keys(query.limit);
+        let deferred_next_cursor =
+            (defer_next_page_proof && skip_prefix_rows && !page.hits.is_empty())
+                .then_some(matched_offset_physical_start)
+                .flatten()
+                .map(|cursor| encode_ssed_partial_unverified_nonprefix_cursor(Some(cursor)));
         page.next_cursor = page
             .next_cursor
             .take()
@@ -708,7 +722,8 @@ impl ReaderBookPackage {
                     encode_ssed_partial_nonprefix_offset_cursor(cursor, skip_prefix_rows)
                 }
             })
-            .or(physical_scan.next_cursor);
+            .or(physical_scan.next_cursor)
+            .or(deferred_next_cursor);
         Ok(SsedPartialNonprefixSearchPage {
             page,
             visible_start_cursor,
@@ -3117,12 +3132,14 @@ impl ReaderBookPackage {
         let (partial_cursor, mut seen_targets) = cursor
             .map(|cursor| (Some(cursor.cursor), cursor.seen_targets))
             .unwrap_or_default();
+        let defer_next_page_proof = self.ssed_partial_nonprefix_fill_should_defer();
         let nonprefix_page = self.search_ssed_partial_nonprefix_page_inner_with_seen_targets(
             &title_query,
             needle,
             partial_cursor,
             true,
             seen_targets.clone(),
+            defer_next_page_proof,
         )?;
         let mut page = nonprefix_page.page;
         if page.hits.is_empty() {
@@ -3133,7 +3150,13 @@ impl ReaderBookPackage {
         page.next_cursor = page
             .next_cursor
             .take()
-            .map(|cursor| encode_ssed_fulltext_nonprefix_title_cursor(&cursor, &seen_targets))
+            .map(|cursor| {
+                if defer_next_page_proof {
+                    encode_ssed_fulltext_unverified_nonprefix_title_cursor(&cursor, &seen_targets)
+                } else {
+                    encode_ssed_fulltext_nonprefix_title_cursor(&cursor, &seen_targets)
+                }
+            })
             .or(Some(post_title_prepass_cursor));
         page.diagnostics.insert(
             0,
@@ -3645,11 +3668,15 @@ fn decode_ssed_fulltext_title_physical_offset_cursor(
 }
 
 const SSED_FULLTEXT_NONPREFIX_TITLE_CURSOR_PREFIX: &str = "title-nonprefix:";
+const SSED_FULLTEXT_UNVERIFIED_NONPREFIX_TITLE_CURSOR_PREFIX: &str = "title-nonprefix-unverified:";
 
 fn decode_ssed_fulltext_nonprefix_title_cursor(
     cursor: Option<&str>,
 ) -> Option<SsedFulltextNonprefixTitleCursor> {
-    let payload = cursor?.strip_prefix(SSED_FULLTEXT_NONPREFIX_TITLE_CURSOR_PREFIX)?;
+    let cursor = cursor?;
+    let payload = cursor
+        .strip_prefix(SSED_FULLTEXT_NONPREFIX_TITLE_CURSOR_PREFIX)
+        .or_else(|| cursor.strip_prefix(SSED_FULLTEXT_UNVERIFIED_NONPREFIX_TITLE_CURSOR_PREFIX))?;
     let decoded = URL_SAFE_NO_PAD.decode(payload.as_bytes()).ok()?;
     let decoded = String::from_utf8(decoded).ok()?;
     let (partial_cursor, seen_targets) = decoded.split_once('\n')?;
@@ -3669,13 +3696,33 @@ fn encode_ssed_fulltext_nonprefix_title_cursor(
     cursor: &str,
     seen_targets: &HashSet<String>,
 ) -> String {
+    encode_ssed_fulltext_nonprefix_title_cursor_with_prefix(
+        SSED_FULLTEXT_NONPREFIX_TITLE_CURSOR_PREFIX,
+        cursor,
+        seen_targets,
+    )
+}
+
+fn encode_ssed_fulltext_unverified_nonprefix_title_cursor(
+    cursor: &str,
+    seen_targets: &HashSet<String>,
+) -> String {
+    encode_ssed_fulltext_nonprefix_title_cursor_with_prefix(
+        SSED_FULLTEXT_UNVERIFIED_NONPREFIX_TITLE_CURSOR_PREFIX,
+        cursor,
+        seen_targets,
+    )
+}
+
+fn encode_ssed_fulltext_nonprefix_title_cursor_with_prefix(
+    prefix: &str,
+    cursor: &str,
+    seen_targets: &HashSet<String>,
+) -> String {
     let mut seen_targets = seen_targets.iter().map(String::as_str).collect::<Vec<_>>();
     seen_targets.sort_unstable();
     let payload = format!("{cursor}\n{}", seen_targets.join(","));
-    format!(
-        "{SSED_FULLTEXT_NONPREFIX_TITLE_CURSOR_PREFIX}{}",
-        URL_SAFE_NO_PAD.encode(payload.as_bytes())
-    )
+    format!("{prefix}{}", URL_SAFE_NO_PAD.encode(payload.as_bytes()))
 }
 
 fn encode_ssed_fulltext_title_physical_offset_cursor(
@@ -4117,8 +4164,9 @@ mod tests {
         decode_ssed_fulltext_nonprefix_title_cursor, decode_ssed_fulltext_title_cursor,
         decode_ssed_partial_nonprefix_cursor, decode_ssed_title_label_cursor,
         encode_ssed_fulltext_nonprefix_title_cursor,
-        encode_ssed_fulltext_title_physical_offset_cursor, encode_ssed_partial_nonprefix_cursor,
-        encode_ssed_partial_nonprefix_offset_cursor,
+        encode_ssed_fulltext_title_physical_offset_cursor,
+        encode_ssed_fulltext_unverified_nonprefix_title_cursor,
+        encode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_offset_cursor,
         encode_ssed_partial_nonprefix_physical_offset_cursor,
         encode_ssed_partial_unverified_nonprefix_cursor, encode_ssed_unverified_title_label_cursor,
         ssed_fulltext_first_byte_candidate_offset, ssed_fulltext_sidecar_title_prepass_is_bounded,
@@ -4322,6 +4370,23 @@ mod tests {
             }
         );
         assert_eq!(decoded.seen_targets, seen_targets);
+
+        let unverified_cursor =
+            encode_ssed_fulltext_unverified_nonprefix_title_cursor(&partial_cursor, &seen_targets);
+        assert!(unverified_cursor.starts_with("title-nonprefix-unverified:"));
+        let decoded_unverified =
+            decode_ssed_fulltext_nonprefix_title_cursor(Some(&unverified_cursor)).unwrap();
+        assert_eq!(
+            decoded_unverified.cursor,
+            SsedPartialNonprefixCursor::Physical {
+                cursor: SsedPartialIndexScanCursor {
+                    component_index: 6,
+                    page_index: 946,
+                },
+                skip_prefix_rows: true,
+            }
+        );
+        assert_eq!(decoded_unverified.seen_targets, seen_targets);
     }
 
     #[test]

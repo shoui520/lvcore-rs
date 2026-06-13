@@ -966,6 +966,9 @@ fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
     if is_unverified_sidecar_title_cursor(mode, cursor) {
         return false;
     }
+    if is_unverified_fulltext_nonprefix_title_cursor(mode, cursor) {
+        return false;
+    }
     if cursor.starts_with("lved-offset-unverified:") {
         return false;
     }
@@ -990,6 +993,9 @@ fn skipped_search_cursor_probe_reason(mode: &SearchMode, cursor: &str) -> &'stat
     if is_unverified_sidecar_title_cursor(mode, cursor) {
         return "unverified sidecar title continuation may scan large SSED sidecars";
     }
+    if is_unverified_fulltext_nonprefix_title_cursor(mode, cursor) {
+        return "unverified full-text non-prefix title continuation may scan large SSED indexes";
+    }
     if cursor.starts_with("lved-offset-unverified:") {
         return "unverified LVED offset continuation may repeat broad SQLite searches";
     }
@@ -1003,6 +1009,10 @@ fn is_unverified_sidecar_title_cursor(mode: &SearchMode, cursor: &str) -> bool {
     ) && cursor.starts_with("sidecar-title-unverified-row:"))
         || (matches!(mode, SearchMode::Partial)
             && cursor.starts_with("ssed-partial-prefix:sidecar-title-unverified-row:"))
+}
+
+fn is_unverified_fulltext_nonprefix_title_cursor(mode: &SearchMode, cursor: &str) -> bool {
+    matches!(mode, SearchMode::FullText) && cursor.starts_with("title-nonprefix-unverified:")
 }
 
 fn is_unverified_title_label_cursor(mode: &SearchMode, cursor: &str) -> bool {
@@ -3075,6 +3085,17 @@ mod tests {
             &SearchMode::Partial,
             "ssed-partial-prefix:sidecar-title-unverified-row:626f64792e6462:745f636f6e7473:665f446174614964:direct:32"
         ));
+        assert!(!should_probe_search_cursor(
+            &SearchMode::FullText,
+            "title-nonprefix-unverified:c3NlZC1wYXJ0aWFsLW5vbnByZWZpeC1pbmRleDo2Ojk0Ngo="
+        ));
+        assert_eq!(
+            skipped_search_cursor_probe_reason(
+                &SearchMode::FullText,
+                "title-nonprefix-unverified:c3NlZC1wYXJ0aWFsLW5vbnByZWZpeC1pbmRleDo2Ojk0Ngo="
+            ),
+            "unverified full-text non-prefix title continuation may scan large SSED indexes"
+        );
         assert!(!should_probe_search_cursor(
             &SearchMode::FullText,
             "lved-offset-unverified:2"

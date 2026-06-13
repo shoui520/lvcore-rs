@@ -4,6 +4,17 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-unverified-nonprefix-title-v1.jsonl`
+- Produced after deferring large SSED full-text non-prefix title continuation
+  proof behind explicit `title-nonprefix-unverified:*` cursors and teaching
+  deep validation not to probe those intentionally unverified continuations.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-unverified-sidecar-title-v1.jsonl`
 - Produced after deferring large exact CJK SSED sidecar-title continuation
   proof behind explicit `sidecar-title-unverified-row:*` cursors and teaching
@@ -12,8 +23,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-cjk-sidecar-prefix-v1.jsonl`
 - Produced after adding an authoritative CJK SSED partial-prefix sidecar-title
@@ -231,18 +240,18 @@ Important info/status classes from the latest gate:
 | --- | ---: | --- |
 | `sidecar-body-row:*` cursor probed `ok` | 28 | Dense sidecar body cursor fix verified |
 | `sidecar-title-unverified-row:*` cursor `not_probed` | 6 | Large exact CJK sidecar-title continuation intentionally deferred |
-| `body:0` full-text cursor `not_probed` | 122 | Post-title native body continuation intentionally deferred |
+| `title-nonprefix-unverified:*` cursor `not_probed` | 1 | Large full-text non-prefix title continuation intentionally deferred |
+| `body:0`/`body-offset:*` full-text cursor `not_probed` | 124 | Post-title native body continuation intentionally deferred |
 | `sidecar-body-start` cursor probed `ok` | 33 | Sidecar body phase start cursor fix verified |
-| `title-nonprefix:*` cursor probed `ok` | 1 | New full-text non-prefix native-title continuation verified |
+| `title-nonprefix:*` cursor probed `ok` | 0 | Replaced by explicit unverified continuation for the remaining large case |
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
-| `body-offset:*` cursor `not_probed` | 2 | Expensive native body continuation intentionally deferred |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
 | `ssed_fulltext_body_direct_scan` | 10 | Direct native HONMON fallback exercised |
-| `ssed_fulltext_partial_nonprefix_title_prepass` | 4 | NCOMP4 first page and cursor probe exercised |
-| `ssed_index_empty_physical_pages_skipped` | 4 | Sparse physical scan advances exercised by NCOMP4 non-prefix title search |
-| `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 24 | Large-index partial-search continuation intentionally deferred |
-| `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 227 | Native offset next-page proof intentionally deferred |
-| `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 17 | Title-label fallback next-page proof intentionally deferred |
+| `ssed_fulltext_partial_nonprefix_title_prepass` | 2 | NCOMP4 first page exercised; cursor probe intentionally deferred |
+| `ssed_index_empty_physical_pages_skipped` | 2 | Sparse physical scan advances exercised by NCOMP4 non-prefix title search |
+| `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 23 | Large-index partial-search continuation intentionally deferred |
+| `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 220 | Native offset next-page proof intentionally deferred |
+| `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 16 | Title-label fallback next-page proof intentionally deferred |
 | `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
 | `gaiji_formatting_helper_candidate` | 36 | Observed OUKOKU11 `B947`/`B948` helper codes |
 | `ssed_navigation_empty_sentinel` | 19 | Expected sentinel classification |
@@ -251,36 +260,106 @@ Important info/status classes from the latest gate:
 
 Latest concrete non-HC performance candidates from the full gate:
 
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 4704 ms validation
-  exercise elapsed, now hit_count 1 with a `title-nonprefix:*` cursor; the
-  cursor probe is `ok` and returns the next distinct title in 2413 ms.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 885 ms, direct native
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 1990 ms validation
+  exercise elapsed, hit_count 1 with a `title-nonprefix-unverified:*` cursor;
+  the residual cost is finding the late first non-prefix title across sparse
+  native index pages, not proving the continuation.
+- `Other/iOS/KQNEWJE5/KQNEWJE5`, `search_forward` query `和英`: 1359 ms,
+  native offset continuation intentionally deferred.
+- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 1227 ms,
+  non-prefix physical-offset partial cursor.
+- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_full_text` query `体の`: 927 ms,
+  native title cursor with a 346 ms cursor probe.
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 876 ms, direct native
   HONMON scan plus row-driven prefetch; this intentionally stays out of the
   mixed digit/non-ASCII title prepass gate.
-- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 842 ms, direct native
+- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 840 ms, direct native
   HONMON scan plus row-driven prefetch.
-- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 758 ms, native title
+- `Other/iOS/IBIO5/IBIO5`, `search_full_text` query `亜-`: 791 ms, sidecar
+  body row cursor with a 5 ms cursor probe.
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 770 ms, native title
   prepass with deferred body continuation.
-- `Other/iOS/IBIO5/IBIO5`, `search_full_text` query `亜-`: 747 ms, sidecar
-  body row cursor with a 6 ms cursor probe.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 743 ms, native title prepass
-  with a physical-offset title cursor and a 338 ms cursor probe.
-- `Other/iOS/KQNEWJE5/KQNEWJE5`, `search_forward` query `和英`: 671 ms, native
-  offset continuation intentionally deferred.
-- `_DCT_GEN2005`, `search_full_text` query `曙光`: 669 ms, direct native HONMON
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 749 ms, native title prepass
+  with a physical-offset title cursor and a 344 ms cursor probe.
+- `Other/iOS/HAIKSAIJ/HAIKSAIJ`, `search_partial` query `陽春`: 646 ms,
+  partial non-prefix index cursor.
+- `_DCT_GEN2005`, `search_full_text` query `曙光`: 619 ms, direct native HONMON
   scan plus row-driven prefetch.
-- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 618 ms,
-  non-prefix physical-offset partial cursor.
 - `Other/iOS/IBIO5/IBIO5`, `search_exact`/`search_backward` query `亜-`:
-  578/522 ms, sidecar title search.
-- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 533 ms, native title prepass
+  592/564 ms, sidecar title search.
+- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 528 ms, native title prepass
   with deferred body continuation.
+- `Other/iOS/KQNEWEJ6/KQNEWEJ6`, `search_full_text` query `eɪ`: 527 ms,
+  sidecar body row cursor with a 23 ms cursor probe.
 
 Rows such as `_DCT_GKKNJPZL` `search_forward` query `00` and `_DCT_IWKOKU7N`
 `search_forward` query `3D` include HC fallback rendering diagnostics and
 should not drive LVCore-only work while HC remains deferred.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0aa. SSED full-text non-prefix title continuation deferral (resolved, full gate)
+
+Why this matters:
+
+- The previous full-corpus gate exposed `_DCT_NCOMP4` full-text search for
+  `1計` as the largest non-HC performance row: validation spent 4704 ms on the
+  first page, then another 2413 ms proving the `title-nonprefix:*`
+  continuation.
+- The first page already returned the visible title `0-1計画法`; the extra
+  cursor proof was searching for the next distinct non-prefix title across
+  sparse native index pages.
+- This is not a body full-text problem and not HC. The diagnostics were
+  `ssed_fulltext_partial_nonprefix_title_prepass` and
+  `ssed_index_empty_physical_pages_skipped`.
+
+Current status:
+
+- Large SSED full-text non-prefix title prepass now fills the requested page and
+  defers next-title proof behind an explicit
+  `title-nonprefix-unverified:*` cursor.
+- The cursor payload still carries the underlying partial non-prefix physical
+  cursor plus already-returned targets, so manually following it resumes the
+  same non-prefix title scan without repeating the visible first title.
+- Deep validation treats this cursor as intentionally not probed, with reason
+  `unverified full-text non-prefix title continuation may scan large SSED indexes`.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore package::drivers::tests::fulltext -- --nocapture`
+  - `cargo test -p lvcore package::drivers::search_ssed::tests -- --nocapture`
+  - `cargo test -p lvcore-cli validate_search_cursor_probe_skips_expensive_fulltext_body_cursors -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ncomp4-unverified-nonprefix-title-v2.jsonl`
+  - `_DCT_NCOMP4` package status remained `ok`.
+  - `search_full_text` `1計` is 2083 ms focused, hit_count 1, with remaining
+    cursor `title-nonprefix-unverified:*`.
+  - The cursor probe is `not_probed` for the new explicit reason.
+- Direct real-package probe:
+  - `lvcore search .../_DCT_NCOMP4 1計 --mode full-text --limit 1` returns
+    `0-1計画法` and a `title-nonprefix-unverified:*` cursor in about 2.2s
+    locally.
+  - Following that cursor resumes the non-prefix title scan and returns
+    `zero-one programming` in about 2.9s locally.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-unverified-nonprefix-title-v1.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1924),
+    which is deferred HC work.
+  - `_DCT_NCOMP4` `search_full_text` `1計` is 1990 ms, hit_count 1, with its
+    non-prefix title continuation intentionally not probed.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_NCOMP4`
+- Observed row in the previous full gate
+  `/tmp/lvcore-all-corpora-validation-20260613-unverified-sidecar-title-v1.jsonl`:
+  - `_DCT_NCOMP4`, `search_full_text`, query `1計`, 4704 ms, hit_count 1,
+    diagnostics `ssed_fulltext_partial_nonprefix_title_prepass` and
+    `ssed_index_empty_physical_pages_skipped`, with a 2413 ms
+    `title-nonprefix:*` cursor probe.
 
 ### 0z. SSED exact CJK sidecar-title lookahead deferral (resolved, full gate)
 
