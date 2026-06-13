@@ -4,6 +4,16 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-ssed-direct-scan-chunk-cache.jsonl`
+- Produced after adding a small MRU cache for expanded `SsedDataFile` chunks and
+  widening SSED direct full-text scan windows from 256 KiB to 1 MiB.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-lved-direct-fts-variants.jsonl`
 - Produced after routing guarded multi-variant LVED FTS searches through direct
   FTS table expressions and deferring exact proof of filled LVED continuation
@@ -12,8 +22,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-ssed-multi-near-key.jsonl`
 - Produced after caching SSED MULTI descriptors/selector menus and adding a
@@ -160,6 +168,59 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0p. SSED direct full-text scan range-read churn (resolved)
+
+Why this matters:
+
+- The previous full-corpus gate exposed `_DCT_NCOMP4` full-text search for `1計`
+  as a concrete non-HC search-latency row.
+- Direct real-package probes reproduced the cost at about 2.1s for
+  `--mode full-text --limit 1`, returning no hits.
+- Diagnostics showed the search checked 64 native-index body windows, then ran
+  a direct HONMON byte scan across 114 windows with zero byte-candidate windows.
+  The direct scan used overlapping `SsedDataFile::read_range` calls over
+  compressed SSEDDATA chunks.
+
+Current status:
+
+- `SsedDataFile` now keeps a small MRU cache of expanded chunks instead of a
+  single expanded chunk, avoiding repeated decompression when overlapping range
+  reads revisit adjacent chunks.
+- SSED direct full-text scan windows increased from 256 KiB to 1 MiB while
+  preserving the existing body lookbehind/overlap, reducing direct scan windows
+  for this package from 114 to 29.
+- Focused tests passed:
+  - `cargo test -p lvcore ssed::tests::file_backed_reader -- --nocapture`
+  - `cargo test -p lvcore package::drivers::search_ssed::tests -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Direct real-package probe:
+  - `_DCT_NCOMP4` full-text `1計 --limit 1` dropped from about 2.14s to about
+    1.65-1.68s.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ncomp4-1m-window.jsonl`
+  - `_DCT_NCOMP4` package status remained `ok`.
+  - Package elapsed time dropped from 3187 ms in the previous full-gate baseline
+    to 2512 ms in focused validation.
+  - The `search_full_text` row dropped from 1959 ms to 1471 ms.
+  - The direct body scan still found no hits, but scanned 29 windows instead of
+    114.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-ssed-direct-scan-chunk-cache.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous full-gate path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1936),
+    which is deferred HC work.
+  - `_DCT_NCOMP4` package elapsed time is 2538 ms.
+  - The `search_full_text` row is 1499 ms and still scans 29 direct body
+    windows.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_NCOMP4`
+- Observed row:
+  - `kind`: `search_full_text`, query: `1計`
 
 ### 0o. LVED guarded FTS variant latency (resolved)
 

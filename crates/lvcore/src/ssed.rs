@@ -12,6 +12,7 @@ pub const BLOCK_SIZE: u32 = 2048;
 pub const CHUNK_SIZE: usize = 0x8000;
 pub const WINDOW_SIZE: usize = 0x0ff0;
 pub const MAX_IN_MEMORY_SSEDDATA_EXPANDED_SIZE: usize = 512 * 1024 * 1024;
+const SSED_DATA_FILE_CHUNK_CACHE_LEN: usize = 4;
 pub const SSEDINFO_MAGIC: &[u8; 8] = b"SSEDINFO";
 pub const ANDROID_LVEDINFO_MAGIC: &[u8; 8] = b"LVEDINFO";
 pub const SSEDDATA_MAGIC: &[u8; 8] = b"SSEDDATA";
@@ -141,8 +142,13 @@ pub struct SsedDataFile {
     file: File,
     file_len: u64,
     header: SsedDataHeader,
-    cached_chunk_index: Option<usize>,
-    cached_chunk: Vec<u8>,
+    cached_chunks: Vec<SsedDataFileChunk>,
+}
+
+#[derive(Debug)]
+struct SsedDataFileChunk {
+    index: usize,
+    data: Vec<u8>,
 }
 
 impl SsedDataReader {
@@ -185,8 +191,7 @@ impl SsedDataFile {
             file,
             file_len,
             header,
-            cached_chunk_index: None,
-            cached_chunk: Vec::new(),
+            cached_chunks: Vec::new(),
         })
     }
 
@@ -226,31 +231,51 @@ impl SsedDataFile {
     }
 
     pub(crate) fn read_expanded_chunk(&mut self, chunk_index: usize) -> Result<&[u8]> {
-        if self.cached_chunk_index != Some(chunk_index) {
-            let start =
-                *self.header.chunk_offsets.get(chunk_index).ok_or_else(|| {
-                    Error::Driver("SSEDDATA chunk index outside header".to_owned())
-                })? as u64;
-            let end = self
-                .header
-                .chunk_offsets
-                .get(chunk_index + 1)
-                .map(|offset| u64::from(*offset))
-                .unwrap_or(self.file_len);
-            if start >= self.file_len || end < start || end > self.file_len {
-                return Err(Error::Driver(
-                    "SSEDDATA chunk byte range outside file".to_owned(),
-                ));
+        if let Some(position) = self
+            .cached_chunks
+            .iter()
+            .position(|chunk| chunk.index == chunk_index)
+        {
+            if position != 0 {
+                let chunk = self.cached_chunks.remove(position);
+                self.cached_chunks.insert(0, chunk);
             }
-            let size = usize::try_from(end - start)
-                .map_err(|_| Error::Driver("SSEDDATA chunk is too large".to_owned()))?;
-            let mut bytes = vec![0u8; size];
-            self.file.seek(SeekFrom::Start(start))?;
-            self.file.read_exact(&mut bytes)?;
-            self.cached_chunk = expand_sseddata_chunk(&bytes, 0)?;
-            self.cached_chunk_index = Some(chunk_index);
+            return Ok(&self.cached_chunks[0].data);
         }
-        Ok(&self.cached_chunk)
+        let start = *self
+            .header
+            .chunk_offsets
+            .get(chunk_index)
+            .ok_or_else(|| Error::Driver("SSEDDATA chunk index outside header".to_owned()))?
+            as u64;
+        let end = self
+            .header
+            .chunk_offsets
+            .get(chunk_index + 1)
+            .map(|offset| u64::from(*offset))
+            .unwrap_or(self.file_len);
+        if start >= self.file_len || end < start || end > self.file_len {
+            return Err(Error::Driver(
+                "SSEDDATA chunk byte range outside file".to_owned(),
+            ));
+        }
+        let size = usize::try_from(end - start)
+            .map_err(|_| Error::Driver("SSEDDATA chunk is too large".to_owned()))?;
+        let mut bytes = vec![0u8; size];
+        self.file.seek(SeekFrom::Start(start))?;
+        self.file.read_exact(&mut bytes)?;
+        let data = expand_sseddata_chunk(&bytes, 0)?;
+        if self.cached_chunks.len() >= SSED_DATA_FILE_CHUNK_CACHE_LEN {
+            self.cached_chunks.pop();
+        }
+        self.cached_chunks.insert(
+            0,
+            SsedDataFileChunk {
+                index: chunk_index,
+                data,
+            },
+        );
+        Ok(&self.cached_chunks[0].data)
     }
 }
 
