@@ -392,7 +392,10 @@ impl ReaderBookPackage {
         needle: &str,
     ) -> Result<bool> {
         if query.cursor.is_some()
-            || !matches!(query.mode, SearchMode::Exact | SearchMode::Forward)
+            || !matches!(
+                query.mode,
+                SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+            )
             || !ssed_sidecar_title_authoritative_prepass_is_bounded(&query.query)
             || !ssed_sidecar_title_query_is_kana_only(&query.query)
             || query.query.trim().chars().count() < 2
