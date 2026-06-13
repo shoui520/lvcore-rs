@@ -4,6 +4,17 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-ssed-fulltext-row-prefetch-cap.jsonl`
+- Produced after capping first-page row-driven SSED full-text body prefetch
+  when byte candidates are available, so late/no-hit cases fall through to the
+  direct HONMON byte-window scan sooner.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260612-ssed-fulltext-body-cursor.jsonl`
 - Produced after changing post-title-prepass SSED full-text continuation from
   row-driven body cursors to the existing deferred native body cursor.
@@ -11,8 +22,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260612-ios-panel-cache.jsonl`
 - Produced after caching parsed SSED plist panel projections by source label and
@@ -105,7 +114,7 @@ Important info/status classes from the latest gate:
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
 | `body-offset:*` cursor `not_probed` | 1 | Expensive native body continuation intentionally deferred |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
-| `ssed_fulltext_body_direct_scan` | 3 | Direct native HONMON fallback exercised |
+| `ssed_fulltext_body_direct_scan` | 4 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 51 | Large-index partial-search continuation intentionally deferred |
 | `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
@@ -115,6 +124,69 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0k. SSED full-text initial row-prefetch latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate still showed a concrete SSED full-text first-page
+  latency gap after the post-title cursor fix.
+- `_DCT_KENE7J5`, `_DCT_NCOMP4`, and `_DCT_GEN2005` spent about 2.2-3.5s in
+  `search_full_text` before returning the first page.
+- Each row performed a 512-row native body prefetch with zero byte-candidate
+  rows, then fell through to the direct HONMON byte-window scan that actually
+  produced the result or proved exhaustion.
+- This was user-visible first-page search time, not only validation cursor
+  probing.
+
+Current status:
+
+- Initial row-driven full-text body prefetch now uses a smaller row budget when
+  byte candidates exist and the request is the first page.
+- Explicit row cursors and cases without byte candidates keep the existing
+  512-row budget.
+- Early row-driven hits still preserve native index titles; late/no-hit cases
+  fall through to the direct body scan sooner.
+- Focused test passed:
+  - `cargo test -p lvcore ssed_fulltext -- --nocapture`
+- Direct real-package probes after the change:
+  - `_DCT_KENE7J5`, query `は殺`, first page about 1.2s instead of about 3.6s.
+  - `_DCT_NCOMP4`, query `1計`, first page about 2.0s instead of about 3.5s.
+  - `_DCT_GEN2005`, query `曙光`, first page about 1.3s instead of about 2.2s.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ssed-fulltext-row-prefetch-cap.jsonl`
+  - `_DCT_KENE7J5` package status `ok`; `search_full_text` elapsed about
+    1.1s and row prefetch checked 64 rows instead of 512.
+  - `_DCT_NCOMP4` package status `ok`; `search_full_text` elapsed about 1.7s
+    and row prefetch checked 64 rows instead of 512.
+  - `_DCT_GEN2005` package status `ok`; `search_full_text` elapsed about
+    0.69s and row prefetch checked 64 rows instead of 512.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-ssed-fulltext-row-prefetch-cap.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback`.
+  - Total gate wall time was about 482s.
+  - In the full gate, `_DCT_KENE7J5` `search_full_text` query `は殺` elapsed
+    about 1.1s, `_DCT_NCOMP4` query `1計` about 1.6s, and `_DCT_GEN2005` query
+    `曙光` about 0.69s.
+  - The affected rows reported `checked_rows=64` before direct body scan.
+
+Baseline evidence:
+
+- Baseline full-corpus JSONL:
+  - `/tmp/lvcore-all-corpora-validation-20260612-ssed-fulltext-body-cursor.jsonl`
+- Baseline symptoms:
+  - `_DCT_KENE7J5` `search_full_text` query `は殺` elapsed about 3.5s, with
+    `checked_rows=512` before direct body scan.
+  - `_DCT_NCOMP4` `search_full_text` query `1計` elapsed about 3.1s, with
+    `checked_rows=512` before direct body scan.
+  - `_DCT_GEN2005` `search_full_text` query `曙光` elapsed about 2.2s, with
+    `checked_rows=512` before direct body scan.
+
+Changed code area:
+
+- `crates/lvcore/src/package/drivers/search_ssed.rs`
 
 ### 0j. SSED full-text post-title continuation latency (resolved)
 

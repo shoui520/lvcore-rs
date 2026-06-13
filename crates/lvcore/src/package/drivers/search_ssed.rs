@@ -1460,7 +1460,10 @@ impl ReaderBookPackage {
                     byte_candidates: &byte_candidates,
                     offset: row_offset,
                     page_limit: remaining_limit,
-                    max_checked_rows: Some(SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS),
+                    max_checked_rows: Some(ssed_fulltext_row_prefetch_max_rows(
+                        query,
+                        &byte_candidates,
+                    )),
                     gaiji_policy: &label_policy,
                 })?;
             let row_page_has_hits = !row_page.hits.is_empty();
@@ -2834,6 +2837,15 @@ impl ReaderBookPackage {
 }
 
 const SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS: usize = 512;
+const SSED_FULLTEXT_INITIAL_ROW_PREFETCH_MAX_ROWS: usize = 64;
+
+fn ssed_fulltext_row_prefetch_max_rows(query: &SearchQuery, byte_candidates: &[Vec<u8>]) -> usize {
+    if query.cursor.is_none() && !byte_candidates.is_empty() {
+        SSED_FULLTEXT_INITIAL_ROW_PREFETCH_MAX_ROWS
+    } else {
+        SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS
+    }
+}
 
 struct SsedRowDrivenFulltextRequest<'a> {
     catalog: &'a SsedCatalog,
