@@ -31,6 +31,13 @@ Subsequent focused validation since the latest full-corpus gate:
   `ok`.
 - This focused run does not replace the latest full-corpus gate; it records the
   scoped proof for 0ak.
+- `/tmp/lvcore-focused-validate-direct-body-skip-initial-row-prefetch-v1.jsonl`
+- Produced after skipping the initial row-driven SSED full-text body prefetch
+  when byte-candidate direct HONMON scanning is available.
+- `_DCT_NMEDEJ12`, `_DCT_GEN2005`, and `_DCT_KENE7J5` validated with package
+  status 3 `ok`.
+- This focused run records the scoped proof for 0al; it does not replace the
+  latest full-corpus gate.
 
 Previous planning baseline:
 
@@ -384,9 +391,10 @@ Latest concrete non-HC performance candidates from the full gate:
   `◯に滅せずんば炎炎を若何いかんせん` and forward query `◯に`: resolved in
   0ak with focused validation. The latest full-corpus gate still predates that
   change.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 672 ms, direct native
-  HONMON scan plus row-driven prefetch. This is improved in 0ag but remains a
-  measurable numeric-body full-text row.
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 663 ms in the latest full
+  gate, direct native HONMON scan plus row-driven prefetch. 0al removes the
+  useless initial row prefetch in focused validation, but the row remains a
+  direct HONMON scan performance candidate at 655 ms focused.
 - `_DCT_NCOMP4`, `search_full_text` query `1計`: 618 ms. It remains behind
   intentionally deferred `title-nonprefix-unverified:*` continuation proof.
 - `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 613 ms,
@@ -418,6 +426,43 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0al. SSED full-text direct body prefetch gate (resolved, focused)
+
+Why this matters:
+
+- The latest full-corpus gate had exactly three SSED full-text rows using the
+  initial row-driven native body prefetch before falling through to direct
+  HONMON byte-window scanning:
+  - `_DCT_NMEDEJ12` `search_full_text` `01`: 663 ms.
+  - `_DCT_GEN2005` `search_full_text` `曙光`: 194 ms.
+  - `_DCT_KENE7J5` `search_full_text` `は殺`: 330 ms.
+- In all three rows, the row prefetch decoded zero hits before direct scanning
+  found the first hit. Once the direct scanner can seek byte candidates, this
+  initial prefetch is redundant for byte-candidate queries.
+
+Current status:
+
+- Initial no-cursor SSED full-text body search skips row-driven prefetch when
+  byte candidates exist and proceeds directly to the byte-window HONMON scan.
+- Explicit row cursors, sidecar-body phase cursors, and no-byte-candidate
+  initial searches keep the existing row-driven path.
+- Focused tests passed:
+  - `cargo fmt`
+  - `cargo test -p lvcore search_ssed -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-direct-body-skip-initial-row-prefetch-v1.jsonl`
+  - Package status: 3 `ok`.
+  - `_DCT_NMEDEJ12` `search_full_text` `01`: 655 ms, now only
+    `ssed_fulltext_body_direct_scan`.
+  - `_DCT_GEN2005` `search_full_text` `曙光`: 105 ms, down from 194 ms, now
+    only `ssed_fulltext_body_direct_scan`.
+  - `_DCT_KENE7J5` `search_full_text` `は殺`: 331 ms, essentially unchanged,
+    now only `ssed_fulltext_body_direct_scan`.
+- This does not close the remaining `_DCT_NMEDEJ12` direct-scan cost. Further
+  improvement likely requires direct HONMON scan-window sizing or streaming
+  changes and should be evaluated across all direct-scan rows before editing.
 
 ### 0ak. KOJIEN7 native circle-marker title search (resolved, focused)
 

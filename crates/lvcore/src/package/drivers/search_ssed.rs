@@ -1834,8 +1834,12 @@ impl ReaderBookPackage {
             }
         }
         let byte_candidates = ssed_body_search_byte_candidates(&query.query);
-        let row_driven_search_allowed =
-            query.cursor.is_none() || row_cursor.is_some() || sidecar_body_phase_cursor;
+        let row_driven_search_allowed = ssed_fulltext_row_driven_body_search_allowed(
+            query.cursor.as_deref(),
+            row_cursor,
+            sidecar_body_phase_cursor,
+            &byte_candidates,
+        );
         if honmon_body_window_scan_needed
             && has_readable_ssed_indexes
             && row_driven_search_allowed
@@ -3443,6 +3447,17 @@ fn ssed_fulltext_row_prefetch_max_rows(query: &SearchQuery, byte_candidates: &[V
     }
 }
 
+fn ssed_fulltext_row_driven_body_search_allowed(
+    cursor: Option<&str>,
+    row_cursor: Option<usize>,
+    sidecar_body_phase_cursor: bool,
+    byte_candidates: &[Vec<u8>],
+) -> bool {
+    row_cursor.is_some()
+        || sidecar_body_phase_cursor
+        || (cursor.is_none() && byte_candidates.is_empty())
+}
+
 struct SsedRowDrivenFulltextRequest<'a> {
     catalog: &'a SsedCatalog,
     raw_query: &'a str,
@@ -4450,8 +4465,8 @@ mod tests {
         encode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_offset_cursor,
         encode_ssed_partial_nonprefix_physical_offset_cursor,
         encode_ssed_partial_unverified_nonprefix_cursor, encode_ssed_unverified_title_label_cursor,
-        ssed_fulltext_first_byte_candidate_offset, ssed_fulltext_sidecar_title_prepass_is_bounded,
-        ssed_partial_prefix_prepass_is_bounded,
+        ssed_fulltext_first_byte_candidate_offset, ssed_fulltext_row_driven_body_search_allowed,
+        ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_partial_prefix_prepass_is_bounded,
         ssed_sidecar_title_authoritative_prepass_is_bounded,
         ssed_sidecar_title_auto_append_is_bounded,
     };
@@ -4503,6 +4518,41 @@ mod tests {
             ssed_fulltext_first_byte_candidate_offset(data, &candidates, data.len()),
             None
         );
+    }
+
+    #[test]
+    fn fulltext_initial_row_prefetch_skips_byte_candidate_queries() {
+        let byte_candidates = vec![b"01".to_vec()];
+        assert!(!ssed_fulltext_row_driven_body_search_allowed(
+            None,
+            None,
+            false,
+            &byte_candidates,
+        ));
+        assert!(ssed_fulltext_row_driven_body_search_allowed(
+            None,
+            None,
+            false,
+            &[],
+        ));
+        assert!(ssed_fulltext_row_driven_body_search_allowed(
+            Some("row:12"),
+            Some(12),
+            false,
+            &byte_candidates,
+        ));
+        assert!(ssed_fulltext_row_driven_body_search_allowed(
+            Some("sidecar-body-start"),
+            None,
+            true,
+            &byte_candidates,
+        ));
+        assert!(!ssed_fulltext_row_driven_body_search_allowed(
+            Some("body:0"),
+            None,
+            false,
+            &byte_candidates,
+        ));
     }
 
     #[test]
