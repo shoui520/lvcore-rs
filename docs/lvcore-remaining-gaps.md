@@ -4,6 +4,17 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-title-label-unverified-nested-skip.jsonl`
+- Produced after changing SSED title-label fallback continuation proof to
+  explicit `ssed-title-label-unverified:*` cursors, including the nested
+  `ssed-partial-prefix:ssed-title-label-unverified:*` form.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-sidecar-title-physical-cursor.jsonl`
 - Produced after changing dense SSED sidecar title continuations from logical
   offset cursors to physical sidecar row cursors.
@@ -11,8 +22,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-ssed-title-cursor-budget.jsonl`
 - Produced after reducing the empty physical-title continuation prefilter budget
@@ -175,8 +184,9 @@ Important info/status classes from the latest gate:
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
 | `ssed_fulltext_body_direct_scan` | 4 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
-| `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 51 | Large-index partial-search continuation intentionally deferred |
+| `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 50 | Large-index partial-search continuation intentionally deferred |
 | `ssed-offset-unverified:*` continuation cursor | 225 | Native offset next-page proof intentionally deferred |
+| `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 17 | Title-label fallback next-page proof intentionally deferred |
 | `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
 | `gaiji_formatting_helper_candidate` | 36 | Observed OUKOKU11 `B947`/`B948` helper codes |
 | `ssed_navigation_empty_sentinel` | 19 | Expected sentinel classification |
@@ -184,6 +194,74 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0s. SSED title-label fallback continuation proof latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate exposed the iOS `Saitoje` backward search for
+  `唖〕` as a concrete non-HC cursor-latency row.
+- The first page correctly returned `あ〔唖〕` with cursor
+  `ssed-title-label:1`, but the old title-label fallback path then
+  recursively scanned ahead to prove whether another visible page existed.
+- This made cursor probing expensive for packages whose title-label fallback
+  search must scan large native title indexes without a precise key seek.
+
+Current status:
+
+- Filled SSED title-label fallback pages now emit
+  `ssed-title-label-unverified:*` cursors when the old path would have run the
+  recursive next-page proof.
+- Existing `ssed-title-label:*` cursors still decode and continue normally.
+- The validator treats `ssed-title-label-unverified:*` as an intentionally
+  unverified exact/forward/backward continuation and does not probe it
+  speculatively.
+- Partial search can wrap the same phase as
+  `ssed-partial-prefix:ssed-title-label-unverified:*`; the validator treats
+  that nested form as the same unverified continuation class.
+- Focused tests passed:
+  - `cargo test -p lvcore package::drivers::search_ssed::tests -- --nocapture`
+  - `cargo test -p lvcore-cli validate_search_cursor_probe_skips_expensive_fulltext_body_cursors -- --nocapture`
+  - `cargo fmt --check`
+  - `cargo build -p lvcore-cli`
+- Direct real-package probes:
+  - iOS `Saitoje` backward `唖〕 --limit 1` now emits
+    `ssed-title-label-unverified:1`.
+  - Continuing with `ssed-title-label-unverified:1` returns the same
+    `おし〔唖〕` hit as the legacy `ssed-title-label:1` cursor.
+  - The continuation run dropped from about 1.53s before this change to about
+    0.77s locally because it no longer scans ahead to prove the following page.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-saitoje-title-label-unverified.jsonl`
+  - iOS `Saitoje` package status remained `ok`.
+  - `search_backward` `唖〕` reported
+    `ssed-title-label-unverified:1` as `not_probed` with reason
+    `unverified title-label fallback continuation may scan large SSED indexes`.
+  - `/tmp/lvcore-focused-validate-kqnewej6-title-label-unverified-nested-skip.jsonl`
+  - `_DCT_KQNEWEJ6` package status remained `ok`.
+  - `search_partial` `画像` reported
+    `ssed-partial-prefix:ssed-title-label-unverified:1` as `not_probed` with
+    the same reason.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-title-label-unverified-nested-skip.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous full-gate path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1936),
+    which is deferred HC work.
+  - iOS `Saitoje` `search_backward` `唖〕` is 9 ms and its
+    `ssed-title-label-unverified:1` cursor is `not_probed`.
+  - `_DCT_KQNEWEJ6` `search_partial` `画像` is 162 ms and its nested
+    `ssed-partial-prefix:ssed-title-label-unverified:1` cursor is
+    `not_probed`.
+  - 17 direct or nested title-label unverified cursors are intentionally not
+    probed.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/Other/iOS/Saitoje/Saitoje`
+- Observed row:
+  - `kind`: `search_backward`, query: `唖〕`
 
 ### 0r. SSED dense sidecar title continuation rescans (resolved)
 

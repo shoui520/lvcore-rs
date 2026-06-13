@@ -16,6 +16,7 @@ const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
+const SSED_TITLE_LABEL_UNVERIFIED_CURSOR_PREFIX: &str = "ssed-title-label-unverified:";
 const SSED_AUX_LABEL_CURSOR_PREFIX: &str = "ssed-aux-label:";
 const SSED_UNVERIFIED_OFFSET_CURSOR_PREFIX: &str = "ssed-offset-unverified:";
 
@@ -945,7 +946,7 @@ impl ReaderBookPackage {
         needle: &str,
         row_offset: usize,
     ) -> Result<SearchPage> {
-        self.search_ssed_title_label_fallback_page_inner(query, needle, row_offset, true)
+        self.search_ssed_title_label_fallback_page_inner(query, needle, row_offset)
     }
 
     fn search_ssed_title_label_fallback_page_inner(
@@ -953,7 +954,6 @@ impl ReaderBookPackage {
         query: &SearchQuery,
         needle: &str,
         row_offset: usize,
-        probe_page_full_cursor: bool,
     ) -> Result<SearchPage> {
         let label_policy = query.label_gaiji_policy();
         let skip_backward_rows = self.ssed_has_forward_browse_index();
@@ -1032,18 +1032,11 @@ impl ReaderBookPackage {
         let next_cursor = match stopped {
             SsedTitleLabelFallbackStop::Exhausted => None,
             SsedTitleLabelFallbackStop::Budget if hits.is_empty() => None,
-            SsedTitleLabelFallbackStop::PageFull
-                if probe_page_full_cursor
-                    && !self.ssed_title_label_fallback_cursor_has_visible_hit(
-                        query,
-                        needle,
-                        checked_rows,
-                    )? =>
-            {
-                None
-            }
-            SsedTitleLabelFallbackStop::Budget | SsedTitleLabelFallbackStop::PageFull => {
+            SsedTitleLabelFallbackStop::Budget => {
                 Some(encode_ssed_title_label_cursor(checked_rows))
+            }
+            SsedTitleLabelFallbackStop::PageFull => {
+                Some(encode_ssed_unverified_title_label_cursor(checked_rows))
             }
         };
         if matches!(stopped, SsedTitleLabelFallbackStop::Budget) {
@@ -1071,23 +1064,6 @@ impl ReaderBookPackage {
             result_sequence: None,
             diagnostics,
         })
-    }
-
-    fn ssed_title_label_fallback_cursor_has_visible_hit(
-        &self,
-        query: &SearchQuery,
-        needle: &str,
-        row_offset: usize,
-    ) -> Result<bool> {
-        let mut probe_query = query.clone();
-        probe_query.limit = 1;
-        let probe_page = self.search_ssed_title_label_fallback_page_inner(
-            &probe_query,
-            needle,
-            row_offset,
-            false,
-        )?;
-        Ok(!probe_page.hits.is_empty())
     }
 
     fn search_ssed_sidecar_title_page(
@@ -3508,14 +3484,20 @@ enum SsedAuxLabelSearchStop {
 }
 
 fn decode_ssed_title_label_cursor(cursor: Option<&str>) -> Option<usize> {
-    cursor?
-        .strip_prefix(SSED_TITLE_LABEL_CURSOR_PREFIX)?
+    let cursor = cursor?;
+    cursor
+        .strip_prefix(SSED_TITLE_LABEL_UNVERIFIED_CURSOR_PREFIX)
+        .or_else(|| cursor.strip_prefix(SSED_TITLE_LABEL_CURSOR_PREFIX))?
         .parse()
         .ok()
 }
 
 fn encode_ssed_title_label_cursor(offset: usize) -> String {
     format!("{SSED_TITLE_LABEL_CURSOR_PREFIX}{offset}")
+}
+
+fn encode_ssed_unverified_title_label_cursor(offset: usize) -> String {
+    format!("{SSED_TITLE_LABEL_UNVERIFIED_CURSOR_PREFIX}{offset}")
 }
 
 fn decode_ssed_aux_label_cursor(cursor: Option<&str>) -> Option<usize> {
@@ -3690,12 +3672,12 @@ fn ssed_fulltext_sidecar_title_prepass_is_bounded(query: &str) -> bool {
 mod tests {
     use super::{
         SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
-        decode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_cursor,
-        encode_ssed_partial_nonprefix_offset_cursor,
+        decode_ssed_partial_nonprefix_cursor, decode_ssed_title_label_cursor,
+        encode_ssed_partial_nonprefix_cursor, encode_ssed_partial_nonprefix_offset_cursor,
         encode_ssed_partial_nonprefix_physical_offset_cursor,
-        encode_ssed_partial_unverified_nonprefix_cursor, ssed_fulltext_first_byte_candidate_offset,
-        ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_partial_prefix_prepass_is_bounded,
-        ssed_sidecar_title_auto_append_is_bounded,
+        encode_ssed_partial_unverified_nonprefix_cursor, encode_ssed_unverified_title_label_cursor,
+        ssed_fulltext_first_byte_candidate_offset, ssed_fulltext_sidecar_title_prepass_is_bounded,
+        ssed_partial_prefix_prepass_is_bounded, ssed_sidecar_title_auto_append_is_bounded,
     };
 
     #[test]
@@ -3831,6 +3813,17 @@ mod tests {
                 offset: 17,
                 skip_prefix_rows: true,
             })
+        );
+    }
+
+    #[test]
+    fn title_label_unverified_cursor_decodes_as_title_label_offset() {
+        let cursor = encode_ssed_unverified_title_label_cursor(42);
+        assert_eq!(cursor, "ssed-title-label-unverified:42");
+        assert_eq!(decode_ssed_title_label_cursor(Some(&cursor)), Some(42));
+        assert_eq!(
+            decode_ssed_title_label_cursor(Some("ssed-title-label:42")),
+            Some(42)
         );
     }
 }

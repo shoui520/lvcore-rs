@@ -964,6 +964,9 @@ fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
     {
         return false;
     }
+    if is_unverified_title_label_cursor(mode, cursor) {
+        return false;
+    }
     if cursor.starts_with("lved-offset-unverified:") {
         return false;
     }
@@ -986,10 +989,22 @@ fn skipped_search_cursor_probe_reason(mode: &SearchMode, cursor: &str) -> &'stat
     {
         return "unverified native offset continuation may scan large SSED indexes";
     }
+    if is_unverified_title_label_cursor(mode, cursor) {
+        return "unverified title-label fallback continuation may scan large SSED indexes";
+    }
     if cursor.starts_with("lved-offset-unverified:") {
         return "unverified LVED offset continuation may repeat broad SQLite searches";
     }
     "body full-text continuation cursors may rescan large SSED body windows"
+}
+
+fn is_unverified_title_label_cursor(mode: &SearchMode, cursor: &str) -> bool {
+    (matches!(
+        mode,
+        SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+    ) && cursor.starts_with("ssed-title-label-unverified:"))
+        || (matches!(mode, SearchMode::Partial)
+            && cursor.starts_with("ssed-partial-prefix:ssed-title-label-unverified:"))
 }
 
 fn search_cursor_probe(
@@ -2995,6 +3010,28 @@ mod tests {
         assert_eq!(
             skipped_search_cursor_probe_reason(&SearchMode::Backward, "ssed-offset-unverified:2"),
             "unverified native offset continuation may scan large SSED indexes"
+        );
+        assert!(!should_probe_search_cursor(
+            &SearchMode::Backward,
+            "ssed-title-label-unverified:2"
+        ));
+        assert_eq!(
+            skipped_search_cursor_probe_reason(
+                &SearchMode::Backward,
+                "ssed-title-label-unverified:2"
+            ),
+            "unverified title-label fallback continuation may scan large SSED indexes"
+        );
+        assert!(!should_probe_search_cursor(
+            &SearchMode::Partial,
+            "ssed-partial-prefix:ssed-title-label-unverified:2"
+        ));
+        assert_eq!(
+            skipped_search_cursor_probe_reason(
+                &SearchMode::Partial,
+                "ssed-partial-prefix:ssed-title-label-unverified:2"
+            ),
+            "unverified title-label fallback continuation may scan large SSED indexes"
         );
         assert!(!should_probe_search_cursor(
             &SearchMode::FullText,
