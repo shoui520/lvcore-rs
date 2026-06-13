@@ -4,12 +4,13 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260613-partial-digit-prefix-fast-probe-v1.jsonl`
-- Produced after making SSED partial-search native prefix probing conditional
-  for no-cursor single-token digit/no-ASCII-letter queries. These queries now
-  run a cheap one-leaf native forward-hit probe first: real digit prefix hits
-  keep the existing partial prefix path, while empty native prefix probes skip
-  the expensive miss and fall through to the existing partial title-index path.
+- `/tmp/lvcore-all-corpora-validation-20260613-ncomp4-partial-prefix-fast-miss-gate-v1.jsonl`
+- Produced after the focused `_DCT_NCOMP4` partial `1計` fix. The fix keeps
+  empty initial partial-prefix pages from surfacing to callers, defers large
+  initial non-prefix partial continuation proof behind an explicit unverified
+  physical-offset cursor, and applies the existing digit/no-ASCII-letter
+  one-leaf prefix-hit probe before expensive fallback prefix scans on large
+  packages.
 - 335 reconstructed package paths validated with package status 335 `ok`.
   The gate used the 333 currently discovered documented-root package paths plus
   the two explicit `Other/Android` package rows.
@@ -20,20 +21,18 @@ Latest full-corpus gate:
 - Reconstructed path-list hash:
   `b3c7c347c4587d6e3b29db8767748f2ebd9402b17f712dd5ae980d45cc5a601a`.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
-  fallback.
-- `_DCT_GKBUSINE` `search_partial` `10` is 37 ms, down from 428 ms in the
-  previous full gate. It preserves the same first hit and
-  `ssed-partial-nonprefix-noskip-offset:1` continuation while skipping the
-  expensive empty native prefix probe.
-- Digit-prefix controls stayed on the native partial prefix path:
-  `_DCT_GEN2011` partial `01` is 13 ms through `ssed_partial_prefix_prepass`,
-  and `_DCT_GEN2009` partial `0` is 122 ms with a cursor probe `ok` at 57 ms.
-- Windows `_DCT_KENROWA` `search_partial` `しめ` is 20 ms, down from 1091 ms
-  in the previous full gate, and its cursor probe is `ok` at 10 ms.
-- iOS `KENROWA` `search_partial` `しめ` is 20 ms, down from 1232 ms, and its
-  cursor probe is `ok` at 10 ms.
-- `_DCT_PROYAL53` `search_partial` `ひゃ` is 37 ms, down from 787 ms, and its
-  cursor probe is `ok` at 18 ms.
+  fallback, 949 occurrences.
+- `_DCT_NCOMP4` `search_full_text` `1計` remains stable at 446 ms with the
+  same `0-1計画法` first hit and deferred `title-nonprefix-unverified:*`
+  continuation. The standard deep validator does not currently exercise the
+  direct `_DCT_NCOMP4` partial `1計` query; that query is covered by focused
+  direct probes below.
+- Digit-prefix controls stayed stable: `_DCT_GKBUSINE` partial `10` is 37 ms
+  with cursor probe `ok` at 13 ms, `_DCT_GEN2011` partial `01` is 13 ms
+  through `ssed_partial_prefix_prepass`, and `_DCT_GEN2009` partial `0` is
+  123 ms with cursor probe `ok` at 58 ms.
+- Windows `_DCT_KENROWA` `search_partial` `しめ` is 20 ms and its cursor probe
+  is `ok` at 10 ms.
 - The `ssed_partial_native_prefix_fast_prepass` info diagnostic appears on
   8 pure-kana partial rows in the full gate. Continuation cursors are wrapped
   as `ssed-partial-prefix:*`, not raw native offsets.
@@ -44,19 +43,39 @@ Latest full-corpus gate:
 
 Focused validation for the latest full-corpus gate:
 
-- `/tmp/lvcore-focused-validate-partial-digit-prefix-fast-probe-v1.jsonl`
-- Focused package validation covered 5 packages with package status 5 `ok`.
-- Target row improved as expected: `_DCT_GKBUSINE` partial `10` is 35 ms,
-  down from 428 ms in the previous full gate and from about 680 ms in direct
-  no-cursor probes before the fix.
-- Digit-prefix controls stayed on their expected prefix path: `_DCT_GEN2011`
-  partial `01` is 12 ms through `ssed_partial_prefix_prepass`, and
-  `_DCT_GEN2009` partial `0` is 112 ms with a cursor probe `ok` at 53 ms.
-- Kana controls stayed on the existing pure-kana fast path: `_DCT_KENROWA`
-  partial `しめ` is 18 ms and `_DCT_PROYAL53` partial `ひゃ` is 32 ms, both
-  through `ssed_partial_native_prefix_fast_prepass`.
+- Focused validation:
+  `/tmp/lvcore-focused-validate-ncomp4-partial-prefix-fast-miss-gate-v1.jsonl`
+  covered `_DCT_NCOMP4`, `_DCT_GKBUSINE`, `_DCT_GEN2011`, `_DCT_GEN2009`,
+  and `_DCT_KENROWA` with package status 5 `ok`.
+- The focused validation controls stayed stable: `_DCT_GKBUSINE` partial `10`
+  is 36 ms with cursor probe `ok`, `_DCT_GEN2011` partial `01` is 13 ms,
+  `_DCT_GEN2009` partial `0` is 121 ms with cursor probe `ok`, and
+  `_DCT_KENROWA` partial `しめ` is 20 ms through the native prefix fast path.
+- Direct `_DCT_NCOMP4` `search_partial` `1計 --limit 1` now returns
+  `0-1計画法` in about 0.49s with
+  `ssed-partial-nonprefix-noskip-unverified-physical-offset:8:121:1`.
 
 Previous full-corpus gates:
+
+- `/tmp/lvcore-all-corpora-validation-20260613-partial-digit-prefix-fast-probe-v1.jsonl`
+- Produced after making SSED partial-search native prefix probing conditional
+  for no-cursor single-token digit/no-ASCII-letter queries. These queries run a
+  cheap one-leaf native forward-hit probe first: real digit prefix hits keep the
+  existing partial prefix path, while empty native prefix probes skip the
+  expensive miss and fall through to the existing partial title-index path.
+- 335 reconstructed package paths validated with package status 335 `ok`.
+- Warning diagnostics remained only the explicitly deferred HC common HTML
+  fallback.
+- `_DCT_GKBUSINE` `search_partial` `10` was 37 ms, down from 428 ms in the
+  previous full gate. It preserved the same first hit and
+  `ssed-partial-nonprefix-noskip-offset:1` continuation.
+- Digit-prefix controls stayed on the native partial prefix path:
+  `_DCT_GEN2011` partial `01` was 13 ms through
+  `ssed_partial_prefix_prepass`, and `_DCT_GEN2009` partial `0` was 122 ms
+  with a cursor probe `ok` at 57 ms.
+- Windows `_DCT_KENROWA` `search_partial` `しめ` was 20 ms, iOS `KENROWA`
+  `search_partial` `しめ` was 20 ms, and `_DCT_PROYAL53` `search_partial`
+  `ひゃ` was 37 ms.
 
 - `/tmp/lvcore-all-corpora-validation-20260613-partial-native-prefix-fast-prepass-v1.jsonl`
 - Produced after adding a bounded SSED partial-search native prefix prepass for
@@ -500,6 +519,7 @@ Important info/status classes from the latest gate:
 | `ssed_index_empty_physical_pages_skipped` | 1 | Sparse physical scan advances exercised by non-prefix title searches |
 | `ssed_index_empty_physical_scan_limited` | 0 | Not exercised in the latest gate after recent prefix fast paths |
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 0 | Replaced by bounded/probeable non-prefix partial continuations in the latest gate |
+| `ssed-partial-nonprefix-noskip-unverified-physical-offset:*` cursor `not_probed` | focused direct-only | New NCOMP4 partial `1計` continuation deferral; not exercised by the standard full-gate query set |
 | `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 211 | Native offset next-page proof intentionally deferred |
 | `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 38 | Title-label fallback next-page proof intentionally deferred |
 | `ssed-partial-prefix:*` cursor probed `ok` | 48 | Partial prefix continuation pages remain probeable |
@@ -516,26 +536,38 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- `_DCT_GKBUSINE`, `search_forward` query `10`: 441 ms in the latest full
+- `_DCT_PROYAL53`, `search_full_text` query `ひゃ`: 652 ms in the latest full
+  gate through `ssed_fulltext_sidecar_scan`, with cursor probe `ok` at 288 ms.
+  The previous full gate was 213 ms and a direct post-gate probe was about
+  0.15s, so treat this as validation/run variance unless it reproduces in
+  direct search.
+- `_DCT_GKBUSINE`, `search_forward` query `10`: 439 ms in the latest full
   gate and direct no-render search remains around 650 ms. The row includes HC
   fallback rendering in validation, but the direct search latency means this is
   still a separate simple-search/title-label candidate. Its `search_partial`
   and `search_full_text` `10` paths are resolved.
-- `Other/iOS/NANMED20/NANMED20`, `search_forward` query `0歳`: 422 ms in the
+- `Other/iOS/NANMED20/NANMED20`, `search_forward` query `0歳`: 426 ms in the
   full gate. Direct search probes were fast, so measure validation/render
   context before changing search code.
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 435 ms, improved from 545 ms
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 446 ms, improved from 545 ms
   but still behind intentionally deferred `title-nonprefix-unverified:*`
-  continuation proof.
-- `_DCT_EJJE100`, `search_full_text` query `co`: 382 ms through
+  continuation proof in the latest full baseline. Direct focused probing also
+  exposed a related `search_partial` `1計` first-page gap; that partial gap is
+  resolved by the focused NCOMP4 partial-prefix fallthrough/fast-miss fix
+  below.
+- `_DCT_EJJE100`, `search_full_text` query `co`: 484 ms through
   `ssed_fulltext_title_index_prepass`, with native body continuation deferred
   behind `body:0`.
-- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 372 ms through
+- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 369 ms through
   `ssed_fulltext_title_index_prepass`, with native body continuation deferred
   behind `body:0`.
 - `_DCT_GKBUSINE`, `search_partial` query `10`: resolved in the latest full
   gate at 37 ms, down from 428 ms, by using a one-leaf fast-hit probe before
   the expensive native partial-prefix probe.
+- `_DCT_NCOMP4`, direct `search_partial` query `1計`: resolved by focused
+  direct probing. It now returns `0-1計画法` in about 0.49s instead of exposing
+  an empty initial prefix page or spending about 2.6s proving a non-prefix
+  continuation.
 - Windows and iOS `KENROWA`, `search_partial` query `しめ`: resolved in the
   latest full gate at 20 ms, down from 1091 ms and 1232 ms, by running the
   bounded native prefix prepass before broad dense-sidecar contains search.
@@ -589,6 +621,85 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0ar. NCOMP4 partial `1計` empty prefix fallthrough (resolved, focused)
+
+Why this matters:
+
+- While investigating the latest full-gate `_DCT_NCOMP4` full-text `1計` row,
+  direct partial probing exposed a concrete search behavior gap:
+  `search_partial` query `1計 --limit 1` returned zero hits with
+  `ssed-partial-prefix:ssed-prefiltered-index:6:90`.
+- The same package and query has a visible non-prefix title hit,
+  `0-1計画法`, through the native title/index scan. Returning an empty first
+  page forced callers to chase a slow prefix cursor before seeing the match.
+- A behavior-only fallthrough fixed the empty page but still took about 2.6s,
+  because large non-prefix partial search proved the next continuation before
+  returning.
+
+Current status:
+
+- Initial partial-prefix pages with zero hits now fall through to the normal
+  partial/non-prefix path instead of surfacing an empty prefix cursor.
+- Large initial non-prefix partial pages now defer next-page proof behind
+  `ssed-partial-nonprefix-noskip-unverified-physical-offset:*`. The cursor
+  preserves both the physical start page and matched-row offset, so continuation
+  can resume without repeating the first hit.
+- Initial digit/no-ASCII-letter partial queries now run the existing one-leaf
+  native forward prefix-hit probe before the expensive fallback prefix scan,
+  even on packages too large for the bounded native prefix prepass. Empty
+  prefix misses go straight to non-prefix partial search; real prefix hits keep
+  the existing prefix path.
+- Validator cursor probing treats the new unverified physical-offset cursor as
+  intentionally not probed, with the same reason as other large partial
+  non-prefix continuations.
+
+Verification:
+
+- Focused tests passed:
+  - `cargo test -p lvcore search_ssed -- --nocapture`
+  - `cargo test -p lvcore-cli validate_search_cursor_probe_skips_expensive_fulltext_body_cursors -- --nocapture`
+  - `cargo check -p lvcore`
+  - `cargo build -p lvcore-cli`
+- Direct real-package probes:
+  - `_DCT_NCOMP4` `search_partial` `1計 --limit 1`: about 0.49s, hit
+    `0-1計画法`, cursor
+    `ssed-partial-nonprefix-noskip-unverified-physical-offset:8:121:1`.
+  - `_DCT_NCOMP4` `search_full_text` `1計 --limit 1`: about 0.49s, same hit,
+    existing `title-nonprefix-unverified:*` cursor.
+  - `_DCT_GKBUSINE` `search_partial` `10 --limit 1`: about 0.05s, still
+    through `ssed_partial_title_index_prepass`.
+  - `_DCT_GEN2011` `search_partial` `01 --limit 1`: about 0.04s, still
+    through `ssed_partial_prefix_prepass`.
+- Focused package validation passed:
+  - `/tmp/lvcore-focused-validate-ncomp4-partial-prefix-fast-miss-gate-v1.jsonl`
+  - Package status 5 `ok` across `_DCT_NCOMP4`, `_DCT_GKBUSINE`,
+    `_DCT_GEN2011`, `_DCT_GEN2009`, and `_DCT_KENROWA`.
+  - Control rows stayed stable: `_DCT_GKBUSINE` partial `10` is 36 ms with
+    cursor probe `ok`; `_DCT_GEN2011` partial `01` is 13 ms; `_DCT_GEN2009`
+    partial `0` is 121 ms with cursor probe `ok`; `_DCT_KENROWA` partial
+    `しめ` is 20 ms through the native prefix fast path.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-ncomp4-partial-prefix-fast-miss-gate-v1.jsonl`
+  - 335 package statuses `ok`.
+  - Warning diagnostics remain the explicitly deferred HC common HTML fallback
+    only, 949 occurrences.
+  - Standard validation controls stayed stable: `_DCT_GKBUSINE` partial `10`
+    is 37 ms, `_DCT_GEN2011` partial `01` is 13 ms, `_DCT_GEN2009` partial
+    `0` is 123 ms, and `_DCT_KENROWA` partial `しめ` is 20 ms.
+  - `_DCT_NCOMP4` full-text `1計` remains stable at 446 ms with the existing
+    deferred `title-nonprefix-unverified:*` continuation.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_NCOMP4`
+- Direct pre-fix probe:
+  - `search_partial` `1計 --limit 1`: about 1.05s, zero hits, cursor
+    `ssed-partial-prefix:ssed-prefiltered-index:6:90`.
+- Direct behavior-only fallthrough probe:
+  - `search_partial` `1計 --limit 1`: about 2.6s, hit `0-1計画法`, cursor
+    `ssed-partial-nonprefix-noskip-physical-offset:8:121:1`.
 
 ### 0aq. SSED digit/no-alpha partial prefix fast-hit probe (resolved, full gate)
 

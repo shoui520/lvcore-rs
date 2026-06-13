@@ -952,9 +952,7 @@ fn search_mode_exercise(
 }
 
 fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
-    if matches!(mode, SearchMode::Partial)
-        && cursor.starts_with("ssed-partial-nonprefix-unverified-index:")
-    {
+    if is_unverified_partial_nonprefix_cursor(mode, cursor) {
         return false;
     }
     if is_unverified_native_offset_cursor(mode, cursor) {
@@ -979,9 +977,7 @@ fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
 }
 
 fn skipped_search_cursor_probe_reason(mode: &SearchMode, cursor: &str) -> &'static str {
-    if matches!(mode, SearchMode::Partial)
-        && cursor.starts_with("ssed-partial-nonprefix-unverified-index:")
-    {
+    if is_unverified_partial_nonprefix_cursor(mode, cursor) {
         return "unverified partial non-prefix continuation may scan large SSED indexes";
     }
     if is_unverified_native_offset_cursor(mode, cursor) {
@@ -1000,6 +996,13 @@ fn skipped_search_cursor_probe_reason(mode: &SearchMode, cursor: &str) -> &'stat
         return "unverified LVED offset continuation may repeat broad SQLite searches";
     }
     "body full-text continuation cursors may rescan large SSED body windows"
+}
+
+fn is_unverified_partial_nonprefix_cursor(mode: &SearchMode, cursor: &str) -> bool {
+    matches!(mode, SearchMode::Partial)
+        && (cursor.starts_with("ssed-partial-nonprefix-unverified-index:")
+            || cursor.starts_with("ssed-partial-nonprefix-unverified-physical-offset:")
+            || cursor.starts_with("ssed-partial-nonprefix-noskip-unverified-physical-offset:"))
 }
 
 fn is_unverified_sidecar_title_cursor(mode: &SearchMode, cursor: &str) -> bool {
@@ -3045,6 +3048,17 @@ mod tests {
             &SearchMode::Partial,
             "ssed-partial-nonprefix-unverified-index:0:0"
         ));
+        assert!(!should_probe_search_cursor(
+            &SearchMode::Partial,
+            "ssed-partial-nonprefix-noskip-unverified-physical-offset:8:121:1"
+        ));
+        assert_eq!(
+            skipped_search_cursor_probe_reason(
+                &SearchMode::Partial,
+                "ssed-partial-nonprefix-noskip-unverified-physical-offset:8:121:1"
+            ),
+            "unverified partial non-prefix continuation may scan large SSED indexes"
+        );
         assert!(!should_probe_search_cursor(
             &SearchMode::Backward,
             "ssed-offset-unverified:2"
