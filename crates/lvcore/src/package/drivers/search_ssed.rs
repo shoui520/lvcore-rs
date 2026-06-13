@@ -19,6 +19,7 @@ const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_SIDECAR_TITLE_LOOKAHEAD_DEFER_MIN_BYTES: u64 = 64 * 1024 * 1024;
 const SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES: u64 = 8 * 1024 * 1024;
+const SSED_SIDECAR_TITLE_NATIVE_FIRST_PROBE_MIN_BYTES: u64 = 128 * 1024 * 1024;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 const SSED_TITLE_LABEL_UNVERIFIED_CURSOR_PREFIX: &str = "ssed-title-label-unverified:";
@@ -96,6 +97,14 @@ impl ReaderBookPackage {
         }
         let mut dense_sidecar_titles_preferred = None;
         let mut sidecar_title_prepass_exhausted_empty = false;
+        if self.ssed_initial_native_probe_should_precede_sidecar_title_prepass(query, &needle)? {
+            let mut native_query = query.clone();
+            native_query.cursor = Some("0".to_owned());
+            let page = self.search_ssed_simple_indexes(&native_query)?;
+            if !page.hits.is_empty() {
+                return Ok(page);
+            }
+        }
         if query.cursor.is_none()
             && matches!(
                 query.mode,
@@ -375,6 +384,30 @@ impl ReaderBookPackage {
                 .extend(pending_empty_title_label_fallback_diagnostics);
         }
         Ok(page)
+    }
+
+    fn ssed_initial_native_probe_should_precede_sidecar_title_prepass(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+    ) -> Result<bool> {
+        if query.cursor.is_some()
+            || !matches!(query.mode, SearchMode::Exact | SearchMode::Forward)
+            || !ssed_sidecar_title_authoritative_prepass_is_bounded(&query.query)
+            || !ssed_sidecar_title_query_is_kana_only(&query.query)
+            || query.query.trim().chars().count() < 2
+            || ssed_index_search_key_candidates(needle).is_empty()
+        {
+            return Ok(false);
+        }
+        Ok(self.ssed_sidecar_body_resolvers()?.iter().any(|resolver| {
+            resolver.title_column.is_some()
+                && std::fs::metadata(&resolver.path)
+                    .map(|metadata| {
+                        metadata.len() >= SSED_SIDECAR_TITLE_NATIVE_FIRST_PROBE_MIN_BYTES
+                    })
+                    .unwrap_or(false)
+        }))
     }
 
     fn ssed_native_initial_offset_overfetch_should_defer(
@@ -4409,6 +4442,17 @@ fn ssed_sidecar_title_query_contains_native_circle_marker(query: &str) -> bool {
     query.trim().chars().any(|ch| matches!(ch, '◯' | '○'))
 }
 
+fn ssed_sidecar_title_query_is_kana_only(query: &str) -> bool {
+    let mut saw_kana = false;
+    for ch in query.trim().chars() {
+        if !matches!(ch as u32, 0x3040..=0x309f | 0x30a0..=0x30ff | 0x31f0..=0x31ff) {
+            return false;
+        }
+        saw_kana = true;
+    }
+    saw_kana
+}
+
 fn ssed_sidecar_title_auto_append_is_bounded(query: &str) -> bool {
     let query = query.trim();
     !query.is_empty()
@@ -4468,7 +4512,7 @@ mod tests {
         ssed_fulltext_first_byte_candidate_offset, ssed_fulltext_row_driven_body_search_allowed,
         ssed_fulltext_sidecar_title_prepass_is_bounded, ssed_partial_prefix_prepass_is_bounded,
         ssed_sidecar_title_authoritative_prepass_is_bounded,
-        ssed_sidecar_title_auto_append_is_bounded,
+        ssed_sidecar_title_auto_append_is_bounded, ssed_sidecar_title_query_is_kana_only,
     };
 
     #[test]
@@ -4489,6 +4533,16 @@ mod tests {
         assert!(ssed_sidecar_title_authoritative_prepass_is_bounded("0歳"));
         assert!(!ssed_sidecar_title_authoritative_prepass_is_bounded("◯に"));
         assert!(!ssed_sidecar_title_authoritative_prepass_is_bounded("○に"));
+    }
+
+    #[test]
+    fn sidecar_title_kana_only_detects_plain_kana_queries() {
+        assert!(ssed_sidecar_title_query_is_kana_only("しめ"));
+        assert!(ssed_sidecar_title_query_is_kana_only("スリー"));
+        assert!(ssed_sidecar_title_query_is_kana_only(" あぎと "));
+        assert!(!ssed_sidecar_title_query_is_kana_only("0歳"));
+        assert!(!ssed_sidecar_title_query_is_kana_only("あい【愛】"));
+        assert!(!ssed_sidecar_title_query_is_kana_only(""));
     }
 
     #[test]

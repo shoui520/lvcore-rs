@@ -4,6 +4,33 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-native-first-kana-v1.jsonl`
+- Produced after making large SSED sidecar packages try native exact/forward
+  title search first for pure-kana no-cursor queries of at least two
+  characters, avoiding empty sidecar title prepasses when native index hits are
+  already available.
+- 335 reconstructed package paths validated with package status 335 `ok`.
+  The original 336-row `/tmp` baseline JSONL was no longer present, so this
+  gate used the 333 currently discovered documented-root package paths plus the
+  two explicit `Other/Android` package rows.
+- Reconstructed path-list file:
+  `/tmp/lvcore-full-paths-20260613-native-first-kana.txt`
+- Reconstructed path-list hash:
+  `b3c7c347c4587d6e3b29db8767748f2ebd9402b17f712dd5ae980d45cc5a601a`.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+- Windows `_DCT_KENROWA` exact `しめ` is 58 ms and forward `しめ` is 29 ms.
+  iOS `KENROWA` exact is 56 ms and forward is 30 ms.
+- Windows `_DCT_JSSAURU2` exact `あぎと` is 32 ms and forward `あぎ` is 34 ms.
+  iOS `JSSAURU2` exact is 36 ms and forward is 37 ms.
+- Sidecar-first controls remain sidecar-backed: Windows `_DCT_DAIJIRN4`
+  forward `あ` is 18 ms with `ssed_sidecar_title_search`, Windows
+  `_DCT_IWKOKUG8` forward `さん` is 34 ms with `ssed_sidecar_title_search`,
+  iOS `KQJCOLLO` forward `あい` is 6 ms with `ssed_sidecar_title_search`, and
+  Windows/iOS `NANMED20` forward `0歳` remains sidecar-backed.
+
+Previous full-corpus gates:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-circle-marker-row-prefetch-v1.jsonl`
 - Produced after two scoped SSED provider changes: keeping KOJIEN7 native
   circle-marker title queries on the native index path, and skipping redundant
@@ -20,8 +47,6 @@ Latest full-corpus gate:
 - Initial SSED full-text row prefetch no longer appears in the gate.
   `_DCT_NMEDEJ12` `search_full_text` `01` is now a pure direct HONMON scan at
   621 ms, `_DCT_GEN2005` `曙光` is 101 ms, and `_DCT_KENE7J5` `は殺` is 276 ms.
-
-Previous full-corpus gates:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-hkkigak6-partial-title-prepass-v1.jsonl`
 - Produced after making initial bounded SSED partial search avoid the slow
@@ -399,6 +424,11 @@ Latest concrete non-HC performance candidates from the full gate:
   changes.
 - `_DCT_NCOMP4`, `search_full_text` query `1計`: 593 ms. It remains behind
   intentionally deferred `title-nonprefix-unverified:*` continuation proof.
+- Windows `_DCT_KENROWA` and iOS `KENROWA`, `search_backward` query `しめ`,
+  remain a concrete non-HC SSED simple-search gap at about 493 ms and 449 ms in
+  the latest full gate. Exact/forward `KENROWA` and exact/forward `JSSAURU2`
+  were resolved in 0am; backward needs separate handling because
+  `JSSAURU2` backward still has a useful sidecar-first result set.
 - Windows `_DCT_KOJIEN7` and iOS `KOJIEN7`, exact query
   `◯に滅せずんば炎炎を若何いかんせん` and forward query `◯に`: resolved in
   0ak and verified in the latest full-corpus gate.
@@ -425,6 +455,67 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0am. SSED large pure-kana exact/forward native-first probe (resolved, full gate)
+
+Why this matters:
+
+- The latest full-corpus gate exposed a clean non-HC simple-search latency
+  cluster in large SSED sidecar packages:
+  - Windows `_DCT_KENROWA` exact `しめ`: 427 ms.
+  - Windows `_DCT_KENROWA` forward `しめ`: 415 ms.
+  - iOS `KENROWA` exact `しめ`: 454 ms.
+  - iOS `KENROWA` forward `しめ`: 423 ms.
+  - Windows `_DCT_JSSAURU2` exact `あぎと`: 432 ms.
+  - Windows `_DCT_JSSAURU2` forward `あぎ`: 431 ms.
+  - iOS `JSSAURU2` exact `あぎと`: 462 ms.
+  - iOS `JSSAURU2` forward `あぎ`: 446 ms.
+- Direct `--cursor 0` probes showed the native title/index path was already
+  fast. The avoidable work was the initial no-cursor sidecar-title prepass
+  scanning a large sidecar table and finding no exact/forward title result.
+- A blanket kana exclusion was rejected because single-kana and small sidecar
+  kana searches such as `_DCT_DAIJIRN4` `あ`, `_DCT_IWKOKUG8` `さん`,
+  `KQJCOLLO` `あい`, and `KQCOLEXP` `ああ` legitimately use sidecar titles.
+
+Current status:
+
+- For no-cursor SSED exact/forward searches only, large sidecar-title packages
+  now try the native path first when the query is pure kana and at least two
+  characters long. If that native probe finds hits, the page is returned
+  immediately; if native finds nothing, the existing sidecar/title fallback
+  behavior remains available.
+- Backward search is intentionally excluded. `JSSAURU2` backward `ぎと` still
+  has a useful sidecar-first result set, so KENROWA backward should be handled
+  as a separate gap rather than by switching all backward kana searches to
+  native-first.
+- Single-kana sidecar-title searches are also excluded to preserve
+  `_DCT_DAIJIRN4` and similar sidecar-backed rows.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo build -p lvcore-cli`
+  - `cargo test -p lvcore search_ssed -- --nocapture`
+  - `cargo test -p lvcore sidecar_title -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-native-first-kana-v1.jsonl`
+  - Package status: 10 `ok`.
+  - Windows `_DCT_KENROWA` exact `しめ`: 55 ms, forward `しめ`: 29 ms.
+  - iOS `KENROWA` exact `しめ`: 55 ms, forward `しめ`: 32 ms.
+  - Windows `_DCT_JSSAURU2` exact `あぎと`: 35 ms, forward `あぎ`: 36 ms.
+  - iOS `JSSAURU2` exact `あぎと`: 34 ms, forward `あぎ`: 37 ms.
+  - Sidecar controls stayed sidecar-backed for `_DCT_DAIJIRN4` `あ`,
+    `_DCT_IWKOKUG8` `さん`, iOS `KQJCOLLO` `あい`, iOS `KQCOLEXP` `ああ`,
+    and Windows/iOS `NANMED20` `0歳`.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-native-first-kana-v1.jsonl`
+  - 335 reconstructed package paths validated with package status 335 `ok`.
+  - Reconstructed path-list hash:
+    `b3c7c347c4587d6e3b29db8767748f2ebd9402b17f712dd5ae980d45cc5a601a`.
+  - Warning diagnostics remained only the explicitly deferred HC common HTML
+    fallback.
+  - Windows `_DCT_KENROWA` exact `しめ`: 58 ms, forward `しめ`: 29 ms.
+  - iOS `KENROWA` exact `しめ`: 56 ms, forward `しめ`: 30 ms.
+  - Windows `_DCT_JSSAURU2` exact `あぎと`: 32 ms, forward `あぎ`: 34 ms.
+  - iOS `JSSAURU2` exact `あぎと`: 36 ms, forward `あぎ`: 37 ms.
 
 ### 0al. SSED full-text direct body prefetch gate (resolved, full gate)
 
