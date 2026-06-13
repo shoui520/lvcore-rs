@@ -4,6 +4,17 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-native-offset-cursor.jsonl`
+- Produced after changing native SSED exact/forward/backward numeric offset
+  continuation pages to defer expensive one-extra-hit proof behind
+  `ssed-offset-unverified:*` cursors.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260612-generic-html-resource-byte-cap.jsonl`
 - Produced after capping deep-validation alternate `GenericHtml` probes by
   known native resource byte totals and streaming eligible data-URL output into
@@ -12,8 +23,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260612-ssed-fulltext-row-prefetch-cap.jsonl`
 - Produced after capping first-page row-driven SSED full-text body prefetch
@@ -126,6 +135,7 @@ Important info/status classes from the latest gate:
 | `ssed_fulltext_body_direct_scan` | 4 | Direct native HONMON fallback exercised |
 | `ssed_index_empty_physical_pages_skipped` | 0 | Closed by sparse partial-search cursor fix |
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 51 | Large-index partial-search continuation intentionally deferred |
+| `ssed-offset-unverified:*` continuation cursor | 225 | Native offset next-page proof intentionally deferred |
 | `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
 | `gaiji_formatting_helper_candidate` | 36 | Observed OUKOKU11 `B947`/`B948` helper codes |
 | `ssed_navigation_empty_sentinel` | 19 | Expected sentinel classification |
@@ -133,6 +143,61 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0m. SSED native offset continuation overfetch latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate exposed `_DCT_NMEDEJ12` backward search for
+  `規定` as a concrete non-HC search latency row.
+- The first page was fast, but deep validation and a real reader following
+  cursor `1` spent about 2.5-2.6s proving whether a third native match existed
+  after returning the second hit.
+- This was a user-visible continuation issue, not only validation overhead:
+  `lvcore search ... --mode backward --limit 1 --cursor 1` reproduced the slow
+  second page directly.
+
+Current status:
+
+- Native SSED exact/forward/backward numeric offset continuation pages no longer
+  overfetch one extra row to prove further pagination.
+- If such a continuation page fills, it returns an
+  `ssed-offset-unverified:*` cursor for the next page, deferring the expensive
+  proof until the user actually asks for another page.
+- The validator treats `ssed-offset-unverified:*` as an unverified native
+  continuation and does not speculatively probe it.
+- Focused tests passed:
+  - `cargo test -p lvcore ssed_native_offset_continuation_defers_overfetch_after_first_page -- --nocapture`
+  - `cargo test -p lvcore-cli validate_search_cursor_probe_skips_expensive_fulltext_body_cursors -- --nocapture`
+  - `cargo fmt --check`
+- Direct real-package probes:
+  - First page stayed about 0.10s and returns cursor `1`.
+  - Cursor page `--cursor 1` dropped from about 2.6s to about 0.10s and returns
+    `ssed-offset-unverified:2`.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-nmedej12-native-offset-cursor.jsonl`
+  - `_DCT_NMEDEJ12` package status remained `ok`.
+  - The `search_backward` row dropped from 2510 ms with a 2493 ms cursor probe
+    to 39 ms with a 19 ms cursor probe.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-native-offset-cursor.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - Path set matched the previous baseline.
+  - Warning diagnostics remained only the explicitly deferred HC common HTML
+    fallback.
+  - The `_DCT_NMEDEJ12` `search_backward` row was 34 ms with a 17 ms cursor
+    probe.
+  - 225 cursor-probe continuations now expose `ssed-offset-unverified:*`
+    cursors instead of proving the next page speculatively.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_NMEDEJ12`
+- Observed row:
+  - `kind`: `search_backward`
+  - query: `規定`
+  - first cursor: `1`
 
 ### 0l. Large GenericHtml resource-byte validation latency (resolved)
 

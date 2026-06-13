@@ -17,6 +17,7 @@ const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 const SSED_AUX_LABEL_CURSOR_PREFIX: &str = "ssed-aux-label:";
+const SSED_UNVERIFIED_OFFSET_CURSOR_PREFIX: &str = "ssed-offset-unverified:";
 
 impl ReaderBookPackage {
     pub(super) fn search_ssed_simple_indexes(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -140,12 +141,25 @@ impl ReaderBookPackage {
         } else {
             None
         };
-        let offset = if partial_scan_cursor.is_some() || prefiltered_scan_cursor.is_some() {
-            0
+        let uses_native_offset_cursor =
+            partial_scan_cursor.is_none() && prefiltered_scan_cursor.is_none();
+        let offset = if uses_native_offset_cursor {
+            decode_ssed_unverified_offset_cursor(query.cursor.as_deref())
+                .unwrap_or_else(|| decode_offset_cursor(query.cursor.as_deref()))
         } else {
-            decode_offset_cursor(query.cursor.as_deref())
+            0
         };
-        let page_limit = query.limit.saturating_add(1);
+        let defer_native_offset_overfetch = uses_native_offset_cursor
+            && query.cursor.is_some()
+            && matches!(
+                query.mode,
+                SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+            );
+        let page_limit = if defer_native_offset_overfetch {
+            query.limit
+        } else {
+            query.limit.saturating_add(1)
+        };
         let gaiji_policy = query.label_gaiji_policy();
         let mut pending_empty_title_label_fallback_diagnostics = Vec::new();
         let mut collector = SsedIndexSearchCollector::new(
@@ -283,6 +297,14 @@ impl ReaderBookPackage {
             }
         }
         let mut page = collector.into_search_page(query.limit);
+        if defer_native_offset_overfetch
+            && page.next_cursor.is_none()
+            && page.hits.len() == query.limit
+        {
+            page.next_cursor = Some(encode_ssed_unverified_offset_cursor(
+                offset.saturating_add(query.limit),
+            ));
+        }
         if page.next_cursor.is_none() {
             page.next_cursor = physical_next_cursor;
         }
@@ -3409,6 +3431,17 @@ fn decode_ssed_aux_label_cursor(cursor: Option<&str>) -> Option<usize> {
 
 fn encode_ssed_aux_label_cursor(offset: usize) -> String {
     format!("{SSED_AUX_LABEL_CURSOR_PREFIX}{offset}")
+}
+
+fn decode_ssed_unverified_offset_cursor(cursor: Option<&str>) -> Option<usize> {
+    cursor?
+        .strip_prefix(SSED_UNVERIFIED_OFFSET_CURSOR_PREFIX)?
+        .parse()
+        .ok()
+}
+
+fn encode_ssed_unverified_offset_cursor(offset: usize) -> String {
+    format!("{SSED_UNVERIFIED_OFFSET_CURSOR_PREFIX}{offset}")
 }
 
 fn ssed_title_label_fallback_is_reasonable(mode: &SearchMode, needle: &str) -> bool {

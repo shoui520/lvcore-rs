@@ -957,6 +957,13 @@ fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
     {
         return false;
     }
+    if matches!(
+        mode,
+        SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+    ) && cursor.starts_with("ssed-offset-unverified:")
+    {
+        return false;
+    }
     !(matches!(mode, SearchMode::FullText)
         && (cursor.starts_with("body:")
             || cursor.starts_with("body-offset:")
@@ -968,6 +975,13 @@ fn skipped_search_cursor_probe_reason(mode: &SearchMode, cursor: &str) -> &'stat
         && cursor.starts_with("ssed-partial-nonprefix-unverified-index:")
     {
         return "unverified partial non-prefix continuation may scan large SSED indexes";
+    }
+    if matches!(
+        mode,
+        SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+    ) && cursor.starts_with("ssed-offset-unverified:")
+    {
+        return "unverified native offset continuation may scan large SSED indexes";
     }
     "body full-text continuation cursors may rescan large SSED body windows"
 }
@@ -2968,6 +2982,14 @@ mod tests {
             &SearchMode::Partial,
             "ssed-partial-nonprefix-unverified-index:0:0"
         ));
+        assert!(!should_probe_search_cursor(
+            &SearchMode::Backward,
+            "ssed-offset-unverified:2"
+        ));
+        assert_eq!(
+            skipped_search_cursor_probe_reason(&SearchMode::Backward, "ssed-offset-unverified:2"),
+            "unverified native offset continuation may scan large SSED indexes"
+        );
     }
 
     #[test]
