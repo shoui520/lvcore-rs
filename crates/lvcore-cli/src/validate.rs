@@ -1277,6 +1277,13 @@ fn render_mode_contract_probe(
     book_id: &BookId,
     native_view: &ResolvedTargetView,
 ) -> serde_json::Value {
+    if let Some(reason) = render_mode_contract_skip_reason(native_view.kind) {
+        return json!({
+            "generic_html": skipped_render_mode_probe(native_view, RenderMode::GenericHtml, reason),
+            "basic_text": skipped_render_mode_probe(native_view, RenderMode::BasicText, reason),
+        });
+    }
+
     let generic_html = if let Some(reason) = generic_html_probe_skip_reason(
         native_view
             .display_html
@@ -1294,6 +1301,15 @@ fn render_mode_contract_probe(
         "generic_html": generic_html,
         "basic_text": render_mode_probe(library, book_id, native_view, RenderMode::BasicText),
     })
+}
+
+fn render_mode_contract_skip_reason(kind: ResolvedTargetKind) -> Option<&'static str> {
+    match kind {
+        ResolvedTargetKind::NavigationSurface
+        | ResolvedTargetKind::PanelSurface
+        | ResolvedTargetKind::Deferred => Some("mode_invariant_surface"),
+        _ => None,
+    }
 }
 
 fn generic_html_probe_skip_reason(
@@ -3242,6 +3258,29 @@ mod tests {
         assert_eq!(
             generic_html_probe_skip_reason(4096, 4, VALIDATE_GENERIC_HTML_RESOURCE_BYTES_LIMIT + 1),
             Some("resource_bytes_too_large")
+        );
+    }
+
+    #[test]
+    fn validate_render_mode_probe_skips_mode_invariant_surface_views() {
+        for kind in [
+            ResolvedTargetKind::NavigationSurface,
+            ResolvedTargetKind::PanelSurface,
+            ResolvedTargetKind::Deferred,
+        ] {
+            assert_eq!(
+                render_mode_contract_skip_reason(kind),
+                Some("mode_invariant_surface")
+            );
+        }
+
+        assert_eq!(
+            render_mode_contract_skip_reason(ResolvedTargetKind::EntryBody),
+            None
+        );
+        assert_eq!(
+            render_mode_contract_skip_reason(ResolvedTargetKind::InfoPage),
+            None
         );
     }
 

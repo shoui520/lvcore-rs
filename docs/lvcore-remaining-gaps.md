@@ -365,6 +365,10 @@ Latest concrete non-HC performance candidates from the full gate:
   changes.
 - `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 502 ms.
   Directly inspect before treating it as a code gap.
+- `Other/iOS/RDRSP2/RDRSP2` `ios-plist:indexSearch.plist` and
+  `SINMEI7` menu/plist panel rows were inspected after this gate and resolved
+  as validation overwork in 0ai. The current full-corpus baseline still shows
+  the pre-0ai timings until the next wider gate.
 - `Other/iOS/IBIO5/IBIO5`, title/full-text query `亜-`: resolved in 0ad and
   verified by the latest full gate.
 
@@ -382,6 +386,43 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0ai. Mode-invariant surface render-mode validation overwork (resolved, focused)
+
+Why this matters:
+
+- The latest full-corpus gate exposed several non-HC `surface_first_target`
+  rows where the slow work was validation, not package behavior. A concrete
+  case was `Other/iOS/RDRSP2/RDRSP2` `ios-plist:indexSearch.plist`: 2073 ms,
+  no resource-scan cost, no link-scan cost, and no HC diagnostics.
+- Direct probing showed the surface itself opened quickly. The repeated work
+  came from validating GenericHtml and BasicText render modes for surface views
+  such as `panel_surface` and `navigation_surface`; those views do not produce
+  entry-body HTML/text under render-mode changes.
+
+Current status:
+
+- Deep validation now skips render-mode contract probes for mode-invariant
+  surface views: `navigation_surface`, `panel_surface`, and `deferred`.
+  Entry-body, info-page, hanrei, law, and search-result views still run the
+  GenericHtml/BasicText contract probes.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore-cli validate_render_mode_probe_skips_mode_invariant_surface_views -- --nocapture`
+  - `cargo test -p lvcore-cli validate_deep_exercises -- --nocapture`
+  - `cargo test -p lvcore-cli validate -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-mode-invariant-surface-v1.jsonl`
+  - 3 packages validated with package status 3 `ok`: `RDRSP2`, iOS
+    `SINMEI7`, and Windows SSED `_DCT_SINMEI7`.
+  - `RDRSP2` `ios-plist:indexSearch.plist` dropped from 2073 ms in the latest
+    full gate to 1068 ms focused, with render modes explicitly skipped as
+    `mode_invariant_surface`.
+  - iOS `SINMEI7` `menu` and `ios-plist:dataCONV.plist` now record the same
+    explicit skip for `navigation_surface` render-mode probes.
+- No full-corpus gate has been run for this validator-only cleanup; the next
+  wider gate should refresh these timings.
 
 ### 0ah. SSED title-prepass filled-page stop (resolved, full gate)
 
