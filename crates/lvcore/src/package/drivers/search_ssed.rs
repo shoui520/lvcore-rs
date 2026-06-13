@@ -154,6 +154,9 @@ impl ReaderBookPackage {
                 if let Some(page) = self.search_ssed_partial_prefix_page(query, &needle, None)? {
                     return Ok(page);
                 }
+                if let Some(page) = self.search_ssed_initial_partial_title_page(query, &needle)? {
+                    return Ok(page);
+                }
                 return self.search_ssed_partial_nonprefix_page(query, &needle, None, false);
             } else if query.cursor.is_none() {
                 return self.search_ssed_partial_nonprefix_page(query, &needle, None, false);
@@ -526,6 +529,7 @@ impl ReaderBookPackage {
     ) -> Result<Option<SearchPage>> {
         let mut prefix_query = query.clone();
         prefix_query.mode = SearchMode::Forward;
+        let cursor_is_none = cursor.is_none();
         prefix_query.cursor = cursor;
         if prefix_query.cursor.is_none() && sidecar_sql_prefilter_is_authoritative(&query.query) {
             let mut page = self.search_ssed_sidecar_title_page(
@@ -540,6 +544,15 @@ impl ReaderBookPackage {
                     .map(encode_ssed_partial_prefix_cursor);
                 return Ok(Some(ssed_partial_prefix_page(page)));
             }
+        }
+        let use_bounded_native_prefix_probe = cursor_is_none
+            && !ssed_index_page_prefilter_candidates(needle).is_empty()
+            && self.ssed_can_scan_all_title_indexes();
+        if use_bounded_native_prefix_probe {
+            if let Some(page) = self.search_ssed_partial_native_prefix_page(query, needle)? {
+                return Ok(Some(ssed_partial_prefix_page(page)));
+            }
+            return Ok(None);
         }
         let mut page = self.search_ssed_simple_indexes(&prefix_query)?;
         if page.hits.is_empty() && page.next_cursor.is_none() {
@@ -576,6 +589,40 @@ impl ReaderBookPackage {
             }
         }
         Ok(Some(ssed_partial_prefix_page(page)))
+    }
+
+    fn search_ssed_partial_native_prefix_page(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+    ) -> Result<Option<SearchPage>> {
+        let mut collector = SsedIndexSearchCollector::new(
+            self,
+            &SearchMode::Forward,
+            needle,
+            0,
+            query.limit.saturating_add(1),
+            query.label_gaiji_policy(),
+        )
+        .with_display_label_matching();
+        let candidate_has_hits = Cell::new(false);
+        let scan_result = self.scan_ssed_simple_leaf_index_rows_near_key(
+            &SearchMode::Forward,
+            needle,
+            |row| {
+                let keep_scanning = collector.push_row(row)?;
+                if collector.has_hits() {
+                    candidate_has_hits.set(true);
+                }
+                Ok(keep_scanning)
+            },
+            || candidate_has_hits.get(),
+        )?;
+        collector.extend_diagnostics(scan_result.diagnostics);
+        if !collector.has_hits() {
+            return Ok(None);
+        }
+        Ok(Some(collector.into_search_page(query.limit)))
     }
 
     fn ssed_deferred_partial_nonprefix_cursor_if_visible(
@@ -620,6 +667,47 @@ impl ReaderBookPackage {
             }
         }
         false
+    }
+
+    fn search_ssed_initial_partial_title_page(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+    ) -> Result<Option<SearchPage>> {
+        if query.limit != 1
+            || ssed_index_page_prefilter_candidates(needle).is_empty()
+            || !self.ssed_can_scan_all_title_indexes()
+        {
+            return Ok(None);
+        }
+        let mut collector = SsedIndexSearchCollector::new(
+            self,
+            &SearchMode::Partial,
+            needle,
+            0,
+            query.limit.saturating_add(1),
+            query.label_gaiji_policy(),
+        )
+        .with_display_label_matching();
+        let scan_diagnostics =
+            self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
+        collector.extend_diagnostics(scan_diagnostics);
+        if !collector.has_hits() {
+            return Ok(None);
+        }
+        let mut page = collector.into_search_page(query.limit);
+        page.next_cursor = page
+            .next_cursor
+            .take()
+            .map(|cursor| encode_ssed_partial_nonprefix_offset_cursor(cursor, false));
+        page.diagnostics.insert(
+            0,
+            Diagnostic::info(
+                "ssed_partial_title_index_prepass",
+                "SSED partial search returned bounded native title/index matches before scanning sparse non-prefix pages",
+            ),
+        );
+        Ok(Some(page))
     }
 
     fn search_ssed_partial_nonprefix_page(
@@ -1458,7 +1546,7 @@ impl ReaderBookPackage {
         )
     }
 
-    fn ssed_fulltext_can_scan_all_title_indexes(&self) -> bool {
+    fn ssed_can_scan_all_title_indexes(&self) -> bool {
         let Some(catalog) = &self.ssed_catalog else {
             return false;
         };
@@ -3078,7 +3166,7 @@ impl ReaderBookPackage {
         needle: &str,
         page_limit: usize,
     ) -> Result<Option<SearchPage>> {
-        let bounded_page_limit = if self.ssed_fulltext_can_scan_all_title_indexes() {
+        let bounded_page_limit = if self.ssed_can_scan_all_title_indexes() {
             page_limit
         } else {
             query.limit
@@ -3092,10 +3180,10 @@ impl ReaderBookPackage {
             query.label_gaiji_policy(),
         )
         .with_display_label_matching();
-        if !self.ssed_fulltext_can_scan_all_title_indexes() {
+        if !self.ssed_can_scan_all_title_indexes() {
             collector = collector.with_pending_page_limit_stop();
         }
-        let partial_scan = if self.ssed_fulltext_can_scan_all_title_indexes() {
+        let partial_scan = if self.ssed_can_scan_all_title_indexes() {
             let scan_diagnostics =
                 self.scan_ssed_partial_index_rows(needle, |row| collector.push_row(row))?;
             collector.extend_diagnostics(scan_diagnostics);

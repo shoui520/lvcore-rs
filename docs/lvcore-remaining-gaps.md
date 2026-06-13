@@ -4,6 +4,25 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-hkkigak6-partial-title-prepass-v1.jsonl`
+- Produced after making initial bounded SSED partial search avoid the slow
+  prefix fallback when the fast native prefix probe is empty, then satisfy the
+  first page through the bounded native partial-title scan. This gate also
+  includes the mode-invariant surface render-mode validation skip from 0ai.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered, including the
+  two `Other/Android` rows.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+- `Other/iOS/HKKIGAK6/HKKIGAK6` `search_partial` `体の` dropped from 502 ms in
+  the previous full gate to 293 ms; its cursor probe is `ok` at 39 ms and
+  resumes as `ssed-partial-nonprefix-noskip-physical-offset:5:79:2`.
+- `Other/iOS/RDRSP2/RDRSP2` `ios-plist:indexSearch.plist` now records
+  `mode_invariant_surface` render-mode skips in the full gate and is 1001 ms,
+  down from 2073 ms in the previous full gate.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-title-prepass-filled-page-stop-v1.jsonl`
 - Produced after making the initial SSED full-text title/index prepass stop at
   the requested page limit instead of scanning one extra title hit to prove
@@ -17,8 +36,6 @@ Latest full-corpus gate:
 - `_DCT_KQDENTAL` `search_full_text` `01` dropped from 681 ms to 579 ms,
   `_DCT_YHOUGO3` `search_full_text` `一ス` dropped from 660 ms to 613 ms, and
   `_DCT_HKDKSR10` `search_full_text` `FU` dropped from 596 ms to 427 ms.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-direct-body-filled-page-cursor-v2.jsonl`
 - Produced after making SSED direct HONMON full-text scans continue through all
@@ -363,12 +380,12 @@ Latest concrete non-HC performance candidates from the full gate:
   filled-page title-prepass overfetch is resolved in 0ah; remaining time should
   be inspected as direct title/index scan or package-open cost before more code
   changes.
-- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 502 ms.
-  Directly inspect before treating it as a code gap.
+- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: resolved in
+  0aj and verified in the latest full-corpus gate at 293 ms.
 - `Other/iOS/RDRSP2/RDRSP2` `ios-plist:indexSearch.plist` and
-  `SINMEI7` menu/plist panel rows were inspected after this gate and resolved
-  as validation overwork in 0ai. The current full-corpus baseline still shows
-  the pre-0ai timings until the next wider gate.
+  `SINMEI7` menu/plist panel rows were inspected after the previous gate. The
+  mode-invariant render-mode validation overwork is resolved in 0ai and is now
+  reflected in the latest full-corpus gate.
 - `Other/iOS/IBIO5/IBIO5`, title/full-text query `亜-`: resolved in 0ad and
   verified by the latest full gate.
 
@@ -386,6 +403,51 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0aj. HKKIGAK6 bounded partial-title first page (resolved, focused)
+
+Why this matters:
+
+- The latest full-corpus gate exposed `Other/iOS/HKKIGAK6/HKKIGAK6`
+  `search_partial` query `体の` at 502 ms, with no HC involvement and no
+  actionable warning diagnostics.
+- Direct probing showed the first native partial hit was correct, but partial
+  search spent avoidable time proving that the prefix phase was empty before
+  scanning the bounded native partial-title index. Full-text already reached
+  the same title through the bounded title-index prepass.
+- The iOS SQLite sidecars do not preserve the native first result for this
+  query class, so this remains a native SSED title/index path rather than a
+  SQLite shortcut.
+
+Current status:
+
+- Initial bounded partial searches with byte prefilter candidates now run a
+  fast native prefix probe for packages whose title indexes are small enough
+  for the existing bounded all-title scan. If the prefix probe is empty, LVCore
+  proceeds directly to the bounded native partial-title page instead of running
+  the slower prefix fallback.
+- The first page returns the same native hit, `ＨＬＡＢ27と体の病気`, and now uses
+  `ssed-partial-nonprefix-noskip-offset:1`; the cursor probe then resumes into
+  the existing physical sparse continuation path.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo build -p lvcore-cli`
+  - `cargo test -p lvcore search_ssed -- --nocapture`
+  - `cargo test -p lvcore partial_nonprefix_cursors_preserve_prefix_skip_state -- --nocapture`
+  - `cargo test -p lvcore fulltext_title_cursors_preserve_physical_offset -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-hkkigak6-partial-title-prepass-v1.jsonl`
+  - Package status: `ok`, elapsed 13164 ms.
+  - `search_partial` `体の`: 276 ms, down from 502 ms in the latest full gate.
+  - Cursor probe: `ssed-partial-nonprefix-noskip-offset:1` returned one hit in
+    36 ms and continued as
+    `ssed-partial-nonprefix-noskip-physical-offset:5:79:2`.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-hkkigak6-partial-title-prepass-v1.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package path set is fully covered.
+  - Warning diagnostics remain only the explicitly deferred HC common HTML
+    fallback.
 
 ### 0ai. Mode-invariant surface render-mode validation overwork (resolved, focused)
 
@@ -421,8 +483,10 @@ Current status:
     `mode_invariant_surface`.
   - iOS `SINMEI7` `menu` and `ios-plist:dataCONV.plist` now record the same
     explicit skip for `navigation_surface` render-mode probes.
-- No full-corpus gate has been run for this validator-only cleanup; the next
-  wider gate should refresh these timings.
+- Full-corpus regression gate
+  `/tmp/lvcore-all-corpora-validation-20260613-hkkigak6-partial-title-prepass-v1.jsonl`
+  includes this cleanup. `RDRSP2` `ios-plist:indexSearch.plist` is now 1001 ms
+  with render modes explicitly skipped as `mode_invariant_surface`.
 
 ### 0ah. SSED title-prepass filled-page stop (resolved, full gate)
 
