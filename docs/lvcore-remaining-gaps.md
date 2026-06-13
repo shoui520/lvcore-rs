@@ -4,6 +4,20 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-ssed-jis-prefilter-memmem-v2.jsonl`
+- Produced after making the SSED separator-aware JIS byte prefilter seek to
+  occurrences of the first JIS pair before verifying separator-skipped pair
+  sequences. This keeps native search semantics but avoids testing every byte
+  offset in sparse index/body prefilter windows.
+- The artifact combines the 334-row all-root gate with focused validation of
+  the two baseline `Other/Android` package rows omitted by that root list.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-ios-table-list-cross-book-shortcut-v1.jsonl`
 - Produced after making iOS SSED `tableList.plist` cross-book rows skip
   repeated local loose-address misses when a sibling owner is known, while
@@ -12,8 +26,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-unverified-nonprefix-title-v1.jsonl`
 - Produced after deferring large SSED full-text non-prefix title continuation
@@ -240,7 +252,7 @@ Warning diagnostics in the baseline:
 
 | Diagnostic | Count | Classification |
 | --- | ---: | --- |
-| `hc_render_common_html_fallback` | 1924 | Deferred HC visual rendering |
+| `hc_render_common_html_fallback` | 261 | Deferred HC visual rendering |
 | `ssed_loose_address_unresolved` | 0 | Closed by packed SSED link-address normalization |
 
 Important info/status classes from the latest gate:
@@ -255,33 +267,33 @@ Important info/status classes from the latest gate:
 | `title-nonprefix:*` cursor probed `ok` | 0 | Replaced by explicit unverified continuation for the remaining large case |
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
-| `ssed_fulltext_body_direct_scan` | 10 | Direct native HONMON fallback exercised |
-| `ssed_fulltext_partial_nonprefix_title_prepass` | 2 | NCOMP4 first page exercised; cursor probe intentionally deferred |
-| `ssed_index_empty_physical_pages_skipped` | 2 | Sparse physical scan advances exercised by NCOMP4 non-prefix title search |
+| `ssed_fulltext_body_direct_scan` | 3 | Direct native HONMON fallback exercised |
+| `ssed_fulltext_partial_nonprefix_title_prepass` | 1 | NCOMP4 first page exercised; cursor probe intentionally deferred |
+| `ssed_index_empty_physical_pages_skipped` | 1 | Sparse physical scan advances exercised by NCOMP4 non-prefix title search |
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 23 | Large-index partial-search continuation intentionally deferred |
 | `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 220 | Native offset next-page proof intentionally deferred |
 | `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 16 | Title-label fallback next-page proof intentionally deferred |
 | `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
-| `gaiji_formatting_helper_candidate` | 36 | Observed OUKOKU11 `B947`/`B948` helper codes |
+| `gaiji_formatting_helper_candidate` | 6 | Observed helper code candidates |
 | `ssed_navigation_empty_sentinel` | 19 | Expected sentinel classification |
 | `skipped_large_view` | 39 | Validator cap for large alternate render probes |
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 Latest concrete non-HC performance candidates from the full gate:
 
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 1990 ms validation
-  exercise elapsed, hit_count 1 with a `title-nonprefix-unverified:*` cursor;
-  the residual cost is finding the late first non-prefix title across sparse
-  native index pages, not proving the continuation.
-- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 1227 ms,
-  non-prefix physical-offset partial cursor.
-- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_full_text` query `体の`: 927 ms,
-  native title cursor with a 346 ms cursor probe.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 876 ms, direct native
-  HONMON scan plus row-driven prefetch; this intentionally stays out of the
-  mixed digit/non-ASCII title prepass gate.
-- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 840 ms, direct native
+- Several top `surface_first_target` rows are likely validator render/window
+  work over large browse targets; measure direct `home`/`surface`/`window`
+  before treating them as LVCore gaps.
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 2262 ms validation
+  exercise elapsed, hit_count 1. The residual cost is finding the late first
+  non-prefix title across sparse native index pages, not proving the
+  continuation.
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 850 ms, native title/index
+  prepass.
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 781 ms, direct native
   HONMON scan plus row-driven prefetch.
+- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 633 ms, direct native
+  HONMON scan plus row-driven prefetch after the JIS prefilter improvement.
 - `Other/iOS/IBIO5/IBIO5`, `search_full_text` query `亜-`: 791 ms, sidecar
   body row cursor with a 5 ms cursor probe.
 - `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 770 ms, native title
@@ -313,6 +325,54 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0ac. SSED separator-aware JIS prefilter seek (resolved, full gate)
+
+Why this matters:
+
+- The latest full gate still had concrete non-HC SSED search latency in native
+  title/body byte prefilters:
+  - `_DCT_NCOMP4`, full-text `1計`: 2540 ms before this change.
+  - `_DCT_KENE7J5`, full-text `は殺`: 905 ms before this change.
+  - `_DCT_NMEDEJ12`, full-text `01`: 900 ms before this change.
+- The shared SSED byte prefilter supported LogoVista title separators inside
+  JIS pair sequences, but it tested every byte offset in each candidate page or
+  body window.
+- That was semantically correct but expensive for sparse native index pages and
+  Japanese body windows.
+
+Current status:
+
+- `contains_jis_pair_sequence_with_title_separators` now seeks to occurrences
+  of the first two-byte JIS pair with `memmem`, then verifies the remaining JIS
+  pairs with the existing title-separator skipping rule.
+- The search advances by one byte after each first-pair candidate, so
+  overlapping candidate starts remain covered and semantics match the previous
+  every-offset scan.
+- No cursor formats or validation skip policies changed.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore package::ssed_search::tests:: -- --nocapture`
+  - `cargo test -p lvcore package::drivers::tests::fulltext::ssed_fulltext_searches_late_nonprefix_title_before_body_scan -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ssed-jis-prefilter-memmem-v2.jsonl`
+  - `_DCT_NCOMP4` package status remained `ok`; `search_full_text` `1計`
+    improved from 2540 ms to 2153 ms in focused validation.
+  - `_DCT_KENE7J5` package status remained `ok`; `search_full_text` `は殺`
+    improved from 905 ms to 631 ms in focused validation.
+  - `_DCT_NMEDEJ12` package status remained `ok`; `search_full_text` `01`
+    improved from 900 ms to 864 ms in focused validation.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-ssed-jis-prefilter-memmem-v2.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (261),
+    which is deferred HC work.
+  - Full-gate timing examples:
+    - `_DCT_NCOMP4` full-text `1計`: 2540 ms to 2262 ms.
+    - `_DCT_KENE7J5` full-text `は殺`: 905 ms to 633 ms.
+    - `_DCT_NMEDEJ12` full-text `01`: 900 ms to 781 ms.
 
 ### 0ab. iOS SSED tableList cross-book row shortcut (resolved, full gate)
 

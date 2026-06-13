@@ -334,7 +334,13 @@ fn contains_jis_pair_sequence_with_title_separators(haystack: &[u8], needle: &[u
     if !is_jis_pair_sequence(needle) {
         return false;
     }
-    for start in 0..haystack.len() {
+    let Some(first_pair) = needle.get(..2) else {
+        return false;
+    };
+    let mut search_offset = 0usize;
+    while let Some(relative_start) = memchr::memmem::find(&haystack[search_offset..], first_pair) {
+        let start = search_offset + relative_start;
+        search_offset = start.saturating_add(1);
         let mut offset = start;
         let mut matched_pairs = 0usize;
         for pair in needle.chunks_exact(2) {
@@ -745,6 +751,20 @@ mod tests {
         assert!(!ssed_body_window_may_contain_query(
             &split_inside_pair,
             &candidates
+        ));
+
+        let index_candidates = ssed_index_page_prefilter_candidates("前後");
+        assert!(ssed_body_window_may_contain_query(
+            &separated,
+            &index_candidates
+        ));
+    }
+
+    #[test]
+    fn separator_aware_jis_match_checks_overlapping_first_pairs() {
+        assert!(contains_jis_pair_sequence_with_title_separators(
+            &[0x21, 0x21, 0x21, 0x21, 0x22],
+            &[0x21, 0x21, 0x21, 0x22],
         ));
     }
 
