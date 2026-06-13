@@ -963,6 +963,9 @@ fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
     if is_unverified_title_label_cursor(mode, cursor) {
         return false;
     }
+    if is_unverified_sidecar_title_cursor(mode, cursor) {
+        return false;
+    }
     if cursor.starts_with("lved-offset-unverified:") {
         return false;
     }
@@ -984,10 +987,22 @@ fn skipped_search_cursor_probe_reason(mode: &SearchMode, cursor: &str) -> &'stat
     if is_unverified_title_label_cursor(mode, cursor) {
         return "unverified title-label fallback continuation may scan large SSED indexes";
     }
+    if is_unverified_sidecar_title_cursor(mode, cursor) {
+        return "unverified sidecar title continuation may scan large SSED sidecars";
+    }
     if cursor.starts_with("lved-offset-unverified:") {
         return "unverified LVED offset continuation may repeat broad SQLite searches";
     }
     "body full-text continuation cursors may rescan large SSED body windows"
+}
+
+fn is_unverified_sidecar_title_cursor(mode: &SearchMode, cursor: &str) -> bool {
+    (matches!(
+        mode,
+        SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+    ) && cursor.starts_with("sidecar-title-unverified-row:"))
+        || (matches!(mode, SearchMode::Partial)
+            && cursor.starts_with("ssed-partial-prefix:sidecar-title-unverified-row:"))
 }
 
 fn is_unverified_title_label_cursor(mode: &SearchMode, cursor: &str) -> bool {
@@ -3045,6 +3060,21 @@ mod tests {
             ),
             "unverified title-label fallback continuation may scan large SSED indexes"
         );
+        assert!(!should_probe_search_cursor(
+            &SearchMode::Exact,
+            "sidecar-title-unverified-row:626f64792e6462:745f636f6e7473:665f446174614964:direct:32"
+        ));
+        assert_eq!(
+            skipped_search_cursor_probe_reason(
+                &SearchMode::Exact,
+                "sidecar-title-unverified-row:626f64792e6462:745f636f6e7473:665f446174614964:direct:32"
+            ),
+            "unverified sidecar title continuation may scan large SSED sidecars"
+        );
+        assert!(!should_probe_search_cursor(
+            &SearchMode::Partial,
+            "ssed-partial-prefix:sidecar-title-unverified-row:626f64792e6462:745f636f6e7473:665f446174614964:direct:32"
+        ));
         assert!(!should_probe_search_cursor(
             &SearchMode::FullText,
             "lved-offset-unverified:2"

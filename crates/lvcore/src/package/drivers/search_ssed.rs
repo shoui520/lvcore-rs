@@ -17,6 +17,7 @@ const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_NATIVE_INITIAL_OFFSET_OVERFETCH_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
+const SSED_SIDECAR_TITLE_LOOKAHEAD_DEFER_MIN_BYTES: u64 = 64 * 1024 * 1024;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 const SSED_TITLE_LABEL_UNVERIFIED_CURSOR_PREFIX: &str = "ssed-title-label-unverified:";
@@ -1256,13 +1257,25 @@ impl ReaderBookPackage {
             SsedSidecarTitleCursor::Offset(offset) => (offset, None),
             SsedSidecarTitleCursor::Physical(cursor) => (0, Some(cursor)),
         };
+        let sidecar_resolvers = self.ssed_sidecar_body_resolvers()?;
+        let defer_lookahead = page.hits.is_empty()
+            && Self::ssed_sidecar_title_lookahead_should_defer(
+                mode,
+                &query.query,
+                sidecar_resolvers,
+            );
+        let sidecar_limit = if defer_lookahead {
+            remaining
+        } else {
+            remaining.saturating_add(1)
+        };
         let sidecar_page = search_ssed_dense_sidecar_titles_with_resolvers(
-            self.ssed_sidecar_body_resolvers()?,
+            sidecar_resolvers,
             mode,
             &query.query,
             sidecar_offset,
             physical_cursor.as_ref(),
-            remaining.saturating_add(1),
+            sidecar_limit,
         )?;
         if !sidecar_page.hits.is_empty() || sidecar_page.matched_count > sidecar_offset {
             page.diagnostics.push(Diagnostic::info(
@@ -1319,10 +1332,33 @@ impl ReaderBookPackage {
         if !sidecar_page.exhausted {
             page.next_cursor = next_physical_cursor
                 .as_ref()
-                .map(encode_ssed_sidecar_title_physical_cursor)
+                .map(|cursor| {
+                    if defer_lookahead {
+                        encode_ssed_sidecar_title_unverified_physical_cursor(cursor)
+                    } else {
+                        encode_ssed_sidecar_title_physical_cursor(cursor)
+                    }
+                })
                 .or_else(|| Some(encode_ssed_sidecar_title_cursor(next_sidecar_offset)));
         }
         Ok(())
+    }
+
+    fn ssed_sidecar_title_lookahead_should_defer(
+        mode: SsedSidecarTitleSearchMode,
+        query: &str,
+        resolvers: &[SsedSidecarBodyResolver],
+    ) -> bool {
+        mode == SsedSidecarTitleSearchMode::Exact
+            && sidecar_sql_prefilter_is_authoritative(query)
+            && resolvers.iter().any(|resolver| {
+                resolver.title_column.is_some()
+                    && std::fs::metadata(&resolver.path)
+                        .map(|metadata| {
+                            metadata.len() >= SSED_SIDECAR_TITLE_LOOKAHEAD_DEFER_MIN_BYTES
+                        })
+                        .unwrap_or(false)
+            })
     }
 
     fn ssed_should_append_sidecar_titles_after_native_page(
@@ -3804,14 +3840,20 @@ fn encode_ssed_fulltext_row_cursor(offset: usize) -> String {
 }
 
 const SSED_SIDECAR_TITLE_PHYSICAL_CURSOR_PREFIX: &str = "sidecar-title-row:";
+const SSED_SIDECAR_TITLE_UNVERIFIED_PHYSICAL_CURSOR_PREFIX: &str = "sidecar-title-unverified-row:";
 
 fn decode_ssed_sidecar_title_cursor(cursor: Option<&str>) -> Option<SsedSidecarTitleCursor> {
     let cursor = cursor?;
     if let Some(value) = cursor.strip_prefix(SSED_SIDECAR_TITLE_CURSOR_PREFIX) {
         return value.parse().ok().map(SsedSidecarTitleCursor::Offset);
     }
-    decode_ssed_sidecar_row_cursor(cursor.strip_prefix(SSED_SIDECAR_TITLE_PHYSICAL_CURSOR_PREFIX)?)
-        .map(SsedSidecarTitleCursor::Physical)
+    if let Some(value) = cursor.strip_prefix(SSED_SIDECAR_TITLE_PHYSICAL_CURSOR_PREFIX) {
+        return decode_ssed_sidecar_row_cursor(value).map(SsedSidecarTitleCursor::Physical);
+    }
+    decode_ssed_sidecar_row_cursor(
+        cursor.strip_prefix(SSED_SIDECAR_TITLE_UNVERIFIED_PHYSICAL_CURSOR_PREFIX)?,
+    )
+    .map(SsedSidecarTitleCursor::Physical)
 }
 
 fn encode_ssed_sidecar_title_cursor(offset: usize) -> String {
@@ -3822,6 +3864,14 @@ fn encode_ssed_sidecar_title_physical_cursor(cursor: &SsedSidecarBodyCursor) -> 
     format!(
         "{}{}",
         SSED_SIDECAR_TITLE_PHYSICAL_CURSOR_PREFIX,
+        encode_ssed_sidecar_row_cursor(cursor)
+    )
+}
+
+fn encode_ssed_sidecar_title_unverified_physical_cursor(cursor: &SsedSidecarBodyCursor) -> String {
+    format!(
+        "{}{}",
+        SSED_SIDECAR_TITLE_UNVERIFIED_PHYSICAL_CURSOR_PREFIX,
         encode_ssed_sidecar_row_cursor(cursor)
     )
 }

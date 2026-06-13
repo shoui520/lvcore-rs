@@ -1999,6 +1999,69 @@ fn dense_honmon_search_uses_cjk_sidecar_titles() {
 }
 
 #[test]
+fn dense_honmon_exact_cjk_sidecar_title_cursor_defers_lookahead() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::CjkTitleRows);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(dir.path().join("body.db"))
+        .unwrap()
+        .set_len(64 * 1024 * 1024)
+        .unwrap();
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let first = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "丂".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(first.hits.len(), 1);
+    assert_eq!(first.hits[0].title_text, "丂");
+    let cursor = first.next_cursor.as_deref().unwrap();
+    assert!(cursor.starts_with("sidecar-title-unverified-row:"));
+
+    let second = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "丂".to_owned(),
+            cursor: Some(cursor.to_owned()),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert!(second.hits.is_empty());
+    assert_eq!(second.next_cursor, None);
+}
+
+#[test]
 fn dense_main_wordlist_title_search_matches_j_text_titles() {
     let dir = tempdir().unwrap();
     let catalog =
