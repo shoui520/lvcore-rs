@@ -88,7 +88,7 @@ use super::navigation_helpers::{
 };
 use super::render_output::{
     finalize_generic_html_view as finalize_generic_html_display, finalize_resolved_view,
-    generic_html_data_url, generic_html_inline_resource_max_bytes,
+    generic_html_data_url, generic_html_inline_resource_max_bytes, push_generic_html_data_url,
 };
 use super::resource_helpers::{
     MONOSCR_BITMAP_BYTES, MONOSCR_HEIGHT, MONOSCR_WIDTH, monoscr_bitmap_to_rgba,

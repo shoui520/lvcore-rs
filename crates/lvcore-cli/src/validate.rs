@@ -20,6 +20,7 @@ const VALIDATE_RESOURCE_TARGET_SCAN_LIMIT: usize = 8;
 const VALIDATE_LINK_TARGET_SCAN_LIMIT: usize = 8;
 const VALIDATE_GENERIC_HTML_NATIVE_HTML_LIMIT: usize = 128 * 1024;
 const VALIDATE_GENERIC_HTML_RESOURCE_LIMIT: usize = 64;
+const VALIDATE_GENERIC_HTML_RESOURCE_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
 const VALIDATE_DIAGNOSTIC_SAMPLE_LIMIT: usize = 8;
 const VALIDATE_SURFACE_TARGET_PAGE_LIMIT: usize = 16;
 const VALIDATE_SURFACE_PROBE_PAGE_LIMIT: usize = 16;
@@ -1222,6 +1223,7 @@ fn render_mode_contract_probe(
             .map(|value| value.len())
             .unwrap_or(0),
         native_view.resources.len(),
+        native_view_known_resource_bytes(native_view),
     ) {
         skipped_render_mode_probe(native_view, RenderMode::GenericHtml, reason)
     } else {
@@ -1236,6 +1238,7 @@ fn render_mode_contract_probe(
 fn generic_html_probe_skip_reason(
     native_display_html_len: usize,
     native_resource_count: usize,
+    native_resource_bytes: u64,
 ) -> Option<&'static str> {
     if native_display_html_len > VALIDATE_GENERIC_HTML_NATIVE_HTML_LIMIT {
         return Some("native_display_html_too_large");
@@ -1243,7 +1246,18 @@ fn generic_html_probe_skip_reason(
     if native_resource_count > VALIDATE_GENERIC_HTML_RESOURCE_LIMIT {
         return Some("resource_count_too_large");
     }
+    if native_resource_bytes > VALIDATE_GENERIC_HTML_RESOURCE_BYTES_LIMIT {
+        return Some("resource_bytes_too_large");
+    }
     None
+}
+
+fn native_view_known_resource_bytes(native_view: &ResolvedTargetView) -> u64 {
+    native_view
+        .resources
+        .iter()
+        .filter_map(|resource| resource.byte_len)
+        .sum()
 }
 
 fn skipped_render_mode_probe(
@@ -1258,6 +1272,7 @@ fn skipped_render_mode_probe(
         "reason": reason,
         "native_display_html_len": native_view.display_html.as_ref().map(|value| value.len()).unwrap_or(0),
         "native_resource_count": native_view.resources.len(),
+        "native_resource_bytes": native_view_known_resource_bytes(native_view),
     })
 }
 
@@ -3079,14 +3094,18 @@ mod tests {
 
     #[test]
     fn validate_generic_html_probe_skips_large_native_views_only() {
-        assert_eq!(generic_html_probe_skip_reason(4096, 4), None);
+        assert_eq!(generic_html_probe_skip_reason(4096, 4, 4096), None);
         assert_eq!(
-            generic_html_probe_skip_reason(VALIDATE_GENERIC_HTML_NATIVE_HTML_LIMIT + 1, 4),
+            generic_html_probe_skip_reason(VALIDATE_GENERIC_HTML_NATIVE_HTML_LIMIT + 1, 4, 4096),
             Some("native_display_html_too_large")
         );
         assert_eq!(
-            generic_html_probe_skip_reason(4096, VALIDATE_GENERIC_HTML_RESOURCE_LIMIT + 1),
+            generic_html_probe_skip_reason(4096, VALIDATE_GENERIC_HTML_RESOURCE_LIMIT + 1, 4096),
             Some("resource_count_too_large")
+        );
+        assert_eq!(
+            generic_html_probe_skip_reason(4096, 4, VALIDATE_GENERIC_HTML_RESOURCE_BYTES_LIMIT + 1),
+            Some("resource_bytes_too_large")
         );
     }
 

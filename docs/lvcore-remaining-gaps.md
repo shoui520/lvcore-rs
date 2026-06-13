@@ -4,6 +4,17 @@ Date: 2026-06-12
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260612-generic-html-resource-byte-cap.jsonl`
+- Produced after capping deep-validation alternate `GenericHtml` probes by
+  known native resource byte totals and streaming eligible data-URL output into
+  the final HTML buffer.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260612-ssed-fulltext-row-prefetch-cap.jsonl`
 - Produced after capping first-page row-driven SSED full-text body prefetch
   when byte candidates are available, so late/no-hit cases fall through to the
@@ -12,8 +23,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260612-ssed-fulltext-body-cursor.jsonl`
 - Produced after changing post-title-prepass SSED full-text continuation from
@@ -120,10 +129,60 @@ Important info/status classes from the latest gate:
 | `lved_viewer_hook_deferred` | 214 info diagnostics plus deferred samples | Intentional external viewer policy |
 | `gaiji_formatting_helper_candidate` | 36 | Observed OUKOKU11 `B947`/`B948` helper codes |
 | `ssed_navigation_empty_sentinel` | 19 | Expected sentinel classification |
-| `skipped_large_view` | 38 | Validator cap for large native HTML alternate mode |
+| `skipped_large_view` | 39 | Validator cap for large alternate render probes |
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0l. Large GenericHtml resource-byte validation latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate exposed `_DCT_SINJIGEN` `aux-index:0` as a slow
+  concrete non-HC surface row.
+- The surface and target render were already valid; the cost came from the
+  validator's alternate `GenericHtml` probe inlining 16 known image resources
+  into a 9.5 MB standalone HTML payload.
+- The existing alternate-render cap handled very large native HTML and high
+  resource counts, but not moderate resource counts with large byte totals.
+
+Current status:
+
+- Deep validation now skips the alternate `GenericHtml` probe when known native
+  resource bytes exceed the validation cap.
+- The skipped row reports `skipped_large_view` with
+  `reason: resource_bytes_too_large` and includes `native_resource_bytes`.
+- GenericHtml inlining still streams eligible resources directly into the final
+  output buffer, avoiding an extra temporary data-URL allocation for probes that
+  remain under the cap.
+- Focused tests passed:
+  - `cargo test -p lvcore generic_html -- --nocapture`
+  - `cargo test -p lvcore render_modes_are_explicit_for_preserved_lved_html -- --nocapture`
+  - `cargo test -p lvcore-cli validate_generic_html_probe_skips_large_native_views_only -- --nocapture`
+  - `cargo test -p lvcore-cli validate_deep_exercises_reader_render_modes -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-sinjjigen-generic-html-resource-byte-cap.jsonl`
+  - `_DCT_SINJIGEN` package status remained `ok`.
+  - The `aux-index:0` row dropped from about 1.8-2.0s to 581 ms in the focused
+    row; package wall time dropped from about 2.4s to 1.16s.
+- Full-corpus validation gate:
+  - `/tmp/lvcore-all-corpora-validation-20260612-generic-html-resource-byte-cap.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - Path set matched the previous baseline.
+  - Warning diagnostics remained only the explicitly deferred HC common HTML
+    fallback.
+  - `skipped_large_view` now has 38 `native_display_html_too_large` skips and
+    one `resource_bytes_too_large` skip.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SSED_DICTS_WINDOWS/_DCT_SINJIGEN`
+- Observed row:
+  - `surface_id`: `aux-index:0`
+  - label: `中国語の起原と特色`
+  - native resources: 16
+  - known native resource bytes: 7,161,321
 
 ### 0k. SSED full-text initial row-prefetch latency (resolved)
 

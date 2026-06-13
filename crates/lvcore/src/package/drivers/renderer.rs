@@ -463,15 +463,17 @@ impl ReaderBookPackage {
     }
 
     fn finalize_generic_html_view(&self, view: ResolvedTargetView) -> Result<ResolvedTargetView> {
-        finalize_generic_html_display(view, |token| self.generic_html_data_url(token))
+        finalize_generic_html_display(view, |token, output| {
+            self.append_generic_html_data_url(token, output)
+        })
     }
 
-    fn generic_html_data_url(&self, token: &str) -> Result<Option<String>> {
+    fn append_generic_html_data_url(&self, token: &str, output: &mut String) -> Result<bool> {
         let resource_token = ResourceToken::from_opaque(token.to_owned());
         let internal_resource = resource_token.decode()?;
         let resource_ref = self.resolve_resource(&resource_token)?;
         let Some(mime_type) = resource_ref.mime_type.as_deref() else {
-            return Ok(None);
+            return Ok(false);
         };
         let bytes = match self.read_resource(&resource_token) {
             Ok(bytes) => bytes,
@@ -481,15 +483,17 @@ impl ReaderBookPackage {
                     mime_type,
                     &error,
                 ) {
-                    return Ok(Some(data_url));
+                    output.push_str(&data_url);
+                    return Ok(true);
                 }
                 return Err(error);
             }
         };
         if bytes.len() > generic_html_inline_resource_max_bytes() {
-            return Ok(None);
+            return Ok(false);
         }
-        Ok(Some(generic_html_data_url(mime_type, &bytes)))
+        push_generic_html_data_url(output, mime_type, &bytes);
+        Ok(true)
     }
 
     fn read_ssed_stream_render_slice(

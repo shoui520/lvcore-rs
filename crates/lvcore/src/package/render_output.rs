@@ -15,19 +15,26 @@ pub(super) fn generic_html_inline_resource_max_bytes() -> usize {
 }
 
 pub(super) fn generic_html_data_url(mime_type: &str, bytes: &[u8]) -> String {
-    format!(
-        "data:{};base64,{}",
-        mime_type,
-        BASE64_STANDARD.encode(bytes)
-    )
+    let mut output = String::with_capacity(
+        "data:".len() + mime_type.len() + ";base64,".len() + bytes.len().div_ceil(3) * 4,
+    );
+    push_generic_html_data_url(&mut output, mime_type, bytes);
+    output
+}
+
+pub(super) fn push_generic_html_data_url(output: &mut String, mime_type: &str, bytes: &[u8]) {
+    output.push_str("data:");
+    output.push_str(mime_type);
+    output.push_str(";base64,");
+    BASE64_STANDARD.encode_string(bytes, output);
 }
 
 pub(super) fn finalize_generic_html_view<F>(
     mut view: ResolvedTargetView,
-    mut data_url_for_resource: F,
+    mut append_data_url_for_resource: F,
 ) -> Result<ResolvedTargetView>
 where
-    F: FnMut(&str) -> Result<Option<String>>,
+    F: FnMut(&str, &mut String) -> Result<bool>,
 {
     let Some(html) = view.display_html.take() else {
         return Ok(view);
@@ -46,12 +53,11 @@ where
                 .split_once(['?', '#'])
                 .map(|(token, _)| token)
                 .unwrap_or(token);
-            match data_url_for_resource(token) {
-                Ok(Some(data_url)) => {
-                    output.push_str(&data_url);
+            match append_data_url_for_resource(token, &mut output) {
+                Ok(true) => {
                     inlined_resources += 1;
                 }
-                Ok(None) => output.push_str(raw_value),
+                Ok(false) => output.push_str(raw_value),
                 Err(error) => {
                     output.push_str("data:,");
                     view.diagnostics.push(Diagnostic::warning(
@@ -250,9 +256,10 @@ mod tests {
             debug_trace: None,
         };
 
-        let view = finalize_generic_html_view(view, |token| {
+        let view = finalize_generic_html_view(view, |token, output| {
             assert_eq!(token, "res-token");
-            Ok(Some("data:image/png;base64,AA==".to_owned()))
+            output.push_str("data:image/png;base64,AA==");
+            Ok(true)
         })
         .unwrap();
         let html = view.display_html.as_deref().unwrap();
@@ -322,7 +329,7 @@ mod tests {
             debug_trace: None,
         };
 
-        let view = finalize_generic_html_view(view, |_| {
+        let view = finalize_generic_html_view(view, |_, _| {
             Err(crate::error::Error::Driver("missing".to_owned()))
         })
         .unwrap();
