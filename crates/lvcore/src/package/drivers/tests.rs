@@ -43,6 +43,7 @@ enum DenseSidecarFixture {
     EntityTitleRows,
     CjkTitleRows,
     AsciiMarkerTitleRows,
+    MainWordlistRows,
     MissingBetaRow,
     OrderedHonbunRows,
 }
@@ -156,6 +157,9 @@ fn write_ssed_dense_sidecar_fixture(root: &Path, fixture: DenseSidecarFixture) -
         }
         DenseSidecarFixture::AsciiMarkerTitleRows => {
             write_dense_body_db_with_ascii_marker_titles(root.join("body.db"));
+        }
+        DenseSidecarFixture::MainWordlistRows => {
+            write_dense_main_wordlist_db(root.join("KJJK100.db"));
         }
         DenseSidecarFixture::MissingBetaRow => {
             write_dense_body_db(root.join("body.db"), true, false, false);
@@ -459,6 +463,25 @@ fn write_android_body_db(path: PathBuf, table: &str) {
                 "<div>android alpha html</div>",
                 "<div>android beta html</div>",
             ),
+        )
+        .unwrap();
+}
+
+fn write_dense_main_wordlist_db(path: PathBuf) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "
+            create table main (
+              ID text not null primary key,
+              Class text,
+              K_text text,
+              J_text text
+            );
+            insert into main values ('00000001', 'class', 'sin', '新');
+            insert into main values ('00000002', 'class', 'alpha', '別');
+            insert into main values ('00010000', 'class', '新', 'late');
+            ",
         )
         .unwrap();
 }

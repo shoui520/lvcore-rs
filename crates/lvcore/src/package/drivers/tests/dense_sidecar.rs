@@ -1993,6 +1993,60 @@ fn dense_honmon_search_uses_cjk_sidecar_titles() {
 }
 
 #[test]
+fn dense_main_wordlist_title_search_matches_j_text_titles() {
+    let dir = tempdir().unwrap();
+    let catalog =
+        write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::MainWordlistRows);
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Dense".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "新".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.hits[0].title_text, "新");
+    assert!(matches!(
+        page.hits[0].target.decode().unwrap(),
+        InternalTarget::SsedDenseAnchor { anchor, .. } if anchor == "00000001"
+    ));
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_sidecar_title_search")
+    );
+    assert!(
+        page.next_cursor
+            .as_deref()
+            .is_some_and(|cursor| cursor.starts_with("sidecar-title-row:"))
+    );
+}
+
+#[test]
 fn dense_honmon_exact_search_matches_single_ascii_marker_title() {
     let dir = tempdir().unwrap();
     let catalog =

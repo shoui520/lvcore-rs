@@ -4,6 +4,16 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-main-wordlist-jtext.jsonl`
+- Produced after treating `K_text`/`J_text` pairs in dense SSED `main`
+  wordlist sidecars as bidirectional title columns.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-initial-native-offset-mode-sized.jsonl`
 - Produced after changing large SSED native exact/forward/backward first pages
   to defer expensive next-page proof behind explicit
@@ -13,8 +23,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-title-label-unverified-nested-skip.jsonl`
 - Produced after changing SSED title-label fallback continuation proof to
@@ -205,24 +213,76 @@ Important info/status classes from the latest gate:
 
 Latest concrete non-HC performance candidates from the full gate:
 
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 1392 ms, no hit, direct
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 1502 ms, no hit, direct
   native HONMON scan plus row-driven prefetch.
-- `_DCT_GENKANA5`, `search_partial` query `アル`: 874 ms, sidecar title search
-  after partial-prefix prepass.
-- `_DCT_KQNEWEJ6`, `search_full_text` query `画像`: 867 ms, native title
-  prepass plus direct HONMON scan.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 842 ms, direct native HONMON
+- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 846 ms, direct native
+  HONMON scan plus row-driven prefetch.
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 827 ms, direct native HONMON
   scan plus row-driven prefetch.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 819 ms, native title
+- `_DCT_GENKANA5`, `search_partial` query `アル`: 822 ms, sidecar title search
+  after partial-prefix prepass.
+- `_DCT_KQNEWEJ6`, `search_full_text` query `画像`: 804 ms, native title
   prepass plus direct HONMON scan.
-- `_DCT_KJJK100`, `search_exact` query `新`: 810 ms, dense sidecar title
-  search.
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 803 ms, native title
+  prepass with deferred body continuation.
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 779 ms, native title
+  prepass plus direct HONMON scan.
 
 Rows such as `_DCT_GKKNJPZL` `search_forward` query `00` and `_DCT_IWKOKU7N`
 `search_forward` query `3D` include HC fallback rendering diagnostics and
 should not drive LVCore-only work while HC remains deferred.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0u. SSED main wordlist bidirectional sidecar titles (resolved)
+
+Why this matters:
+
+- The latest full-corpus baseline exposed `_DCT_KJJK100` exact search for `新`
+  as a concrete non-HC dense-sidecar title latency row.
+- The real sidecar table is `main(ID, Class, K_text, J_text)`. LVCore treated
+  only `K_text` as title-like, so Japanese exact title search scanned about
+  1.6 million `K_text` rows before finding `ID=01649735`.
+- The same table has early `J_text='新'` entries, and the package is a
+  bidirectional Korean/Japanese wordlist. `K_text` and `J_text` are both
+  title-like in this format shape.
+
+Current status:
+
+- Dense sidecar title search now treats the `plain` column as an alternate
+  title only for `main` wordlist resolvers whose columns are the observed
+  `K_text`/`J_text` pair.
+- When the alternate column matched, the search hit label uses the matched
+  alternate title text, while the target still resolves through the same dense
+  sidecar anchor.
+- Direct real-package probe:
+  - `_DCT_KJJK100` exact `新 --limit 1` dropped to about 0.03s locally.
+  - The first hit is now `ID=00025646` with title `新`, matching `J_text`,
+    instead of the late `K_text` row.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore package::drivers::tests::dense_sidecar -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-kjjk100-main-wordlist-jtext.jsonl`
+  - `_DCT_KJJK100` package status remained `ok`.
+  - `search_exact` query `新` dropped from 810-835 ms to 46 ms focused.
+  - The exact-search cursor probe remained fast at 23 ms.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-main-wordlist-jtext.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous 336-package baseline path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1936),
+    which is deferred HC work.
+  - `_DCT_KJJK100` package status remained `ok`.
+  - `search_exact` query `新` is 52 ms in the full gate, with a 27 ms cursor
+    probe.
+
+Touched code:
+
+- `crates/lvcore/src/ssed_sidecar.rs`
+- `crates/lvcore/src/package/drivers/tests.rs`
+- `crates/lvcore/src/package/drivers/tests/dense_sidecar.rs`
 
 ### 0t. SSED large native initial offset proof latency (resolved)
 

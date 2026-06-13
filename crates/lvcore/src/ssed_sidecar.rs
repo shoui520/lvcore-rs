@@ -530,12 +530,12 @@ pub fn search_ssed_dense_sidecar_titles_with_resolvers(
             let anchor_id = anchor_id_from_search_row(resolver, row)?;
             let body = sidecar_body_from_row(resolver, row)?;
             let cursor = sidecar_body_cursor_from_search_row(resolver, row)?;
-            let hit = SsedSidecarSearchHit {
+            let mut hit = SsedSidecarSearchHit {
                 anchor_id,
                 body,
                 cursor: Some(cursor),
             };
-            if !sidecar_title_matches(&hit.body.title, mode, &needle) {
+            if !sidecar_title_hit_matches(&mut hit, resolver, mode, &needle) {
                 continue;
             }
             if row_cursor.is_none() && matched < offset {
@@ -856,14 +856,19 @@ fn sidecar_title_prefilter_sql_for_resolver(
     query: &str,
     cursor: Option<&SsedSidecarBodyCursor>,
 ) -> Result<Option<(String, Vec<String>)>> {
-    let (where_sql, mut parameters) =
-        if sidecar_title_sql_prefilter_is_available(connection, resolver, title_column, query)? {
-            sidecar_title_prefilter_where_and_parameters(title_column, mode, query)
-        } else if sidecar_title_decoded_fallback_is_bounded(resolver) {
-            (None, Vec::new())
-        } else {
-            return Ok(None);
-        };
+    let mut available_title_columns = Vec::new();
+    for column in sidecar_title_search_columns(resolver, title_column) {
+        if sidecar_title_sql_prefilter_is_available(connection, resolver, column, query)? {
+            available_title_columns.push(column);
+        }
+    }
+    let (where_sql, mut parameters) = if !available_title_columns.is_empty() {
+        sidecar_title_prefilter_where_and_parameters(&available_title_columns, mode, query)
+    } else if sidecar_title_decoded_fallback_is_bounded(resolver) {
+        (None, Vec::new())
+    } else {
+        return Ok(None);
+    };
     let where_sql = if let Some(cursor) = cursor {
         parameters.push(cursor.order_value.clone());
         let order_sql = resolver.id_rule.sql_where_identifier(&resolver.id_column);
@@ -881,21 +886,30 @@ fn sidecar_title_prefilter_sql_for_resolver(
 }
 
 fn sidecar_title_prefilter_where_and_parameters(
-    title_column: &str,
+    title_columns: &[&str],
     mode: SsedSidecarTitleSearchMode,
     query: &str,
 ) -> (Option<String>, Vec<String>) {
-    let title_sql = quote_sql_identifier(title_column);
     let pattern = sqlite_like_title_prefilter_pattern(mode, query);
-    if ssed_sidecar_title_prefilter_should_match_sql_trimmed_title(mode, query) {
-        let where_sql = format!(
-            " where ({title_sql} like ? escape '\\' or ltrim({title_sql}, '{SSED_SIDECAR_TITLE_SQL_TRIM_CHARS}') like ? escape '\\')"
-        );
-        return (Some(where_sql), vec![pattern.clone(), pattern]);
+    let mut clauses = Vec::new();
+    let mut parameters = Vec::new();
+    let match_trimmed = ssed_sidecar_title_prefilter_should_match_sql_trimmed_title(mode, query);
+    for title_column in title_columns {
+        let title_sql = quote_sql_identifier(title_column);
+        if match_trimmed {
+            clauses.push(format!(
+                "({title_sql} like ? escape '\\' or ltrim({title_sql}, '{SSED_SIDECAR_TITLE_SQL_TRIM_CHARS}') like ? escape '\\')"
+            ));
+            parameters.push(pattern.clone());
+            parameters.push(pattern.clone());
+        } else {
+            clauses.push(format!("{title_sql} like ? escape '\\'"));
+            parameters.push(pattern.clone());
+        }
     }
     (
-        Some(format!(" where {title_sql} like ? escape '\\'")),
-        vec![pattern],
+        Some(format!(" where ({})", clauses.join(" or "))),
+        parameters,
     )
 }
 
@@ -1010,6 +1024,22 @@ fn sidecar_search_columns(resolver: &SsedSidecarBodyResolver) -> Vec<&str> {
     .into_iter()
     .flatten()
     .collect()
+}
+
+fn sidecar_title_search_columns<'a>(
+    resolver: &'a SsedSidecarBodyResolver,
+    title_column: &'a str,
+) -> Vec<&'a str> {
+    let mut columns = vec![title_column];
+    if sidecar_plain_column_is_title_like(resolver)
+        && let Some(plain_column) = resolver.plain_column.as_deref()
+        && !columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(plain_column))
+    {
+        columns.push(plain_column);
+    }
+    columns
 }
 
 fn sqlite_like_contains_pattern(query: &str) -> String {
@@ -1147,6 +1177,39 @@ fn sidecar_title_matches(title: &str, mode: SsedSidecarTitleSearchMode, needle: 
             SsedSidecarTitleSearchMode::Backward => candidate.ends_with(needle),
             SsedSidecarTitleSearchMode::Partial => candidate.contains(needle),
         })
+}
+
+fn sidecar_title_hit_matches(
+    hit: &mut SsedSidecarSearchHit,
+    resolver: &SsedSidecarBodyResolver,
+    mode: SsedSidecarTitleSearchMode,
+    needle: &str,
+) -> bool {
+    if sidecar_title_matches(&hit.body.title, mode, needle) {
+        return true;
+    }
+    if sidecar_plain_column_is_title_like(resolver)
+        && sidecar_title_matches(&hit.body.text, mode, needle)
+    {
+        hit.body.title = hit.body.text.clone();
+        return true;
+    }
+    false
+}
+
+fn sidecar_plain_column_is_title_like(resolver: &SsedSidecarBodyResolver) -> bool {
+    if resolver.kind != SsedSidecarKind::MainWordlist {
+        return false;
+    }
+    let (Some(title_column), Some(plain_column)) = (
+        resolver.title_column.as_deref(),
+        resolver.plain_column.as_deref(),
+    ) else {
+        return false;
+    };
+    (title_column.eq_ignore_ascii_case("K_text") && plain_column.eq_ignore_ascii_case("J_text"))
+        || (title_column.eq_ignore_ascii_case("J_text")
+            && plain_column.eq_ignore_ascii_case("K_text"))
 }
 
 fn sidecar_title_match_variants(title: &str) -> Vec<String> {
