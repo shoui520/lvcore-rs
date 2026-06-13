@@ -4,6 +4,24 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-direct-body-filled-page-cursor-v2.jsonl`
+- Produced after making SSED direct HONMON full-text scans continue through all
+  byte-candidate entries in a scan window, stop filled pages without proving an
+  extra hit, and resume `body-offset:*` pages through the same byte-window scan
+  from the next body entry instead of a 4096-row index pass.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered, including the
+  two `Other/Android` rows.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+- `_DCT_NMEDEJ12` `search_full_text` `01` now scans one direct body window and
+  returns an earlier body hit in 686 ms, down from 807 ms and five scanned
+  windows in the previous full gate. `_DCT_KENE7J5` `search_full_text` `は殺`
+  dropped from 607 ms to 343 ms, and `_DCT_GEN2005` `search_full_text` `曙光`
+  dropped from 506 ms to 193 ms.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-tagged-nonprefix-prefilter-v3.jsonl`
 - Produced after adding a state-aware SSED tagged-leaf page prefilter, scoped to
   large non-prefix title scans. The prefilter tracks inherited tagged group
@@ -18,8 +36,6 @@ Latest full-corpus gate:
   full gate to 545 ms. `_DCT_KQNEWEJ6` stayed on its fast title-prepass path at
   406 ms, and `_DCT_KENE7J5` remained on its prior native body-scan path at
   607 ms after the page-prefilter extensions were scoped to non-prefix scans.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-sidecar-body-phase-deferral-v1.jsonl`
 - Produced after making explicit SSED full-text `sidecar-body-row:*`
@@ -300,7 +316,7 @@ Important info/status classes from the latest gate:
 | `sidecar-body-row:*` cursor probed `ok` | 47 | Dense sidecar body cursor fix verified |
 | `sidecar-title-unverified-row:*` cursor `not_probed` | 60 | Large/medium authoritative non-ASCII sidecar-title continuation intentionally deferred |
 | `title-nonprefix-unverified:*` cursor `not_probed` | 1 | Large full-text non-prefix title continuation intentionally deferred |
-| `body:0`/`body-offset:*` full-text cursor `not_probed` | 124 | Post-title native body continuation intentionally deferred |
+| `body:0`/`body-offset:*` full-text cursor `not_probed` | 125 | Post-title native body continuation intentionally deferred |
 | `sidecar-body-start` cursor probed `ok` | 15 | Sidecar body phase start cursor fix verified |
 | `title-nonprefix:*` cursor probed `ok` | 0 | Replaced by explicit unverified continuation for the remaining large case |
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
@@ -322,22 +338,19 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 807 ms, direct native
-  HONMON scan plus row-driven prefetch.
-- `_DCT_KQDENTAL`, `search_full_text` query `01`: 769 ms, native title/index
+- `_DCT_NMEDEJ12`, `search_full_text` query `01`: 686 ms, direct native
+  HONMON scan plus row-driven prefetch. This is improved in 0ag but remains a
+  measurable numeric-body full-text row.
+- `_DCT_KQDENTAL`, `search_full_text` query `01`: 681 ms, native title/index
   prepass.
-- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 637 ms, native title
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: 660 ms, native title
   prepass with deferred body continuation.
-- `_DCT_KENE7J5`, `search_full_text` query `は殺`: 607 ms, direct native
-  HONMON scan plus row-driven prefetch after the JIS prefilter improvement.
-- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 573 ms, native title
+- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 596 ms, native title
   prepass with deferred body continuation.
 - `_DCT_NCOMP4`, `search_full_text` query `1計`: resolved from 2056 ms to
-  545 ms by the scoped tagged non-prefix page prefilter; remaining continuation
+  590 ms by the scoped tagged non-prefix page prefilter; remaining continuation
   proof is intentionally deferred behind `title-nonprefix-unverified:*`.
-- `_DCT_GEN2005`, `search_full_text` query `曙光`: 506 ms, direct native
-  HONMON scan plus row-driven prefetch.
-- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 531 ms.
+- `Other/iOS/HKKIGAK6/HKKIGAK6`, `search_partial` query `体の`: 527 ms.
   Directly inspect before treating it as a code gap.
 - `Other/iOS/IBIO5/IBIO5`, title/full-text query `亜-`: resolved in 0ad and
   verified by the latest full gate.
@@ -356,6 +369,57 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0ag. SSED direct HONMON filled-page cursor (resolved, full gate)
+
+Why this matters:
+
+- The latest full-corpus gate exposed `_DCT_NMEDEJ12` full-text query `01` as
+  a concrete non-HC SSED body-search gap: 807 ms, five scanned direct HONMON
+  windows, and a `body-offset:*` continuation.
+- Direct probing also showed that following the old `body-offset:*` cursor could
+  spend about 12 seconds in the row-driven physical cursor path for the next
+  page.
+- While inspecting that path, direct byte-window scanning was found to inspect
+  only the first byte-candidate entry in each scan window. That could skip
+  earlier body hits in numeric/common-byte windows.
+
+Current status:
+
+- Direct HONMON full-text scanning now walks byte-candidate entries within the
+  current scan window before advancing to the next window.
+- Filled direct body pages now return a physical `body-offset:*` cursor at the
+  last returned hit without proving an extra hit. Following that cursor resumes
+  direct byte-window scanning from the next body entry instead of first building
+  a 4096-row index resume set.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore package::drivers::tests::fulltext -- --nocapture`
+  - `cargo test -p lvcore-cli validate_search_cursor_probe_skips_expensive_fulltext_body_cursors -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-direct-body-filled-page-cursor-v2.jsonl`
+  - `_DCT_NMEDEJ12` package status `ok`; `search_full_text` `01` scanned one
+    direct body window and returned one hit in 707 ms.
+  - `_DCT_KENE7J5` package status `ok`; `search_full_text` `は殺` scanned one
+    direct body window and returned one hit in 364 ms.
+- Direct real-package cursor probes:
+  - `_DCT_NMEDEJ12` first page `01`: 0.72s wall time, one scanned direct body
+    window, cursor `body-offset:484f4e4d4f4e2e444943:5f5a2`.
+  - Following that cursor returned the next body hit in 0.11s wall time through
+    `ssed_fulltext_body_cursor_scan`. The old row-driven physical cursor path
+    had taken about 12s on the prior cursor.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-direct-body-filled-page-cursor-v2.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - Path set matched the previous 336-row baseline, including the two
+    `Other/Android` rows.
+  - Warning diagnostics remained only the explicitly deferred HC common HTML
+    fallback.
+  - `_DCT_NMEDEJ12` `search_full_text` `01`: 686 ms, one scanned direct body
+    window, down from 807 ms and five scanned windows.
+  - `_DCT_KENE7J5` `search_full_text` `は殺`: 343 ms, down from 607 ms.
+  - `_DCT_GEN2005` `search_full_text` `曙光`: 193 ms, down from 506 ms.
 
 ### 0af. SSED tagged non-prefix title page prefilter (resolved, full gate)
 

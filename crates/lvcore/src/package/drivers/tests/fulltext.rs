@@ -769,6 +769,51 @@ fn ssed_fulltext_direct_body_scan_finds_late_body_hit() {
 }
 
 #[test]
+fn ssed_fulltext_direct_body_scan_continues_within_candidate_window() {
+    let dir = tempdir().unwrap();
+    let catalog = write_ssed_fulltext_late_body_fixture(dir.path());
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Synthetic late fulltext".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let page = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::FullText,
+            query: "曙光".to_owned(),
+            cursor: None,
+            limit: 2,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(page.hits.len(), 2);
+    assert!(page.hits[0].title_text.contains("one"));
+    assert!(page.hits[1].title_text.contains("two"));
+    assert!(
+        page.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ssed_fulltext_body_direct_scan")
+    );
+}
+
+#[test]
 fn ssed_fulltext_body_cursor_uses_bounded_honmon_scan() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_fulltext_fixture(dir.path());
@@ -1372,13 +1417,13 @@ fn write_ssed_fulltext_multi_body_fixture(root: &Path) -> SsedCatalog {
 fn write_ssed_fulltext_late_body_fixture(root: &Path) -> SsedCatalog {
     let mut body_pages = Vec::new();
     let mut rows = Vec::new();
-    for index in 0..520u32 {
+    for index in 0..522u32 {
         let mut body = Vec::new();
         body.extend_from_slice(&SSED_ENTRY_MARKER);
-        let text = if index == 519 {
-            "late direct 曙光 body"
-        } else {
-            "irrelevant native fulltext body"
+        let text = match index {
+            519 => "late direct 曙光 body one",
+            520 => "late direct 曙光 body two",
+            _ => "irrelevant native fulltext body",
         };
         body.extend_from_slice(&body_jis(text));
         body.extend_from_slice(&[0x1f, 0x0a]);
