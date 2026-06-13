@@ -101,7 +101,7 @@ impl ReaderBookPackage {
                 query.mode,
                 SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
             )
-            && sidecar_sql_prefilter_is_authoritative(&query.query)
+            && ssed_sidecar_title_authoritative_prepass_is_bounded(&query.query)
             && query.query.trim().chars().any(|ch| !ch.is_ascii())
         {
             let page = self.search_ssed_sidecar_title_page(
@@ -531,7 +531,9 @@ impl ReaderBookPackage {
         prefix_query.mode = SearchMode::Forward;
         let cursor_is_none = cursor.is_none();
         prefix_query.cursor = cursor;
-        if prefix_query.cursor.is_none() && sidecar_sql_prefilter_is_authoritative(&query.query) {
+        if prefix_query.cursor.is_none()
+            && ssed_sidecar_title_authoritative_prepass_is_bounded(&query.query)
+        {
             let mut page = self.search_ssed_sidecar_title_page(
                 &prefix_query,
                 SsedSidecarTitleCursor::Offset(0),
@@ -4383,9 +4385,20 @@ fn ssed_sidecar_title_search_mode(mode: &SearchMode) -> Option<SsedSidecarTitleS
     }
 }
 
+fn ssed_sidecar_title_authoritative_prepass_is_bounded(query: &str) -> bool {
+    sidecar_sql_prefilter_is_authoritative(query)
+        && !ssed_sidecar_title_query_contains_native_circle_marker(query)
+}
+
+fn ssed_sidecar_title_query_contains_native_circle_marker(query: &str) -> bool {
+    query.trim().chars().any(|ch| matches!(ch, '◯' | '○'))
+}
+
 fn ssed_sidecar_title_auto_append_is_bounded(query: &str) -> bool {
     let query = query.trim();
-    !query.is_empty() && !query.chars().any(char::is_whitespace)
+    !query.is_empty()
+        && !query.chars().any(char::is_whitespace)
+        && !ssed_sidecar_title_query_contains_native_circle_marker(query)
 }
 
 fn ssed_partial_prefix_prepass_is_bounded(query: &str) -> bool {
@@ -4438,7 +4451,9 @@ mod tests {
         encode_ssed_partial_nonprefix_physical_offset_cursor,
         encode_ssed_partial_unverified_nonprefix_cursor, encode_ssed_unverified_title_label_cursor,
         ssed_fulltext_first_byte_candidate_offset, ssed_fulltext_sidecar_title_prepass_is_bounded,
-        ssed_partial_prefix_prepass_is_bounded, ssed_sidecar_title_auto_append_is_bounded,
+        ssed_partial_prefix_prepass_is_bounded,
+        ssed_sidecar_title_authoritative_prepass_is_bounded,
+        ssed_sidecar_title_auto_append_is_bounded,
     };
 
     #[test]
@@ -4447,10 +4462,18 @@ mod tests {
         assert!(ssed_sidecar_title_auto_append_is_bounded(" abaisser "));
         assert!(ssed_sidecar_title_auto_append_is_bounded("白水"));
         assert!(ssed_sidecar_title_auto_append_is_bounded("丂"));
-        assert!(ssed_sidecar_title_auto_append_is_bounded("◯に"));
+        assert!(!ssed_sidecar_title_auto_append_is_bounded("◯に"));
         assert!(ssed_sidecar_title_auto_append_is_bounded("ａｂｃ"));
         assert!(!ssed_sidecar_title_auto_append_is_bounded(""));
         assert!(!ssed_sidecar_title_auto_append_is_bounded("two words"));
+    }
+
+    #[test]
+    fn sidecar_title_authoritative_prepass_skips_native_circle_markers() {
+        assert!(ssed_sidecar_title_authoritative_prepass_is_bounded("白水"));
+        assert!(ssed_sidecar_title_authoritative_prepass_is_bounded("0歳"));
+        assert!(!ssed_sidecar_title_authoritative_prepass_is_bounded("◯に"));
+        assert!(!ssed_sidecar_title_authoritative_prepass_is_bounded("○に"));
     }
 
     #[test]

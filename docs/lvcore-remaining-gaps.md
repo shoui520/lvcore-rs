@@ -21,6 +21,17 @@ Latest full-corpus gate:
   `mode_invariant_surface` render-mode skips in the full gate and is 1001 ms,
   down from 2073 ms in the previous full gate.
 
+Subsequent focused validation since the latest full-corpus gate:
+
+- `/tmp/lvcore-focused-validate-kojien7-circle-native-title-v1.jsonl`
+- Produced after keeping native SSED exact/forward title search authoritative
+  for KOJIEN7 circle-marker queries instead of first probing dense sidecar
+  title rows.
+- Windows `_DCT_KOJIEN7` and iOS `KOJIEN7` validated with package status 2
+  `ok`.
+- This focused run does not replace the latest full-corpus gate; it records the
+  scoped proof for 0ak.
+
 Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260613-title-prepass-filled-page-stop-v1.jsonl`
@@ -369,6 +380,10 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
+- Windows `_DCT_KOJIEN7` and iOS `KOJIEN7`, exact query
+  `◯に滅せずんば炎炎を若何いかんせん` and forward query `◯に`: resolved in
+  0ak with focused validation. The latest full-corpus gate still predates that
+  change.
 - `_DCT_NMEDEJ12`, `search_full_text` query `01`: 672 ms, direct native
   HONMON scan plus row-driven prefetch. This is improved in 0ag but remains a
   measurable numeric-body full-text row.
@@ -403,6 +418,48 @@ drive LVCore-only work while HC remains deferred.
 gate to 927 ms with a 0 ms cursor probe in the current full gate.
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0ak. KOJIEN7 native circle-marker title search (resolved, focused)
+
+Why this matters:
+
+- The latest full-corpus gate exposed a clean non-HC SSED search gap in both
+  KOJIEN7 package layouts:
+  - Windows `_DCT_KOJIEN7` exact
+    `◯に滅せずんば炎炎を若何いかんせん`: 708 ms.
+  - Windows `_DCT_KOJIEN7` forward `◯に`: 675 ms.
+  - iOS `KOJIEN7` exact `◯に滅せずんば炎炎を若何いかんせん`: 718 ms.
+  - iOS `KOJIEN7` forward `◯に`: 710 ms.
+- Direct inspection showed the real hit is a normal native `CRINDEX.DIC` title
+  hit. The expensive work was the dense sidecar title prepass and auto-append
+  preference check, not native index lookup.
+- Cursor and direct probes showed native search is already fast once those
+  sidecar prepasses are skipped for this query class.
+
+Current status:
+
+- SSED sidecar title prepasses now stay bounded for the existing authoritative
+  cases, but skip native circle-marker title queries containing `◯` or `○`.
+- The change is intentionally narrow. Normal dense sidecar title searches still
+  run for ordinary CJK sidecar-backed title queries; direct probing of forward
+  `あ` on KOJIEN7 still uses `ssed_sidecar_title_search`.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo build -p lvcore-cli`
+  - `cargo test -p lvcore sidecar_title_auto_append_accepts_bounded_single_token_queries -- --nocapture`
+  - `cargo test -p lvcore sidecar_title_authoritative_prepass_skips_native_circle_markers -- --nocapture`
+  - `cargo test -p lvcore search_ssed -- --nocapture`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-kojien7-circle-native-title-v1.jsonl`
+  - Package status: 2 `ok`.
+  - Windows `_DCT_KOJIEN7` exact
+    `◯に滅せずんば炎炎を若何いかんせん`: 43 ms.
+  - Windows `_DCT_KOJIEN7` forward `◯に`: 43 ms.
+  - iOS `KOJIEN7` exact `◯に滅せずんば炎炎を若何いかんせん`: 50 ms.
+  - iOS `KOJIEN7` forward `◯に`: 49 ms.
+- No full-corpus gate has been run for 0ak yet. The next full gate should be
+  before push if this shared SSED provider change is committed immediately, or
+  after the next similarly scoped provider change if batching is preferred.
 
 ### 0aj. HKKIGAK6 bounded partial-title first page (resolved, focused)
 
