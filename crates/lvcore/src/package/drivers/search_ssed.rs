@@ -124,6 +124,21 @@ impl ReaderBookPackage {
             }
             sidecar_title_prepass_exhausted_empty = true;
         }
+        if self.ssed_initial_partial_native_prefix_probe_should_precede_sidecar_title_prepass(
+            query, &needle,
+        )? {
+            if let Some(page) = self.search_ssed_partial_native_prefix_page(query, &needle)? {
+                let mut page = ssed_native_partial_prefix_page(page);
+                page.diagnostics.insert(
+                    0,
+                    Diagnostic::info(
+                        "ssed_partial_native_prefix_fast_prepass",
+                        "SSED partial search returned an early native prefix match before scanning broad dense sidecar title matches",
+                    ),
+                );
+                return Ok(page);
+            }
+        }
         if query.cursor.is_none() && ssed_sidecar_title_auto_append_is_bounded(&query.query) {
             let mut diagnostics = Vec::new();
             let prefers_dense_sidecar_titles =
@@ -433,6 +448,24 @@ impl ReaderBookPackage {
         }))
     }
 
+    fn ssed_initial_partial_native_prefix_probe_should_precede_sidecar_title_prepass(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+    ) -> Result<bool> {
+        if !ssed_initial_partial_native_prefix_prepass_query_is_bounded(query, needle) {
+            return Ok(false);
+        }
+        Ok(self.ssed_sidecar_body_resolvers()?.iter().any(|resolver| {
+            resolver.title_column.is_some()
+                && std::fs::metadata(&resolver.path)
+                    .map(|metadata| {
+                        metadata.len() >= SSED_SIDECAR_TITLE_NATIVE_FIRST_PROBE_MIN_BYTES
+                    })
+                    .unwrap_or(false)
+        }))
+    }
+
     fn ssed_native_initial_offset_overfetch_should_defer(
         &self,
         mode: &SearchMode,
@@ -608,7 +641,7 @@ impl ReaderBookPackage {
             && self.ssed_can_scan_all_title_indexes();
         if use_bounded_native_prefix_probe {
             if let Some(page) = self.search_ssed_partial_native_prefix_page(query, needle)? {
-                return Ok(Some(ssed_partial_prefix_page(page)));
+                return Ok(Some(ssed_native_partial_prefix_page(page)));
             }
             return Ok(None);
         }
@@ -3880,6 +3913,14 @@ fn ssed_partial_prefix_page(mut page: SearchPage) -> SearchPage {
     page
 }
 
+fn ssed_native_partial_prefix_page(mut page: SearchPage) -> SearchPage {
+    page.next_cursor = page
+        .next_cursor
+        .take()
+        .map(encode_ssed_partial_prefix_cursor);
+    ssed_partial_prefix_page(page)
+}
+
 fn decode_ssed_partial_nonprefix_cursor(
     cursor: Option<&str>,
 ) -> Option<SsedPartialNonprefixCursor> {
@@ -4376,6 +4417,18 @@ fn ssed_initial_title_label_fallback_prepass_should_run(query: &SearchQuery, nee
         && raw_query.chars().any(|ch| !ch.is_ascii())
 }
 
+fn ssed_initial_partial_native_prefix_prepass_query_is_bounded(
+    query: &SearchQuery,
+    needle: &str,
+) -> bool {
+    query.cursor.is_none()
+        && query.mode == SearchMode::Partial
+        && ssed_sidecar_title_authoritative_prepass_is_bounded(&query.query)
+        && ssed_sidecar_title_query_is_kana_only(&query.query)
+        && query.query.trim().chars().count() >= 2
+        && !ssed_index_page_prefilter_candidates(needle).is_empty()
+}
+
 fn ssed_native_index_component_may_match_mode(
     mode: &SearchMode,
     component: &SsedComponent,
@@ -4613,11 +4666,13 @@ mod tests {
         ssed_fulltext_partial_nonprefix_title_prepass_is_bounded,
         ssed_fulltext_row_driven_body_search_allowed,
         ssed_fulltext_sidecar_title_prepass_is_bounded,
-        ssed_initial_title_label_fallback_prepass_should_run,
+        ssed_initial_partial_native_prefix_prepass_query_is_bounded,
+        ssed_initial_title_label_fallback_prepass_should_run, ssed_native_partial_prefix_page,
         ssed_partial_prefix_prepass_is_bounded,
         ssed_sidecar_title_authoritative_prepass_is_bounded,
         ssed_sidecar_title_auto_append_is_bounded, ssed_sidecar_title_query_is_kana_only,
     };
+    use crate::SearchPage;
     use crate::package::BookId;
     use crate::search::{SearchMode, SearchQuery, SearchScope};
 
@@ -4711,6 +4766,65 @@ mod tests {
             &cursor_query,
             "画像一覧"
         ));
+    }
+
+    #[test]
+    fn partial_native_prefix_fast_prepass_is_limited_to_pure_kana_partial_queries() {
+        assert!(ssed_initial_partial_native_prefix_prepass_query_is_bounded(
+            &current_book_query(SearchMode::Partial, "しめ", 1),
+            "しめ"
+        ));
+        assert!(ssed_initial_partial_native_prefix_prepass_query_is_bounded(
+            &current_book_query(SearchMode::Partial, "ひゃ", 1),
+            "ひゃ"
+        ));
+        assert!(
+            !ssed_initial_partial_native_prefix_prepass_query_is_bounded(
+                &current_book_query(SearchMode::Forward, "しめ", 1),
+                "しめ"
+            )
+        );
+        assert!(
+            !ssed_initial_partial_native_prefix_prepass_query_is_bounded(
+                &current_book_query(SearchMode::Partial, "し", 1),
+                "し"
+            )
+        );
+        assert!(
+            !ssed_initial_partial_native_prefix_prepass_query_is_bounded(
+                &current_book_query(SearchMode::Partial, "0歳", 1),
+                "0歳"
+            )
+        );
+        assert!(
+            !ssed_initial_partial_native_prefix_prepass_query_is_bounded(
+                &current_book_query(SearchMode::Partial, "white", 1),
+                "white"
+            )
+        );
+        let mut cursor_query = current_book_query(SearchMode::Partial, "しめ", 1);
+        cursor_query.cursor = Some("ssed-partial-prefix:1".to_owned());
+        assert!(
+            !ssed_initial_partial_native_prefix_prepass_query_is_bounded(&cursor_query, "しめ")
+        );
+    }
+
+    #[test]
+    fn native_partial_prefix_page_wraps_native_cursor() {
+        let page = SearchPage {
+            hits: Vec::new(),
+            next_cursor: Some("1".to_owned()),
+            result_sequence: None,
+            diagnostics: Vec::new(),
+        };
+        let page = ssed_native_partial_prefix_page(page);
+        assert_eq!(page.next_cursor.as_deref(), Some("ssed-partial-prefix:1"));
+        assert_eq!(
+            page.diagnostics
+                .first()
+                .map(|diagnostic| diagnostic.code.as_str()),
+            Some("ssed_partial_prefix_prepass")
+        );
     }
 
     #[test]
