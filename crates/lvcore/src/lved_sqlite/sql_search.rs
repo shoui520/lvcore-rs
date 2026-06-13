@@ -18,6 +18,13 @@ struct LvedSearchProvider<'a> {
     list_columns: &'a [String],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LvedFtsVariantQuery {
+    column: String,
+    match_query: String,
+    guard_patterns: Vec<String>,
+}
+
 pub(super) fn search_lved_sqlite_connection(
     connection: &Connection,
     schema: &LvedSqliteSchema,
@@ -34,16 +41,13 @@ pub(super) fn search_lved_sqlite_connection(
         return Ok(Vec::new());
     };
     if normalized_variants.len() > 1
-        && !normalized_variants
-            .iter()
-            .any(|variant| lved_fts_query_needs_value_guard(variant))
-        && let Some(match_queries) =
-            lved_fts_match_queries(&normalized_variants, mode, provider.search_columns)
+        && let Some(variant_queries) =
+            lved_fts_variant_queries(&normalized_variants, mode, provider.search_columns)
     {
         return search_lved_sqlite_fts_variants(
             connection,
             provider,
-            &match_queries,
+            &variant_queries,
             offset,
             limit,
         );
@@ -93,7 +97,7 @@ pub(super) fn search_lved_sqlite_connection(
 fn search_lved_sqlite_fts_variants(
     connection: &Connection,
     provider: LvedSearchProvider<'_>,
-    match_queries: &[String],
+    variant_queries: &[LvedFtsVariantQuery],
     offset: usize,
     limit: usize,
 ) -> Result<Vec<LvedSearchHit>> {
@@ -105,16 +109,25 @@ fn search_lved_sqlite_fts_variants(
     let search_table = quote_identifier(provider.search_table);
     let list_table = quote_identifier(provider.list_table);
     let match_expr = fts_table_match_expr(provider.search_table);
-    let sql = format!(
-        "select l.id, l.refid, {}, {}, {}, {} \
-         from {search_table} join {list_table} l on l.id = {search_table}.rowid where {match_expr} order by {search_table}.rowid limit ?",
-        projection.anchor, projection.title, projection.subtitle, projection.kind
-    );
     let mut hits_by_list_id = BTreeMap::new();
-    for match_query in match_queries {
+    for variant in variant_queries {
+        let mut where_clause = match_expr.clone();
+        let column = quote_identifier(&variant.column);
+        for _ in &variant.guard_patterns {
+            where_clause.push_str(&format!(" and {search_table}.{column} like ? escape '\\'"));
+        }
+        let sql = format!(
+            "select l.id, l.refid, {}, {}, {}, {} \
+             from {search_table} join {list_table} l on l.id = {search_table}.rowid where {where_clause} order by {search_table}.rowid limit ?",
+            projection.anchor, projection.title, projection.subtitle, projection.kind
+        );
         let mut statement = connection.prepare(&sql)?;
+        let mut sql_parameters = Vec::with_capacity(variant.guard_patterns.len() + 2);
+        sql_parameters.push(Value::Text(variant.match_query.clone()));
+        sql_parameters.extend(variant.guard_patterns.iter().cloned().map(Value::Text));
+        sql_parameters.push(Value::Integer(fetch_limit as i64));
         let rows =
-            statement.query_map((match_query, fetch_limit as i64), lved_search_hit_from_row)?;
+            statement.query_map(params_from_iter(sql_parameters), lved_search_hit_from_row)?;
         for row in rows {
             let hit = row?;
             hits_by_list_id.entry(hit.list_id).or_insert(hit);
@@ -248,46 +261,96 @@ fn lved_search_where(
     }
 }
 
-fn lved_fts_match_queries(
+fn lved_fts_variant_queries(
     normalized_variants: &[String],
     mode: &SearchMode,
     search_columns: &[String],
-) -> Option<Vec<String>> {
+) -> Option<Vec<LvedFtsVariantQuery>> {
     let queries = normalized_variants
         .iter()
-        .filter_map(|normalized| lved_fts_match_query(normalized, mode, search_columns))
+        .filter_map(|normalized| lved_fts_variant_query(normalized, mode, search_columns))
         .collect::<Vec<_>>();
     (!queries.is_empty()).then_some(queries)
 }
 
-fn lved_fts_match_query(
+fn lved_fts_variant_query(
     normalized: &str,
     mode: &SearchMode,
     search_columns: &[String],
-) -> Option<String> {
-    match mode {
+) -> Option<LvedFtsVariantQuery> {
+    let needs_guard = lved_fts_query_needs_value_guard(normalized);
+    let (column, match_query, guard_patterns) = match mode {
         SearchMode::Exact => None,
-        SearchMode::Forward => fts_query("forward", normalized, search_columns, true, false),
+        SearchMode::Forward => Some((
+            "forward",
+            fts_query("forward", normalized, search_columns, true, false)?,
+            needs_guard
+                .then(|| lved_search_value_guard_patterns(SearchValueGuardKind::Prefix(normalized)))
+                .unwrap_or_default(),
+        )),
         SearchMode::Backward => {
             let reversed = normalized.chars().rev().collect::<String>();
-            fts_query("back", &reversed, search_columns, true, false)
+            Some((
+                "back",
+                fts_query("back", &reversed, search_columns, true, false)?,
+                needs_guard
+                    .then(|| {
+                        lved_search_value_guard_patterns(SearchValueGuardKind::Prefix(&reversed))
+                    })
+                    .unwrap_or_default(),
+            ))
         }
-        SearchMode::Partial => fts_query("part", normalized, search_columns, false, true),
-        SearchMode::FullText => fts_query(
+        SearchMode::Partial => Some((
+            "part",
+            fts_query("part", normalized, search_columns, false, true)?,
+            needs_guard
+                .then(|| {
+                    lved_search_value_guard_patterns(SearchValueGuardKind::ContainsSplitChars(
+                        normalized,
+                    ))
+                })
+                .unwrap_or_default(),
+        )),
+        SearchMode::FullText => Some((
             "fts",
-            normalized,
-            search_columns,
-            false,
-            should_split_chars(normalized),
-        ),
-        SearchMode::Advanced(column) => fts_query(
-            column,
-            normalized,
-            search_columns,
-            false,
-            should_split_chars(normalized),
-        ),
-    }
+            fts_query(
+                "fts",
+                normalized,
+                search_columns,
+                false,
+                should_split_chars(normalized),
+            )?,
+            needs_guard
+                .then(|| {
+                    lved_search_value_guard_patterns(SearchValueGuardKind::ContainsSplitChars(
+                        normalized,
+                    ))
+                })
+                .unwrap_or_default(),
+        )),
+        SearchMode::Advanced(column) => Some((
+            column.as_str(),
+            fts_query(
+                column,
+                normalized,
+                search_columns,
+                false,
+                should_split_chars(normalized),
+            )?,
+            needs_guard
+                .then(|| {
+                    lved_search_value_guard_patterns(SearchValueGuardKind::ContainsSplitChars(
+                        normalized,
+                    ))
+                })
+                .unwrap_or_default(),
+        )),
+    }?;
+    Some(LvedFtsVariantQuery {
+        column: column.to_owned(),
+        match_query,
+        guard_patterns,
+    })
 }
 
 fn exact_lved_search_where(
@@ -845,6 +908,31 @@ mod tests {
         assert!(where_clause.contains("select rowid from \"search\" where \"search\" match ?"));
         assert!(where_clause.contains("s.\"fts\" like ? escape '\\'"));
         assert_eq!(parameters, vec!["fts:法 fts:律", "%法%", "%律%"]);
+    }
+
+    #[test]
+    fn fulltext_variant_queries_keep_direct_fts_with_value_guards() {
+        let columns = search_columns(&["forward", "back", "part", "fts", "filter"]);
+        let variants = lved_query_variants("あ");
+
+        let queries = lved_fts_variant_queries(&variants, &SearchMode::FullText, &columns)
+            .expect("variant queries");
+
+        assert_eq!(
+            queries,
+            vec![
+                LvedFtsVariantQuery {
+                    column: "fts".to_owned(),
+                    match_query: "fts:あ".to_owned(),
+                    guard_patterns: vec!["%あ%".to_owned()],
+                },
+                LvedFtsVariantQuery {
+                    column: "fts".to_owned(),
+                    match_query: "fts:ア".to_owned(),
+                    guard_patterns: vec!["%ア%".to_owned()],
+                },
+            ]
+        );
     }
 
     #[test]

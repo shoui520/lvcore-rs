@@ -4,6 +4,17 @@ Date: 2026-06-13
 
 Latest full-corpus gate:
 
+- `/tmp/lvcore-all-corpora-validation-20260613-lved-direct-fts-variants.jsonl`
+- Produced after routing guarded multi-variant LVED FTS searches through direct
+  FTS table expressions and deferring exact proof of filled LVED continuation
+  pages behind `lved-offset-unverified:*` cursors.
+- 336 packages validated with package status 336 `ok`.
+- The previous 336-package baseline path set is fully covered.
+- Warning diagnostics remain only the explicitly deferred HC common HTML
+  fallback.
+
+Previous planning baseline:
+
 - `/tmp/lvcore-all-corpora-validation-20260613-ssed-multi-near-key.jsonl`
 - Produced after caching SSED MULTI descriptors/selector menus and adding a
   simple-leaf near-key fast path for filtered MULTI browse surfaces.
@@ -11,8 +22,6 @@ Latest full-corpus gate:
 - The previous 336-package baseline path set is fully covered.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback.
-
-Previous planning baseline:
 
 - `/tmp/lvcore-all-corpora-validation-20260612-native-offset-cursor.jsonl`
 - Produced after changing native SSED exact/forward/backward numeric offset
@@ -151,6 +160,64 @@ Important info/status classes from the latest gate:
 | `no_resource`, `no_link`, `no_target` | many | Usually validator sample result, not a failure |
 
 ## Fix-Now / Recently Closed Candidates
+
+### 0o. LVED guarded FTS variant latency (resolved)
+
+Why this matters:
+
+- The latest full-corpus gate exposed `_DCT_SSJPKOKU` full-text and partial
+  searches for `あ` as concrete non-HC search latency rows.
+- Direct real-package probes reproduced the issue: first-page and cursor-page
+  full-text searches were about 1.4-1.6s.
+- The slow SQL shape was the hiragana/katakana variant path for guarded FTS
+  searches. LVCore used `rowid in (select rowid from search where match ...)`
+  subqueries joined with `or`, which forced broad FTS result materialization for
+  high-frequency CJK terms.
+
+Current status:
+
+- Multi-variant LVED FTS searches now run each variant as a direct FTS table
+  expression with the same value guard patterns, then merge/deduplicate by list
+  id in row order.
+- LVED numeric continuation pages also return `lved-offset-unverified:*` when a
+  continuation page fills exactly, deferring next-page proof instead of doing
+  immediate overfetch on every continuation.
+- Focused tests passed:
+  - `cargo test -p lvcore lved_sqlite::sql_search -- --nocapture`
+  - `cargo test -p lvcore-cli validate_search_cursor_probe_skips_expensive_fulltext_body_cursors -- --nocapture`
+  - `cargo fmt --check`
+- Direct real-package probes:
+  - `_DCT_SSJPKOKU` full-text `あ --limit 1` dropped from about 1.4-1.6s to
+    about 0.37s.
+  - Cursor page `--cursor 1` dropped to about 0.36s and returns
+    `lved-offset-unverified:2`.
+  - Partial `あ --limit 1` dropped to about 0.35s.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ssjpkoku-lved-direct-variants.jsonl`
+  - `_DCT_SSJPKOKU` package status remained `ok`.
+  - Package elapsed time dropped from 5348 ms in the latest full-gate baseline
+    to 1243 ms in focused validation.
+  - The `search_full_text` row dropped from 2185 ms with a 1084 ms cursor probe
+    to 1 ms with a 0 ms cursor probe in focused validation.
+  - The `search_partial` row dropped from 1305 ms with a 644 ms cursor probe to
+    5 ms with a 0 ms cursor probe in focused validation.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260613-lved-direct-fts-variants.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - The previous full-gate path set is fully covered.
+  - Warning diagnostics remain only `hc_render_common_html_fallback` (1936),
+    which is deferred HC work.
+  - `_DCT_SSJPKOKU` package elapsed time is 2374 ms.
+  - The `search_full_text` row is 1 ms with a 0 ms cursor probe.
+  - The `search_partial` row is 6 ms with a 0 ms cursor probe.
+
+Baseline evidence:
+
+- Package:
+  - `/home/shoui/Agents/CodexMax/LogoVista/LOGOVISTA_SQLCIPHER_DICTS_WINDOWS/_DCT_SSJPKOKU`
+- Observed rows:
+  - `kind`: `search_full_text`, query: `あ`
+  - `kind`: `search_partial`, query: `あ`
 
 ### 0n. SSED MULTI filtered selector browse latency (resolved)
 

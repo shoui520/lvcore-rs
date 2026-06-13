@@ -1,5 +1,7 @@
 use super::*;
 
+const LVED_UNVERIFIED_OFFSET_CURSOR_PREFIX: &str = "lved-offset-unverified:";
+
 impl ReaderBookPackage {
     pub(super) fn search_lved_sqlite(&self, query: &SearchQuery) -> Result<SearchPage> {
         let Some(store) = &self.lved_store else {
@@ -26,11 +28,22 @@ impl ReaderBookPackage {
             }
             return Ok(page);
         }
-        let offset = decode_offset_cursor(query.cursor.as_deref());
-        let page_limit = query.limit.saturating_add(1);
+        let offset = decode_lved_unverified_offset_cursor(query.cursor.as_deref())
+            .unwrap_or_else(|| decode_offset_cursor(query.cursor.as_deref()));
+        let defer_offset_overfetch = query.cursor.is_some();
+        let page_limit = if defer_offset_overfetch {
+            query.limit
+        } else {
+            query.limit.saturating_add(1)
+        };
         let mut raw_hits = store.search_page(&query.query, &query.mode, offset, page_limit)?;
-        let mut next_cursor =
-            (raw_hits.len() > query.limit).then(|| (offset + query.limit).to_string());
+        let mut next_cursor = if raw_hits.len() > query.limit {
+            Some((offset + query.limit).to_string())
+        } else if defer_offset_overfetch && query.limit > 0 && raw_hits.len() == query.limit {
+            Some(encode_lved_unverified_offset_cursor(offset + query.limit))
+        } else {
+            None
+        };
         raw_hits.truncate(query.limit);
         let mut hits = raw_hits
             .into_iter()
@@ -79,4 +92,13 @@ impl ReaderBookPackage {
             diagnostics,
         })
     }
+}
+
+fn decode_lved_unverified_offset_cursor(cursor: Option<&str>) -> Option<usize> {
+    let cursor = cursor?.strip_prefix(LVED_UNVERIFIED_OFFSET_CURSOR_PREFIX)?;
+    cursor.parse().ok()
+}
+
+fn encode_lved_unverified_offset_cursor(offset: usize) -> String {
+    format!("{LVED_UNVERIFIED_OFFSET_CURSOR_PREFIX}{offset}")
 }

@@ -964,6 +964,9 @@ fn should_probe_search_cursor(mode: &SearchMode, cursor: &str) -> bool {
     {
         return false;
     }
+    if cursor.starts_with("lved-offset-unverified:") {
+        return false;
+    }
     !(matches!(mode, SearchMode::FullText)
         && (cursor.starts_with("body:")
             || cursor.starts_with("body-offset:")
@@ -982,6 +985,9 @@ fn skipped_search_cursor_probe_reason(mode: &SearchMode, cursor: &str) -> &'stat
     ) && cursor.starts_with("ssed-offset-unverified:")
     {
         return "unverified native offset continuation may scan large SSED indexes";
+    }
+    if cursor.starts_with("lved-offset-unverified:") {
+        return "unverified LVED offset continuation may repeat broad SQLite searches";
     }
     "body full-text continuation cursors may rescan large SSED body windows"
 }
@@ -2989,6 +2995,14 @@ mod tests {
         assert_eq!(
             skipped_search_cursor_probe_reason(&SearchMode::Backward, "ssed-offset-unverified:2"),
             "unverified native offset continuation may scan large SSED indexes"
+        );
+        assert!(!should_probe_search_cursor(
+            &SearchMode::FullText,
+            "lved-offset-unverified:2"
+        ));
+        assert_eq!(
+            skipped_search_cursor_probe_reason(&SearchMode::FullText, "lved-offset-unverified:2"),
+            "unverified LVED offset continuation may repeat broad SQLite searches"
         );
     }
 
