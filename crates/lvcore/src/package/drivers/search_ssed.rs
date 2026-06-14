@@ -4666,7 +4666,7 @@ fn ssed_title_label_tiny_index_hit_page_query_is_bounded(query: &SearchQuery) ->
             query,
             &normalize_search_match_text(&query.query),
         )
-        && ssed_sidecar_title_authoritative_prepass_is_bounded(&query.query)
+        && !ssed_sidecar_title_query_contains_native_circle_marker(&query.query)
 }
 
 fn ssed_initial_partial_native_prefix_prepass_query_is_bounded(
@@ -5208,6 +5208,13 @@ mod tests {
         assert_eq!(
             ssed_title_label_fallback_hit_page_max_rows_for_index_blocks(
                 &exact_query,
+                SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS,
+            ),
+            SSED_TITLE_LABEL_TINY_INDEX_SEARCH_FALLBACK_MAX_ROWS
+        );
+        assert_eq!(
+            ssed_title_label_fallback_hit_page_max_rows_for_index_blocks(
+                &current_book_query(SearchMode::Exact, "ｂｅｓｔ", 1),
                 SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS,
             ),
             SSED_TITLE_LABEL_TINY_INDEX_SEARCH_FALLBACK_MAX_ROWS
