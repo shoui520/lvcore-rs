@@ -1495,9 +1495,9 @@ fn ssed_partial_deferred_nonprefix_cursor_resumes_at_visible_physical_page() {
     assert_eq!(first_page.hits.len(), 1);
     assert_eq!(first_page.hits[0].title_text, "002");
     let deferred_cursor = first_page.next_cursor.as_deref().unwrap();
-    assert_eq!(
-        deferred_cursor,
-        "ssed-partial-nonprefix-unverified-index:0:0"
+    assert!(
+        deferred_cursor.starts_with("ssed-partial-nonprefix-index:"),
+        "{first_page:#?}"
     );
 
     let second_page = package
@@ -1577,7 +1577,7 @@ fn ssed_partial_deferred_nonprefix_cursor_resumes_at_visible_physical_page() {
 }
 
 #[test]
-fn ssed_partial_prefix_page_defers_large_nonprefix_cursor_without_visibility_probe() {
+fn ssed_partial_prefix_page_proves_no_large_nonprefix_continuation() {
     let dir = tempdir().unwrap();
 
     fs::write(
@@ -1701,10 +1701,7 @@ fn ssed_partial_prefix_page_defers_large_nonprefix_cursor_without_visibility_pro
 
     assert_eq!(page.hits.len(), 1);
     assert_eq!(page.hits[0].title_text, "target");
-    assert_eq!(
-        page.next_cursor.as_deref(),
-        Some("ssed-partial-nonprefix-unverified-index:0:0")
-    );
+    assert_eq!(page.next_cursor, None);
     assert!(
         page.diagnostics
             .iter()

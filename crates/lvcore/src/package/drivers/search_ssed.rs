@@ -693,32 +693,27 @@ impl ReaderBookPackage {
             .take()
             .map(encode_ssed_partial_prefix_cursor);
         if page.next_cursor.is_none() {
-            if !page.hits.is_empty() && self.ssed_partial_nonprefix_fill_should_defer() {
-                page.next_cursor = Some(encode_ssed_partial_unverified_nonprefix_cursor(None));
-            } else {
-                let remaining = query.limit.saturating_sub(page.hits.len());
-                if remaining > 0 {
-                    if !page.hits.is_empty() {
-                        page.next_cursor = self.ssed_deferred_partial_nonprefix_cursor_if_visible(
-                            query, needle, true,
-                        )?;
-                    } else {
-                        let mut nonprefix_query = query.clone();
-                        nonprefix_query.limit = remaining;
-                        let mut nonprefix_page = self.search_ssed_partial_nonprefix_page(
-                            &nonprefix_query,
-                            needle,
-                            None,
-                            true,
-                        )?;
-                        page.hits.append(&mut nonprefix_page.hits);
-                        page.diagnostics.extend(nonprefix_page.diagnostics);
-                        page.next_cursor = nonprefix_page.next_cursor;
-                    }
-                } else {
+            let remaining = query.limit.saturating_sub(page.hits.len());
+            if remaining > 0 {
+                if !page.hits.is_empty() {
                     page.next_cursor = self
                         .ssed_deferred_partial_nonprefix_cursor_if_visible(query, needle, true)?;
+                } else {
+                    let mut nonprefix_query = query.clone();
+                    nonprefix_query.limit = remaining;
+                    let mut nonprefix_page = self.search_ssed_partial_nonprefix_page(
+                        &nonprefix_query,
+                        needle,
+                        None,
+                        true,
+                    )?;
+                    page.hits.append(&mut nonprefix_page.hits);
+                    page.diagnostics.extend(nonprefix_page.diagnostics);
+                    page.next_cursor = nonprefix_page.next_cursor;
                 }
+            } else {
+                page.next_cursor =
+                    self.ssed_deferred_partial_nonprefix_cursor_if_visible(query, needle, true)?;
             }
         }
         Ok(ssed_partial_prefix_page(page))
