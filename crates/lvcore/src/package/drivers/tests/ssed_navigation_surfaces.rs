@@ -1710,6 +1710,171 @@ fn ssed_partial_prefix_page_proves_no_large_nonprefix_continuation() {
 }
 
 #[test]
+fn ssed_visible_title_label_cursor_advances_past_duplicate_seen_targets() {
+    let dir = tempdir().unwrap();
+
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[b"body"], 100, 100),
+    )
+    .unwrap();
+
+    let row_count = 20_800usize;
+    let rows_per_leaf = 64usize;
+    let leaf_count = row_count.div_ceil(rows_per_leaf);
+    let mut titles = Vec::new();
+    let target_title_offset = 0u16;
+    titles.extend_from_slice(&body_jis("ターゲット"));
+    titles.extend_from_slice(&[0x1f, 0x0a]);
+    let filler_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"x\x1f\x0a");
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[&titles], 300, 300),
+    )
+    .unwrap();
+
+    let mut internal = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    internal[0..2].copy_from_slice(&0x0002u16.to_be_bytes());
+    internal[2..4].copy_from_slice(&u16::try_from(leaf_count).unwrap().to_be_bytes());
+    let mut internal_pos = 4usize;
+    let leaf_key = body_jis("あ");
+    for leaf_index in 0..leaf_count {
+        write_internal_index_row(
+            &mut internal,
+            &mut internal_pos,
+            &leaf_key,
+            201 + u32::try_from(leaf_index).unwrap(),
+        );
+    }
+
+    let mut index_stream = Vec::new();
+    index_stream.extend_from_slice(&internal);
+    for leaf_index in 0..leaf_count {
+        let start = leaf_index * rows_per_leaf;
+        let end = (start + rows_per_leaf).min(row_count);
+        let mut leaf = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+        leaf[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+        leaf[2..4].copy_from_slice(&u16::try_from(end - start).unwrap().to_be_bytes());
+        let mut pos = 4usize;
+        for row_index in start..end {
+            let title_offset = if row_index == 0 || row_index == 20_600 {
+                target_title_offset
+            } else {
+                filler_title_offset
+            };
+            write_simple_index_row(&mut leaf, &mut pos, &leaf_key, 100, 0, 300, title_offset);
+        }
+        index_stream.extend_from_slice(&leaf);
+    }
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(
+            &index_stream
+                .chunks(crate::ssed::CHUNK_SIZE)
+                .collect::<Vec<_>>(),
+            200,
+            200 + leaf_count as u32,
+        ),
+    )
+    .unwrap();
+
+    let catalog = SsedCatalog {
+        title: "Duplicate label".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x91,
+                start_block: 200,
+                end_block: 200 + leaf_count as u32,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    };
+    let search_modes = ssed_search_modes(&catalog, dir.path());
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Duplicate label".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            search_modes,
+            ..Default::default()
+        },
+    );
+
+    let first = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "ターゲット".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert_eq!(first.hits.len(), 1);
+    assert_eq!(first.hits[0].title_text, "ターゲット");
+    let cursor = first.next_cursor.clone().unwrap();
+    assert!(cursor.starts_with("ssed-title-label-seen:"));
+
+    let continuation = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Exact,
+            query: "ターゲット".to_owned(),
+            cursor: Some(cursor),
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+
+    assert!(continuation.hits.is_empty());
+    assert_eq!(continuation.next_cursor, None);
+}
+
+#[test]
 fn ssed_visible_title_label_fallback_does_not_return_empty_no_hit_cursor() {
     let dir = tempdir().unwrap();
 

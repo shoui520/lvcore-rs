@@ -27,6 +27,7 @@ const SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES: u64 = 8 * 1024 * 1
 const SSED_SIDECAR_TITLE_NATIVE_FIRST_PROBE_MIN_BYTES: u64 = 128 * 1024 * 1024;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
 const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
+const SSED_TITLE_LABEL_SEEN_CURSOR_PREFIX: &str = "ssed-title-label-seen:";
 const SSED_TITLE_LABEL_UNVERIFIED_CURSOR_PREFIX: &str = "ssed-title-label-unverified:";
 const SSED_AUX_LABEL_CURSOR_PREFIX: &str = "ssed-aux-label:";
 const SSED_UNVERIFIED_OFFSET_CURSOR_PREFIX: &str = "ssed-offset-unverified:";
@@ -66,14 +67,8 @@ impl ReaderBookPackage {
         if let Some(sidecar_cursor) = decode_ssed_sidecar_title_cursor(query.cursor.as_deref()) {
             return self.search_ssed_sidecar_title_page(query, sidecar_cursor, Vec::new());
         }
-        if let Some(title_label_row_offset) =
-            decode_ssed_title_label_cursor(query.cursor.as_deref())
-        {
-            return self.search_ssed_title_label_fallback_page(
-                query,
-                &needle,
-                title_label_row_offset,
-            );
+        if let Some(title_label_cursor) = decode_ssed_title_label_cursor(query.cursor.as_deref()) {
+            return self.search_ssed_title_label_fallback_page(query, &needle, title_label_cursor);
         }
         let has_readable_ssed_indexes = self
             .ssed_catalog
@@ -198,7 +193,7 @@ impl ReaderBookPackage {
             let mut title_label_page = self.search_ssed_title_label_fallback_page_inner(
                 query,
                 &needle,
-                0,
+                SsedTitleLabelCursor::new(0),
                 SSED_TITLE_LABEL_FAST_PREPASS_MAX_ROWS,
                 false,
             )?;
@@ -358,8 +353,11 @@ impl ReaderBookPackage {
             )
         {
             if ssed_title_label_fallback_is_reasonable(&query.mode, &needle) {
-                let mut fallback_page =
-                    self.search_ssed_title_label_fallback_page(query, &needle, 0)?;
+                let mut fallback_page = self.search_ssed_title_label_fallback_page(
+                    query,
+                    &needle,
+                    SsedTitleLabelCursor::new(0),
+                )?;
                 if fallback_page.hits.is_empty() && fallback_page.next_cursor.is_none() {
                     let mut immediate_diagnostics = Vec::new();
                     for diagnostic in fallback_page.diagnostics {
@@ -1382,12 +1380,12 @@ impl ReaderBookPackage {
         &self,
         query: &SearchQuery,
         needle: &str,
-        row_offset: usize,
+        cursor: SsedTitleLabelCursor,
     ) -> Result<SearchPage> {
         self.search_ssed_title_label_fallback_page_inner(
             query,
             needle,
-            row_offset,
+            cursor,
             SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS,
             true,
         )
@@ -1397,17 +1395,18 @@ impl ReaderBookPackage {
         &self,
         query: &SearchQuery,
         needle: &str,
-        row_offset: usize,
+        cursor: SsedTitleLabelCursor,
         empty_page_max_rows: usize,
         emit_budget_diagnostic: bool,
     ) -> Result<SearchPage> {
         let label_policy = query.label_gaiji_policy();
         let skip_backward_rows = self.ssed_has_forward_browse_index();
+        let row_offset = cursor.row_offset;
         let mut checked_rows = 0usize;
         let mut scanned_rows = 0usize;
         let mut hits = Vec::new();
         let mut diagnostics = Vec::new();
-        let mut seen_targets = HashSet::new();
+        let mut seen_targets = cursor.seen_targets;
         let mut stopped = SsedTitleLabelFallbackStop::Exhausted;
         let mut page_full_cursor = None::<usize>;
         let hit_page_max_rows = self.ssed_title_label_fallback_hit_page_max_rows(query);
@@ -1451,7 +1450,7 @@ impl ReaderBookPackage {
                     return Ok(true);
                 }
                 let body_key = format!("{:08x}:{:04x}", row.body.block, row.body.offset);
-                if !seen_targets.insert(body_key) {
+                if seen_targets.contains(&body_key) {
                     return Ok(true);
                 }
                 let target = match self.ssed_target_for_search_index_row(&row)? {
@@ -1465,6 +1464,7 @@ impl ReaderBookPackage {
                     stopped = SsedTitleLabelFallbackStop::PageFullVerified;
                     return Ok(false);
                 }
+                seen_targets.insert(body_key);
                 let title = self.ssed_display_text_for_index_row(&row);
                 let label = self.ssed_rich_label_with_policy(&title, &label_policy);
                 let href = target.href();
@@ -1488,15 +1488,31 @@ impl ReaderBookPackage {
         let next_cursor = match stopped {
             SsedTitleLabelFallbackStop::Exhausted => None,
             SsedTitleLabelFallbackStop::Budget if let Some(cursor) = page_full_cursor => {
-                Some(encode_ssed_unverified_title_label_cursor(cursor))
+                if seen_targets.is_empty() {
+                    Some(encode_ssed_unverified_title_label_cursor(cursor))
+                } else {
+                    Some(encode_ssed_title_label_cursor_with_seen(
+                        checked_rows.max(cursor),
+                        &seen_targets,
+                    ))
+                }
             }
-            SsedTitleLabelFallbackStop::Budget if hits.is_empty() => None,
-            SsedTitleLabelFallbackStop::Budget => {
-                Some(encode_ssed_title_label_cursor(checked_rows))
+            SsedTitleLabelFallbackStop::Budget if hits.is_empty() => {
+                if seen_targets.is_empty() {
+                    None
+                } else {
+                    Some(encode_ssed_title_label_cursor_with_seen(
+                        checked_rows,
+                        &seen_targets,
+                    ))
+                }
             }
-            SsedTitleLabelFallbackStop::PageFullVerified => {
-                page_full_cursor.map(encode_ssed_title_label_cursor)
-            }
+            SsedTitleLabelFallbackStop::Budget => Some(encode_ssed_title_label_cursor_with_seen(
+                checked_rows,
+                &seen_targets,
+            )),
+            SsedTitleLabelFallbackStop::PageFullVerified => page_full_cursor
+                .map(|cursor| encode_ssed_title_label_cursor_with_seen(cursor, &seen_targets)),
         };
         if emit_budget_diagnostic && matches!(stopped, SsedTitleLabelFallbackStop::Budget) {
             let mut diagnostic = if hits.is_empty() {
@@ -4577,23 +4593,70 @@ enum SsedTitleLabelFallbackStop {
     PageFullVerified,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SsedTitleLabelCursor {
+    row_offset: usize,
+    seen_targets: HashSet<String>,
+}
+
+impl SsedTitleLabelCursor {
+    fn new(row_offset: usize) -> Self {
+        Self {
+            row_offset,
+            seen_targets: HashSet::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SsedAuxLabelSearchStop {
     Exhausted,
     PageFull,
 }
 
-fn decode_ssed_title_label_cursor(cursor: Option<&str>) -> Option<usize> {
+fn decode_ssed_title_label_cursor(cursor: Option<&str>) -> Option<SsedTitleLabelCursor> {
     let cursor = cursor?;
-    cursor
+    if let Some(payload) = cursor.strip_prefix(SSED_TITLE_LABEL_SEEN_CURSOR_PREFIX) {
+        let decoded = URL_SAFE_NO_PAD.decode(payload.as_bytes()).ok()?;
+        let decoded = String::from_utf8(decoded).ok()?;
+        let (row_offset, seen_targets) = decoded.split_once('\n')?;
+        let row_offset = row_offset.parse().ok()?;
+        let seen_targets = seen_targets
+            .split(',')
+            .filter(|target| !target.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+        return Some(SsedTitleLabelCursor {
+            row_offset,
+            seen_targets,
+        });
+    }
+    let row_offset = cursor
         .strip_prefix(SSED_TITLE_LABEL_UNVERIFIED_CURSOR_PREFIX)
         .or_else(|| cursor.strip_prefix(SSED_TITLE_LABEL_CURSOR_PREFIX))?
         .parse()
-        .ok()
+        .ok()?;
+    Some(SsedTitleLabelCursor::new(row_offset))
 }
 
 fn encode_ssed_title_label_cursor(offset: usize) -> String {
     format!("{SSED_TITLE_LABEL_CURSOR_PREFIX}{offset}")
+}
+
+fn encode_ssed_title_label_cursor_with_seen(
+    offset: usize,
+    seen_targets: &HashSet<String>,
+) -> String {
+    if seen_targets.is_empty() {
+        return encode_ssed_title_label_cursor(offset);
+    }
+    let mut seen_targets = seen_targets.iter().map(String::as_str).collect::<Vec<_>>();
+    seen_targets.sort_unstable();
+    let payload = format!("{offset}\n{}", seen_targets.join(","));
+    format!(
+        "{SSED_TITLE_LABEL_SEEN_CURSOR_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(payload.as_bytes())
+    )
 }
 
 fn encode_ssed_unverified_title_label_cursor(offset: usize) -> String {
@@ -4992,7 +5055,8 @@ mod tests {
         encode_ssed_partial_nonprefix_physical_offset_cursor,
         encode_ssed_partial_unverified_nonprefix_cursor,
         encode_ssed_partial_unverified_nonprefix_physical_offset_cursor,
-        encode_ssed_unverified_title_label_cursor, ssed_fulltext_first_byte_candidate_offset,
+        encode_ssed_title_label_cursor_with_seen, encode_ssed_unverified_title_label_cursor,
+        ssed_fulltext_first_byte_candidate_offset,
         ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe,
         ssed_fulltext_nonprefix_title_continuation_proof_is_bounded,
         ssed_fulltext_partial_nonprefix_title_prepass_is_bounded,
@@ -5814,10 +5878,19 @@ mod tests {
     fn title_label_unverified_cursor_decodes_as_title_label_offset() {
         let cursor = encode_ssed_unverified_title_label_cursor(42);
         assert_eq!(cursor, "ssed-title-label-unverified:42");
-        assert_eq!(decode_ssed_title_label_cursor(Some(&cursor)), Some(42));
-        assert_eq!(
-            decode_ssed_title_label_cursor(Some("ssed-title-label:42")),
-            Some(42)
-        );
+        let decoded = decode_ssed_title_label_cursor(Some(&cursor)).unwrap();
+        assert_eq!(decoded.row_offset, 42);
+        assert!(decoded.seen_targets.is_empty());
+
+        let decoded = decode_ssed_title_label_cursor(Some("ssed-title-label:42")).unwrap();
+        assert_eq!(decoded.row_offset, 42);
+        assert!(decoded.seen_targets.is_empty());
+
+        let seen_targets = HashSet::from(["00000064:0000".to_owned()]);
+        let cursor = encode_ssed_title_label_cursor_with_seen(20480, &seen_targets);
+        assert!(cursor.starts_with("ssed-title-label-seen:"));
+        let decoded = decode_ssed_title_label_cursor(Some(&cursor)).unwrap();
+        assert_eq!(decoded.row_offset, 20480);
+        assert_eq!(decoded.seen_targets, seen_targets);
     }
 }
