@@ -506,6 +506,178 @@ fn ssed_native_initial_offset_defers_overfetch_for_large_short_query() {
 }
 
 #[test]
+fn ssed_partial_prefix_proves_specific_native_offset_cursor() {
+    let dir = tempdir().unwrap();
+
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(
+            &[b"ten alpha body\0ten beta body\0alpha body\0beta body"],
+            100,
+            100,
+        ),
+    )
+    .unwrap();
+
+    let mut titles = Vec::new();
+    let numeric_alpha_title_offset = 0u16;
+    titles.extend_from_slice(b"10 alpha\x1f\x0a");
+    let numeric_beta_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"10 beta\x1f\x0a");
+    let alpha_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"al alpha\x1f\x0a");
+    let beta_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"al beta\x1f\x0a");
+    fs::write(
+        dir.path().join("FHTITLE.DIC"),
+        fixture_sseddata_literal_chunks(&[&titles], 300, 300),
+    )
+    .unwrap();
+
+    let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
+    index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
+    index_page[2..4].copy_from_slice(&4u16.to_be_bytes());
+    let mut pos = 4usize;
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        b"10 alpha",
+        100,
+        0,
+        300,
+        numeric_alpha_title_offset,
+    );
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        b"10 beta",
+        100,
+        15,
+        300,
+        numeric_beta_title_offset,
+    );
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        b"al alpha",
+        100,
+        29,
+        300,
+        alpha_title_offset,
+    );
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        b"al beta",
+        100,
+        40,
+        300,
+        beta_title_offset,
+    );
+    fs::write(
+        dir.path().join("FHINDEX.DIC"),
+        fixture_sseddata_literal_chunks(&[&index_page], 200, 200),
+    )
+    .unwrap();
+
+    let catalog = SsedCatalog {
+        title: "Large forward partial".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x03,
+                start_block: 300,
+                end_block: 300,
+                data: [0; 4],
+                filename: "FHTITLE.DIC".to_owned(),
+                role: SsedComponentRole::Title,
+            },
+            SsedComponent {
+                index: 2,
+                multi: 0,
+                component_type: 0x91,
+                start_block: 200,
+                end_block: 2305,
+                data: [0; 4],
+                filename: "FHINDEX.DIC".to_owned(),
+                role: SsedComponentRole::Index,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 3,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Large forward partial".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    let ascii = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "al".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(ascii.hits.len(), 1);
+    assert_eq!(ascii.hits[0].title_text, "al alpha");
+    assert_eq!(
+        ascii.next_cursor.as_deref(),
+        Some("ssed-partial-prefix:ssed-offset-unverified:1")
+    );
+
+    let numeric = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Partial,
+            query: "10".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(numeric.hits.len(), 1);
+    assert_eq!(numeric.hits[0].title_text, "10 alpha");
+    assert_eq!(
+        numeric.next_cursor.as_deref(),
+        Some("ssed-partial-prefix:1")
+    );
+}
+
+#[test]
 fn ssed_multi_descriptor_and_selector_menu_are_cached() {
     let dir = tempdir().unwrap();
 

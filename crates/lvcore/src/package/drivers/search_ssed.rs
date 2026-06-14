@@ -735,10 +735,21 @@ impl ReaderBookPackage {
         query: &SearchQuery,
         needle: &str,
     ) -> Result<SearchPage> {
-        page.next_cursor = page
-            .next_cursor
-            .take()
-            .map(encode_ssed_partial_prefix_cursor);
+        if let Some(cursor) = page.next_cursor.take() {
+            let cursor = if let Some(next_offset) =
+                decode_ssed_unverified_offset_cursor(Some(cursor.as_str()))
+            {
+                self.ssed_deferred_partial_prefix_native_offset_cursor_if_visible(
+                    query,
+                    needle,
+                    next_offset,
+                )?
+                .unwrap_or(cursor)
+            } else {
+                cursor
+            };
+            page.next_cursor = Some(encode_ssed_partial_prefix_cursor(cursor));
+        }
         if page.next_cursor.is_none() {
             let remaining = query.limit.saturating_sub(page.hits.len());
             if remaining > 0 {
@@ -764,6 +775,45 @@ impl ReaderBookPackage {
             }
         }
         Ok(ssed_partial_prefix_page(page))
+    }
+
+    fn ssed_deferred_partial_prefix_native_offset_cursor_if_visible(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        next_offset: usize,
+    ) -> Result<Option<String>> {
+        if !ssed_partial_prefix_deferred_native_offset_proof_is_bounded(query)
+            || ssed_index_search_key_candidates(needle).is_empty()
+        {
+            return Ok(None);
+        }
+
+        let mut collector = SsedIndexSearchCollector::new(
+            self,
+            &SearchMode::Forward,
+            needle,
+            next_offset,
+            1,
+            query.label_gaiji_policy(),
+        )
+        .with_display_label_matching()
+        .with_pending_page_limit_stop();
+        let candidate_has_hits = Cell::new(false);
+        self.scan_ssed_simple_leaf_index_rows_near_key_with_leaf_budget(
+            &SearchMode::Forward,
+            needle,
+            SSED_NATIVE_DEFERRED_OFFSET_PROOF_LEAF_PAGE_BUDGET,
+            |row| {
+                let keep_scanning = collector.push_row(row)?;
+                if collector.has_hits() {
+                    candidate_has_hits.set(true);
+                }
+                Ok(keep_scanning)
+            },
+            || candidate_has_hits.get(),
+        )?;
+        Ok(collector.has_hits().then(|| next_offset.to_string()))
     }
 
     fn search_ssed_partial_native_prefix_page(
@@ -3833,16 +3883,33 @@ fn ssed_native_deferred_offset_proof_is_bounded(query: &SearchQuery) -> bool {
     if trimmed.is_empty() || trimmed.chars().all(|ch| ch.is_ascii_alphabetic()) {
         return false;
     }
-    let has_non_ascii = trimmed.chars().any(|ch| !ch.is_ascii());
-    let is_ascii_alphanumeric = trimmed.chars().all(|ch| ch.is_ascii_alphanumeric());
-
     if query.limit >= SSED_NATIVE_DEFERRED_OFFSET_PROOF_BROAD_MIN_LIMIT {
         return true;
     }
 
     query.limit == 1
         && query.mode == SearchMode::Backward
-        && (has_non_ascii || is_ascii_alphanumeric)
+        && ssed_native_deferred_offset_specific_query_is_bounded(trimmed)
+}
+
+fn ssed_partial_prefix_deferred_native_offset_proof_is_bounded(query: &SearchQuery) -> bool {
+    if query.cursor.is_some() || query.mode != SearchMode::Partial || query.limit != 1 {
+        return false;
+    }
+
+    let trimmed = query.query.trim();
+    if trimmed.is_empty() || trimmed.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return false;
+    }
+
+    ssed_native_deferred_offset_specific_query_is_bounded(trimmed)
+}
+
+fn ssed_native_deferred_offset_specific_query_is_bounded(trimmed: &str) -> bool {
+    let has_non_ascii = trimmed.chars().any(|ch| !ch.is_ascii());
+    let is_ascii_alphanumeric = trimmed.chars().all(|ch| ch.is_ascii_alphanumeric());
+
+    (has_non_ascii || is_ascii_alphanumeric)
         && trimmed
             .chars()
             .take(SSED_NATIVE_DEFERRED_OFFSET_PROOF_SPECIFIC_MIN_CHARS)
