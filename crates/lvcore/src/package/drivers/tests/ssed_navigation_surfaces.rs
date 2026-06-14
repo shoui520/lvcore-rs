@@ -1560,10 +1560,15 @@ fn ssed_partial_deferred_nonprefix_cursor_resumes_at_visible_physical_page() {
 
     assert_eq!(nonprefix_first_page.hits.len(), 1);
     assert_eq!(nonprefix_first_page.hits[0].title_text, "x00-one");
+    assert_eq!(
+        nonprefix_first_page.next_cursor.as_deref(),
+        Some("ssed-partial-nonprefix-noskip-offset:1")
+    );
     assert!(
-        nonprefix_first_page.next_cursor.as_deref().is_some_and(
-            |cursor| cursor.starts_with("ssed-partial-nonprefix-noskip-physical-offset:")
-        )
+        nonprefix_first_page
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "ssed_partial_title_index_prepass" })
     );
     assert!(nonprefix_first_page.diagnostics.iter().all(|diagnostic| {
         diagnostic.code != "ssed_index_empty_physical_pages_skipped"
@@ -2968,6 +2973,117 @@ fn ssed_auxiliary_index_routes_menu_component_targets_as_menu_items() {
 }
 
 #[test]
+fn ssed_menu_address_continuation_preserves_address_scope() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("HONMON.DIC"),
+        fixture_sseddata_literal_chunks(&[b"alpha body"], 100, 100),
+    )
+    .unwrap();
+
+    let mut menu = Vec::new();
+    menu.extend(ssed_menu_record_for_test(&[&[0x24, 0x22]], 100, 0));
+    let address_offset = menu.len();
+    menu.extend(ssed_menu_record_for_test(
+        &[&[0x24, 0x24], &[0x24, 0x26], &[0x24, 0x28]],
+        100,
+        1,
+    ));
+    menu.extend(ssed_menu_record_for_test(&[&[0x24, 0x2a]], 100, 4));
+    fs::write(
+        dir.path().join("MENU.DIC"),
+        fixture_sseddata_literal_chunks(&[&menu], 500, 500),
+    )
+    .unwrap();
+
+    let catalog = SsedCatalog {
+        title: "Scoped menu".to_owned(),
+        components: vec![
+            SsedComponent {
+                index: 0,
+                multi: 0,
+                component_type: 0x00,
+                start_block: 100,
+                end_block: 100,
+                data: [0; 4],
+                filename: "HONMON.DIC".to_owned(),
+                role: SsedComponentRole::Honmon,
+            },
+            SsedComponent {
+                index: 1,
+                multi: 0,
+                component_type: 0x01,
+                start_block: 500,
+                end_block: 500,
+                data: [0; 4],
+                filename: "MENU.DIC".to_owned(),
+                role: SsedComponentRole::Menu,
+            },
+        ],
+        layout: crate::ssed::SsedInfoLayout {
+            component_count_offset: 0,
+            record_start: 0,
+            record_size: 0x30,
+            component_count: 2,
+            trailing_bytes: 0,
+        },
+    };
+    let package = ReaderBookPackage::new(
+        dir.path(),
+        DetectedPackage {
+            root: dir.path().to_path_buf(),
+            format_family: FormatFamily::Ssed,
+            confidence: 95,
+            title: Some("Scoped menu".to_owned()),
+            evidence: Vec::new(),
+        },
+        ssed_capabilities(&catalog, dir.path()),
+        PackageStores {
+            ssed_catalog: Some(catalog),
+            ..Default::default()
+        },
+    );
+
+    let address_cursor = format!("addr:500:{address_offset}");
+    let first = package
+        .open_surface_page("menu", Some(&address_cursor), 2)
+        .unwrap();
+    let NavigationSurface::SimpleMenu {
+        nodes, next_cursor, ..
+    } = first
+    else {
+        panic!("expected SSED menu surface");
+    };
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["い", "う"]
+    );
+    let expected_next_cursor = format!("addr:500:{address_offset}:link:0:2");
+    assert_eq!(next_cursor.as_deref(), Some(expected_next_cursor.as_str()));
+
+    let second = package
+        .open_surface_page("menu", Some(&expected_next_cursor), 2)
+        .unwrap();
+    let NavigationSurface::SimpleMenu {
+        nodes, next_cursor, ..
+    } = second
+    else {
+        panic!("expected SSED menu surface");
+    };
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|node| node.label_text.as_str())
+            .collect::<Vec<_>>(),
+        ["え", "お"]
+    );
+    assert_eq!(next_cursor, None);
+}
+
+#[test]
 fn ssed_ios_table_list_window_uses_plist_order() {
     let dir = tempdir().unwrap();
     fs::write(
@@ -3255,6 +3371,21 @@ fn ssed_table_list_test_ssedinfo_with_honmon_range(
         "HONMON.DIC",
     );
     data
+}
+
+fn ssed_menu_record_for_test(labels_jis: &[&[u8]], block: u32, first_offset: u32) -> Vec<u8> {
+    let mut record = vec![0x1f, 0x09, 0x00, 0x01];
+    for (index, label) in labels_jis.iter().enumerate() {
+        record.extend_from_slice(&[0x1f, 0x42]);
+        record.extend_from_slice(label);
+        record.extend_from_slice(&[0x1f, 0x62]);
+        record.extend_from_slice(&bcd_u32(block));
+        record.extend_from_slice(&bcd_word(
+            first_offset.saturating_add(u32::try_from(index).unwrap_or(u32::MAX)),
+        ));
+    }
+    record.extend_from_slice(&[0x1f, 0x0a]);
+    record
 }
 
 fn ssed_table_list_test_write_ssedinfo_record(

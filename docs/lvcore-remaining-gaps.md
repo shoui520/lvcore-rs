@@ -4,14 +4,19 @@ Date: 2026-06-14
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260614-sidecar-title-label-lookahead-v1.jsonl`
-- Produced after two scoped SSED cursor-proof changes:
-  - exact/forward/backward dense sidecar-title searches now prove one extra row
-    for authoritative multi-character queries and emit verified
+- `/tmp/lvcore-all-corpora-validation-20260614-ssed-menu-address-partial-prefix-v1.jsonl`
+- Produced after the current scoped LVCore SSED changes:
+  - exact/forward/backward dense sidecar-title searches prove one extra row for
+    authoritative multi-character queries and emit verified
     `sidecar-title-row:*` cursors when safe;
-  - title-label fallback pages now do bounded post-hit lookahead and emit
-    verified `ssed-title-label:*` cursors only when a next distinct hit is
-    found within the existing 256-row post-hit budget.
+  - title-label fallback pages do bounded post-hit lookahead and emit verified
+    `ssed-title-label:*` cursors only when a next distinct hit is found within
+    the existing 256-row post-hit budget;
+  - sidecar-avoidance native probes use a private internal start cursor instead
+    of treating the internal `0` offset as an external continuation;
+  - SSED menu address pages preserve address scope in continuation cursors; and
+  - the native partial-prefix prepass shares the normal prefix-page completion
+    path, including explicit deferred non-prefix cursors for large indexes.
 - 335 reconstructed package paths validated with package status 335 `ok`.
   The gate used the 333 currently discovered documented-root package paths plus
   the two explicit `Other/Android` package rows.
@@ -22,7 +27,7 @@ Latest full-corpus gate:
 - Reconstructed path-list hash:
   `b3c7c347c4587d6e3b29db8767748f2ebd9402b17f712dd5ae980d45cc5a601a`.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
-  fallback, 949 occurrences.
+  fallback, 816 aggregate warning entries in this gate.
 - `sidecar-title-unverified-row:*` search rows dropped from 43 in the previous
   full gate to 19. Remaining rows are intentionally broad single-character
   exact/forward/backward title continuations.
@@ -51,6 +56,10 @@ Latest full-corpus gate:
 - The `ssed_partial_native_prefix_fast_prepass` info diagnostic appears on
   8 pure-kana partial rows in the full gate. Continuation cursors are wrapped
   as `ssed-partial-prefix:*`, not raw native offsets.
+- Deferred cursor probes in the latest gate are currently concentrated in:
+  209 native offset continuations, 123 body full-text continuations, 27
+  title-label fallback continuations, 22 sidecar-title continuations, 22 partial
+  non-prefix continuations, and 2 full-text non-prefix title continuations.
 - Existing exact visible-title and digit/no-alpha full-text improvements
   remained stable: `_DCT_KQNEWEJ6` exact `画像一覧` is 12 ms,
   `_DCT_KQNEWJE5` exact `外字一覧` is 12 ms, and `_DCT_GKBUSINE` full-text
@@ -126,6 +135,76 @@ Focused validation after the current LVCore change:
     cursor probe is `ok` at 16 ms. `_DCT_IWKOKUG8` exact `さんディー` remains
     intentionally unverified because no next hit was proved within the bounded
     lookahead.
+- Third target gap from the latest full-corpus JSONL: the native-first probe
+  used before dense sidecar title search set cursor `0` internally, which made
+  the native index path treat the probe as an external continuation and emit
+  `ssed-offset-unverified:*` even for specific long-kana exact queries.
+- Code change: the sidecar-avoidance native probe now uses a private internal
+  start cursor. External/user native offset cursors still force deferred
+  overfetch, and broad one/two-character native queries still use the existing
+  large-index defer predicate.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore native_internal_start_cursor_does_not_count_as_external_continuation`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-native-internal-start-cursor-v1.jsonl`
+  - 6 packages validated with package status 6 `ok`: `_DCT_PROYAL53`,
+    `_DCT_JSSAURU2`, iOS `JSSAURU2`, `_DCT_KENROWA`, `_DCT_IBIO4`, and
+    `_DCT_KENCOLLO`.
+  - The three long-kana exact rows from the latest full-corpus baseline now
+    prove exhaustion and return no cursor: `_DCT_PROYAL53` exact
+    `ひゃくとうばん`, `_DCT_JSSAURU2` exact `あぎと`, and iOS `JSSAURU2`
+    exact `あぎと`.
+  - Broad controls remain intentionally deferred: `_DCT_PROYAL53` forward
+    `ひゃ` still returns `ssed-offset-unverified:3`, `_DCT_KENROWA` exact
+    `しめ` still returns `ssed-offset-unverified:1`, and `_DCT_IBIO4` exact
+    `蓚酸` still returns `ssed-offset-unverified:1`.
+- Fourth target gap from the latest full-corpus JSONL: SSED menu target
+  rendering for `SINMEI7` was slow enough to stand out, and direct inspection
+  showed a correctness issue in the address-based menu target path. Address
+  cursors such as `addr:23203:310` produced continuation cursors like `4` or
+  `link:11:53` without preserving the address scope, so following the cursor
+  reopened the root MENU stream instead of continuing the selected address
+  subtree.
+- Code change: SSED menu address cursors now decode into an address scope plus
+  an optional page cursor, and address-scoped pages encode continuations as
+  `addr:block:offset:<page-cursor>`. Root menu cursors are unchanged.
+- Related local blocker fixed: the native partial-prefix prepass now shares the
+  same prefix-page finishing logic as the normal native path. Large-index
+  prefix hits now expose an explicit deferred non-prefix cursor instead of
+  silently ending the partial result stream or proving a broad non-prefix page
+  during prefix-page completion.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore ssed_menu_address_continuation_preserves_address_scope`
+  - `cargo test -p lvcore ssed_partial_deferred_nonprefix_cursor_resumes_at_visible_physical_page`
+  - `cargo test -p lvcore ssed_partial_prefix_page_defers_large_nonprefix_cursor_without_visibility_probe`
+  - `cargo test -p lvcore ssed_navigation_surfaces`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-ssed-menu-address-and-partial-prefix-v1.jsonl`
+  - 6 affected packages validated with package status 6 `ok`: Windows
+    `_DCT_SINMEI7`, iOS `SINMEI7`, `_DCT_NCOMP4`, `_DCT_GKBUSINE`,
+    `_DCT_GEN2011`, and `_DCT_GEN2009`.
+  - Direct Windows `_DCT_SINMEI7` probes now preserve address scope:
+    `menu --cursor addr:23203:310 --limit 16` returns `addr:23203:310:4`,
+    and render of the `あ行` target returns `addr:23203:310:link:11:53`.
+  - Direct iOS `SINMEI7` probes now preserve address scope:
+    `menu --cursor addr:20914:1698 --limit 16` returns
+    `addr:20914:1698:link:0:16`, and render of the same address target returns
+    `addr:20914:1698:link:1:12`.
+  - Following those scoped cursors stays inside the selected address stream;
+    for example Windows `_DCT_SINMEI7` `addr:23203:310:link:11:53` returns the
+    next `あ行` entry labels rather than root MENU rows.
+  - Direct `_DCT_NCOMP4` partial `1計 --limit 1` still returns `0-1計画法`
+    and now exposes
+    `ssed-partial-nonprefix-noskip-unverified-physical-offset:8:121:1`,
+    preserving the existing large-index deferred non-prefix continuation.
+  - Focused validation controls stayed stable: `_DCT_GKBUSINE` partial `10`
+    returns `ssed-partial-nonprefix-noskip-offset:1`, `_DCT_GEN2011` partial
+    `01` returns `ssed-partial-nonprefix-unverified-index:0:0`, and
+    `_DCT_GEN2009` partial `0` returns `ssed-partial-prefix:1`.
 
 Previous full-corpus gates:
 
@@ -3707,8 +3786,8 @@ resources, links, or targets.
 
 Current status:
 
-- All 336 known packages in the baseline open and deep-validate at package
-  status `ok`.
+- All 335 reconstructed packages in the latest baseline open and deep-validate
+  at package status `ok`.
 
 Known gap:
 

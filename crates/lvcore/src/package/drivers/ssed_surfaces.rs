@@ -287,21 +287,17 @@ impl ReaderBookPackage {
         if let Some(surface) = self.cached_ssed_navigation_surface_page(&cache_key)? {
             return Ok(surface);
         }
-        let address_offset =
-            match ssed_navigation_address_cursor_offset(cursor, component, surface_id) {
-                Ok(offset) => offset,
-                Err(diagnostic) => {
-                    return Ok(NavigationSurface::Deferred {
-                        surface_id: surface_id.to_owned(),
-                        diagnostics: vec![diagnostic],
-                    });
-                }
-            };
-        let node_cursor = if address_offset.is_some() {
-            SsedMenuNodeCursor {
-                record_offset: 0,
-                link_offset: 0,
+        let address_cursor = match ssed_navigation_address_cursor(cursor, component, surface_id) {
+            Ok(offset) => offset,
+            Err(diagnostic) => {
+                return Ok(NavigationSurface::Deferred {
+                    surface_id: surface_id.to_owned(),
+                    diagnostics: vec![diagnostic],
+                });
             }
+        };
+        let node_cursor = if let Some(address_cursor) = &address_cursor {
+            decode_ssed_menu_node_cursor(address_cursor.page_cursor.as_deref())
         } else {
             decode_ssed_menu_node_cursor(cursor)
         };
@@ -319,7 +315,8 @@ impl ReaderBookPackage {
                 ));
             }
         };
-        let parse_data = if let Some(offset) = address_offset {
+        let parse_data = if let Some(address_cursor) = &address_cursor {
+            let offset = address_cursor.relative_offset;
             if offset >= data.len() {
                 return Ok(NavigationSurface::Deferred {
                     surface_id: surface_id.to_owned(),
@@ -371,7 +368,7 @@ impl ReaderBookPackage {
             SsedMenuNodePageRequest {
                 package: self,
                 records: &parsed.records,
-                base_index: if address_offset.is_some() {
+                base_index: if address_cursor.is_some() {
                     0
                 } else {
                     node_cursor.record_offset
@@ -390,7 +387,10 @@ impl ReaderBookPackage {
         let surface = NavigationSurface::SimpleMenu {
             surface_id: surface_id.to_owned(),
             nodes,
-            next_cursor: node_page.next_cursor,
+            next_cursor: ssed_navigation_scoped_next_cursor(
+                address_cursor.as_ref(),
+                node_page.next_cursor,
+            ),
         };
         self.cache_ssed_navigation_surface_page(cache_key, &surface)?;
         Ok(surface)
@@ -528,27 +528,40 @@ fn ssed_browse_index_priority(component: &SsedComponent) -> u8 {
     }
 }
 
-fn ssed_navigation_address_cursor_offset(
+struct SsedNavigationAddressCursor {
+    block: u32,
+    offset: u32,
+    relative_offset: usize,
+    page_cursor: Option<String>,
+}
+
+fn ssed_navigation_address_cursor(
     cursor: Option<&str>,
     component: &SsedComponent,
     surface_id: &str,
-) -> std::result::Result<Option<usize>, Diagnostic> {
+) -> std::result::Result<Option<SsedNavigationAddressCursor>, Diagnostic> {
     let Some(cursor) = cursor.map(str::trim).filter(|cursor| !cursor.is_empty()) else {
         return Ok(None);
     };
     let Some(rest) = cursor.strip_prefix("addr:") else {
         return Ok(None);
     };
-    let mut parts = rest.split(':');
+    let mut parts = rest.splitn(3, ':');
     let parsed = match (parts.next(), parts.next(), parts.next()) {
-        (Some(block), Some(offset), None) => {
+        (Some(block), Some(offset), page_cursor) => {
             let block = block.parse::<u32>().ok();
             let offset = offset.parse::<u32>().ok();
-            block.zip(offset)
+            block.zip(offset).map(|(block, offset)| {
+                let page_cursor = page_cursor
+                    .map(str::trim)
+                    .filter(|cursor| !cursor.is_empty())
+                    .map(str::to_owned);
+                (block, offset, page_cursor)
+            })
         }
         _ => None,
     };
-    let Some((block, offset)) = parsed else {
+    let Some((block, offset, page_cursor)) = parsed else {
         return Err(Diagnostic::warning(
             "ssed_navigation_address_cursor_invalid",
             format!("{surface_id} address cursor is malformed: {cursor}"),
@@ -564,13 +577,37 @@ fn ssed_navigation_address_cursor_offset(
         )
         .with_context("component", &component.filename));
     };
-    usize::try_from(relative_offset).map(Some).map_err(|_| {
-        Diagnostic::warning(
-            "ssed_navigation_address_cursor_too_large",
-            format!("{surface_id} address cursor {block}:{offset} does not fit this platform"),
-        )
-        .with_context("component", &component.filename)
-    })
+    usize::try_from(relative_offset)
+        .map(Some)
+        .map_err(|_| {
+            Diagnostic::warning(
+                "ssed_navigation_address_cursor_too_large",
+                format!("{surface_id} address cursor {block}:{offset} does not fit this platform"),
+            )
+            .with_context("component", &component.filename)
+        })
+        .map(|relative_offset| {
+            relative_offset.map(|relative_offset| SsedNavigationAddressCursor {
+                block,
+                offset,
+                relative_offset,
+                page_cursor,
+            })
+        })
+}
+
+fn ssed_navigation_scoped_next_cursor(
+    address_cursor: Option<&SsedNavigationAddressCursor>,
+    next_cursor: Option<String>,
+) -> Option<String> {
+    let next_cursor = next_cursor?;
+    match address_cursor {
+        Some(address_cursor) => Some(format!(
+            "addr:{}:{}:{}",
+            address_cursor.block, address_cursor.offset, next_cursor
+        )),
+        None => Some(next_cursor),
+    }
 }
 
 pub(super) fn ssed_navigation_surface_page_cache_key(

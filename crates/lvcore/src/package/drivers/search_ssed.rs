@@ -25,6 +25,7 @@ const SSED_TITLE_LABEL_CURSOR_PREFIX: &str = "ssed-title-label:";
 const SSED_TITLE_LABEL_UNVERIFIED_CURSOR_PREFIX: &str = "ssed-title-label-unverified:";
 const SSED_AUX_LABEL_CURSOR_PREFIX: &str = "ssed-aux-label:";
 const SSED_UNVERIFIED_OFFSET_CURSOR_PREFIX: &str = "ssed-offset-unverified:";
+const SSED_NATIVE_INTERNAL_START_CURSOR: &str = "ssed-native-internal-start";
 
 impl ReaderBookPackage {
     pub(super) fn search_ssed_simple_indexes(&self, query: &SearchQuery) -> Result<SearchPage> {
@@ -99,7 +100,7 @@ impl ReaderBookPackage {
         let mut sidecar_title_prepass_exhausted_empty = false;
         if self.ssed_initial_native_probe_should_precede_sidecar_title_prepass(query, &needle)? {
             let mut native_query = query.clone();
-            native_query.cursor = Some("0".to_owned());
+            native_query.cursor = Some(SSED_NATIVE_INTERNAL_START_CURSOR.to_owned());
             let page = self.search_ssed_simple_indexes(&native_query)?;
             if !page.hits.is_empty() {
                 return Ok(page);
@@ -127,7 +128,7 @@ impl ReaderBookPackage {
             query, &needle,
         )? {
             if let Some(page) = self.search_ssed_partial_native_prefix_page(query, &needle)? {
-                let mut page = ssed_native_partial_prefix_page(page);
+                let mut page = self.finish_ssed_partial_prefix_page(page, query, &needle)?;
                 page.diagnostics.insert(
                     0,
                     Diagnostic::info(
@@ -229,12 +230,14 @@ impl ReaderBookPackage {
         } else {
             0
         };
+        let external_native_offset_cursor =
+            ssed_native_offset_cursor_is_external(query.cursor.as_deref());
         let defer_native_offset_overfetch = uses_native_offset_cursor
             && matches!(
                 query.mode,
                 SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
             )
-            && (query.cursor.is_some()
+            && (external_native_offset_cursor
                 || self.ssed_native_initial_offset_overfetch_should_defer(&query.mode, &needle));
         let page_limit = if defer_native_offset_overfetch {
             query.limit
@@ -662,48 +665,63 @@ impl ReaderBookPackage {
         }
         if use_bounded_native_prefix_probe {
             if let Some(page) = self.search_ssed_partial_native_prefix_page(query, needle)? {
-                return Ok(Some(ssed_native_partial_prefix_page(page)));
+                return self
+                    .finish_ssed_partial_prefix_page(page, query, needle)
+                    .map(Some);
             }
             return Ok(None);
         }
-        let mut page = self.search_ssed_simple_indexes(&prefix_query)?;
+        let page = self.search_ssed_simple_indexes(&prefix_query)?;
         if page.hits.is_empty() && page.next_cursor.is_none() {
             return Ok(None);
         }
         if ssed_partial_prefix_empty_initial_page_should_fall_through(query, &page) {
             return Ok(None);
         }
+        self.finish_ssed_partial_prefix_page(page, query, needle)
+            .map(Some)
+    }
+
+    fn finish_ssed_partial_prefix_page(
+        &self,
+        mut page: SearchPage,
+        query: &SearchQuery,
+        needle: &str,
+    ) -> Result<SearchPage> {
         page.next_cursor = page
             .next_cursor
             .take()
             .map(encode_ssed_partial_prefix_cursor);
         if page.next_cursor.is_none() {
-            let remaining = query.limit.saturating_sub(page.hits.len());
             if !page.hits.is_empty() && self.ssed_partial_nonprefix_fill_should_defer() {
                 page.next_cursor = Some(encode_ssed_partial_unverified_nonprefix_cursor(None));
-            } else if remaining > 0 {
-                if !page.hits.is_empty() {
+            } else {
+                let remaining = query.limit.saturating_sub(page.hits.len());
+                if remaining > 0 {
+                    if !page.hits.is_empty() {
+                        page.next_cursor = self.ssed_deferred_partial_nonprefix_cursor_if_visible(
+                            query, needle, true,
+                        )?;
+                    } else {
+                        let mut nonprefix_query = query.clone();
+                        nonprefix_query.limit = remaining;
+                        let mut nonprefix_page = self.search_ssed_partial_nonprefix_page(
+                            &nonprefix_query,
+                            needle,
+                            None,
+                            true,
+                        )?;
+                        page.hits.append(&mut nonprefix_page.hits);
+                        page.diagnostics.extend(nonprefix_page.diagnostics);
+                        page.next_cursor = nonprefix_page.next_cursor;
+                    }
+                } else {
                     page.next_cursor = self
                         .ssed_deferred_partial_nonprefix_cursor_if_visible(query, needle, true)?;
-                } else {
-                    let mut nonprefix_query = query.clone();
-                    nonprefix_query.limit = remaining;
-                    let mut nonprefix_page = self.search_ssed_partial_nonprefix_page(
-                        &nonprefix_query,
-                        needle,
-                        None,
-                        true,
-                    )?;
-                    page.hits.append(&mut nonprefix_page.hits);
-                    page.diagnostics.extend(nonprefix_page.diagnostics);
-                    page.next_cursor = nonprefix_page.next_cursor;
                 }
-            } else {
-                page.next_cursor =
-                    self.ssed_deferred_partial_nonprefix_cursor_if_visible(query, needle, true)?;
             }
         }
-        Ok(Some(ssed_partial_prefix_page(page)))
+        Ok(ssed_partial_prefix_page(page))
     }
 
     fn search_ssed_partial_native_prefix_page(
@@ -3989,14 +4007,6 @@ fn ssed_partial_prefix_page(mut page: SearchPage) -> SearchPage {
     page
 }
 
-fn ssed_native_partial_prefix_page(mut page: SearchPage) -> SearchPage {
-    page.next_cursor = page
-        .next_cursor
-        .take()
-        .map(encode_ssed_partial_prefix_cursor);
-    ssed_partial_prefix_page(page)
-}
-
 fn decode_ssed_partial_nonprefix_cursor(
     cursor: Option<&str>,
 ) -> Option<SsedPartialNonprefixCursor> {
@@ -4498,6 +4508,10 @@ fn encode_ssed_unverified_offset_cursor(offset: usize) -> String {
     format!("{SSED_UNVERIFIED_OFFSET_CURSOR_PREFIX}{offset}")
 }
 
+fn ssed_native_offset_cursor_is_external(cursor: Option<&str>) -> bool {
+    cursor.is_some() && cursor != Some(SSED_NATIVE_INTERNAL_START_CURSOR)
+}
+
 fn ssed_title_label_fallback_is_reasonable(mode: &SearchMode, needle: &str) -> bool {
     match mode {
         SearchMode::Exact | SearchMode::Backward => needle.chars().count() >= 2,
@@ -4785,8 +4799,9 @@ mod tests {
     use std::{collections::HashSet, path::Path};
 
     use super::{
-        ReaderBookPackage, SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES,
-        SsedFulltextTitleCursor, SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
+        ReaderBookPackage, SSED_NATIVE_INTERNAL_START_CURSOR,
+        SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES, SsedFulltextTitleCursor,
+        SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
         decode_ssed_fulltext_nonprefix_title_cursor, decode_ssed_fulltext_title_cursor,
         decode_ssed_partial_nonprefix_cursor, decode_ssed_title_label_cursor,
         encode_ssed_fulltext_nonprefix_title_cursor,
@@ -4804,9 +4819,9 @@ mod tests {
         ssed_initial_partial_native_prefix_prepass_query_is_bounded,
         ssed_initial_title_label_fallback_prepass_should_run,
         ssed_initial_title_label_fast_prepass_needs_native_miss_probe,
-        ssed_native_partial_prefix_page,
+        ssed_native_offset_cursor_is_external,
         ssed_partial_prefix_empty_initial_page_should_fall_through,
-        ssed_partial_prefix_native_probe_needs_fast_hit_probe,
+        ssed_partial_prefix_native_probe_needs_fast_hit_probe, ssed_partial_prefix_page,
         ssed_partial_prefix_prepass_is_bounded,
         ssed_sidecar_title_authoritative_prepass_is_bounded,
         ssed_sidecar_title_auto_append_is_bounded, ssed_sidecar_title_query_is_kana_only,
@@ -4955,6 +4970,18 @@ mod tests {
     }
 
     #[test]
+    fn native_internal_start_cursor_does_not_count_as_external_continuation() {
+        assert!(!ssed_native_offset_cursor_is_external(None));
+        assert!(!ssed_native_offset_cursor_is_external(Some(
+            SSED_NATIVE_INTERNAL_START_CURSOR
+        )));
+        assert!(ssed_native_offset_cursor_is_external(Some("0")));
+        assert!(ssed_native_offset_cursor_is_external(Some(
+            "ssed-offset-unverified:1"
+        )));
+    }
+
+    #[test]
     fn fulltext_sidecar_title_prepass_is_limited_to_bounded_ascii_word_queries() {
         assert!(ssed_fulltext_sidecar_title_prepass_is_bounded("In"));
         assert!(ssed_fulltext_sidecar_title_prepass_is_bounded("read"));
@@ -5080,15 +5107,15 @@ mod tests {
     }
 
     #[test]
-    fn native_partial_prefix_page_wraps_native_cursor() {
+    fn partial_prefix_page_adds_prepass_diagnostic() {
         let page = SearchPage {
             hits: Vec::new(),
             next_cursor: Some("1".to_owned()),
             result_sequence: None,
             diagnostics: Vec::new(),
         };
-        let page = ssed_native_partial_prefix_page(page);
-        assert_eq!(page.next_cursor.as_deref(), Some("ssed-partial-prefix:1"));
+        let page = ssed_partial_prefix_page(page);
+        assert_eq!(page.next_cursor.as_deref(), Some("1"));
         assert_eq!(
             page.diagnostics
                 .first()
