@@ -4,12 +4,14 @@ Date: 2026-06-14
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260614-gkbusine-forward-title-label-fast-prepass-v1.jsonl`
-- Produced after making no-cursor SSED forward digit/no-ASCII-letter title
-  queries eligible for the bounded title-label fast prepass when a cheap
-  one-leaf native forward-hit probe misses. Real native prefix hits keep the
-  existing native path; empty native prefix probes can return early visible
-  title-label hits without paying for the full native miss and broad fallback.
+- `/tmp/lvcore-all-corpora-validation-20260614-sidecar-title-label-lookahead-v1.jsonl`
+- Produced after two scoped SSED cursor-proof changes:
+  - exact/forward/backward dense sidecar-title searches now prove one extra row
+    for authoritative multi-character queries and emit verified
+    `sidecar-title-row:*` cursors when safe;
+  - title-label fallback pages now do bounded post-hit lookahead and emit
+    verified `ssed-title-label:*` cursors only when a next distinct hit is
+    found within the existing 256-row post-hit budget.
 - 335 reconstructed package paths validated with package status 335 `ok`.
   The gate used the 333 currently discovered documented-root package paths plus
   the two explicit `Other/Android` package rows.
@@ -21,17 +23,26 @@ Latest full-corpus gate:
   `b3c7c347c4587d6e3b29db8767748f2ebd9402b17f712dd5ae980d45cc5a601a`.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
   fallback, 949 occurrences.
-- `_DCT_GKBUSINE` `search_forward` `10` is 83 ms, down from 439 ms in the
-  previous full gate and about 0.70s in direct probes before the fix. It
-  preserves the same first three hits and continuation
-  `ssed-title-label-unverified:3`, now through
-  `ssed_title_label_fast_prepass`.
+- `sidecar-title-unverified-row:*` search rows dropped from 43 in the previous
+  full gate to 19. Remaining rows are intentionally broad single-character
+  exact/forward/backward title continuations.
+- `ssed-title-label-unverified:*` direct/nested search rows dropped from 38 in
+  the previous full gate to 27; 8 title-label rows now emit verified
+  `ssed-title-label:*` cursors with successful cursor probes.
+- `_DCT_GKBUSINE` `search_forward` `10` is 85 ms and now returns
+  `ssed-title-label:3` with cursor probe `ok` at 4 ms.
+- `_DCT_NANMED20` `search_exact` `0歳平均余命` returns a verified
+  `sidecar-title-row:*` cursor with cursor probe `ok` at 80 ms; iOS
+  `NANMED20` is also verified with cursor probe `ok` at 56 ms.
+- `_DCT_IWKOKUG8` `search_forward` `さん` returns a verified
+  `sidecar-title-row:*` cursor with cursor probe `ok` at 3 ms; iOS `IWKOKUG8`
+  is also `ok` at 4 ms.
 - `_DCT_NCOMP4` `search_full_text` `1計` remains stable at 446 ms with the
   same `0-1計画法` first hit and deferred `title-nonprefix-unverified:*`
   continuation. The standard deep validator does not currently exercise the
   direct `_DCT_NCOMP4` partial `1計` query; that query is covered by focused
   direct probes below.
-- Digit-prefix controls stayed stable: `_DCT_GKBUSINE` partial `10` is 37 ms
+- Digit-prefix controls stayed stable: `_DCT_GKBUSINE` partial `10` is 38 ms
   with cursor probe `ok` at 13 ms, `_DCT_GEN2011` partial `01` is 13 ms
   through `ssed_partial_prefix_prepass`, and `_DCT_GEN2009` partial `0` is
   123 ms with cursor probe `ok` at 58 ms.
@@ -62,7 +73,75 @@ Focused validation for the latest full-corpus gate:
   `_DCT_NCOMP4` partial `1計 --limit 1` still returns `0-1計画法` in about
   0.47s with `ssed-partial-nonprefix-noskip-unverified-physical-offset:8:121:1`.
 
+Focused validation after the current LVCore change:
+
+- Target gap from the latest full-corpus JSONL: SSED dense sidecar title rows
+  that returned `sidecar-title-unverified-row:*` cursors even for bounded
+  multi-character exact/forward/backward title queries.
+- Code change: exact/forward/backward sidecar title lookahead now proves one
+  additional row for authoritative multi-character queries, but keeps broad
+  single-character non-ASCII queries deferred. Partial behavior is unchanged.
+- A broader exact-mode version was rejected during focused validation because
+  `_DCT_DAIJIRN4` exact `あ` needed about 1.7s to prove cursor exhaustion.
+  With the final scoped rule, `_DCT_DAIJIRN4` exact `あ` stays at 13 ms and
+  keeps its intentional `sidecar-title-unverified-row:*` cursor.
+- Focused tests passed:
+  - `cargo test -p lvcore sidecar_title_lookahead_only_defers_broad_single_char_queries`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-sidecar-title-lookahead-multichar-v1.jsonl`
+  - 21 affected packages validated with package status 21 `ok`.
+  - `sidecar-title-unverified-row:*` rows in that affected set dropped from
+    43 in the latest full-corpus baseline to 19 focused rows; the remaining
+    rows are intentionally broad single-character exact/forward/backward
+    queries.
+  - `_DCT_NANMED20` exact `0歳平均余命` now returns a verified
+    `sidecar-title-row:*` cursor and its cursor probe is `ok` at 81 ms.
+  - iOS `NANMED20` exact `0歳平均余命` now returns a verified
+    `sidecar-title-row:*` cursor and its cursor probe is `ok` at 57 ms.
+  - `_DCT_IWKOKUG8` forward `さん` now returns a verified
+    `sidecar-title-row:*` cursor and its cursor probe is `ok` at 3 ms; iOS
+    `IWKOKUG8` is also `ok` at 3 ms.
+  - iOS `OUKOKU11` forward `スリ` now returns a verified
+    `sidecar-title-row:*` cursor and its cursor probe is `ok` at 2 ms.
+- Second target gap from the latest full-corpus JSONL: title-label fallback
+  pages returned `ssed-title-label-unverified:*` even when a bounded post-hit
+  lookahead could prove that a next distinct title-label hit exists.
+- Code change: title-label fallback now continues after filling the requested
+  page only within the existing 256-row post-hit budget. If another distinct
+  hit is found, the page emits a normal `ssed-title-label:*` cursor; if not, it
+  keeps the existing unverified cursor.
+- Focused tests passed:
+  - `cargo test -p lvcore title_label -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-title-label-lookahead-v1.jsonl`
+  - 32 affected packages validated with package status 32 `ok`.
+  - `ssed-title-label-unverified:*` rows in that affected set dropped from
+    38 in the latest full-corpus baseline to 27 focused rows, with 8 newly
+    probeable `ssed-title-label:*` rows.
+  - `_DCT_GKBUSINE` forward `10` now returns `ssed-title-label:3`; its cursor
+    probe is `ok` at 4 ms.
+  - `_DCT_KQNEWEJ6` backward `一覧` now returns `ssed-title-label:1`; its
+    cursor probe is `ok` at 16 ms. `_DCT_IWKOKUG8` exact `さんディー` remains
+    intentionally unverified because no next hit was proved within the bounded
+    lookahead.
+
 Previous full-corpus gates:
+
+- `/tmp/lvcore-all-corpora-validation-20260614-gkbusine-forward-title-label-fast-prepass-v1.jsonl`
+- Produced after making no-cursor SSED forward digit/no-ASCII-letter title
+  queries eligible for the bounded title-label fast prepass when a cheap
+  one-leaf native forward-hit probe misses. Real native prefix hits keep the
+  existing native path; empty native prefix probes can return early visible
+  title-label hits without paying for the full native miss and broad fallback.
+- 335 reconstructed package paths validated with package status 335 `ok`.
+- Warning diagnostics remained only the explicitly deferred HC common HTML
+  fallback, 949 occurrences.
+- `_DCT_GKBUSINE` `search_forward` `10` was 83 ms, down from 439 ms in the
+  previous full gate and about 0.70s in direct probes before the fix. It
+  preserved the same first three hits and continuation
+  `ssed-title-label-unverified:3`, through `ssed_title_label_fast_prepass`.
 
 - `/tmp/lvcore-all-corpora-validation-20260613-ncomp4-partial-prefix-fast-miss-gate-v1.jsonl`
 - Produced after the focused `_DCT_NCOMP4` partial `1計` fix. The fix keeps
@@ -528,7 +607,7 @@ Important info/status classes from the latest gate:
 | Marker | Count | Classification |
 | --- | ---: | --- |
 | `sidecar-body-row:*` cursor probed `ok` | 47 | Dense sidecar body cursor fix verified |
-| `sidecar-title-unverified-row:*` cursor `not_probed` | 43 | Large/medium authoritative non-ASCII sidecar-title continuation intentionally deferred |
+| `sidecar-title-unverified-row:*` cursor `not_probed` | 19 | Broad single-character exact/forward/backward sidecar-title continuations intentionally deferred |
 | `title-nonprefix-unverified:*` cursor `not_probed` | 2 | Large full-text non-prefix title continuation intentionally deferred |
 | `body:0`/`body-offset:*` full-text cursor `not_probed` | 123 | Post-title native body continuation intentionally deferred |
 | `sidecar-body-start` cursor probed `ok` | 15 | Sidecar body phase start cursor fix verified |
@@ -543,7 +622,7 @@ Important info/status classes from the latest gate:
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 0 | Replaced by bounded/probeable non-prefix partial continuations in the latest gate |
 | `ssed-partial-nonprefix-noskip-unverified-physical-offset:*` cursor `not_probed` | focused direct-only | New NCOMP4 partial `1計` continuation deferral; not exercised by the standard full-gate query set |
 | `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 211 | Native offset next-page proof intentionally deferred |
-| `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 38 | Title-label fallback next-page proof intentionally deferred |
+| `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 27 | Distant/unknown title-label continuations intentionally deferred after bounded post-hit lookahead |
 | `ssed-partial-prefix:*` cursor probed `ok` | 48 | Partial prefix continuation pages remain probeable |
 | `ssed_partial_native_prefix_fast_prepass` | 8 | Bounded pure-kana partial native-prefix prepass exercised |
 | `ssed_title_label_fast_prepass` | 29 | Bounded exact non-ASCII and forward digit/no-alpha visible title-label prepass exercised |

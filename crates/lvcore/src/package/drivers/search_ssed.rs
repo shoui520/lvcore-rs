@@ -18,7 +18,6 @@ const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_NATIVE_INITIAL_OFFSET_OVERFETCH_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
-const SSED_SIDECAR_TITLE_LOOKAHEAD_DEFER_MIN_BYTES: u64 = 64 * 1024 * 1024;
 const SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES: u64 = 8 * 1024 * 1024;
 const SSED_SIDECAR_TITLE_NATIVE_FIRST_PROBE_MIN_BYTES: u64 = 128 * 1024 * 1024;
 const SSED_SIDECAR_TITLE_CURSOR_PREFIX: &str = "sidecar-title:";
@@ -1399,6 +1398,7 @@ impl ReaderBookPackage {
         let mut diagnostics = Vec::new();
         let mut seen_targets = HashSet::new();
         let mut stopped = SsedTitleLabelFallbackStop::Exhausted;
+        let mut page_full_cursor = None::<usize>;
         let fallback_diagnostics = self.scan_ssed_ordered_index_rows_with_filters(
             None,
             |component| {
@@ -1444,6 +1444,10 @@ impl ReaderBookPackage {
                         return Ok(true);
                     }
                 };
+                if page_full_cursor.is_some() {
+                    stopped = SsedTitleLabelFallbackStop::PageFullVerified;
+                    return Ok(false);
+                }
                 let title = self.ssed_display_text_for_index_row(&row);
                 let label = self.ssed_rich_label_with_policy(&title, &label_policy);
                 let href = target.href();
@@ -1458,8 +1462,7 @@ impl ReaderBookPackage {
                     diagnostics: label.diagnostics,
                 });
                 if hits.len() >= query.limit {
-                    stopped = SsedTitleLabelFallbackStop::PageFull;
-                    return Ok(false);
+                    page_full_cursor = Some(checked_rows);
                 }
                 Ok(true)
             },
@@ -1467,12 +1470,15 @@ impl ReaderBookPackage {
         diagnostics.extend(fallback_diagnostics);
         let next_cursor = match stopped {
             SsedTitleLabelFallbackStop::Exhausted => None,
+            SsedTitleLabelFallbackStop::Budget if let Some(cursor) = page_full_cursor => {
+                Some(encode_ssed_unverified_title_label_cursor(cursor))
+            }
             SsedTitleLabelFallbackStop::Budget if hits.is_empty() => None,
             SsedTitleLabelFallbackStop::Budget => {
                 Some(encode_ssed_title_label_cursor(checked_rows))
             }
-            SsedTitleLabelFallbackStop::PageFull => {
-                Some(encode_ssed_unverified_title_label_cursor(checked_rows))
+            SsedTitleLabelFallbackStop::PageFullVerified => {
+                page_full_cursor.map(encode_ssed_title_label_cursor)
             }
         };
         if emit_budget_diagnostic && matches!(stopped, SsedTitleLabelFallbackStop::Budget) {
@@ -1630,6 +1636,9 @@ impl ReaderBookPackage {
         if !sidecar_sql_prefilter_is_authoritative(query) {
             return false;
         }
+        let query = query.trim();
+        let query_has_non_ascii = query.chars().any(|ch| !ch.is_ascii());
+        let query_is_single_char = query.chars().count() == 1;
         let has_sized_title_resolver = |min_bytes| {
             resolvers.iter().any(|resolver| {
                 resolver.title_column.is_some()
@@ -1638,17 +1647,18 @@ impl ReaderBookPackage {
                         .unwrap_or(false)
             })
         };
-        if mode == SsedSidecarTitleSearchMode::Exact
-            && has_sized_title_resolver(SSED_SIDECAR_TITLE_LOOKAHEAD_DEFER_MIN_BYTES)
-        {
-            return true;
+        if mode == SsedSidecarTitleSearchMode::Exact {
+            return query_is_single_char
+                && query_has_non_ascii
+                && has_sized_title_resolver(
+                    SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES,
+                );
         }
         matches!(
             mode,
-            SsedSidecarTitleSearchMode::Exact
-                | SsedSidecarTitleSearchMode::Forward
-                | SsedSidecarTitleSearchMode::Backward
-        ) && query.trim().chars().any(|ch| !ch.is_ascii())
+            SsedSidecarTitleSearchMode::Forward | SsedSidecarTitleSearchMode::Backward
+        ) && query_is_single_char
+            && query_has_non_ascii
             && has_sized_title_resolver(SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES)
     }
 
@@ -4440,7 +4450,7 @@ fn encode_ssed_sidecar_title_unverified_physical_cursor(cursor: &SsedSidecarBody
 enum SsedTitleLabelFallbackStop {
     Exhausted,
     Budget,
-    PageFull,
+    PageFullVerified,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4772,9 +4782,10 @@ fn is_ssed_cjk_ideograph(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, path::Path};
 
     use super::{
+        ReaderBookPackage, SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES,
         SsedFulltextTitleCursor, SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
         decode_ssed_fulltext_nonprefix_title_cursor, decode_ssed_fulltext_title_cursor,
         decode_ssed_partial_nonprefix_cursor, decode_ssed_title_label_cursor,
@@ -4803,6 +4814,10 @@ mod tests {
     use crate::SearchPage;
     use crate::package::BookId;
     use crate::search::{SearchMode, SearchQuery, SearchScope};
+    use crate::ssed_sidecar::{
+        SsedSidecarBodyResolver, SsedSidecarIdRule, SsedSidecarKind, SsedSidecarStorage,
+        SsedSidecarTitleSearchMode,
+    };
 
     fn current_book_fulltext_query(query: &str, limit: usize) -> SearchQuery {
         SearchQuery {
@@ -4827,6 +4842,24 @@ mod tests {
             cursor: None,
             limit,
             gaiji_policy: None,
+        }
+    }
+
+    fn test_sidecar_title_resolver(path: &Path) -> SsedSidecarBodyResolver {
+        SsedSidecarBodyResolver {
+            path: path.to_path_buf(),
+            storage: SsedSidecarStorage::Plain,
+            kind: SsedSidecarKind::TContents,
+            table: "t_contents".to_owned(),
+            id_column: "f_DataId".to_owned(),
+            id_rule: SsedSidecarIdRule::DirectColumn,
+            title_column: Some("f_title".to_owned()),
+            html_column: None,
+            plain_column: Some("f_text".to_owned()),
+            block_column: None,
+            offset_column: None,
+            block_min: None,
+            block_max: None,
         }
     }
 
@@ -4858,6 +4891,67 @@ mod tests {
         assert!(!ssed_sidecar_title_query_is_kana_only("0歳"));
         assert!(!ssed_sidecar_title_query_is_kana_only("あい【愛】"));
         assert!(!ssed_sidecar_title_query_is_kana_only(""));
+    }
+
+    #[test]
+    fn sidecar_title_lookahead_only_defers_broad_single_char_queries() {
+        let sidecar = tempfile::NamedTempFile::new().expect("create sidecar fixture");
+        sidecar
+            .as_file()
+            .set_len(SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES)
+            .expect("size sidecar fixture");
+        let resolver = test_sidecar_title_resolver(sidecar.path());
+        let resolvers = [resolver];
+
+        assert!(
+            !ReaderBookPackage::ssed_sidecar_title_lookahead_should_defer(
+                SsedSidecarTitleSearchMode::Exact,
+                "0歳平均余命",
+                &resolvers
+            )
+        );
+        assert!(
+            ReaderBookPackage::ssed_sidecar_title_lookahead_should_defer(
+                SsedSidecarTitleSearchMode::Exact,
+                "あ",
+                &resolvers
+            )
+        );
+        assert!(
+            !ReaderBookPackage::ssed_sidecar_title_lookahead_should_defer(
+                SsedSidecarTitleSearchMode::Forward,
+                "0歳",
+                &resolvers
+            )
+        );
+        assert!(
+            !ReaderBookPackage::ssed_sidecar_title_lookahead_should_defer(
+                SsedSidecarTitleSearchMode::Backward,
+                "余命",
+                &resolvers
+            )
+        );
+        assert!(
+            ReaderBookPackage::ssed_sidecar_title_lookahead_should_defer(
+                SsedSidecarTitleSearchMode::Forward,
+                "あ",
+                &resolvers
+            )
+        );
+        assert!(
+            ReaderBookPackage::ssed_sidecar_title_lookahead_should_defer(
+                SsedSidecarTitleSearchMode::Backward,
+                "あ",
+                &resolvers
+            )
+        );
+        assert!(
+            !ReaderBookPackage::ssed_sidecar_title_lookahead_should_defer(
+                SsedSidecarTitleSearchMode::Partial,
+                "0歳",
+                &resolvers
+            )
+        );
     }
 
     #[test]
