@@ -20,7 +20,8 @@ const SSED_PARTIAL_NONPREFIX_PREFILTERED_LEAF_PAGE_BUDGET: usize = 128;
 const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 16;
 const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_NATIVE_INITIAL_OFFSET_OVERFETCH_MAX_INDEX_BLOCKS: u32 = 2048;
-const SSED_NATIVE_DEFERRED_OFFSET_PROOF_MIN_LIMIT: usize = 3;
+const SSED_NATIVE_DEFERRED_OFFSET_PROOF_BROAD_MIN_LIMIT: usize = 3;
+const SSED_NATIVE_DEFERRED_OFFSET_PROOF_SPECIFIC_MIN_CHARS: usize = 2;
 const SSED_NATIVE_DEFERRED_OFFSET_PROOF_LEAF_PAGE_BUDGET: usize = 1;
 const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
@@ -521,16 +522,7 @@ impl ReaderBookPackage {
         next_offset: usize,
     ) -> Result<Option<String>> {
         if query.cursor.is_some()
-            || query.limit < SSED_NATIVE_DEFERRED_OFFSET_PROOF_MIN_LIMIT
-            || !matches!(
-                query.mode,
-                SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
-            )
-            || query
-                .query
-                .trim()
-                .chars()
-                .all(|ch| ch.is_ascii_alphabetic())
+            || !ssed_native_deferred_offset_proof_is_bounded(query)
             || ssed_index_search_key_candidates(needle).is_empty()
         {
             return Ok(None);
@@ -3827,6 +3819,35 @@ impl ReaderBookPackage {
         )?;
         Ok(!sidecar_page.hits.is_empty())
     }
+}
+
+fn ssed_native_deferred_offset_proof_is_bounded(query: &SearchQuery) -> bool {
+    if !matches!(
+        query.mode,
+        SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+    ) {
+        return false;
+    }
+
+    let trimmed = query.query.trim();
+    if trimmed.is_empty() || trimmed.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return false;
+    }
+    let has_non_ascii = trimmed.chars().any(|ch| !ch.is_ascii());
+    let is_ascii_alphanumeric = trimmed.chars().all(|ch| ch.is_ascii_alphanumeric());
+
+    if query.limit >= SSED_NATIVE_DEFERRED_OFFSET_PROOF_BROAD_MIN_LIMIT {
+        return true;
+    }
+
+    query.limit == 1
+        && query.mode == SearchMode::Backward
+        && (has_non_ascii || is_ascii_alphanumeric)
+        && trimmed
+            .chars()
+            .take(SSED_NATIVE_DEFERRED_OFFSET_PROOF_SPECIFIC_MIN_CHARS)
+            .count()
+            >= SSED_NATIVE_DEFERRED_OFFSET_PROOF_SPECIFIC_MIN_CHARS
 }
 
 const SSED_FULLTEXT_ROW_PREFETCH_MAX_ROWS: usize = 512;

@@ -323,7 +323,11 @@ fn ssed_native_initial_offset_defers_overfetch_for_large_short_query() {
 
     fs::write(
         dir.path().join("HONMON.DIC"),
-        fixture_sseddata_literal_chunks(&[b"alpha body\0beta body"], 100, 100),
+        fixture_sseddata_literal_chunks(
+            &[b"alpha body\0beta body\0gamma body\0delta body"],
+            100,
+            100,
+        ),
     )
     .unwrap();
 
@@ -332,6 +336,10 @@ fn ssed_native_initial_offset_defers_overfetch_for_large_short_query() {
     titles.extend_from_slice(b"alpha matched\x1f\x0a");
     let beta_title_offset = u16::try_from(titles.len()).unwrap();
     titles.extend_from_slice(b"beta matched\x1f\x0a");
+    let numeric_alpha_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"alpha 10\x1f\x0a");
+    let numeric_beta_title_offset = u16::try_from(titles.len()).unwrap();
+    titles.extend_from_slice(b"beta 10\x1f\x0a");
     fs::write(
         dir.path().join("BHTITLE.DIC"),
         fixture_sseddata_literal_chunks(&[&titles], 300, 300),
@@ -340,8 +348,26 @@ fn ssed_native_initial_offset_defers_overfetch_for_large_short_query() {
 
     let mut index_page = vec![0u8; crate::ssed::BLOCK_SIZE as usize];
     index_page[0..2].copy_from_slice(&0xc000u16.to_be_bytes());
-    index_page[2..4].copy_from_slice(&2u16.to_be_bytes());
+    index_page[2..4].copy_from_slice(&4u16.to_be_bytes());
     let mut pos = 4usize;
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        b"01 ahpla",
+        100,
+        21,
+        300,
+        numeric_alpha_title_offset,
+    );
+    write_simple_index_row(
+        &mut index_page,
+        &mut pos,
+        b"01 ateb",
+        100,
+        32,
+        300,
+        numeric_beta_title_offset,
+    );
     write_simple_index_row(
         &mut index_page,
         &mut pos,
@@ -461,6 +487,22 @@ fn ssed_native_initial_offset_defers_overfetch_for_large_short_query() {
         second.next_cursor.as_deref(),
         Some("ssed-offset-unverified:2")
     );
+
+    let numeric = package
+        .search(&SearchQuery {
+            scope: crate::search::SearchScope::CurrentBook {
+                book_id: package.metadata().book_id.clone(),
+            },
+            mode: SearchMode::Backward,
+            query: "10".to_owned(),
+            cursor: None,
+            limit: 1,
+            gaiji_policy: None,
+        })
+        .unwrap();
+    assert_eq!(numeric.hits.len(), 1);
+    assert_eq!(numeric.hits[0].title_text, "alpha 10");
+    assert_eq!(numeric.next_cursor.as_deref(), Some("1"));
 }
 
 #[test]

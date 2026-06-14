@@ -4,7 +4,7 @@ Date: 2026-06-14
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260614-native-offset-limit3-proof-v1.jsonl`
+- `/tmp/lvcore-all-corpora-validation-20260614-native-limit1-backward-proof-v1.jsonl`
 - Produced after the current scoped LVCore SSED changes:
   - exact/forward/backward dense sidecar-title searches prove one extra row for
     authoritative multi-character queries and emit verified
@@ -17,6 +17,10 @@ Latest full-corpus gate:
     the next logical hit only for non-pure-ASCII short queries with limit 3 or
     higher, emitting a normal offset cursor when that next hit is already
     visible within the proof budget;
+  - initial backward native pages on large SSED indexes run the same one-leaf
+    proof for specific limit-1 non-pure-letter queries, emitting a normal offset
+    cursor when the next suffix hit is already visible while keeping exact mode,
+    pure ASCII-letter queries, and ASCII punctuation cases deferred;
   - title-label fallback pages do bounded post-hit lookahead and emit verified
     `ssed-title-label:*` cursors only when a next distinct hit is found within
     the existing 256-row post-hit budget;
@@ -53,15 +57,15 @@ Latest full-corpus gate:
 - The gate was run over the documented corpus roots plus explicit
   `Other/Android` and `Other/iOS` roots.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
-  fallback, 955 aggregate warning entries in this gate.
+  fallback, 261 warning entries in this gate.
 - `sidecar-title-unverified-row:*` direct/nested search rows dropped from 22 to
-  0. The latest gate has 64 `sidecar-title-row:*` rows with successful cursor
+  0. The latest gate has 76 `sidecar-title-row:*` rows with successful cursor
   probes.
 - `ssed-title-label-unverified:*` direct/nested search rows dropped from 15 in
-  the previous full gate to 0. The latest gate has 25 title-label rows using
+  the previous full gate to 0. The latest gate has 26 title-label rows using
   bounded `ssed-title-label-seen:*` pagination with successful cursor probes.
 - `ssed-partial-nonprefix-unverified-index:*` rows dropped from 22 in the
-  previous full gate to 0. The latest gate has 29
+  previous full gate to 0. The latest gate has 30
   `ssed-partial-nonprefix-index:*` cursors, all with cursor probe `ok`.
 - `title-nonprefix-unverified:*` full-text rows dropped from 2 to 1. The
   latest gate proves `_DCT_YHOUGO3` full-text `一ス` has no remaining
@@ -97,7 +101,7 @@ Latest full-corpus gate:
 - `_DCT_IWKOKUG8` `search_forward` `さん` returns a verified
   `sidecar-title-row:*` cursor with cursor probe `ok` at 3 ms; iOS `IWKOKUG8`
   is also `ok` at 4 ms.
-- `_DCT_NCOMP4` `search_full_text` `1計` is 442 ms with the
+- `_DCT_NCOMP4` `search_full_text` `1計` is 427 ms with the
   same `0-1計画法` first hit and deferred `title-nonprefix-unverified:*`
   continuation. The standard deep validator does not currently exercise the
   direct `_DCT_NCOMP4` partial `1計` query; that query is covered by focused
@@ -113,7 +117,7 @@ Latest full-corpus gate:
   8 pure-kana partial rows in the full gate. Continuation cursors are wrapped
   as `ssed-partial-prefix:*`, not raw native offsets.
 - Deferred cursor probes in the latest gate are currently concentrated in:
-  188 native offset continuations, 125 body full-text continuations, and
+  164 native offset continuations, 125 body full-text continuations, and
   1 full-text non-prefix title continuation.
 - Existing exact visible-title and digit/no-alpha full-text improvements
   remained stable: `_DCT_KQNEWEJ6` exact `画像一覧` is 15 ms,
@@ -594,9 +598,43 @@ Focused validation after the current LVCore change:
   - Native offset `not_probed` rows dropped from 209 to 188. Forward native
     offset `not_probed` rows dropped from 41 to 20; exact/backward/partial
     native deferrals stayed intentionally deferred.
+- Current native-offset follow-up from the latest full-corpus JSONL: 41 SSED
+  exact/backward specific limit-1 rows returned `ssed-offset-unverified:1`, so
+  validation skipped the next page even when a nearby suffix hit could be proven
+  within one native leaf page.
+- Code change: initial native offset deferral now also runs the one-leaf
+  next-hit proof for limit-1 backward queries when the trimmed query is at least
+  two characters and is either non-ASCII or ASCII alphanumeric. Exact-mode
+  limit-1 proof remains deferred after focused validation showed `_DCT_GEN2002`
+  exact `01` rising from 8 ms to 448 ms. Pure ASCII-letter queries and ASCII
+  punctuation cases such as `_DCT_GEN2004` backward `E.` remain deferred.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore ssed_native -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-native-limit1-backward-proof-v4.jsonl`
+  - 38 affected/control packages validated with package status 38 `ok`.
+  - Targeted exact/backward `ssed-offset-unverified:1` rows dropped from 41 to
+    17 in that focused set; 24 rows now return normal cursor `1` with cursor
+    probe `ok`.
+  - Median first-page latency delta across the targeted rows was about 15 ms.
+    The largest targeted first-page latency was `_DCT_25IGAKU` backward `ッジ`
+    at 177 ms, up from 73 ms.
+- Final full-corpus gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260614-native-limit1-backward-proof-v1.jsonl`
+  - 336 packages validated with package status 336 `ok`.
+  - Native offset `not_probed` rows dropped from 188 to 164. Backward native
+    offset `not_probed` rows dropped from 65 to 41; exact/forward/partial native
+    deferrals stayed intentionally deferred.
+  - Across the 41 targeted rows, 24 now return normal cursor `1` with cursor
+    probe `ok`; 17 remain `ssed-offset-unverified:1`.
 
 Previous full-corpus gates:
 
+- `/tmp/lvcore-all-corpora-validation-20260614-native-offset-limit3-proof-v1.jsonl`
+- Produced after adding bounded one-leaf native offset proof for non-pure-ASCII
+  exact/forward/backward queries with limit 3 or higher.
 - `/tmp/lvcore-all-corpora-validation-20260614-sidecar-title-physical-cursors-v1.jsonl`
 - Produced after encoding sidecar-title physical row continuations as
   `sidecar-title-row:*` and closing the `sidecar-title-unverified-row:*` bucket.
@@ -1130,8 +1168,8 @@ Important info/status classes from the latest gate:
 
 | Marker | Count | Classification |
 | --- | ---: | --- |
-| `sidecar-body-row:*` cursor probed `ok` | 62 | Dense sidecar body cursor fix verified |
-| `sidecar-title-row:*` cursor probed `ok` | 64 | Sidecar title physical row continuation verified |
+| `sidecar-body-row:*` cursor probed `ok` | 47 | Dense sidecar body cursor fix verified |
+| `sidecar-title-row:*` cursor probed `ok` | 76 | Sidecar title physical row continuation verified |
 | `sidecar-title-unverified-row:*` cursor `not_probed` | 0 | Closed by physical sidecar-title row cursors |
 | `title-nonprefix-unverified:*` cursor `not_probed` | 1 | Large full-text non-prefix title continuation intentionally deferred |
 | `body:0`/`body-offset:*` full-text cursor `not_probed` | 125 | Post-title native body continuation intentionally deferred |
@@ -1140,15 +1178,15 @@ Important info/status classes from the latest gate:
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
 | `ssed_fulltext_body_window_scan` | 0 | Closed by direct native HONMON scan fallback |
 | `ssed_fulltext_title_index_prepass` | 136 | Full-text title/index prepass remains the dominant successful fast path |
-| `ssed_fulltext_body_direct_scan` | 5 | Direct native HONMON fallback exercised |
+| `ssed_fulltext_body_direct_scan` | 3 | Direct native HONMON fallback exercised |
 | `ssed_fulltext_partial_nonprefix_title_prepass` | 3 | NCOMP4, YHOUGO3, and HKKIGAK6 title prepasses exercised; some cursor probes intentionally deferred |
 | `ssed_index_empty_physical_pages_skipped` | 1 | Sparse physical scan advances exercised by non-prefix title searches |
 | `ssed_index_empty_physical_scan_limited` | 0 | Not exercised in the latest gate after recent prefix fast paths |
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 0 | Replaced by bounded/probeable non-prefix partial continuations in the latest gate |
 | `ssed-partial-nonprefix-noskip-unverified-physical-offset:*` cursor `not_probed` | focused direct-only | New NCOMP4 partial `1計` continuation deferral; not exercised by the standard full-gate query set |
-| `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 188 | Native offset next-page proof intentionally deferred |
+| `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 164 | Native offset next-page proof intentionally deferred |
 | `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 0 | Closed by bounded seen-target title-label cursors |
-| `ssed-title-label-seen:*` cursor probed `ok` | 25 | Bounded seen-target title-label continuation pagination |
+| `ssed-title-label-seen:*` cursor probed `ok` | 26 | Bounded seen-target title-label continuation pagination |
 | `ssed-partial-prefix:*` cursor probed `ok` | 58 | Partial prefix continuation pages remain probeable |
 | `ssed_partial_native_prefix_fast_prepass` | 8 | Bounded pure-kana partial native-prefix prepass exercised |
 | `ssed_title_label_fast_prepass` | 29 | Bounded exact non-ASCII and forward digit/no-alpha visible title-label prepass exercised |
@@ -1163,7 +1201,7 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 442 ms, improved from 545 ms
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 427 ms, improved from 545 ms
   but still behind intentionally deferred `title-nonprefix-unverified:*`
   continuation proof in the latest full baseline. Direct focused probing also
   exposed a related `search_partial` `1計` first-page gap; that partial gap is
