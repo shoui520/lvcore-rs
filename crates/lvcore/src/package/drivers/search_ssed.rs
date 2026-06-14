@@ -20,6 +20,8 @@ const SSED_PARTIAL_NONPREFIX_PREFILTERED_LEAF_PAGE_BUDGET: usize = 128;
 const SSED_INDEX_EMPTY_PHYSICAL_SCAN_LEAF_PAGE_BUDGET: usize = 16;
 const SSED_FULLTEXT_UNBOUNDED_TITLE_PREPASS_MAX_INDEX_BLOCKS: u32 = 2048;
 const SSED_NATIVE_INITIAL_OFFSET_OVERFETCH_MAX_INDEX_BLOCKS: u32 = 2048;
+const SSED_NATIVE_DEFERRED_OFFSET_PROOF_MIN_LIMIT: usize = 3;
+const SSED_NATIVE_DEFERRED_OFFSET_PROOF_LEAF_PAGE_BUDGET: usize = 1;
 const SSED_FULLTEXT_BODY_CURSOR_MAX_ROWS: usize = 4096;
 const SSED_PARTIAL_EAGER_NONPREFIX_MAX_INDEX_BLOCKS: u32 = 256;
 const SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS: u32 = 256;
@@ -398,9 +400,10 @@ impl ReaderBookPackage {
             && page.next_cursor.is_none()
             && page.hits.len() == query.limit
         {
-            page.next_cursor = Some(encode_ssed_unverified_offset_cursor(
-                offset.saturating_add(query.limit),
-            ));
+            let next_offset = offset.saturating_add(query.limit);
+            page.next_cursor = self
+                .ssed_deferred_native_offset_cursor_if_visible(query, &needle, next_offset)?
+                .or_else(|| Some(encode_ssed_unverified_offset_cursor(next_offset)));
         }
         if page.next_cursor.is_none() {
             page.next_cursor = physical_next_cursor;
@@ -509,6 +512,55 @@ impl ReaderBookPackage {
             }
         }
         false
+    }
+
+    fn ssed_deferred_native_offset_cursor_if_visible(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        next_offset: usize,
+    ) -> Result<Option<String>> {
+        if query.cursor.is_some()
+            || query.limit < SSED_NATIVE_DEFERRED_OFFSET_PROOF_MIN_LIMIT
+            || !matches!(
+                query.mode,
+                SearchMode::Exact | SearchMode::Forward | SearchMode::Backward
+            )
+            || query
+                .query
+                .trim()
+                .chars()
+                .all(|ch| ch.is_ascii_alphabetic())
+            || ssed_index_search_key_candidates(needle).is_empty()
+        {
+            return Ok(None);
+        }
+
+        let mut collector = SsedIndexSearchCollector::new(
+            self,
+            &query.mode,
+            needle,
+            next_offset,
+            1,
+            query.label_gaiji_policy(),
+        )
+        .with_display_label_matching()
+        .with_pending_page_limit_stop();
+        let candidate_has_hits = Cell::new(false);
+        self.scan_ssed_simple_leaf_index_rows_near_key_with_leaf_budget(
+            &query.mode,
+            needle,
+            SSED_NATIVE_DEFERRED_OFFSET_PROOF_LEAF_PAGE_BUDGET,
+            |row| {
+                let keep_scanning = collector.push_row(row)?;
+                if collector.has_hits() {
+                    candidate_has_hits.set(true);
+                }
+                Ok(keep_scanning)
+            },
+            || candidate_has_hits.get(),
+        )?;
+        Ok(collector.has_hits().then(|| next_offset.to_string()))
     }
 
     fn has_searchable_ssed_aux_index(&self) -> Result<bool> {
