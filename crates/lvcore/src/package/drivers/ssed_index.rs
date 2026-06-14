@@ -853,6 +853,9 @@ impl ReaderBookPackage {
             };
             if allow_nonprefix_page_prefilter_extensions
                 && !page_prefilter_anchors.is_empty()
+                && page_prefilter_anchors
+                    .iter()
+                    .any(|anchor| anchor.len() > SSED_INDEX_PAGE_PREFILTER_ANCHOR_MIN_LEN)
                 && SsedDataHeader::parse_file(&path).is_ok_and(|header| {
                     header.expanded_size() <= SSED_INDEX_PAGE_PREFILTER_IN_MEMORY_MAX_EXPANDED_BYTES
                 })

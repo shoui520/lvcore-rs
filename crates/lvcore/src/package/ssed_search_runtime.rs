@@ -112,6 +112,7 @@ pub(super) struct SsedIndexSearchCollector<'a> {
     pending_row: Option<SsedIndexRow>,
     gaiji_policy: GaijiPolicy,
     match_display_label: bool,
+    skip_forward_prefix_matches: bool,
     stop_on_pending_page_limit: bool,
 }
 
@@ -139,6 +140,7 @@ impl<'a> SsedIndexSearchCollector<'a> {
             pending_row: None,
             gaiji_policy,
             match_display_label: false,
+            skip_forward_prefix_matches: false,
             stop_on_pending_page_limit: false,
         }
     }
@@ -151,6 +153,11 @@ impl<'a> SsedIndexSearchCollector<'a> {
 
     pub(super) fn with_display_label_matching(mut self) -> Self {
         self.match_display_label = true;
+        self
+    }
+
+    pub(super) fn with_forward_prefix_skip(mut self) -> Self {
+        self.skip_forward_prefix_matches = true;
         self
     }
 
@@ -170,6 +177,10 @@ impl<'a> SsedIndexSearchCollector<'a> {
                 return Ok(false);
             }
         }
+        let body_key = ssed_index_body_key(row.body);
+        if self.seen_targets.contains(&body_key) && !self.offset_seen_targets.contains(&body_key) {
+            return Ok(true);
+        }
         let row_matches = self.row_matches(&row);
         if !row_matches {
             return Ok(true);
@@ -180,7 +191,6 @@ impl<'a> SsedIndexSearchCollector<'a> {
         {
             return Ok(true);
         }
-        let body_key = ssed_index_body_key(row.body);
         let already_seen = !self.seen_targets.insert(body_key.clone());
         let count_for_offset = !already_seen || self.offset_seen_targets.remove(&body_key);
         if self.matched_count < self.offset {
@@ -202,6 +212,11 @@ impl<'a> SsedIndexSearchCollector<'a> {
 
     fn row_matches(&self, row: &SsedIndexRow) -> bool {
         let key = ssed_index_row_match_text(row);
+        if self.skip_forward_prefix_matches
+            && search_match_satisfied(&SearchMode::Forward, &key, self.needle)
+        {
+            return false;
+        }
         if search_match_satisfied(self.mode, &key, self.needle) {
             if self.mode == &SearchMode::Exact
                 && self.match_display_label
@@ -217,6 +232,13 @@ impl<'a> SsedIndexSearchCollector<'a> {
         let display = self.package.ssed_display_text_for_index_row(row);
         let display_keys = self.display_label_match_texts(row, &display);
         if display_keys.is_empty() {
+            return false;
+        }
+        if self.skip_forward_prefix_matches
+            && display_keys.iter().any(|display_key| {
+                search_match_satisfied(&SearchMode::Forward, display_key, self.needle)
+            })
+        {
             return false;
         }
         display_keys

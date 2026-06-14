@@ -928,6 +928,9 @@ impl ReaderBookPackage {
         if defer_next_page_proof {
             collector = collector.with_pending_page_limit_stop();
         }
+        if skip_prefix_rows {
+            collector = collector.with_forward_prefix_skip();
+        }
         let physical_scan = self.scan_ssed_partial_nonprefix_index_rows_paged_until_visible(
             needle,
             physical_cursor,
@@ -1204,16 +1207,6 @@ impl ReaderBookPackage {
                 SSED_PARTIAL_INDEX_PREFILTERED_LEAF_PAGE_BUDGET,
                 true,
                 |row_cursor, row| {
-                    if skip_prefix_rows
-                        && ssed_title_label_fallback_row_matches(
-                            self,
-                            &SearchMode::Forward,
-                            needle,
-                            &row,
-                        )
-                    {
-                        return Ok(true);
-                    }
                     let had_hits = collector.has_hits();
                     let keep_scanning = collector.push_row(row)?;
                     if !had_hits && collector.has_hits() && first_visible_row_cursor.is_none() {
