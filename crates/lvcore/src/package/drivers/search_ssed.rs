@@ -12,6 +12,8 @@ const SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS: usize = 20_480;
 const SSED_TITLE_LABEL_TINY_INDEX_SEARCH_FALLBACK_MAX_ROWS: usize =
     SSED_TITLE_LABEL_SEARCH_FALLBACK_EMPTY_PAGE_MAX_ROWS;
 const SSED_TITLE_LABEL_FAST_PREPASS_MAX_ROWS: usize = 64;
+const SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_CURSOR_OFFSET: usize = 8;
+const SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_INDEX_BLOCKS: u32 = 768;
 const SSED_INDEX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 2;
 const SSED_PARTIAL_NONPREFIX_EMPTY_PHYSICAL_CURSOR_ADVANCE_LIMIT: usize = 8;
 const SSED_PARTIAL_NONPREFIX_PREFILTERED_LEAF_PAGE_BUDGET: usize = 128;
@@ -1409,6 +1411,7 @@ impl ReaderBookPackage {
         let mut stopped = SsedTitleLabelFallbackStop::Exhausted;
         let mut page_full_cursor = None::<usize>;
         let hit_page_max_rows = self.ssed_title_label_fallback_hit_page_max_rows(query);
+        let early_hit_page_max_rows = self.ssed_title_label_fallback_early_hit_page_max_rows(query);
         let fallback_diagnostics = self.scan_ssed_ordered_index_rows_with_filters(
             None,
             |component| {
@@ -1428,6 +1431,10 @@ impl ReaderBookPackage {
                 }
                 let row_budget = if hits.is_empty() {
                     empty_page_max_rows
+                } else if page_full_cursor.is_some_and(|cursor| {
+                    cursor <= SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_CURSOR_OFFSET
+                }) {
+                    early_hit_page_max_rows
                 } else {
                     hit_page_max_rows
                 };
@@ -1519,12 +1526,28 @@ impl ReaderBookPackage {
     }
 
     fn ssed_title_label_fallback_hit_page_max_rows(&self, query: &SearchQuery) -> usize {
-        if !ssed_title_label_tiny_index_hit_page_query_is_bounded(query) {
-            return SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS;
-        }
-        let Some(catalog) = &self.ssed_catalog else {
+        let Some(index_block_count) = self.ssed_title_label_fallback_index_block_count_up_to(
+            SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS,
+        ) else {
             return SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS;
         };
+        ssed_title_label_fallback_hit_page_max_rows_for_index_blocks(query, index_block_count)
+    }
+
+    fn ssed_title_label_fallback_early_hit_page_max_rows(&self, query: &SearchQuery) -> usize {
+        let Some(index_block_count) = self.ssed_title_label_fallback_index_block_count_up_to(
+            SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_INDEX_BLOCKS,
+        ) else {
+            return SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS;
+        };
+        ssed_title_label_fallback_early_hit_page_max_rows_for_index_blocks(query, index_block_count)
+    }
+
+    fn ssed_title_label_fallback_index_block_count_up_to(
+        &self,
+        max_index_blocks: u32,
+    ) -> Option<u32> {
+        let catalog = self.ssed_catalog.as_ref()?;
         let mut index_block_count = 0u32;
         for component in catalog.components_by_role(SsedComponentRole::Index) {
             if !component.has_positive_range() || !is_supported_index_type(component.component_type)
@@ -1540,11 +1563,11 @@ impl ReaderBookPackage {
                 continue;
             }
             index_block_count = index_block_count.saturating_add(component.block_count());
-            if index_block_count > SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS {
-                return SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS;
+            if index_block_count > max_index_blocks {
+                return None;
             }
         }
-        ssed_title_label_fallback_hit_page_max_rows_for_index_blocks(query, index_block_count)
+        Some(index_block_count)
     }
 
     fn search_ssed_sidecar_title_page(
@@ -4649,6 +4672,19 @@ fn ssed_title_label_fallback_hit_page_max_rows_for_index_blocks(
     }
 }
 
+fn ssed_title_label_fallback_early_hit_page_max_rows_for_index_blocks(
+    query: &SearchQuery,
+    index_block_count: u32,
+) -> usize {
+    if ssed_title_label_tiny_index_hit_page_lookahead_is_bounded(query, index_block_count)
+        || ssed_title_label_early_hit_page_lookahead_is_bounded(query, index_block_count)
+    {
+        SSED_TITLE_LABEL_TINY_INDEX_SEARCH_FALLBACK_MAX_ROWS
+    } else {
+        SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS
+    }
+}
+
 fn ssed_title_label_tiny_index_hit_page_lookahead_is_bounded(
     query: &SearchQuery,
     index_block_count: u32,
@@ -4656,6 +4692,15 @@ fn ssed_title_label_tiny_index_hit_page_lookahead_is_bounded(
     ssed_title_label_tiny_index_hit_page_query_is_bounded(query)
         && index_block_count > 0
         && index_block_count <= SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS
+}
+
+fn ssed_title_label_early_hit_page_lookahead_is_bounded(
+    query: &SearchQuery,
+    index_block_count: u32,
+) -> bool {
+    ssed_title_label_tiny_index_hit_page_query_is_bounded(query)
+        && index_block_count > SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS
+        && index_block_count <= SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_INDEX_BLOCKS
 }
 
 fn ssed_title_label_tiny_index_hit_page_query_is_bounded(query: &SearchQuery) -> bool {
@@ -4934,6 +4979,7 @@ mod tests {
     use super::{
         ReaderBookPackage, SSED_NATIVE_INTERNAL_START_CURSOR,
         SSED_SIDECAR_TITLE_NON_ASCII_LOOKAHEAD_DEFER_MIN_BYTES,
+        SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_INDEX_BLOCKS,
         SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS, SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS,
         SSED_TITLE_LABEL_TINY_INDEX_SEARCH_FALLBACK_MAX_ROWS, SsedFulltextTitleCursor,
         SsedPartialIndexScanCursor, SsedPartialNonprefixCursor,
@@ -4961,6 +5007,7 @@ mod tests {
         ssed_partial_prefix_prepass_is_bounded,
         ssed_sidecar_title_authoritative_prepass_is_bounded,
         ssed_sidecar_title_auto_append_is_bounded, ssed_sidecar_title_query_is_kana_only,
+        ssed_title_label_fallback_early_hit_page_max_rows_for_index_blocks,
         ssed_title_label_fallback_hit_page_max_rows_for_index_blocks,
     };
     use crate::SearchPage;
@@ -5227,6 +5274,34 @@ mod tests {
             SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS
         );
         assert_eq!(
+            ssed_title_label_fallback_early_hit_page_max_rows_for_index_blocks(
+                &exact_query,
+                SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS,
+            ),
+            SSED_TITLE_LABEL_TINY_INDEX_SEARCH_FALLBACK_MAX_ROWS
+        );
+        assert_eq!(
+            ssed_title_label_fallback_early_hit_page_max_rows_for_index_blocks(
+                &exact_query,
+                SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS + 1,
+            ),
+            SSED_TITLE_LABEL_TINY_INDEX_SEARCH_FALLBACK_MAX_ROWS
+        );
+        assert_eq!(
+            ssed_title_label_fallback_early_hit_page_max_rows_for_index_blocks(
+                &exact_query,
+                SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_INDEX_BLOCKS,
+            ),
+            SSED_TITLE_LABEL_TINY_INDEX_SEARCH_FALLBACK_MAX_ROWS
+        );
+        assert_eq!(
+            ssed_title_label_fallback_early_hit_page_max_rows_for_index_blocks(
+                &exact_query,
+                SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_INDEX_BLOCKS + 1,
+            ),
+            SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS
+        );
+        assert_eq!(
             ssed_title_label_fallback_hit_page_max_rows_for_index_blocks(&exact_query, 0),
             SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS
         );
@@ -5237,6 +5312,13 @@ mod tests {
             ssed_title_label_fallback_hit_page_max_rows_for_index_blocks(
                 &cursor_query,
                 SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS,
+            ),
+            SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS
+        );
+        assert_eq!(
+            ssed_title_label_fallback_early_hit_page_max_rows_for_index_blocks(
+                &cursor_query,
+                SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_INDEX_BLOCKS,
             ),
             SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS
         );
@@ -5266,6 +5348,13 @@ mod tests {
             ssed_title_label_fallback_hit_page_max_rows_for_index_blocks(
                 &current_book_query(SearchMode::Exact, "◯に滅せず", 1),
                 SSED_TITLE_LABEL_TINY_INDEX_MAX_INDEX_BLOCKS,
+            ),
+            SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS
+        );
+        assert_eq!(
+            ssed_title_label_fallback_early_hit_page_max_rows_for_index_blocks(
+                &current_book_query(SearchMode::Exact, "◯に滅せず", 1),
+                SSED_TITLE_LABEL_EARLY_HIT_LOOKAHEAD_MAX_INDEX_BLOCKS,
             ),
             SSED_TITLE_LABEL_SEARCH_FALLBACK_MAX_ROWS
         );

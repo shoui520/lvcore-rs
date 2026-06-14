@@ -4,7 +4,7 @@ Date: 2026-06-14
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260614-title-label-fullwidth-latin-v1.jsonl`
+- `/tmp/lvcore-all-corpora-validation-20260614-title-label-early-hit-lookahead-v1.jsonl`
 - Produced after the current scoped LVCore SSED changes:
   - exact/forward/backward dense sidecar-title searches prove one extra row for
     authoritative multi-character queries and emit verified
@@ -31,7 +31,10 @@ Latest full-corpus gate:
     cases while keeping larger index sets on the existing 256-row budget; and
   - the tiny-index exact title-label proof covers full-width Latin labels that
     pass the initial title-label guard without also requiring sidecar-title
-    authoritative prefilter eligibility.
+    authoritative prefilter eligibility; and
+  - exact title-label fallback pages with a very early first hit in
+    medium-bounded SSED index sets use the exhaustion-level post-hit lookahead
+    to prove duplicate-target exhaustion or a verified next distinct hit.
 - 335 reconstructed package paths validated with package status 335 `ok`.
   The gate used the 333 currently discovered documented-root package paths plus
   the two explicit `Other/Android` package rows.
@@ -42,12 +45,12 @@ Latest full-corpus gate:
 - Reconstructed path-list hash:
   `b3c7c347c4587d6e3b29db8767748f2ebd9402b17f712dd5ae980d45cc5a601a`.
 - Warning diagnostics remain only the explicitly deferred HC common HTML
-  fallback, 816 aggregate warning entries in this gate.
+  fallback, 949 aggregate warning entries in this gate.
 - `sidecar-title-unverified-row:*` search rows dropped from 43 in the previous
   full gate to 19. Remaining rows are intentionally broad single-character
   exact/forward/backward title continuations.
 - `ssed-title-label-unverified:*` direct/nested search rows dropped from 27 in
-  the previous full gate to 19; 9 title-label rows now emit verified
+  the previous full gate to 15; 11 title-label rows now emit verified
   `ssed-title-label:*` cursors with successful cursor probes.
 - `ssed-partial-nonprefix-unverified-index:*` rows dropped from 22 in the
   previous full gate to 0. The latest gate has 29
@@ -67,6 +70,12 @@ Latest full-corpus gate:
   exact `後天性免疫不全症候群` now returns verified `ssed-title-label:29`
   with cursor probe `ok`; and `_DCT_KQJEXPRS` exact `ｂｅｓｔ` now returns no
   cursor.
+- Early-hit exact title-label rows now prove duplicate-target exhaustion or a
+  verified next distinct hit: `_DCT_GKKOJIKT` exact
+  `Ｒのない月の牡蠣はよくない` and `_DCT_HAIKSAIJ` exact `あいのかぜ` now
+  return no cursor; iOS `KQCOLEXP` exact `ああいえばこういう` and iOS
+  `KQJCOLLO` exact `あいくるしい` now return verified
+  `ssed-title-label:1` cursors with successful cursor probes.
 - The SSED partial-prefix/non-prefix proof latency cluster improved without
   changing cursor semantics: `_DCT_HKDKSR13` partial `AC` is 935 ms, down from
   1271 ms; `_DCT_HKDKSR14` partial `AC` is 778 ms, down from 1027 ms;
@@ -96,7 +105,7 @@ Latest full-corpus gate:
   8 pure-kana partial rows in the full gate. Continuation cursors are wrapped
   as `ssed-partial-prefix:*`, not raw native offsets.
 - Deferred cursor probes in the latest gate are currently concentrated in:
-  209 native offset continuations, 124 body full-text continuations, 19
+  209 native offset continuations, 124 body full-text continuations, 15
   title-label fallback continuations, 22 sidecar-title continuations, and
   1 full-text non-prefix title continuation.
 - Existing exact visible-title and digit/no-alpha full-text improvements
@@ -443,9 +452,65 @@ Focused validation after the current LVCore change:
   - Deferred title-label fallback continuation probes dropped from 20 to 19;
     native offset/body full-text/sidecar-title/full-text non-prefix title
     deferral counts stayed at 209/124/22/1.
+- Tenth target gap from the latest full-corpus JSONL: four remaining exact
+  title-label rows had very early first hits in medium-bounded SSED index sets,
+  but still returned `ssed-title-label-unverified:*` because the normal 256-row
+  post-hit lookahead stopped before it could prove a duplicate target was not a
+  user-visible continuation or before it found the next distinct hit.
+- Code change: exact, single-hit, initial title-label fallback pages now use
+  the exhaustion-level post-hit budget for early first-hit rows only when the
+  first page fills by row offset 8 or earlier and the readable supported SSED
+  index set has at most 768 blocks. Tiny-index pages keep their existing
+  exhaustion-level budget. Later first-hit rows and larger/circle-marker
+  packages keep the existing 256-row budget.
+- Focused tests passed:
+  - `cargo fmt --check`
+  - `cargo test -p lvcore title_label -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-title-label-early-hit-lookahead-v2.jsonl`
+  - 19 affected/control packages validated with package status 19 `ok`.
+  - Top-level `ssed-title-label-unverified:*` rows in that focused set dropped
+    from 19 to 15.
+  - `_DCT_GKKOJIKT` exact `Ｒのない月の牡蠣はよくない` now returns one hit in
+    286 ms with no continuation cursor.
+  - `_DCT_HAIKSAIJ` exact `あいのかぜ` now returns one hit in 296 ms with no
+    continuation cursor.
+  - iOS `KQCOLEXP` exact `ああいえばこういう` now returns
+    `ssed-title-label:1` with cursor probe `ok` at 111 ms.
+  - iOS `KQJCOLLO` exact `あいくるしい` now returns `ssed-title-label:1` with
+    cursor probe `ok` at 67 ms.
+  - Controls remain intentionally deferred without the wider lookahead:
+    `_DCT_GKSAHOU` exact `あごがおちる` still returns
+    `ssed-title-label-unverified:40`; `_DCT_ARCHSIC3` exact
+    `すがる-をとめ`, `_DCT_KQNEWEJ6` exact `画像一覧`, and `_DCT_KOJIEN7`
+    exact `◯に滅せずんば炎炎を若何いかんせん` still return
+    `ssed-title-label-unverified:1`.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260614-title-label-early-hit-lookahead-v1.jsonl`
+  - 335 package statuses `ok`.
+  - Warning diagnostics remain only the explicitly deferred HC common HTML
+    fallback, 949 aggregate warning entries.
+  - Format-family coverage is unchanged: 1 `hourei`, 23 `lvl_multi_view`,
+    87 `lved_sqlite3`, and 224 `ssed` packages.
+  - `_DCT_GKKOJIKT` exact `Ｒのない月の牡蠣はよくない` is 273 ms in the full
+    gate, returns one hit, and has no continuation cursor.
+  - `_DCT_HAIKSAIJ` exact `あいのかぜ` is 294 ms in the full gate, returns one
+    hit, and has no continuation cursor.
+  - iOS `KQCOLEXP` exact `ああいえばこういう` is 332 ms in the full gate and
+    returns `ssed-title-label:1` with cursor probe `ok` at 119 ms.
+  - iOS `KQJCOLLO` exact `あいくるしい` is 140 ms in the full gate and returns
+    `ssed-title-label:1` with cursor probe `ok` at 69 ms.
+  - Deferred title-label fallback continuation probes dropped from 19 to 15;
+    native offset/body full-text/sidecar-title/full-text non-prefix title
+    deferral counts stayed at 209/124/22/1.
 
 Previous full-corpus gates:
 
+- `/tmp/lvcore-all-corpora-validation-20260614-title-label-fullwidth-latin-v1.jsonl`
+- Produced after closing the `_DCT_KQJEXPRS` full-width Latin exact
+  title-label continuation by relaxing the tiny-index proof from sidecar-title
+  authoritative eligibility.
 - `/tmp/lvcore-all-corpora-validation-20260614-title-label-tiny-index-proof-v1.jsonl`
 - Produced after proving exact title-label continuation/exhaustion on tiny SSED
   index sets while keeping larger index sets on the existing hit-page budget.
@@ -962,7 +1027,7 @@ Warning diagnostics in the baseline:
 
 | Diagnostic | Count | Classification |
 | --- | ---: | --- |
-| `hc_render_common_html_fallback` | 816 | Deferred HC visual rendering |
+| `hc_render_common_html_fallback` | 949 | Deferred HC visual rendering |
 | `ssed_loose_address_unresolved` | 0 | Closed by packed SSED link-address normalization |
 
 Important info/status classes from the latest gate:
@@ -985,7 +1050,7 @@ Important info/status classes from the latest gate:
 | `ssed-partial-nonprefix-unverified-index:*` cursor `not_probed` | 0 | Replaced by bounded/probeable non-prefix partial continuations in the latest gate |
 | `ssed-partial-nonprefix-noskip-unverified-physical-offset:*` cursor `not_probed` | focused direct-only | New NCOMP4 partial `1計` continuation deferral; not exercised by the standard full-gate query set |
 | `ssed-offset-unverified:*` direct/nested cursor `not_probed` | 209 | Native offset next-page proof intentionally deferred |
-| `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 19 | Distant/unknown title-label continuations intentionally deferred after bounded/tiny-index hit-page lookahead |
+| `ssed-title-label-unverified:*` direct/nested cursor `not_probed` | 15 | Distant/unknown title-label continuations intentionally deferred after bounded/tiny-index hit-page lookahead |
 | `ssed-partial-prefix:*` cursor probed `ok` | 54 | Partial prefix continuation pages remain probeable |
 | `ssed_partial_native_prefix_fast_prepass` | 8 | Bounded pure-kana partial native-prefix prepass exercised |
 | `ssed_title_label_fast_prepass` | 29 | Bounded exact non-ASCII and forward digit/no-alpha visible title-label prepass exercised |
