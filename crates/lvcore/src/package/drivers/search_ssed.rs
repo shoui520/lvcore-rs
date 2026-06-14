@@ -3579,13 +3579,27 @@ impl ReaderBookPackage {
         page.next_cursor = page
             .next_cursor
             .take()
-            .map(|cursor| {
-                if defer_next_page_proof {
-                    encode_ssed_fulltext_unverified_nonprefix_title_cursor(&cursor, &seen_targets)
-                } else {
-                    encode_ssed_fulltext_nonprefix_title_cursor(&cursor, &seen_targets)
+            .map(|cursor| -> Result<String> {
+                if !defer_next_page_proof {
+                    return Ok(encode_ssed_fulltext_nonprefix_title_cursor(
+                        &cursor,
+                        &seen_targets,
+                    ));
+                }
+                match self.ssed_fulltext_deferred_nonprefix_title_cursor_if_visible(
+                    query,
+                    needle,
+                    &cursor,
+                    &seen_targets,
+                )? {
+                    SsedFulltextNonprefixTitleProof::Visible(cursor) => Ok(cursor),
+                    SsedFulltextNonprefixTitleProof::Exhausted => {
+                        Ok(post_title_prepass_cursor.clone())
+                    }
+                    SsedFulltextNonprefixTitleProof::Deferred(cursor) => Ok(cursor),
                 }
             })
+            .transpose()?
             .or(Some(post_title_prepass_cursor));
         page.diagnostics.insert(
             0,
@@ -3595,6 +3609,55 @@ impl ReaderBookPackage {
             ),
         );
         Ok(Some(page))
+    }
+
+    fn ssed_fulltext_deferred_nonprefix_title_cursor_if_visible(
+        &self,
+        query: &SearchQuery,
+        needle: &str,
+        cursor: &str,
+        seen_targets: &HashSet<String>,
+    ) -> Result<SsedFulltextNonprefixTitleProof> {
+        if !ssed_fulltext_nonprefix_title_continuation_proof_is_bounded(query, needle) {
+            return Ok(SsedFulltextNonprefixTitleProof::Deferred(
+                encode_ssed_fulltext_unverified_nonprefix_title_cursor(cursor, seen_targets),
+            ));
+        }
+        let Some(partial_cursor) = decode_ssed_partial_nonprefix_cursor(Some(cursor)) else {
+            return Ok(SsedFulltextNonprefixTitleProof::Deferred(
+                encode_ssed_fulltext_unverified_nonprefix_title_cursor(cursor, seen_targets),
+            ));
+        };
+        let mut probe_query = query.clone();
+        probe_query.mode = SearchMode::Partial;
+        probe_query.cursor = None;
+        probe_query.limit = 1;
+        let proof_page = self.search_ssed_partial_nonprefix_page_inner_with_seen_targets(
+            &probe_query,
+            needle,
+            Some(partial_cursor),
+            true,
+            seen_targets.clone(),
+            true,
+        )?;
+        if proof_page.page.hits.is_empty() {
+            return Ok(match proof_page.page.next_cursor {
+                Some(next_cursor) => SsedFulltextNonprefixTitleProof::Deferred(
+                    encode_ssed_fulltext_unverified_nonprefix_title_cursor(
+                        &next_cursor,
+                        seen_targets,
+                    ),
+                ),
+                None => SsedFulltextNonprefixTitleProof::Exhausted,
+            });
+        }
+        let visible_cursor = proof_page
+            .visible_start_cursor
+            .map(|cursor| encode_ssed_partial_nonprefix_cursor(Some(cursor), true))
+            .unwrap_or_else(|| cursor.to_owned());
+        Ok(SsedFulltextNonprefixTitleProof::Visible(
+            encode_ssed_fulltext_nonprefix_title_cursor(&visible_cursor, seen_targets),
+        ))
     }
 
     fn ssed_fulltext_post_title_prepass_cursor(&self, query: &SearchQuery) -> Result<String> {
@@ -3902,6 +3965,13 @@ struct SsedPartialNonprefixSearchPage {
 struct SsedFulltextNonprefixTitleCursor {
     cursor: SsedPartialNonprefixCursor,
     seen_targets: HashSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SsedFulltextNonprefixTitleProof {
+    Visible(String),
+    Exhausted,
+    Deferred(String),
 }
 
 #[derive(Debug, Default)]
@@ -4761,14 +4831,25 @@ fn ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
     let has_ascii_digit_or_punctuation = raw_query
         .bytes()
         .any(|byte| byte.is_ascii_digit() || byte.is_ascii_punctuation());
-    let mut chars = raw_query.chars();
-    let starts_with_cjk = chars.next().is_some_and(is_ssed_cjk_ideograph);
-    let has_mixed_japanese_title_token = starts_with_cjk && chars.any(is_ssed_japanese_kana);
+    let has_mixed_japanese_title_token = ssed_query_is_mixed_cjk_kana_token(raw_query);
     if !has_non_ascii || !(has_ascii_digit_or_punctuation || has_mixed_japanese_title_token) {
         return false;
     }
     let needle_len = needle.chars().count();
     (2..=8).contains(&needle_len) && !ssed_index_page_prefilter_candidates(needle).is_empty()
+}
+
+fn ssed_fulltext_nonprefix_title_continuation_proof_is_bounded(
+    query: &SearchQuery,
+    needle: &str,
+) -> bool {
+    ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(query, needle)
+        && ssed_query_is_mixed_cjk_kana_token(query.query.trim())
+}
+
+fn ssed_query_is_mixed_cjk_kana_token(raw_query: &str) -> bool {
+    let mut chars = raw_query.chars();
+    chars.next().is_some_and(is_ssed_cjk_ideograph) && chars.any(is_ssed_japanese_kana)
 }
 
 fn is_ssed_japanese_kana(ch: char) -> bool {
@@ -4801,6 +4882,7 @@ mod tests {
         encode_ssed_partial_unverified_nonprefix_physical_offset_cursor,
         encode_ssed_unverified_title_label_cursor, ssed_fulltext_first_byte_candidate_offset,
         ssed_fulltext_initial_forward_title_prepass_needs_fast_hit_probe,
+        ssed_fulltext_nonprefix_title_continuation_proof_is_bounded,
         ssed_fulltext_partial_nonprefix_title_prepass_is_bounded,
         ssed_fulltext_row_driven_body_search_allowed,
         ssed_fulltext_sidecar_title_prepass_is_bounded,
@@ -5185,6 +5267,22 @@ mod tests {
         assert!(ssed_fulltext_partial_nonprefix_title_prepass_is_bounded(
             &query, "1計"
         ));
+    }
+
+    #[test]
+    fn fulltext_nonprefix_title_continuation_proof_stays_narrow() {
+        let query = current_book_fulltext_query("一ス", 1);
+        assert!(ssed_fulltext_nonprefix_title_continuation_proof_is_bounded(
+            &query, "一す"
+        ));
+        let query = current_book_fulltext_query("体の", 1);
+        assert!(ssed_fulltext_nonprefix_title_continuation_proof_is_bounded(
+            &query, "体の"
+        ));
+        let query = current_book_fulltext_query("1計", 1);
+        assert!(!ssed_fulltext_nonprefix_title_continuation_proof_is_bounded(&query, "1計"));
+        let query = current_book_fulltext_query("犬", 1);
+        assert!(!ssed_fulltext_nonprefix_title_continuation_proof_is_bounded(&query, "犬"));
     }
 
     #[test]

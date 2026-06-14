@@ -4,7 +4,7 @@ Date: 2026-06-14
 
 Latest full-corpus gate:
 
-- `/tmp/lvcore-all-corpora-validation-20260614-partial-prefix-nonprefix-proof-latency-v1.jsonl`
+- `/tmp/lvcore-all-corpora-validation-20260614-fulltext-nonprefix-title-proof-v1.jsonl`
 - Produced after the current scoped LVCore SSED changes:
   - exact/forward/backward dense sidecar-title searches prove one extra row for
     authoritative multi-character queries and emit verified
@@ -19,10 +19,13 @@ Latest full-corpus gate:
     path;
   - partial-prefix page completion now proves bounded non-prefix continuation
     visibility, emitting verified `ssed-partial-nonprefix-index:*` cursors or no
-    cursor instead of broad unverified start cursors; and
+    cursor instead of broad unverified start cursors;
   - SSED partial non-prefix proof now skips prefix-matching rows inside the
     index collector and only uses in-memory page prefilter extension when an
-    anchor is longer than the minimum prefilter length.
+    anchor is longer than the minimum prefilter length; and
+  - full-text non-prefix title continuation proof now verifies fast mixed
+    CJK+kana exhaustion, while keeping slow digit+CJK continuation proof
+    deferred.
 - 335 reconstructed package paths validated with package status 335 `ok`.
   The gate used the 333 currently discovered documented-root package paths plus
   the two explicit `Other/Android` package rows.
@@ -43,14 +46,18 @@ Latest full-corpus gate:
 - `ssed-partial-nonprefix-unverified-index:*` rows dropped from 22 in the
   previous full gate to 0. The latest gate has 29
   `ssed-partial-nonprefix-index:*` cursors, all with cursor probe `ok`.
-- `_DCT_GKBUSINE` `search_forward` `10` is 85 ms and now returns
+- `title-nonprefix-unverified:*` full-text rows dropped from 2 to 1. The
+  latest gate proves `_DCT_YHOUGO3` full-text `一ス` has no remaining
+  non-prefix title continuation and falls through to `body:0`; `_DCT_NCOMP4`
+  full-text `1計` remains intentionally deferred.
+- `_DCT_GKBUSINE` `search_forward` `10` is 86 ms and now returns
   `ssed-title-label:3` with cursor probe `ok` at 4 ms.
 - The SSED partial-prefix/non-prefix proof latency cluster improved without
-  changing cursor semantics: `_DCT_HKDKSR13` partial `AC` is 933 ms, down from
-  1271 ms; `_DCT_HKDKSR14` partial `AC` is 761 ms, down from 1027 ms;
-  `_DCT_HKDKSR29` partial `AC` is 725 ms, down from 972 ms; `_DCT_HKDKSR30`
+  changing cursor semantics: `_DCT_HKDKSR13` partial `AC` is 935 ms, down from
+  1271 ms; `_DCT_HKDKSR14` partial `AC` is 778 ms, down from 1027 ms;
+  `_DCT_HKDKSR29` partial `AC` is 747 ms, down from 972 ms; `_DCT_HKDKSR30`
   partial `AC` is 783 ms, down from 1054 ms; and `_DCT_KQCOLEXP` partial
-  `ビー` is 729 ms, down from 1121 ms. All retain verified
+  `ビー` is 737 ms, down from 1121 ms. All retain verified
   `ssed-partial-nonprefix-index:*` cursors with cursor probe `ok`.
 - `_DCT_NANMED20` `search_exact` `0歳平均余命` returns a verified
   `sidecar-title-row:*` cursor with cursor probe `ok` at 80 ms; iOS
@@ -58,15 +65,15 @@ Latest full-corpus gate:
 - `_DCT_IWKOKUG8` `search_forward` `さん` returns a verified
   `sidecar-title-row:*` cursor with cursor probe `ok` at 3 ms; iOS `IWKOKUG8`
   is also `ok` at 4 ms.
-- `_DCT_NCOMP4` `search_full_text` `1計` is 437 ms with the
+- `_DCT_NCOMP4` `search_full_text` `1計` is 412 ms with the
   same `0-1計画法` first hit and deferred `title-nonprefix-unverified:*`
   continuation. The standard deep validator does not currently exercise the
   direct `_DCT_NCOMP4` partial `1計` query; that query is covered by focused
   direct probes below.
-- Digit-prefix controls stayed stable: `_DCT_GKBUSINE` partial `10` is 37 ms
+- Digit-prefix controls stayed stable: `_DCT_GKBUSINE` partial `10` is 38 ms
   with cursor probe `ok` at 13 ms, `_DCT_GEN2011` partial `01` now returns a
-  verified `ssed-partial-nonprefix-index:3:8` cursor in 251 ms with cursor
-  probe `ok` at 36 ms, and `_DCT_GEN2009` partial `0` is 128 ms with cursor
+  verified `ssed-partial-nonprefix-index:3:8` cursor in 262 ms with cursor
+  probe `ok` at 37 ms, and `_DCT_GEN2009` partial `0` is 129 ms with cursor
   probe `ok` at 61 ms.
 - Windows `_DCT_KENROWA` `search_partial` `しめ` is 20 ms and its cursor probe
   is `ok` at 10 ms.
@@ -74,12 +81,12 @@ Latest full-corpus gate:
   8 pure-kana partial rows in the full gate. Continuation cursors are wrapped
   as `ssed-partial-prefix:*`, not raw native offsets.
 - Deferred cursor probes in the latest gate are currently concentrated in:
-  209 native offset continuations, 123 body full-text continuations, 27
+  209 native offset continuations, 124 body full-text continuations, 27
   title-label fallback continuations, 22 sidecar-title continuations, and
-  2 full-text non-prefix title continuations.
+  1 full-text non-prefix title continuation.
 - Existing exact visible-title and digit/no-alpha full-text improvements
-  remained stable: `_DCT_KQNEWEJ6` exact `画像一覧` is 16 ms,
-  `_DCT_KQNEWJE5` exact `外字一覧` is 18 ms, and `_DCT_GKBUSINE` full-text
+  remained stable: `_DCT_KQNEWEJ6` exact `画像一覧` is 15 ms,
+  `_DCT_KQNEWJE5` exact `外字一覧` is 17 ms, and `_DCT_GKBUSINE` full-text
   `10` is 28 ms.
 
 Focused validation for the latest full-corpus gate:
@@ -102,14 +109,21 @@ Focused validation for the latest full-corpus gate:
   `/tmp/lvcore-focused-validate-partial-prefix-nonprefix-proof-latency-v1.jsonl`
   covered 7 SSED packages with package status 7 `ok`.
 - Target rows improved while preserving verified continuations:
-  `_DCT_HKDKSR13` partial `AC` is 954 ms focused and 933 ms in the full gate,
-  `_DCT_HKDKSR14` partial `AC` is 738 ms focused and 761 ms in the full gate,
-  `_DCT_HKDKSR29` partial `AC` is 712 ms focused and 725 ms in the full gate,
+  `_DCT_HKDKSR13` partial `AC` is 954 ms focused and 935 ms in the full gate,
+  `_DCT_HKDKSR14` partial `AC` is 738 ms focused and 778 ms in the full gate,
+  `_DCT_HKDKSR29` partial `AC` is 712 ms focused and 747 ms in the full gate,
   `_DCT_HKDKSR30` partial `AC` is 749 ms focused and 783 ms in the full gate,
-  and `_DCT_KQCOLEXP` partial `ビー` is 702 ms focused and 729 ms in the full
+  and `_DCT_KQCOLEXP` partial `ビー` is 702 ms focused and 737 ms in the full
   gate.
 - Focused latency-validation warnings remained only the explicitly deferred HC
   common HTML fallback.
+- Focused full-text non-prefix title validation:
+  `/tmp/lvcore-focused-validate-fulltext-nonprefix-title-proof-v1.jsonl`
+  covered `_DCT_YHOUGO3` and `_DCT_NCOMP4` with package status 2 `ok`.
+- `_DCT_YHOUGO3` full-text `一ス` now returns `body:0` in 156 ms in focused
+  validation instead of `title-nonprefix-unverified:*`; `_DCT_NCOMP4`
+  full-text `1計` remains `title-nonprefix-unverified:*` in 414 ms because its
+  direct cursor proof still takes about 1.6s.
 
 Focused validation after the current LVCore change:
 
@@ -302,8 +316,58 @@ Focused validation after the current LVCore change:
   - The full gate still has 0 `ssed-partial-nonprefix-unverified-index:*`
     cursors and 29 probeable `ssed-partial-nonprefix-index:*` cursors, all with
     cursor probe status `ok`.
+- Seventh target gap from the latest full-corpus JSONL: the only remaining
+  full-text non-prefix title continuation deferrals were `_DCT_YHOUGO3`
+  full-text `一ス` and `_DCT_NCOMP4` full-text `1計`. Direct cursor probes
+  showed `_DCT_YHOUGO3` could prove exhaustion quickly, while `_DCT_NCOMP4`
+  still needed about 1.6s and should remain deferred.
+- Code change: full-text non-prefix title continuation proof now runs a bounded
+  visibility/exhaustion probe only for mixed CJK+kana title-prepass queries.
+  Digit+CJK and punctuation cases continue to return the existing
+  `title-nonprefix-unverified:*` cursor.
+- Focused tests passed:
+  - `cargo fmt`
+  - `cargo test -p lvcore fulltext_nonprefix_title -- --nocapture`
+  - `cargo test -p lvcore fulltext_title_cursors_preserve_physical_offset -- --nocapture`
+  - `cargo build -p lvcore-cli`
+- Direct real-package probes:
+  - `_DCT_YHOUGO3` full-text `一ス --limit 1` returns `body:0` in about 0.18s;
+    following `body:0` returns a body hit in about 0.10s.
+  - `_DCT_NCOMP4` full-text `1計 --limit 1` still returns
+    `title-nonprefix-unverified:*` in about 0.49s; following that cursor still
+    takes about 1.6s, so it remains intentionally deferred.
+- Focused real-package validation passed:
+  - `/tmp/lvcore-focused-validate-fulltext-nonprefix-title-proof-v1.jsonl`
+  - 2 affected/control packages validated with package status 2 `ok`:
+    `_DCT_YHOUGO3` and `_DCT_NCOMP4`.
+  - `_DCT_YHOUGO3` full-text `一ス` is 156 ms through
+    `ssed_fulltext_partial_nonprefix_title_prepass` and now returns `body:0`;
+    `_DCT_NCOMP4` full-text `1計` remains deferred at 414 ms.
+- Full-corpus regression gate passed:
+  - `/tmp/lvcore-all-corpora-validation-20260614-fulltext-nonprefix-title-proof-v1.jsonl`
+  - 335 package statuses `ok`.
+  - Warning diagnostics remain only the explicitly deferred HC common HTML
+    fallback, 816 aggregate warning entries.
+  - `title-nonprefix-unverified:*` full-text rows dropped from 2 to 1; body
+    full-text continuations rose from 123 to 124 because `_DCT_YHOUGO3` now
+    falls through to the body phase.
 
 Previous full-corpus gates:
+
+- `/tmp/lvcore-all-corpora-validation-20260614-partial-prefix-nonprefix-proof-latency-v1.jsonl`
+- Produced after integrating partial non-prefix prefix skipping into the SSED
+  index collector and avoiding expanded-index page prefilter extension for
+  minimum-length anchors such as `AC`.
+- 335 reconstructed package paths validated with package status 335 `ok`.
+- Warning diagnostics remained only the explicitly deferred HC common HTML
+  fallback, 816 aggregate warning entries.
+- `ssed-partial-nonprefix-unverified-index:*` remained 0; the gate had 29
+  probeable `ssed-partial-nonprefix-index:*` cursors, all with cursor probe
+  status `ok`.
+- This gate became the baseline for the full-text non-prefix title proof work:
+  `_DCT_YHOUGO3` full-text `一ス` still returned
+  `title-nonprefix-unverified:*`, and `_DCT_NCOMP4` full-text `1計` remained
+  intentionally deferred.
 
 - `/tmp/lvcore-all-corpora-validation-20260614-partial-nonprefix-proof-v1.jsonl`
 - Produced after making partial-prefix page completion prove bounded
@@ -812,8 +876,8 @@ Important info/status classes from the latest gate:
 | --- | ---: | --- |
 | `sidecar-body-row:*` cursor probed `ok` | 47 | Dense sidecar body cursor fix verified |
 | `sidecar-title-unverified-row:*` cursor `not_probed` | 19 | Broad single-character exact/forward/backward sidecar-title continuations intentionally deferred |
-| `title-nonprefix-unverified:*` cursor `not_probed` | 2 | Large full-text non-prefix title continuation intentionally deferred |
-| `body:0`/`body-offset:*` full-text cursor `not_probed` | 123 | Post-title native body continuation intentionally deferred |
+| `title-nonprefix-unverified:*` cursor `not_probed` | 1 | Large full-text non-prefix title continuation intentionally deferred |
+| `body:0`/`body-offset:*` full-text cursor `not_probed` | 124 | Post-title native body continuation intentionally deferred |
 | `sidecar-body-start` cursor probed `ok` | 15 | Sidecar body phase start cursor fix verified |
 | `title-nonprefix:*` cursor probed `ok` | 1 | Small bounded non-prefix title continuation still probeable |
 | `sidecar-body:*` cursor `not_probed` | 0 | Closed by row/start/physical cursor split |
@@ -841,33 +905,33 @@ Latest concrete non-HC performance candidates from the full gate:
 - Several top `surface_first_target` rows are likely validator render/window
   work over large browse targets; measure direct `home`/`surface`/`window`
   before treating them as LVCore gaps.
-- `_DCT_NCOMP4`, `search_full_text` query `1計`: 437 ms, improved from 545 ms
+- `_DCT_NCOMP4`, `search_full_text` query `1計`: 412 ms, improved from 545 ms
   but still behind intentionally deferred `title-nonprefix-unverified:*`
   continuation proof in the latest full baseline. Direct focused probing also
   exposed a related `search_partial` `1計` first-page gap; that partial gap is
   resolved by the focused NCOMP4 partial-prefix fallthrough/fast-miss fix
   below.
-- `Other/iOS/NANMED20/NANMED20`, `search_forward` query `0歳`: 436 ms in the
+- `Other/iOS/NANMED20/NANMED20`, `search_forward` query `0歳`: 390 ms in the
   full gate. Direct search probes were fast, so measure validation/render
   context before changing search code.
-- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 394 ms through
+- `_DCT_HKDKSR10`, `search_full_text` query `FU`: 392 ms through
   `ssed_fulltext_title_index_prepass`, with native body continuation deferred
   behind `body:0`.
 - `_DCT_EJJE100`, `search_full_text` query `co`: 401 ms through
   `ssed_fulltext_title_index_prepass`, with native body continuation deferred
   behind `body:0`.
-- `_DCT_HKDKSR10`, `search_partial` query `AB`: 438 ms through
+- `_DCT_HKDKSR10`, `search_partial` query `AB`: 420 ms through
   `ssed_partial_prefix_prepass`; direct forward/partial probes are similar, so
   this may be package/open or native prefix setup rather than partial-only
   behavior.
-- `_DCT_HKKIGAK6`, `search_partial` query `Ab`: 304 ms through
+- `_DCT_HKKIGAK6`, `search_partial` query `Ab`: 307 ms through
   `ssed_partial_title_index_prepass`; direct probing reproduced roughly
   0.4s, making it a possible future scoped partial-title candidate.
 - `_DCT_GKBUSINE`, `search_partial` query `10`: resolved in the latest full
-  gate at 37 ms, down from 428 ms, by using a one-leaf fast-hit probe before
+  gate at 38 ms, down from 428 ms, by using a one-leaf fast-hit probe before
   the expensive native partial-prefix probe.
 - `_DCT_GKBUSINE`, `search_forward` query `10`: resolved in the latest full
-  gate at 85 ms, down from 439 ms, by running the bounded title-label fast
+  gate at 86 ms, down from 439 ms, by running the bounded title-label fast
   prepass after a cheap one-leaf native forward probe proves there is no native
   prefix hit.
 - SSED partial-prefix/non-prefix proof latency for `_DCT_HKDKSR13`,
@@ -885,20 +949,20 @@ Latest concrete non-HC performance candidates from the full gate:
 - `_DCT_PROYAL53`, `search_partial` query `ひゃ`: resolved in the latest full
   gate at 37 ms, down from 787 ms, by the same prepass.
 - `_DCT_KQNEWEJ6`, `search_exact` query `画像一覧`: resolved in the latest full
-  gate at 16 ms, down from 381 ms, by running the bounded exact visible
+  gate at 15 ms, down from 381 ms, by running the bounded exact visible
   title-label fast prepass.
 - `_DCT_KQNEWJE5`, `search_exact` query `外字一覧`: resolved in the latest full
-  gate at 18 ms, down from 271 ms, by the same prepass.
+  gate at 17 ms, down from 271 ms, by the same prepass.
 - `_DCT_NMEDEJ12`, `search_full_text` query `01`: resolved in the latest full
-  gate at 180 ms, down from 556 ms, by skipping the empty forward-title prepass
+  gate at 167 ms, down from 556 ms, by skipping the empty forward-title prepass
   after a one-leaf fast-hit probe.
 - `_DCT_KQDENTAL`, `search_full_text` query `01`: resolved in the latest full
-  gate at 187 ms, down from 546 ms, while preserving its title-index first hit.
+  gate at 189 ms, down from 546 ms, while preserving its title-index first hit.
 - `_DCT_GKBUSINE`, `search_full_text` query `10`: resolved in the latest full
   gate at 28 ms, down from 387 ms, while preserving its title-index first hit.
-- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: resolved by routing short
-  CJK-leading mixed kana+CJK title queries through the bounded non-prefix title
-  prepass; latest full-gate validation remains 54 ms.
+- `_DCT_YHOUGO3`, `search_full_text` query `一ス`: resolved further by proving
+  the mixed CJK+kana non-prefix title continuation exhausted and falling
+  through to `body:0`; latest full-gate validation is 162 ms.
 - Windows `_DCT_KOJIEN7` and iOS `KOJIEN7`, exact query
   `◯に滅せずんば炎炎を若何いかんせん` and forward query `◯に`: resolved in
   0ak and verified in the latest full-corpus gate.
