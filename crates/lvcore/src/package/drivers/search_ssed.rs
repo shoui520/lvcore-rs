@@ -1694,13 +1694,7 @@ impl ReaderBookPackage {
         if !sidecar_page.exhausted {
             page.next_cursor = next_physical_cursor
                 .as_ref()
-                .map(|cursor| {
-                    if defer_lookahead {
-                        encode_ssed_sidecar_title_unverified_physical_cursor(cursor)
-                    } else {
-                        encode_ssed_sidecar_title_physical_cursor(cursor)
-                    }
-                })
+                .map(encode_ssed_sidecar_title_physical_cursor)
                 .or_else(|| Some(encode_ssed_sidecar_title_cursor(next_sidecar_offset)));
         }
         Ok(())
@@ -4574,14 +4568,6 @@ fn encode_ssed_sidecar_title_physical_cursor(cursor: &SsedSidecarBodyCursor) -> 
     format!(
         "{}{}",
         SSED_SIDECAR_TITLE_PHYSICAL_CURSOR_PREFIX,
-        encode_ssed_sidecar_row_cursor(cursor)
-    )
-}
-
-fn encode_ssed_sidecar_title_unverified_physical_cursor(cursor: &SsedSidecarBodyCursor) -> String {
-    format!(
-        "{}{}",
-        SSED_SIDECAR_TITLE_UNVERIFIED_PHYSICAL_CURSOR_PREFIX,
         encode_ssed_sidecar_row_cursor(cursor)
     )
 }

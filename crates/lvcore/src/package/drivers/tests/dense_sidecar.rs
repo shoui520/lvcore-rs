@@ -2174,7 +2174,7 @@ fn dense_honmon_exact_cjk_sidecar_title_cursor_defers_lookahead() {
     assert_eq!(first.hits.len(), 1);
     assert_eq!(first.hits[0].title_text, "丂");
     let cursor = first.next_cursor.as_deref().unwrap();
-    assert!(cursor.starts_with("sidecar-title-unverified-row:"));
+    assert!(cursor.starts_with("sidecar-title-row:"));
 
     let second = package
         .search(&SearchQuery {
@@ -2194,7 +2194,7 @@ fn dense_honmon_exact_cjk_sidecar_title_cursor_defers_lookahead() {
 }
 
 #[test]
-fn dense_honmon_cjk_sidecar_title_cursor_defers_forward_backward_lookahead() {
+fn dense_honmon_cjk_sidecar_title_cursor_uses_physical_forward_backward_pages() {
     let dir = tempdir().unwrap();
     let catalog = write_ssed_dense_sidecar_fixture(dir.path(), DenseSidecarFixture::CjkTitleRows);
     fs::OpenOptions::new()
@@ -2238,7 +2238,7 @@ fn dense_honmon_cjk_sidecar_title_cursor_defers_forward_backward_lookahead() {
         assert_eq!(first.hits.len(), 1);
         assert_eq!(first.hits[0].title_text, "丂");
         let cursor = first.next_cursor.as_deref().unwrap();
-        assert!(cursor.starts_with("sidecar-title-unverified-row:"));
+        assert!(cursor.starts_with("sidecar-title-row:"));
 
         let second = package
             .search(&SearchQuery {
